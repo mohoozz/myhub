@@ -1,0 +1,755 @@
+# myhub 全栈重写 TODO
+
+> 依据《flutter/需求分析文档.md》v2.0 拆解，按功能模块组织，勾选即完成。
+> **架构**：后端 Go Gin + 前端 Flutter（全栈重写，不复用旧代码）
+> 里程碑：M0 全栈骨架 → M1 文件管理 → M2 媒体播放 → M3 阅读器 → M4 多端打磨 v1.0 → M5 动态+离线 v1.1
+
+---
+
+## 0. 项目脚手架与基础设施
+
+### 0.1 Go 后端脚手架
+
+- [x] 初始化 Go module：`go mod init myhub-server`
+- [x] 安装核心依赖：Gin、GORM、golang-jwt、Viper、robfig/cron、bcrypt（SQLite 驱动采用纯 Go 的 glebarez/sqlite，免 CGO）
+- [x] 搭建目录结构（`cmd/`、`internal/handler/`、`internal/service/`、`internal/repository/`、`internal/model/`、`internal/middleware/`、`internal/adapter/`、`internal/parser/`、`internal/router/`）
+- [x] `cmd/server/main.go` 入口：加载配置、初始化数据库、注册路由、启动服务（含优雅关闭）
+- [x] 配置管理（`config/config.go`）：Viper 读取 YAML（端口、JWT 密钥、数据库路径、路径源白名单），支持 MYHUB_ 环境变量覆盖
+- [x] GORM + SQLite 初始化：自动迁移入口、连接池配置
+- [x] 全局中间件：CORS、请求日志（Gin Logger）、异常恢复（Gin Recovery）
+- [x] 统一响应格式：`{ code: 0, data: ..., message: "" }`
+- [x] 全局错误处理中间件
+
+### 0.2 Flutter 前端脚手架
+
+- [x] `flutter create myhub_flutter`，配置包名/应用名/版本号（PC 优先，仅启用 Windows 平台）
+- [x] 配置 `pubspec.yaml`：添加全部依赖（Riverpod、go_router、dio、media_kit、drift、lucide_icons_flutter 等）
+- [x] 配置 `analysis_options.yaml`（strict lint 规则）
+- [x] 搭建目录结构（`core/`、`data/`、`features/`、`shared/`）
+- [x] `main.dart`：ProviderScope + MaterialApp.router 入口（含 MediaKit 初始化）
+- [x] `app.dart`：MaterialApp.router 配置（亮/暗主题、路由）
+- [x] 环境变量配置（后端 API 地址，通过 `--dart-define=API_BASE_URL=...`）
+
+### 0.3 基础设施
+
+- [x] Go 后端：编写 `Dockerfile`（多阶段构建，最终 Alpine 镜像，含 FFmpeg）
+- [x] Flutter 前端：配置各平台入口（PC 优先：Windows 桌面入口已配置；Android/iOS 入口后续里程碑补充）
+- [x] `docker-compose.yml`：Go 后端 + Caddy 反向代理（预留 OpenClaw、OpenList）
+- [x] `Caddyfile`：反代配置 + 自动 HTTPS
+- [x] `Makefile`：`make dev` / `make build` / `make run` 等常用命令
+- [x] 编写 `README.md`：快速开始、环境要求、目录结构说明
+
+---
+
+## 1. Go 后端核心模块
+
+### 1.1 数据模型（GORM）
+
+- [x] `model/user.go`：User（id, username, password_hash）
+- [x] `model/source.go`：Source（id, name, type, config_json, mount_point, enabled, created_at）
+- [x] `model/trash_item.go`：TrashItem（id, source_id, original_path, trash_path, size, deleted_at）
+- [x] `model/favorite.go`：Favorite（id, source_id, file_path, media_type, size, created_at），唯一键 (source_id, file_path)
+- [x] `model/reading_progress.go`：ReadingProgress（id, source_id, file_path, media_type, title, cover, progress_json, percent, finished, updated_at），唯一键 (source_id, file_path)
+- [x] `model/novel_index.go`：NovelIndex（id, source_id, file_path, encoding, chapters_json, file_size），唯一键 (source_id, file_path)
+- [x] `model/feed.go`：FeedSubscription、FeedItem（唯一键 platform+content_id）、FeedCursor、WatchLater（唯一键 platform+content_id）、FeedFetchLog
+- [x] `model/config.go`：AppConfig（id, key, value），唯一键 key
+- [x] GORM AutoMigrate 在启动时自动建表
+- [x] 提供 `cmd/cli/` 创建用户命令行工具（`go run cmd/cli/main.go create-user`）
+
+### 1.2 鉴权模块（Auth）
+
+- [x] `POST /api/auth/login`：用户名密码验证，bcrypt 校验，颁发 JWT（24h 过期）
+- [x] JWT 中间件：解析 Token、注入用户信息到 Context、401 拦截
+- [x] `PUT /api/auth/password`：修改密码（需旧密码验证）
+- [x] 内部接口 Token 校验中间件（供 OpenClaw 回传）
+- [x] Repository 层：`user.go`（FindByUsername、Create、UpdatePassword）
+
+### 1.3 存储适配器层
+
+- [x] 定义 `IStorageAdapter` 接口：List、Stat、ReadStream、WriteStream、Move、Copy、Delete、Restore、Mkdir
+- [x] `LocalAdapter`：基于 `os` 包，挂载点根目录白名单校验防目录穿越，回收站目录 `.trash`
+- [x] `WebDavAdapter`：基于 `go-webdav` 库，Range 请求头透传，连接测试
+- [x] 适配器工厂：根据 Source.Type 创建对应适配器实例
+- [ ] `OpenListAdapter`（可选，二期）：对接 OpenList REST API
+
+### 1.4 路径源管理（Source）
+
+- [x] CRUD API：`GET/POST/PUT/DELETE /api/sources`
+- [x] `POST /api/sources/:id/test`：连接测试（调用适配器的 Stat 验证可用性）
+- [x] Repository 层：`source.go`（List、GetByID、Create、Update、Delete）
+- [x] Service 层：校验、适配器实例化、连接测试
+
+### 1.5 文件管理（File）
+
+- [x] `GET /api/files?source=&path=`：列目录，文件类型识别（扩展名映射）
+- [x] `POST /api/files/mkdir`：新建文件夹
+- [x] `POST /api/files/upload`：multipart 文件上传
+- [x] `POST /api/files/rename`：重命名
+- [x] `POST /api/files/move`：同源移动；跨源走流式中转（不落临时文件）
+- [x] `POST /api/files/copy`：同源复制；跨源流式中转
+- [x] `DELETE /api/files`：删除入回收站（逻辑删除，移入 `.trash/`）
+- [x] `GET /api/files/thumbnail?source=&path=`：视频缩略图（FFmpeg 抽帧缓存）
+- [x] Service 层：文件操作编排、跨源中转
+- [x] 视频缩略图生成：`ffmpeg -ss 10 -i input -vframes 1 -s 320x180 thumb.jpg`
+
+### 1.6 回收站（Trash）
+
+- [x] `GET /api/trash`：回收站列表（按 source_id 过滤）
+- [x] `POST /api/trash/restore`：还原文件（从 `.trash/` 移回原路径）
+- [x] `DELETE /api/trash/:id`：彻底删除单个文件
+- [x] `DELETE /api/trash`：清空回收站
+- [x] 定时清理任务（robfig/cron，每天执行，删除超过 N 天的回收站条目，默认 30 天）
+
+### 1.7 收藏（Favorite）
+
+- [x] `GET /api/favorites`：收藏列表（支持分页）
+- [x] `POST /api/favorites`：添加收藏（source_id + file_path 唯一）
+- [x] `DELETE /api/favorites`：取消收藏
+- [x] Repository 层：`favorite.go`
+
+### 1.8 流媒体模块（Stream）
+
+- [x] `GET /api/stream/:sourceId/*path`：原始流接口
+  - 支持 HTTP Range 请求（解析 `Range` 头，返回 206 Partial Content）
+  - 设置正确的 `Content-Type`、`Accept-Ranges: bytes`
+  - 视频直通格式：mp4/webm/m4v/mkv/avi/mov
+  - 音频直通格式：mp3/m4a/flac/wav/ogg
+- [x] FFmpeg HLS 转码（兜底）：
+  - `GET /api/stream/hls/:id/playlist.m3u8`：m3u8 播放列表
+  - `GET /api/stream/hls/:id/segment/:n.ts`：TS 分片
+  - 优先 `-c copy` 仅转封装，不兼容编码时再降码
+  - 转码会话管理：按需启动、空闲 5 分钟自动回收
+- [x] 字幕转换：srt/ass → webvtt（FFmpeg 或自行解析转换）
+- [x] Service 层：Range 解析、流式响应、HLS 会话池
+
+### 1.9 小说阅读模块（Reader - Novel）
+
+- [x] TXT 章节索引：
+  - 正则识别"第x章""Chapter x"等标题模式
+  - 自动检测编码（UTF-8/GBK/Big5，`golang.org/x/text` + `iconv` 兜底）
+  - 索引结果缓存到 `novel_index` 表
+  - 大文件后台异步建索引，先按固定分页可读
+- [x] `GET /api/reader/novel/chapters?source=&path=`：章节列表
+- [x] `GET /api/reader/novel/content?source=&path=&chapter=N`：按章节返回字节区间内容
+- [x] EPUB 解包：
+  - `GET /api/reader/epub/meta?source=&path=`：元数据（书名、作者、封面、目录）
+  - `GET /api/reader/epub/chapter?source=&path=&id=`：章节 HTML 内容
+  - `GET /api/reader/epub/resource?source=&path=&id=`：静态资源（图片/CSS）
+  - 按 `mimetype` 区分图集型（漫画）与文字型（小说）
+
+### 1.10 漫画阅读模块（Comic）
+
+- [x] 漫画识别策略：
+  - 扩展名优先：`.cbz`/`.cbr` → 直接漫画
+  - 内容嗅探：ZIP 中央目录解析 → 图片占比 ≥ 90% 且自然序列 → 漫画
+  - 目录级约定：路径源可标记为"漫画库"
+  - 手动覆盖：`POST /api/reader/comic/override`
+- [x] ZIP/CBZ 解析：`archive/zip` 标准库，中央目录读取，natsort 排序
+- [x] RAR/CBR 解析：`nwaples/rardecode` 或调用系统 unrar
+- [x] `GET /api/reader/comic/pages?source=&path=`：页列表
+- [x] `GET /api/reader/comic/page?source=&path=&n=N`：单页图片流式返回
+- [x] `GET /api/reader/comic/detect?source=&path=`：内容嗅探判定
+- [x] 普通压缩包支持：
+  - `GET /api/reader/archive/tree?source=&path=`：文件树
+  - `GET /api/reader/archive/file?source=&path=&entry=`：单独解出文件
+- [x] EPUB 图集型漫画支持（复用 EPUB 解包逻辑）
+
+### 1.11 阅读进度（Progress）
+
+- [x] `GET /api/progress`：获取所有进度（按 updated_at 降序）
+- [x] `PUT /api/progress`：保存/更新进度（upsert）
+- [x] `DELETE /api/progress`：标记已读完（设置 finished=true）
+- [x] Repository 层：`progress.go`
+
+### 1.12 动态模块（Feed，二期 M5）
+
+- [ ] `GET/POST/DELETE /api/feed/subscriptions`：订阅源 CRUD
+- [ ] 抓取调度（robfig/cron）：
+  - 按每个订阅源的 cron 表达式触发
+  - 增量抓取：基于 last_fetched_at + 已入库 content_id 截断
+- [ ] OpenClaw 集成：
+  - Gateway API 下发抓取任务
+  - `POST /api/internal/feed/ingest`：接收抓取结果，zod 风格校验，去重入库
+- [ ] 平台抽取提示词维护（B站/YouTube/抖音各一份 YAML 配置）
+- [ ] YouTube RSS 免费兜底通道
+- [ ] `GET /api/feed?cursor=&limit=`：动态列表（按发布时间降序）
+- [ ] `POST /api/feed/read`：更新已读游标
+- [ ] `POST /api/feed/fetch`：手动触发抓取
+- [ ] 稍后观看：`GET/POST/DELETE /api/feed/watch-later`
+- [ ] 抓取任务日志入库（FeedFetchLog）
+
+### 1.13 系统配置（Config）
+
+- [x] `GET /api/config`：获取所有配置（键值对）
+- [x] `PUT /api/config`：批量更新配置
+- [x] Repository 层：`config.go`
+
+### 1.14 路由注册
+
+- [x] `router/router.go`：注册所有路由
+  - 公开路由组：`/api/auth/*`
+  - 需鉴权路由组（JWT 中间件）
+  - 内部路由组：`/api/internal/*`（Token 校验中间件）
+- [x] 静态文件托管：生产环境托管 Flutter Web 构建产物（可选）
+
+---
+
+## 2. Flutter 前端 - 核心基础设施
+
+### 2.1 主题系统
+
+- [x] `core/theme/colors.dart`：色板常量定义
+  - 主色：`#2563eb`（亮）/ `#3b82f6`（暗）
+  - 背景：`#eef4fb`（亮）/ `#000000`（暗）
+  - 卡片：`#ffffff`（亮）/ `#121212`（暗）
+  - 导航背景：`#ffffff`（亮）/ `#0a0a0a`（暗）
+  - 文字主：`#1a1a2e`（亮）/ `#e0e0e0`（暗）
+  - 文字辅：`#6b7280`（亮）/ `#888888`（暗）
+  - 分割线：`#e5e7eb`（亮）/ `#1e1e1e`（暗）
+  - 输入框/列表行背景：`#ffffff`（亮）/ `#1a1a1a`（暗）
+  - 选中高亮：`#eef4fb` 底 + `#2563eb` 色（亮）/ `#1a2744` 底 + `#3b82f6` 色（暗）
+  - 播放器/阅读器沉浸背景：`#000000`（统一纯黑）
+- [x] `core/theme/app_theme.dart`：亮色/暗色 ThemeData
+  - 亮色：ColorScheme.light，卡片 Elevation 1-2
+  - 暗色：ColorScheme.dark（纯黑背景 `#000000`），**无阴影，用 `#1e1e1e` 边框区分卡片**
+  - 全局圆角 12px、按钮 20px 胶囊、输入框 8px
+  - 进度条 4px 高
+  - 字体：正文系统默认，阅读器思源宋体
+- [x] `shared/providers/theme_provider.dart`：主题状态管理（实现于 `core/theme/theme_mode_provider.dart`）
+  - 亮/暗切换
+  - 跟随系统（`PlatformDispatcher` 监听）
+  - 持久化到 `SharedPreferences`
+  - 沉浸式场景自动强制暗色
+- [x] 导航栏样式：
+  - `NavigationBar`（手机）：选中项蓝色高亮
+  - `NavigationRail`（平板/桌面）：选中项蓝色胶囊高亮，暗色模式 `#0a0a0a` 背景
+
+### 2.2 路由系统
+
+- [x] `core/router/app_router.dart`：go_router 配置
+  - 路由表：`/login`、`/reading`、`/favorites`、`/feed`、`/browse`、`/trash`、`/settings`、`/profile`
+  - 路由守卫：未登录 → 重定向 `/login`；已登录访问 `/login` → 重定向 `/reading`
+  - 嵌套路由：`ShellRoute` + 自适应导航壳
+  - 深层链接支持
+
+### 2.3 导航壳
+
+- [x] `shared/widgets/app_navigation.dart`：自适应导航壳
+  - `LayoutBuilder` 判断宽度：
+    - `<600px`：底部 `NavigationBar`（阅读/动态/浏览 3 项）+ 顶栏 `AppBar` 右侧头像按钮
+    - `600~840px`：左侧 `NavigationRail`（仅图标，阅读/收藏/动态/浏览/设置）+ 顶栏右侧头像
+    - `>840px`：左侧 `NavigationRail`（展开标签，同项）+ 左下角设置/主题切换按钮
+  - 选中项蓝色胶囊高亮动画
+  - 头像菜单（`PopupMenuButton`）：个人中心、我的收藏、设置、深色模式开关、退出登录
+
+### 2.4 页面保活
+
+- [x] `IndexedStack` 包裹 Tab 页面，保持切换不销毁
+- [x] 播放器使用独立全屏路由（`Navigator.push`），不随 Tab 切换影响
+- [x] 迷你播放器使用全局 `Overlay`，跨页面保持
+
+### 2.5 API 层封装
+
+- [x] `core/api/dio_client.dart`：dio 单例
+  - `BaseOptions`：baseUrl、超时 30s、JSON 默认 Content-Type
+  - 请求拦截器：注入 JWT Token（从 `flutter_secure_storage` 读取）
+  - 响应拦截器：统一错误处理、401 跳转登录
+  - 日志拦截器（Debug 模式）
+- [x] `core/api/auth_api.dart`：`login()`、`changePassword()`
+- [x] `core/api/source_api.dart`：CRUD + `testConnection()`
+- [x] `core/api/file_api.dart`：`listFiles()`、`uploadFiles()`（进度回调）、`mkdir()`、`rename()`、`moveFiles()`、`copyFiles()`、`deleteFiles()`、`thumbnailUrl()`
+- [x] `core/api/trash_api.dart`：列表、还原、删除、清空
+- [x] `core/api/favorite_api.dart`：列表、添加、移除
+- [x] `core/api/stream_api.dart`：`streamUrl()`、`hlsPlaylistUrl()`、`subtitleUrl()`
+- [x] `core/api/reader_api.dart`：TXT 章节/内容、EPUB 元数据/章节/资源
+- [x] `core/api/comic_api.dart`：页列表、单页图片、识别、覆盖、压缩包文件树/单文件
+- [x] `core/api/progress_api.dart`：获取所有、保存、标记已读完
+- [x] `core/api/feed_api.dart`：列表、已读、订阅 CRUD、手动抓取、稍后观看 CRUD
+- [x] `core/api/config_api.dart`：获取、更新
+
+### 2.6 数据模型
+
+- [x] 用 `freezed` 生成全部数据模型（User、Source、FileItem、TrashItem、Favorite、ReadingProgress、NovelIndex、FeedItem、FeedSubscription、WatchLater、AppConfig 等）
+- [x] `json_serializable` 配置 JSON 序列化
+
+### 2.7 本地存储
+
+- [x] `flutter_secure_storage`：JWT Token 读写
+- [x] `shared_preferences`：主题偏好、阅读器设置、播放设置
+- [x] `drift` 本地数据库（`data/database/`）：
+  - `local_progress.dart`：LocalProgress 表（离线进度缓存 + synced 标记）
+  - `download_task.dart`：DownloadTask 表（离线下载队列，二期）
+  - `build_runner` 生成代码
+
+---
+
+## 3. Flutter 前端 - 鉴权模块（Auth）
+
+- [x] `features/auth/screens/login_screen.dart`：登录页 UI（实现于 `features/auth/login_screen.dart`）
+  - Logo + 标题
+  - 用户名输入框
+  - 密码输入框（可切换明文/密文）
+  - 登录按钮（胶囊形，蓝色）
+  - 错误提示（SnackBar）
+  - 加载状态（按钮内转圈）
+- [x] `features/auth/providers/auth_provider.dart`：登录状态管理
+  - `login()` → dio POST → 存储 Token → 更新状态
+  - `logout()` → 清除 Token → 跳转登录页
+  - `changePassword()` → PUT 请求
+- [x] `shared/providers/auth_state_provider.dart`：全局认证状态（Riverpod）
+  - 是否已登录
+  - 当前用户名
+  - Token 有效性检查
+- [x] 路由守卫：go_router `redirect` 逻辑
+- [x] 设置页修改密码 UI
+
+---
+
+## 4. Flutter 前端 - 浏览模块（文件管理）
+
+### 4.1 路径源管理（F-101）
+
+- [x] `shared/widgets/source_manager.dart`：路径源管理组件
+  - 列表展示：类型图标、名称、挂载点、开关
+  - 添加/编辑弹窗：类型下拉（本地/WebDAV）、配置表单、连接测试按钮
+  - 删除确认弹窗
+- [x] 路径源选择器（浏览页顶部）：`DropdownButton` 切换当前路径源
+- [x] 对接 `source_api.dart` 全部接口
+
+### 4.2 文件浏览（F-102）
+
+- [x] `features/browse/screens/browse_screen.dart`：浏览页主界面（实现于 `features/browse/browse_screen.dart`）
+  - 顶部：路径源选择器 + 面包屑导航 + 搜索按钮 + 视图切换 + 上传按钮
+  - 内容区：`IndexedStack` 切换网格/列表视图
+- [x] `features/browse/widgets/file_grid.dart`：文件网格视图
+  - `GridView.builder` + 文件卡片
+  - 卡片内容：类型图标/缩略图、文件名（单行省略）、文件夹子项数、视频时长角标
+  - 漫画文件显示"漫画"徽标（蓝色胶囊）
+  - 卡片整体可点击，hover 浮起（亮色）/ 边框高亮（暗色）
+- [x] `features/browse/widgets/file_list.dart`：文件列表视图
+  - `ListView.builder` + `ListTile`
+  - 行内容：类型图标、文件名、大小、修改时间
+- [x] `features/browse/widgets/breadcrumb_bar.dart`：面包屑导航
+  - 水平滚动 `Chip` 列表
+  - 点击跳转到对应层级
+- [x] 搜索当前目录：`TextField` + 前端过滤
+- [x] 排序选择器：底部弹出菜单（名称/大小/时间，升序/降序）
+- [x] 下拉刷新（`RefreshIndicator`）
+- [x] 空状态：文件夹图标 + "此目录为空"
+- [x] 加载状态：`CircularProgressIndicator`
+- [x] 错误状态：错误信息 + 重试按钮
+
+### 4.3 文件操作（F-103 ~ F-105）
+
+- [x] 文件上传：
+  - 点击上传按钮 → `file_picker` 选择文件
+  - 上传进度 `BottomSheet`：文件名 + `LinearProgressIndicator` + 百分比
+  - 多文件队列上传
+  - 桌面端：`desktop_drop` 拖拽上传
+- [x] 新建文件夹：`AlertDialog` 输入名称 → `POST /api/files/mkdir`
+- [x] 重命名：`AlertDialog` 输入新名称 → `POST /api/files/rename`
+- [x] 移动/复制：`MoveTargetPicker`（`BottomSheet` 文件树选择目标目录）
+- [x] 长按进入多选模式：
+  - 卡片显示复选框
+  - 底部浮现操作栏：移动/复制/重命名/删除/收藏（`SnackBar` 风格或固定 `BottomAppBar`）
+
+### 4.4 删除与回收站（F-106）
+
+- [x] 删除确认 `AlertDialog`："确定删除 xxx？将移入回收站"
+- [x] `features/trash/screens/trash_screen.dart`：回收站页（实现于 `features/trash/trash_screen.dart`）
+  - 列表展示：文件名、原始路径、大小、删除时间
+  - 滑动操作（`Dismissible`）：左滑还原、右滑彻底删除
+  - 顶栏：清空按钮（二次确认）
+  - 空状态："回收站为空"
+- [x] 浏览页回收站入口（顶栏或导航栏按钮）
+
+### 4.5 文件收藏（F-107）
+
+- [x] 浏览页文件/文件夹星标按钮（卡片右上角或长按菜单）
+- [x] `features/favorites/screens/favorites_screen.dart`：收藏页（实现于 `features/favorites/favorites_screen.dart`）
+  - 网格/列表视图切换
+  - 类型图标、文件名、大小
+  - 右上角实心星标（点击取消收藏，即时移除）
+  - 卡片整体可点击 → 按类型进入播放器/阅读器
+  - 空状态：星形图标 + "暂无收藏，去浏览页添加吧"
+- [x] 收藏页与浏览页星标状态双向同步
+
+---
+
+## 5. Flutter 前端 - 媒体播放模块（F-201 / F-206 / F-207）
+
+### 5.1 播放器核心
+
+- [ ] `shared/widgets/media_player/media_player.dart`：播放器主 Widget
+  - 集成 `media_kit`：`Player` + `VideoController`
+  - 初始化：平台特定配置（Android/iOS/桌面）
+  - 播放源构建：直接 URL（直通格式）+ HLS URL（转码兜底）
+  - 视频/音频自动识别（根据 mediaType 或扩展名）
+  - 全屏播放使用 `Navigator.push` 独立路由
+  - 暗色沉浸背景（纯黑 `#000000`）
+- [ ] 加载状态：中央 `CircularProgressIndicator` + "加载中..."
+- [ ] 缓冲指示器：控制栏进度条显示缓冲区间
+- [ ] 错误状态：错误信息 + 重试按钮
+
+### 5.2 播放控制
+
+- [ ] `shared/widgets/media_player/player_controls.dart`：自定义控制栏（Overlay）
+  - 播放/暂停按钮（中央大按钮，点击或轻触画面）
+  - 进度条：`Slider` 可拖拽 + 缓冲进度叠加
+  - 当前时间 / 总时长（`Text` 格式 `mm:ss`）
+  - 倍速选择：`BottomSheet` 列表（0.5x/0.75x/1.0x/1.25x/1.5x/2.0x）
+  - 音量滑块：水平 `Slider` + 静音按钮
+  - 全屏切换按钮
+  - 控制栏 3 秒无操作自动隐藏
+- [ ] 锁定屏幕方向（全屏时横屏锁定）
+
+### 5.3 音频唱片封面模式
+
+- [ ] `shared/widgets/media_player/audio_cover_mode.dart`：音频播放 UI
+  - 封面图片：`RotationTransition` 旋转动效（播放时旋转，暂停时停止）
+  - 无封面时显示音乐图标占位
+  - 标题 + 作者信息（居中显示）
+  - 控制栏与视频完全一致
+- [ ] 视频/音频模式自动切换
+
+### 5.4 手势控制
+
+- [ ] `shared/widgets/media_player/gesture_handler.dart`：手势识别层
+  - 水平滑动：调节进度（±10s 起，随滑动距离增加）
+  - 右侧 1/3 竖滑：调节音量
+  - 左侧 1/3 竖滑：调节亮度（`MediaQuery` 或系统亮度 API）
+  - 双击左半区：快退 10s
+  - 双击右半区：快进 10s
+  - 调节时屏幕中央悬浮胶囊实时反馈（进度时间 / 音量% / 亮度% 图标 + 数值）
+
+### 5.5 键盘控制（桌面端）
+
+- [ ] `CallbackShortcuts` + `Focus` 全局键盘监听
+  - `←`/`→`：快退/快进 5s
+  - `↑`/`↓`：调节音量 5%
+  - `空格`：播放/暂停
+  - `Esc`：退出全屏播放器
+  - `F`：全屏切换
+  - `M`：静音切换
+
+### 5.6 字幕支持
+
+- [ ] 外挂字幕自动检测：同目录同名 srt/ass/vtt 文件
+- [ ] 字幕加载与显示（media_kit 内置 subtitle 支持）
+- [ ] 字幕轨切换按钮（如有多个字幕）
+
+### 5.7 播放进度与迷你播放器
+
+- [ ] 播放进度自动上报：每 5 秒节流 → `PUT /api/progress`
+- [ ] 打开已播放文件自动恢复进度（seek 到上次位置）
+- [ ] `shared/widgets/media_player/mini_player.dart`：迷你播放器
+  - 底部迷你条：文件名、细进度条、播放/暂停圆形按钮、关闭按钮
+  - 使用全局 `Overlay` 实现，跨页面保持
+  - 点击迷你条展开全屏播放器
+  - 关闭按钮停止播放并移除 Overlay
+  - 拖拽到底部可关闭
+
+### 5.8 连续播放推荐（F-207，新增）
+
+- [ ] `shared/widgets/media_player/next_media_tip.dart`：下一个推荐提示
+  - 播放结束后，查询同目录同类型文件列表
+  - 按当前排序找下一个文件（排序缓存 > 名称升序）
+  - 底部弹出"下一个：xxx"提示条（`SnackBar` 风格或自定义 Widget）
+  - 5 秒倒计时自动播放（`CircularProgressIndicator` 倒计时环）
+  - 点击立即播放、点击空白区域关闭
+
+---
+
+## 6. Flutter 前端 - 小说阅读模块（F-202 / F-203）
+
+### 6.1 TXT 阅读器
+
+- [ ] `shared/widgets/novel_reader/novel_reader.dart`：阅读器主 Widget
+- [ ] 章节列表加载：`GET /api/reader/novel/chapters`
+- [ ] 章节内容按需加载：`GET /api/reader/novel/content?chapter=N`
+- [ ] `shared/widgets/novel_reader/page_mode.dart`：翻页模式
+  - `PageView.builder` 左右滑动翻页
+  - 每页计算可容纳字数，按屏幕高度切分
+  - 翻页动画（`PageView` 默认滑动效果）
+- [ ] `shared/widgets/novel_reader/scroll_mode.dart`：滚动模式
+  - `ListView.builder` 上下连续滚动
+  - 章节间平滑衔接
+- [ ] 章节预加载：当前章节 ± 1
+
+### 6.2 EPUB 阅读器
+
+- [ ] EPUB 元数据加载：书名、作者、封面、目录
+- [ ] 章节 HTML 渲染：`flutter_widget_from_html` 或自建富文本渲染
+- [ ] 静态资源加载（图片/CSS）
+- [ ] 翻页/滚动模式（与 TXT 共用阅读器壳）
+
+### 6.3 阅读器设置
+
+- [ ] `shared/widgets/novel_reader/reader_settings.dart`：设置面板
+  - `ModalBottomSheet` 弹出
+  - 字号调节：`Slider`（12~24px）
+  - 行距调节：`Slider`（1.2~2.5）
+  - 三种主题切换：日间（白底 `#ffffff` 黑字）、夜间（黑底 `#000000` 白字）、护眼（暖纸 `#f5f0e8` 底 + 深棕 `#4a3728` 字）
+  - 翻页模式切换（翻页/滚动）
+  - 设置持久化到 `SharedPreferences`
+- [ ] 思源宋体（`Noto Serif SC`）应用于正文
+- [ ] 亮色模式阅读器也使用独立背景色（不受全局主题影响）
+
+### 6.4 目录与进度
+
+- [ ] `shared/widgets/novel_reader/chapter_drawer.dart`：目录抽屉
+  - `Drawer` 从右侧滑出
+  - 章节列表，当前章节高亮
+  - 点击跳转到对应章节
+- [ ] 阅读进度实时显示：底部进度条 + 百分比文字
+- [ ] 上/下一章按钮（底部悬浮或章节末尾）
+- [ ] 进度自动上报后端（退出阅读器时保存）
+
+---
+
+## 7. Flutter 前端 - 漫画阅读模块（F-204 / F-208）
+
+### 7.1 漫画数据加载
+
+- [ ] `shared/widgets/comic_reader/comic_reader.dart`：漫画阅读器主 Widget
+- [ ] 漫画页列表加载：`GET /api/reader/comic/pages`
+- [ ] 单页图片加载：`GET /api/reader/comic/page?n=N` + `cached_network_image`
+- [ ] 漫画识别策略复用后端判定，前端根据返回类型路由到对应阅读器
+
+### 7.2 阅读模式
+
+- [ ] `shared/widgets/comic_reader/single_page.dart`：单页模式
+  - `PageView.builder` 左右滑动翻页
+  - `InteractiveViewer` 包裹每张图片，支持双指缩放/拖拽
+  - 点击切换控制栏显隐
+- [ ] `shared/widgets/comic_reader/double_page.dart`：双页模式
+  - 横屏/平板自动启用
+  - `PageView` 每页显示两张图（`Row` 左右排列）
+  - 从右向左阅读（日漫方向）或从左向右（可配置）
+- [ ] `shared/widgets/comic_reader/webtoon_mode.dart`：条漫模式
+  - `ListView.builder` 纵向连续滚动
+  - 每张图全宽显示
+  - `InteractiveViewer` 支持双指缩放
+- [ ] 模式切换按钮：底部悬浮 `SegmentedButton`（单页/双页/条漫）
+
+### 7.3 预加载
+
+- [ ] 当前页 ± 3 页预加载
+  - `cached_network_image` 的 `precacheImage` 方法
+  - 正向翻页时前向优先（+1/+2/+3 先于 -1/-2/-3）
+  - 反向翻页时后向优先
+- [ ] 预加载队列管理：最多同时预加载 3 张
+
+### 7.4 控制栏与进度
+
+- [ ] 顶部悬浮控制栏（Overlay，点击显示/隐藏）：
+  - 页码指示器：`当前页 / 总页数`
+  - 返回按钮
+  - 模式切换按钮
+- [ ] 阅读页码进度自动上报
+- [ ] 下次打开恢复上次页码
+
+### 7.5 翻完推荐下一本（F-208，新增）
+
+- [ ] `shared/widgets/comic_reader/next_comic_tip.dart`：下一本推荐提示
+  - 翻到最后一页时，底部弹出"下一本：xxx"提示
+  - 同目录查找下一个漫画文件
+  - 5 秒倒计时自动打开（`CircularProgressIndicator` 倒计时环）
+  - 点击立即打开、点击空白区域关闭
+
+---
+
+## 8. Flutter 前端 - 阅读进度与"正在阅读"（F-205）
+
+- [ ] `features/reading/providers/reading_provider.dart`：进度数据管理
+  - 加载全部进度列表
+  - 按 updated_at 降序排列
+  - 下拉刷新
+- [ ] `features/reading/screens/reading_screen.dart`："正在阅读"首页
+  - `GridView` 卡片网格（2 列自适应）
+  - `shared/widgets/reading_card.dart`：进度卡片
+    - 封面/类型图标
+    - 类型徽标（小说/漫画/视频/音频，蓝色胶囊小标）
+    - 标题（单行省略）
+    - 细进度条（4px，蓝色）
+    - 最后阅读时间（相对时间，如"3 小时前"）
+  - 卡片整体可点击 → 进入对应阅读器/播放器并恢复进度
+  - 长按卡片 → "标记为已读完"选项
+- [ ] 空状态：书本图标 + "还没有阅读记录，去浏览页看看吧"
+
+---
+
+## 9. Flutter 前端 - 动态模块（F-301 ~ F-304，二期 M5）
+
+> 动态模块为后端主导功能，Flutter 端主要负责 UI 展示。
+
+- [ ] `features/feed/providers/feed_provider.dart`：动态数据管理
+- [ ] `features/feed/screens/feed_screen.dart`：动态流 UI
+  - 时间序卡片列表：`ListView.builder` + 无限滚动（`ScrollController` 触底加载更多）
+  - 卡片内容：平台徽标、作者、封面缩略图、标题、发布时间（相对时间）、类型徽标
+  - 视频/音频动态点击内嵌播放（复用统一播放器）或跳转原站
+  - "已看到此处"进度锚点
+  - 下拉刷新加载最新
+  - "全部标为已读"按钮
+- [ ] 稍后观看（F-304）：
+  - 动态卡片书签按钮（点击收录/取消，实心高亮）
+  - 顶栏书签图标 + 数量角标
+  - 点击角标展开稍后观看列表（`BottomSheet`）
+  - 列表支持单条移除、内嵌播放
+- [ ] 订阅源管理：设置页添加/编辑/删除/启停
+- [ ] 手动触发抓取按钮
+
+---
+
+## 10. Flutter 前端 - 设置模块（F-401 ~ F-403）
+
+- [ ] `features/settings/screens/settings_screen.dart`：设置页 UI
+  - 分组卡片列表：`ListView` + `Card` + `ListTile`
+  - 每组：标题 + 列表行（行尾 chevron 或 Switch）
+- [ ] 路径源管理：条目列表 + iOS 风格开关 + 添加按钮
+- [ ] 阅读器偏好：字号、主题、翻页模式、漫画方向
+- [ ] 播放设置：默认倍速、转码质量偏好
+- [ ] 动态设置：抓取频率、保留条数上限、平台凭据
+- [ ] 账号安全：修改密码行
+- [ ] 系统信息：存储用量、任务日志
+- [ ] 设置持久化：`GET/PUT /api/config`
+- [ ] Flutter 专属设置：
+  - 离线缓存管理（显示缓存大小 + 清理按钮）
+  - 主题跟随系统开关
+  - 关于（版本号、开源许可）
+
+---
+
+## 11. Flutter 前端 - 多平台适配（F-501）
+
+### 11.1 Android
+
+- [ ] 边缘到边缘（Edge-to-Edge）：`SystemUiOverlayStyle` 透明状态栏/导航栏
+- [ ] 状态栏图标颜色跟随主题
+- [ ] 系统返回手势兼容（`PopScope`）
+- [ ] Material 3 动态取色（可选，Android 12+）
+
+### 11.2 iOS
+
+- [ ] `SafeArea` 适配：刘海屏、Dynamic Island
+- [ ] 状态栏样式跟随主题
+- [ ] 系统侧滑返回手势兼容（go_router 默认支持）
+- [ ] 橡皮筋滚动效果（`BouncingScrollPhysics`）
+
+### 11.3 平板/折叠屏
+
+- [ ] NavigationRail 自适应（600px 断点）
+- [ ] 双页漫画模式（横屏自动启用）
+- [ ] 设置页双栏布局（左侧导航 + 右侧内容）
+
+### 11.4 桌面端
+
+- [ ] 键盘快捷键全局（`CallbackShortcuts`）
+- [ ] 窗口最小尺寸限制（480×320）
+- [ ] 文件拖拽上传（`desktop_drop`）
+- [ ] 右键上下文菜单（文件操作）
+- [ ] 窗口标题栏自定义（可选）
+
+### 11.5 横竖屏适配
+
+- [ ] `OrientationBuilder` 处理横竖屏切换
+- [ ] 视频播放器：竖屏正常/横屏全屏
+- [ ] 漫画阅读器：竖屏单页/横屏双页
+- [ ] 浏览页：横屏增加列数
+
+---
+
+## 12. Flutter 前端 - 新增功能
+
+### 12.1 离线进度缓存与同步（F-502）
+
+- [ ] drift 数据库 `local_progress` 表：本地进度存储
+- [ ] 阅读器/播放器退出时：同时保存到本地 drift 和后端 API
+- [ ] 网络不可用时：仅保存到本地 drift，设置 `synced = false`
+- [ ] 网络恢复时：批量上传未同步的进度（`synced = false` 的记录）
+- [ ] 冲突处理：后端时间戳更新 → 以最新为准
+
+### 12.2 离线下载（F-503，二期）
+
+- [ ] drift 数据库 `download_task` 表：下载队列
+- [ ] 下载管理页：下载中/已完成/已暂停列表
+- [ ] dio `download()` 方法：支持暂停/恢复/取消
+- [ ] 下载进度通知
+- [ ] 后台下载（`workmanager` 或 `flutter_background_service`）
+- [ ] 离线播放/阅读：从本地文件路径加载
+- [ ] 下载存储空间管理：显示占用空间 + 清理按钮
+
+### 12.3 系统通知（F-504，二期）
+
+- [ ] `flutter_local_notifications` 初始化 + 权限申请
+- [ ] 动态抓取完成通知
+- [ ] 离线下载完成通知
+- [ ] 通知点击跳转对应页面（go_router 深层链接）
+
+---
+
+## 13. 测试
+
+### 13.1 Go 后端测试
+
+- [ ] 单元测试：各 Service 层（Mock Repository）
+- [ ] 单元测试：存储适配器（LocalAdapter、WebDavAdapter）
+- [ ] 单元测试：TXT 编码检测、章节切分
+- [ ] 集成测试：API 端点（`httptest` 包）
+- [ ] 测试覆盖率 > 60%
+
+### 13.2 Flutter 前端测试
+
+- [ ] 单元测试：数据模型序列化/反序列化
+- [ ] 单元测试：Repository 层（Mock dio）
+- [ ] Widget 测试：核心组件（文件网格、播放器控制栏、阅读器翻页）
+- [ ] Widget 测试：主题切换、导航切换
+- [ ] 集成测试：登录 → 浏览 → 播放 → 阅读 完整流程
+- [ ] 多设备 Golden 测试（UI 截图对比）
+
+---
+
+## 14. 部署与发布
+
+### 14.1 Go 后端部署
+
+- [ ] `Dockerfile`：多阶段构建（golang:alpine 编译 → alpine 运行，含 FFmpeg）
+- [ ] `docker-compose.yml`：Go 后端 + Caddy + OpenClaw（可选）+ OpenList（可选）
+- [ ] `Caddyfile`：反代配置 + 自动 HTTPS
+- [ ] 健康检查端点：`GET /api/health`
+- [ ] SQLite 每日自动备份（cron + shell 脚本）
+- [ ] 环境变量文档（`config.yaml` 注释）
+
+### 14.2 Flutter 前端发布
+
+- [ ] Android：签名配置（`key.properties`）、Gradle 构建、APK/AAB 输出
+- [ ] iOS：Xcode 配置（Bundle ID、签名）、Archive → TestFlight / IPA
+- [ ] Windows：MSIX 打包（`msix` 包）
+- [ ] macOS：DMG 打包、公证（Notarization）
+- [ ] Linux：AppImage / Flatpak / Snap
+- [ ] Web（可选）：`flutter build web` → 部署到 Caddy 静态目录
+- [ ] CI/CD：GitHub Actions 多平台自动构建
+- [ ] 版本管理：语义化版本 + `CHANGELOG.md`
+
+---
+
+## 里程碑检查点
+
+- [ ] **M0**：Go 后端脚手架 + 鉴权 + 路径源 + 文件管理 API 可用；Flutter 脚手架 + 路由 + 主题 + 登录可用
+- [ ] **M1**：Flutter 文件浏览/上传/操作/回收站/收藏可用
+- [ ] **M2**：Flutter 视频/音频播放器（media_kit）+ 迷你播放器 + 连续播放推荐可用
+- [ ] **M3**：Flutter 小说/漫画阅读器 + 阅读进度 + "正在阅读"首页 + 连续阅读推荐可用
+- [ ] **M4 v1.0**：多平台适配完成，设置模块收尾，离线进度缓存，Go 后端全部 API 就绪
+- [ ] **M5 v1.1**：动态模块 + 离线下载 + 系统通知
+
+
+
+## 体验优化、bug修复
+---
+
+
+- [ ] 服务器启动时从配置文件读取部分配置：db数据、缓存数据存储路径；端口、日志级别、日志路径；ffmpeg路径；
+- [ ] 点击头像框，直接跳到个人主页
+
+
+---

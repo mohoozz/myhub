@@ -1,0 +1,48 @@
+# myhub-server 配置文件
+# 所有配置项均可通过环境变量覆盖，规则：前缀 MYHUB_ + 大写路径（. 替换为 _）
+# 例如：MYHUB_SERVER_PORT=9090 覆盖 server.port；MYHUB_JWT_SECRET=xxx 覆盖 jwt.secret
+
+server:
+  # HTTP 监听端口
+  port: 8080
+  # Gin 运行模式：debug（开发，输出详细日志）/ release（生产）
+  mode: debug
+
+jwt:
+  # JWT 签名密钥，生产环境务必通过 MYHUB_JWT_SECRET 环境变量覆盖
+  secret: "myhub-default-secret-please-change"
+  # Token 过期时间（小时）
+  expire_hours: 24
+
+internal:
+  # 内部接口访问令牌（供 OpenClaw 回传等内部服务调用 /api/internal/*）
+  # 请求头 X-Internal-Token 需与此值一致；生产环境务必通过 MYHUB_INTERNAL_TOKEN 覆盖
+  token: "myhub-internal-token-please-change"
+
+database:
+  # SQLite 数据库文件路径（相对工作目录或绝对路径均可）
+  path: "data/myhub.db"
+
+storage:
+  # 路径源白名单：本地路径源仅允许挂载这些根目录，防止目录穿越
+  # 示例：
+  # allowed_roots:
+  #   - "D:/Media"
+  #   - "/mnt/nas"
+  allowed_roots: []
+
+data:
+  # 视频缩略图缓存目录（FFmpeg 抽帧产物）
+  thumbs_dir: "data/thumbs"
+  # HLS 转码输出目录（m3u8 与 ts 分片）
+  hls_dir: "data/hls"
+
+trash:
+  # 回收站保留天数，超时由定时任务自动彻底删除
+  retention_days: 30
+
+web:
+  # Flutter Web 构建产物目录（可选）：配置后生产环境直接托管 SPA
+  # 非 /api 路径优先匹配静态文件，未命中回退 index.html（前端路由）
+  # 示例：dir: "web"
+  dir: ""

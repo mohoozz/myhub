@@ -1,0 +1,16 @@
+# 数据目录（数据库、缩略图、HLS 产物）
+data/
+
+# 二进制产物
+*.exe
+myhub-server
+myhub-server-*
+
+# 版本控制
+.git/
+.gitignore
+
+# 文档与临时文件
+*.md
+*.log
+tmp/

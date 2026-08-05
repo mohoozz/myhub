@@ -1,0 +1,66 @@
+name: myhub_flutter
+description: "myhub - personal content hub (Flutter client, PC first)."
+publish_to: 'none'
+
+version: 0.1.0
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.6.1
+  # Routing
+  go_router: ^14.8.1
+  # Network
+  dio: ^5.7.0
+  # Media playback
+  media_kit: ^1.2.0
+  media_kit_video: ^1.2.0
+  media_kit_libs_video: ^1.0.5
+  # Image caching
+  cached_network_image: ^3.4.1
+  # Local database
+  drift: ^2.22.1
+  sqlite3_flutter_libs: ^0.5.0
+  # Storage
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.3.4
+  # File picking
+  file_picker: ^8.1.6
+  # Fonts
+  google_fonts: ^6.2.1
+  # Codegen annotations
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+  # Notifications
+  flutter_local_notifications: ^18.0.0
+  # Paths
+  path_provider: ^2.1.0
+  # i18n / formatting
+  intl: ^0.19.0
+  # Desktop drag & drop
+  desktop_drop: ^0.5.0
+  # Desktop window controls (custom title bar)
+  window_manager: ^0.4.3
+  # Icons
+  lucide_icons_flutter: ^3.1.15
+  cupertino_icons: ^1.0.8
+  path: ^1.9.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+  build_runner: ^2.4.0
+  freezed: ^2.5.0
+  json_serializable: ^6.8.0
+  drift_dev: ^2.22.1
+  riverpod_generator: ^2.6.3
+
+flutter:
+  uses-material-design: true

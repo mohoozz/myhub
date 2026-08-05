@@ -1,0 +1,222 @@
+import 'package:flutter/material.dart';
+import 'package:myhub_flutter/core/theme/colors.dart';
+
+/// Builds the light / dark [ThemeData] from the [AppColors] spec.
+///
+/// Global shape language: cards 12px radius, pill (stadium) buttons,
+/// 8px radius inputs, 4px-tall progress indicators. Dark mode is
+/// shadow-less; cards are separated by a #1E1E1E border instead.
+abstract final class AppTheme {
+  static const double _cardRadius = 12;
+  static const double _inputRadius = 8;
+  static const double _progressHeight = 4;
+
+  static ThemeData light() {
+    const colorScheme = ColorScheme.light(
+      primary: AppColors.primaryLight,
+      onPrimary: Colors.white,
+      secondary: AppColors.primaryLight,
+      onSecondary: Colors.white,
+      surface: AppColors.backgroundLight,
+      onSurface: AppColors.textPrimaryLight,
+      onSurfaceVariant: AppColors.textSecondaryLight,
+      outline: AppColors.dividerLight,
+      error: Color(0xFFDC2626),
+      onError: Colors.white,
+      surfaceTint: Colors.transparent,
+    );
+    return _build(
+      colorScheme: colorScheme,
+      cardColor: AppColors.cardLight,
+      navBackground: AppColors.navBackgroundLight,
+      dividerColor: AppColors.dividerLight,
+      inputFill: AppColors.inputBackgroundLight,
+      selectionBg: AppColors.selectionBgLight,
+      selectionFg: AppColors.selectionFgLight,
+      textPrimary: AppColors.textPrimaryLight,
+      textSecondary: AppColors.textSecondaryLight,
+      isDark: false,
+    );
+  }
+
+  static ThemeData dark() {
+    const colorScheme = ColorScheme.dark(
+      primary: AppColors.primaryDark,
+      onPrimary: Colors.white,
+      secondary: AppColors.primaryDark,
+      onSecondary: Colors.white,
+      surface: AppColors.backgroundDark,
+      onSurface: AppColors.textPrimaryDark,
+      onSurfaceVariant: AppColors.textSecondaryDark,
+      outline: AppColors.dividerDark,
+      error: Color(0xFFEF4444),
+      onError: Colors.white,
+      surfaceTint: Colors.transparent,
+    );
+    return _build(
+      colorScheme: colorScheme,
+      cardColor: AppColors.cardDark,
+      navBackground: AppColors.navBackgroundDark,
+      dividerColor: AppColors.dividerDark,
+      inputFill: AppColors.inputBackgroundDark,
+      selectionBg: AppColors.selectionBgDark,
+      selectionFg: AppColors.selectionFgDark,
+      textPrimary: AppColors.textPrimaryDark,
+      textSecondary: AppColors.textSecondaryDark,
+      isDark: true,
+    );
+  }
+
+  static ThemeData _build({
+    required ColorScheme colorScheme,
+    required Color cardColor,
+    required Color navBackground,
+    required Color dividerColor,
+    required Color inputFill,
+    required Color selectionBg,
+    required Color selectionFg,
+    required Color textPrimary,
+    required Color textSecondary,
+    required bool isDark,
+  }) {
+    final inputBorder = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(_inputRadius),
+      borderSide: BorderSide(color: dividerColor),
+    );
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: colorScheme.surface,
+      appBarTheme: AppBarTheme(
+        backgroundColor: colorScheme.surface,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: false,
+        titleTextStyle: TextStyle(
+          color: textPrimary,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      cardTheme: CardThemeData(
+        color: cardColor,
+        elevation: isDark ? 0 : 1,
+        shadowColor: isDark ? Colors.transparent : null,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(_cardRadius),
+          side: isDark ? BorderSide(color: dividerColor) : BorderSide.none,
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: cardColor,
+        elevation: isDark ? 0 : 6,
+        shadowColor: isDark ? Colors.transparent : null,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(_cardRadius),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          // 40px-tall pill => 20px radius capsule.
+          shape: const StadiumBorder(),
+          minimumSize: const Size(64, 40),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: inputFill,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 12,
+        ),
+        border: inputBorder,
+        enabledBorder: inputBorder,
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(_inputRadius),
+          borderSide: BorderSide(color: colorScheme.primary, width: 1.5),
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+        color: dividerColor,
+        thickness: 1,
+        space: 1,
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: colorScheme.primary,
+        linearMinHeight: _progressHeight,
+        borderRadius: BorderRadius.circular(_progressHeight / 2),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: navBackground,
+        indicatorColor: selectionBg,
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? selectionFg
+                : textSecondary,
+          ),
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            fontSize: 12,
+            fontWeight: states.contains(WidgetState.selected)
+                ? FontWeight.w600
+                : FontWeight.w400,
+            color: states.contains(WidgetState.selected)
+                ? selectionFg
+                : textSecondary,
+          ),
+        ),
+      ),
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor: navBackground,
+        indicatorColor: selectionBg,
+        selectedIconTheme: IconThemeData(color: selectionFg),
+        unselectedIconTheme: IconThemeData(color: textSecondary),
+        selectedLabelTextStyle: TextStyle(
+          color: selectionFg,
+          fontWeight: FontWeight.w600,
+        ),
+        unselectedLabelTextStyle: TextStyle(color: textSecondary),
+      ),
+      textTheme: (isDark
+              ? Typography.material2021().white
+              : Typography.material2021().black)
+          .apply(
+        bodyColor: textPrimary,
+        displayColor: textPrimary,
+        fontFamilyFallback: _fontFamilyFallback,
+      ),
+    );
+  }
+
+  /// CJK-friendly fallback chain: Windows renders Chinese with the default
+  /// font stack blurry, so prefer the platform's UI CJK fonts explicitly.
+  static const List<String> _fontFamilyFallback = [
+    'Microsoft YaHei UI',
+    'Microsoft YaHei',
+    'PingFang SC',
+    'Noto Sans SC',
+    'sans-serif',
+  ];
+
+  /// 阅读器正文字体：思源宋体优先，逐级回退平台衬线字体。
+  static const List<String> readerSerifFallback = [
+    'Noto Serif SC',
+    'Source Han Serif SC',
+    'Songti SC',
+    'SimSun',
+    'serif',
+  ];
+
+  /// 阅读器正文样式（独立背景/字号由阅读器设置控制，此处仅提供字体）。
+  static TextStyle readerSerif({required Color color, required double fontSize, double height = 1.8}) {
+    return TextStyle(
+      color: color,
+      fontSize: fontSize,
+      height: height,
+      fontFamilyFallback: readerSerifFallback,
+    );
+  }
+}

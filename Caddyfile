@@ -1,0 +1,29 @@
+# myhub 反向代理配置
+# 将 myhub.example.com 替换为你的域名；本地开发可直接用 :80
+
+myhub.example.com {
+	# API 与流式接口反向代理到 Go 后端
+	reverse_proxy myhub-server:8080 {
+		# 流式播放需要禁用缓冲，支持 Range 请求透传
+		flush_interval -1
+	}
+
+	# 安全响应头
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# 日志
+	log {
+		output file /data/access.log
+		format json
+	}
+}
+
+# 本地开发（无域名）时使用：
+# :80 {
+# 	reverse_proxy myhub-server:8080
+# }

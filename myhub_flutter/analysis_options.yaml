@@ -1,0 +1,34 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+  errors:
+    # Freezed / json_serializable generate annotations the analyzer cannot resolve.
+    invalid_annotation_target: ignore
+  language:
+    strict-casts: true
+
+linter:
+  rules:
+    # ---- Stricter than flutter_lints defaults ----
+    - always_declare_return_types
+    - always_use_package_imports
+    - directives_ordering
+    - eol_at_end_of_file
+    - prefer_final_locals
+    - prefer_single_quotes
+    - require_trailing_commas
+    - unawaited_futures
+    - unnecessary_lambdas
+    - unreachable_from_main
+    # ---- Correctness ----
+    - avoid_empty_else
+    - avoid_relative_lib_imports
+    - avoid_shadowing_type_parameters
+    - avoid_types_as_parameter_names
+    - await_only_futures
+    - camel_case_extensions
+    - camel_case_types
+    - curly_braces_in_flow_control_structures

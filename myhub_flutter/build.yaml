@@ -1,0 +1,8 @@
+targets:
+  $default:
+    builders:
+      json_serializable:
+        options:
+          # 后端 Go JSON 字段为 snake_case，Dart 侧用 camelCase
+          field_rename: snake
+          explicit_to_json: true

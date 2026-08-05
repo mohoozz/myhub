@@ -1,0 +1,14 @@
+# 数据目录（SQLite 数据库、缩略图、HLS 转码产物）
+data/
+
+# 二进制产物
+*.exe
+myhub-server
+myhub-server-*
+
+# 日志
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
