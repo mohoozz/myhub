@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"gorm.io/gorm"
 
@@ -26,11 +27,27 @@ var (
 type SourceService struct {
 	cfg        *config.Config
 	sourceRepo *repository.SourceRepository
+
+	// 适配器缓存：避免每个请求都重建适配器（WebDAV 每次新建会做
+	// 内网探测 + 新建 HTTP 客户端，高频流式请求下连接无法复用，
+	// TIME_WAIT 堆积会耗尽 Windows 临时端口）
+	adapterMu    sync.Mutex
+	adapterCache map[uint]*cachedAdapter
+}
+
+// cachedAdapter 缓存的适配器及其对应的源快照（按 UpdatedAt 失效）
+type cachedAdapter struct {
+	source  *model.Source
+	adapter adapter.IStorageAdapter
 }
 
 // NewSourceService 创建 SourceService
 func NewSourceService(cfg *config.Config, sourceRepo *repository.SourceRepository) *SourceService {
-	return &SourceService{cfg: cfg, sourceRepo: sourceRepo}
+	return &SourceService{
+		cfg:          cfg,
+		sourceRepo:   sourceRepo,
+		adapterCache: make(map[uint]*cachedAdapter),
+	}
 }
 
 // List 返回全部路径源
@@ -106,7 +123,11 @@ func (s *SourceService) Update(source *model.Source) error {
 	if err := s.validate(source); err != nil {
 		return err
 	}
-	return s.sourceRepo.Update(source)
+	if err := s.sourceRepo.Update(source); err != nil {
+		return err
+	}
+	s.invalidateAdapter(source.ID)
+	return nil
 }
 
 // Delete 删除路径源
@@ -114,26 +135,38 @@ func (s *SourceService) Delete(id uint) error {
 	if _, err := s.GetByID(id); err != nil {
 		return err
 	}
-	return s.sourceRepo.Delete(id)
+	if err := s.sourceRepo.Delete(id); err != nil {
+		return err
+	}
+	s.invalidateAdapter(id)
+	return nil
 }
 
-// Test 连接测试：实例化适配器并调用 Test 验证挂载点可用
-func (s *SourceService) Test(ctx context.Context, id uint) error {
+// Test 连接测试：实例化适配器并调用 Test 验证挂载点可用。
+// 返回实际使用的链路（"lan"/"wan"，无链路信息时为空字符串）。
+func (s *SourceService) Test(ctx context.Context, id uint) (string, error) {
 	source, err := s.GetByID(id)
 	if err != nil {
-		return err
+		return "", err
 	}
 	a, err := s.newAdapter(source)
 	if err != nil {
 		if errors.Is(err, adapter.ErrForbidden) {
-			return ErrSourceForbidden
+			return "", ErrSourceForbidden
 		}
-		return err
+		return "", err
 	}
-	return a.Test(ctx)
+	if err := a.Test(ctx); err != nil {
+		return "", err
+	}
+	if nr, ok := a.(adapter.NetworkReporter); ok {
+		return nr.Network(), nil
+	}
+	return "", nil
 }
 
-// GetAdapter 获取指定路径源的适配器实例（供文件管理等模块使用）
+// GetAdapter 获取指定路径源的适配器实例（供文件管理等模块使用）。
+// 适配器按源缓存复用（HTTP 连接池随之复用），源记录变更后自动重建。
 func (s *SourceService) GetAdapter(sourceID uint) (adapter.IStorageAdapter, *model.Source, error) {
 	source, err := s.GetByID(sourceID)
 	if err != nil {
@@ -142,9 +175,24 @@ func (s *SourceService) GetAdapter(sourceID uint) (adapter.IStorageAdapter, *mod
 	if !source.Enabled {
 		return nil, nil, fmt.Errorf("%w：路径源已停用", ErrInvalidSource)
 	}
+
+	s.adapterMu.Lock()
+	defer s.adapterMu.Unlock()
+	if cached, ok := s.adapterCache[sourceID]; ok &&
+		cached.source.UpdatedAt.Equal(source.UpdatedAt) {
+		return cached.adapter, cached.source, nil
+	}
 	a, err := s.newAdapter(source)
 	if err != nil {
 		return nil, nil, err
 	}
+	s.adapterCache[sourceID] = &cachedAdapter{source: source, adapter: a}
 	return a, source, nil
+}
+
+// invalidateAdapter 使指定源的缓存适配器失效（更新/删除源时调用）
+func (s *SourceService) invalidateAdapter(id uint) {
+	s.adapterMu.Lock()
+	delete(s.adapterCache, id)
+	s.adapterMu.Unlock()
 }

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -12,6 +13,7 @@ void main() {
   setUp(() {
     // 每个用例默认无 Token（未登录）
     FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
   });
 
   Future<GoRouter> createRouter(

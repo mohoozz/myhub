@@ -54,3 +54,8 @@ func (r *UserRepository) Create(user *model.User) error {
 func (r *UserRepository) UpdatePassword(id uint, passwordHash string) error {
 	return r.db.Model(&model.User{}).Where("id = ?", id).Update("password_hash", passwordHash).Error
 }
+
+// UpdateAvatar 更新指定用户的头像文件名
+func (r *UserRepository) UpdateAvatar(id uint, avatar string) error {
+	return r.db.Model(&model.User{}).Where("id = ?", id).Update("avatar", avatar).Error
+}

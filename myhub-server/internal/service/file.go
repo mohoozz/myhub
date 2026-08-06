@@ -24,7 +24,7 @@ import (
 var (
 	ErrCrossSourceDir = errors.New("跨源中转暂不支持目录")
 	ErrInvalidName    = errors.New("非法文件名")
-	ErrNotVideo       = errors.New("仅视频文件支持缩略图")
+	ErrNotVideo       = errors.New("仅音视频文件支持缩略图")
 )
 
 // 媒体类型扩展名映射
@@ -235,7 +235,8 @@ func (s *FileService) Delete(ctx context.Context, sourceID uint, paths []string)
 	return nil
 }
 
-// Thumbnail 生成/获取视频缩略图（FFmpeg 抽帧，按 sourceID+path 缓存）
+// Thumbnail 生成/获取音视频缩略图（FFmpeg，按 sourceID+path 缓存）
+// 视频抽帧；音频提取内嵌专辑封面（attached pic 以视频流形式存在）。
 // 返回缓存的 JPEG 文件路径
 func (s *FileService) Thumbnail(ctx context.Context, sourceID uint, p string) (string, error) {
 	a, source, err := s.sourceSvc.GetAdapter(sourceID)
@@ -246,7 +247,8 @@ func (s *FileService) Thumbnail(ctx context.Context, sourceID uint, p string) (s
 	if err != nil {
 		return "", err
 	}
-	if fi.IsDir || DetectMediaType(fi.Name, false) != "video" {
+	mediaType := DetectMediaType(fi.Name, fi.IsDir)
+	if mediaType != "video" && mediaType != "audio" {
 		return "", ErrNotVideo
 	}
 
@@ -266,20 +268,51 @@ func (s *FileService) Thumbnail(ctx context.Context, sourceID uint, p string) (s
 	}
 
 	// 构造 ffmpeg 输入：本地源直接用文件路径，WebDAV 源用 URL + Basic 认证头
-	args, err := ffmpegInputArgs(source, p)
+	inputArgs, err := ffmpegInputArgs(source, p)
 	if err != nil {
 		return "", err
 	}
-	// -ss 10 前置（输入seek，快），抽 1 帧缩放为 320x180
-	args = append(args, "-ss", "10", "-vframes", "1", "-s", "320x180", "-y", outPath)
 
-	cmdCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, ffmpeg, args...)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("ffmpeg 执行失败: %w, 输出: %s", err, string(output))
+	// 候选命令：前一个失败（或无产物）时依次回退
+	var argSets [][]string
+	if mediaType == "audio" {
+		// -an 丢弃音频流，取封面图帧并等比缩放到宽 320
+		argSets = [][]string{
+			append(append([]string{}, inputArgs...), "-an", "-vframes", "1", "-vf", "scale=320:-2", "-y", outPath),
+		}
+	} else {
+		// -ss 10 置于 -i 前（输入seek，快）；短于 10 秒的视频无帧产出时回退抽首帧
+		argSets = [][]string{
+			append(append([]string{"-ss", "10"}, inputArgs...), "-vframes", "1", "-s", "320x180", "-y", outPath),
+			append(append([]string{}, inputArgs...), "-vframes", "1", "-s", "320x180", "-y", outPath),
+		}
 	}
-	return outPath, nil
+
+	var lastErr error
+	for _, args := range argSets {
+		cmdCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		cmd := exec.CommandContext(cmdCtx, ffmpeg, args...)
+		output, runErr := cmd.CombinedOutput()
+		cancel()
+		if runErr != nil {
+			lastErr = fmt.Errorf("ffmpeg 执行失败: %w, 输出: %s", runErr, tailOutput(output, 800))
+			continue
+		}
+		if st, statErr := os.Stat(outPath); statErr == nil && st.Size() > 0 {
+			return outPath, nil
+		}
+		lastErr = errors.New("ffmpeg 未产出有效缩略图")
+	}
+	return "", lastErr
+}
+
+// tailOutput 截取命令输出的末尾部分（ffmpeg 的错误信息在尾部，头部是版本 banner）
+func tailOutput(b []byte, n int) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > n {
+		s = "..." + s[len(s)-n:]
+	}
+	return s
 }
 
 // validateName 校验文件名合法（非空、无路径分隔符、非 . / ..）

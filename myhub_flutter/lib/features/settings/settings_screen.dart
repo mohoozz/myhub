@@ -9,6 +9,7 @@ import 'package:myhub_flutter/features/settings/providers/app_config_provider.da
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 import 'package:myhub_flutter/shared/utils/app_cache.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_settings.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/reader_settings.dart';
 import 'package:myhub_flutter/shared/widgets/source_manager.dart';
@@ -174,9 +175,7 @@ Future<void> _saveConfig(
     await ref.read(appConfigProvider.notifier).setValue(key, value);
   } catch (e) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text('保存失败：$e')));
+    showTopSnackBar(context, '保存失败：$e');
   }
 }
 
@@ -210,9 +209,7 @@ class _AccountSection extends ConsumerWidget {
           onTap: () async {
             final changed = await ChangePasswordDialog.show(context);
             if ((changed ?? false) && context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('密码修改成功')),
-              );
+              showTopSnackBar(context, '密码修改成功');
             }
           },
         ),
@@ -561,9 +558,7 @@ class _CacheRowState extends State<_CacheRow> {
       await AppCache.clear();
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(const SnackBar(content: Text('缓存已清理')));
+        showTopSnackBar(context, '缓存已清理');
       }
     } finally {
       if (mounted) setState(() => _clearing = false);

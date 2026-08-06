@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -77,8 +78,63 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 // Me GET /api/auth/me（需 JWT）：返回当前登录用户信息
 func (h *AuthHandler) Me(c *gin.Context) {
-	Success(c, gin.H{
-		"user_id":  GetUserID(c),
+	userID := GetUserID(c)
+	resp := gin.H{
+		"user_id":  userID,
 		"username": GetUsername(c),
-	})
+	}
+	if v := h.authSvc.AvatarVersion(userID); v > 0 {
+		resp["avatar_url"] = avatarURL(v)
+	}
+	Success(c, resp)
+}
+
+// 头像大小上限 5MB
+const maxAvatarSize = 5 << 20
+
+// UploadAvatar PUT /api/auth/avatar（需 JWT）
+// multipart 字段 avatar，单文件，5MB 以内，jpg/jpeg/png/webp/gif。
+// 成功返回 avatar_url（含 ?v= 版本号，客户端据此刷新缓存）。
+func (h *AuthHandler) UploadAvatar(c *gin.Context) {
+	file, err := c.FormFile("avatar")
+	if err != nil {
+		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "参数错误：缺少 avatar 文件")
+		return
+	}
+	if file.Size <= 0 || file.Size > maxAvatarSize {
+		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "头像大小需在 5MB 以内")
+		return
+	}
+	src, err := file.Open()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	defer src.Close()
+
+	version, err := h.authSvc.SaveAvatar(GetUserID(c), file.Filename, src)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidAvatar) {
+			Fail(c, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		_ = c.Error(err)
+		return
+	}
+	Success(c, gin.H{"avatar_url": avatarURL(version)})
+}
+
+// GetAvatar GET /api/auth/avatar（需 JWT）：返回当前用户头像图片
+func (h *AuthHandler) GetAvatar(c *gin.Context) {
+	p, err := h.authSvc.AvatarPath(GetUserID(c))
+	if err != nil {
+		Fail(c, http.StatusNotFound, http.StatusNotFound, "头像不存在")
+		return
+	}
+	c.File(p)
+}
+
+// avatarURL 拼接带版本号的头像相对地址（防客户端缓存旧图）
+func avatarURL(version int64) string {
+	return "/api/auth/avatar?v=" + strconv.FormatInt(version, 10)
 }

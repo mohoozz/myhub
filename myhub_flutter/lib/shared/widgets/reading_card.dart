@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:myhub_flutter/core/api/comic_api.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/shared/providers/auth_headers_provider.dart';
@@ -130,8 +131,8 @@ class ReadingCard extends ConsumerWidget {
   }
 }
 
-/// 卡片封面：优先 cover 字段图片；视频回退到 FFmpeg 缩略图；
-/// 其余按类型渐变 + 图标。
+/// 卡片封面：优先 cover 字段图片；视频/音频回退到 FFmpeg 缩略图，
+/// 漫画回退到第一页；其余按类型渐变 + 图标。
 class _Cover extends ConsumerWidget {
   const _Cover({required this.progress, required this.icon});
 
@@ -159,10 +160,14 @@ class _Cover extends ConsumerWidget {
     String? url;
     if (progress.cover.isNotEmpty) {
       url = progress.cover;
-    } else if (progress.mediaType == 'video') {
+    } else if (progress.mediaType == 'video' || progress.mediaType == 'audio') {
       url = ref
           .read(fileApiProvider)
           .thumbnailUrl(progress.sourceId, progress.filePath);
+    } else if (progress.mediaType == 'comic') {
+      url = ref
+          .read(comicApiProvider)
+          .pageUrl(progress.sourceId, progress.filePath, 0);
     }
     if (url == null) return fallback;
 

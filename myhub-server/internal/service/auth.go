@@ -3,6 +3,10 @@ package service
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -16,6 +20,8 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("用户名或密码错误")
 	ErrWrongOldPassword   = errors.New("原密码错误")
+	ErrInvalidAvatar      = errors.New("仅支持 jpg/jpeg/png/webp/gif 图片")
+	ErrAvatarNotFound     = errors.New("头像不存在")
 )
 
 // Claims JWT 自定义声明
@@ -63,6 +69,74 @@ func (s *AuthService) ChangePassword(userID uint, oldPassword, newPassword strin
 		return fmt.Errorf("密码加密失败: %w", err)
 	}
 	return s.userRepo.UpdatePassword(userID, string(hash))
+}
+
+// SaveAvatar 保存用户头像：扩展名白名单校验后写入 avatars 目录
+//（文件名 <userID><ext>，旧扩展名文件一并清理），并更新用户记录。
+// 返回头像版本号（UpdatedAt 秒级时间戳），供客户端拼接 ?v= 防缓存。
+func (s *AuthService) SaveAvatar(userID uint, filename string, src io.Reader) (int64, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+	default:
+		return 0, ErrInvalidAvatar
+	}
+
+	dir := s.cfg.Data.AvatarsDir
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return 0, fmt.Errorf("创建头像目录失败: %w", err)
+	}
+	name := fmt.Sprintf("%d%s", userID, ext)
+	dst := filepath.Join(dir, name)
+	f, err := os.Create(dst)
+	if err != nil {
+		return 0, fmt.Errorf("写入头像失败: %w", err)
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, src); err != nil {
+		return 0, fmt.Errorf("写入头像失败: %w", err)
+	}
+
+	// 清理同用户旧扩展名文件（如 1.png → 1.jpg）
+	for _, old := range []string{".jpg", ".jpeg", ".png", ".webp", ".gif"} {
+		if old != ext {
+			_ = os.Remove(filepath.Join(dir, fmt.Sprintf("%d%s", userID, old)))
+		}
+	}
+
+	if err := s.userRepo.UpdateAvatar(userID, name); err != nil {
+		return 0, fmt.Errorf("更新头像记录失败: %w", err)
+	}
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		return 0, fmt.Errorf("用户不存在: %w", err)
+	}
+	return user.UpdatedAt.Unix(), nil
+}
+
+// AvatarPath 返回用户头像文件的磁盘路径；未设置或文件缺失返回 ErrAvatarNotFound。
+func (s *AuthService) AvatarPath(userID uint) (string, error) {
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		return "", ErrAvatarNotFound
+	}
+	if user.Avatar == "" {
+		return "", ErrAvatarNotFound
+	}
+	p := filepath.Join(s.cfg.Data.AvatarsDir, user.Avatar)
+	if fi, err := os.Stat(p); err != nil || fi.IsDir() {
+		return "", ErrAvatarNotFound
+	}
+	return p, nil
+}
+
+// AvatarVersion 返回头像版本号（UpdatedAt 秒级时间戳）；未设置返回 0。
+func (s *AuthService) AvatarVersion(userID uint) int64 {
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil || user.Avatar == "" {
+		return 0
+	}
+	return user.UpdatedAt.Unix()
 }
 
 // GenerateToken 为用户颁发 JWT（有效期取配置 jwt.expire_hours）

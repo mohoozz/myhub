@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:dynamic_color/dynamic_color.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,12 +24,17 @@ class MyhubApp extends ConsumerWidget {
     ref.watch(progressSyncProvider);
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
+        // 仅 Android 12+ 使用 Material You 动态取色；其余平台固定白蓝品牌色
+        // （Windows 系统强调色会污染主题，例如青绿色按钮）。
+        final useDynamic =
+            !kIsWeb && Platform.isAndroid && lightDynamic != null;
         return MaterialApp.router(
           title: 'myhub',
           debugShowCheckedModeBanner: false,
-          // 支持的平台（Android 12+）使用 Material You 动态取色，否则品牌色
-          theme: AppTheme.light(dynamicScheme: lightDynamic),
-          darkTheme: AppTheme.dark(dynamicScheme: darkDynamic),
+          theme: AppTheme.light(
+              dynamicScheme: useDynamic ? lightDynamic : null),
+          darkTheme: AppTheme.dark(
+              dynamicScheme: useDynamic ? darkDynamic : null),
           themeMode: themeMode,
           routerConfig: router,
           scrollBehavior: const AppScrollBehavior(),

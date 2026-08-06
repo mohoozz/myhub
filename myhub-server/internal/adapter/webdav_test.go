@@ -36,6 +36,46 @@ func TestWebDavAdapter_Test(t *testing.T) {
 	}
 }
 
+func TestWebDavAdapter_Network(t *testing.T) {
+	// 未配置内网地址：默认外网
+	a := setupWebDav(t)
+	if a.Network() != "wan" {
+		t.Fatalf("默认应为 wan，得到: %q", a.Network())
+	}
+
+	handler := &webdav.Handler{
+		Prefix:     "/dav",
+		FileSystem: webdav.NewMemFS(),
+		LockSystem: webdav.NewMemLS(),
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	// 内网地址可达：优先内网
+	a2, err := NewWebDavAdapter(&WebDavConfig{
+		URL:    "http://127.0.0.1:1/dav", // 不可达的外网地址
+		LanURL: srv.URL + "/dav",
+	}, "/")
+	if err != nil {
+		t.Fatalf("NewWebDavAdapter 失败: %v", err)
+	}
+	if a2.Network() != "lan" {
+		t.Fatalf("内网可达时应为 lan，得到: %q", a2.Network())
+	}
+
+	// 内网地址不可达：回退外网
+	a3, err := NewWebDavAdapter(&WebDavConfig{
+		URL:    srv.URL + "/dav",
+		LanURL: "http://127.0.0.1:1/dav", // 不可达的内网地址
+	}, "/")
+	if err != nil {
+		t.Fatalf("NewWebDavAdapter 失败: %v", err)
+	}
+	if a3.Network() != "wan" {
+		t.Fatalf("内网不可达应回退 wan，得到: %q", a3.Network())
+	}
+}
+
 func TestWebDavAdapter_WriteReadListStat(t *testing.T) {
 	a := setupWebDav(t)
 	ctx := context.Background()

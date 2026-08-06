@@ -15,7 +15,7 @@ import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 ///
 /// * 黑胶唱片样式封面，`RotationTransition` 旋转动效：播放时旋转，暂停时停在当前角度；
 /// * 封面来源：同目录同名图片，或 cover/folder/front（jpg/jpeg/png/webp），
-///   无封面时显示音乐图标占位；
+///   其次回退到后端缩略图接口提取的内嵌专辑封面，均无封面时显示音乐图标占位；
 /// * 标题 + 作者信息居中（按 "作者 - 标题" 文件名约定解析）；
 /// * 控制栏与视频完全一致（外层 Stack 挂载的 PlayerControls，与模式无关）。
 class AudioCoverMode extends ConsumerStatefulWidget {
@@ -101,15 +101,17 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
     return idx <= 0 ? '/' : path.substring(0, idx);
   }
 
-  /// 同目录封面探测：同名图片优先，其次 cover/folder/front。
+  /// 同目录封面探测：同名图片优先，其次 cover/folder/front，
+  /// 再回退到后端缩略图接口提取的内嵌专辑封面（无专辑封面时加载失败自动回退占位图标）。
   Future<void> _resolveCover() async {
+    String? found;
+    final dir = _parentDirOf(widget.file.path);
     try {
-      final dir = _parentDirOf(widget.file.path);
       final items =
           await ref.read(fileApiProvider).listFiles(widget.sourceId, dir);
       final names = [
         for (final e in items)
-          if (e is Map<String, dynamic> && e['isDir'] != true)
+          if (e is Map<String, dynamic> && e['is_dir'] != true)
             e['name'] as String? ?? '',
       ]..removeWhere((n) => n.isEmpty);
 
@@ -119,27 +121,30 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
         base = base.substring(0, dot);
       }
 
-      final found =
+      found =
           _matchCover(names, [base.toLowerCase()]) ??
           _matchCover(names, _coverStems);
-      if (found == null || !mounted) return;
-
-      final token =
-          await const FlutterSecureStorage().read(key: kAccessTokenKey);
-      if (!mounted) return;
-      setState(() {
-        _coverUrl = StreamApi.streamUrl(
-          widget.sourceId,
-          dir == '/' ? '/$found' : '$dir/$found',
-        );
-        _coverHeaders = {
-          if (token != null && token.isNotEmpty)
-            'Authorization': 'Bearer $token',
-        };
-      });
     } catch (_) {
-      // 目录不可读等场景：保持音乐图标占位
+      // 目录不可读等场景：仍可尝试内嵌专辑封面
     }
+    if (!mounted) return;
+
+    final token = await const FlutterSecureStorage().read(key: kAccessTokenKey);
+    if (!mounted) return;
+    setState(() {
+      _coverUrl = found != null
+          ? StreamApi.streamUrl(
+              widget.sourceId,
+              dir == '/' ? '/$found' : '$dir/$found',
+            )
+          : ref
+              .read(fileApiProvider)
+              .thumbnailUrl(widget.sourceId, widget.file.path);
+      _coverHeaders = {
+        if (token != null && token.isNotEmpty)
+          'Authorization': 'Bearer $token',
+      };
+    });
   }
 
   /// 按候选名（小写、无扩展名）+ 图片扩展名匹配实际文件名（大小写不敏感）。

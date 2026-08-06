@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/comic_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_reader.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/media_player.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/epub_reader.dart';
@@ -30,7 +31,9 @@ Future<void> openMediaItem(
     mediaType: mediaType,
   );
   if (mediaType == 'video' || mediaType == 'audio') {
-    await MediaPlayerPage.open(context, sourceId: sourceId, file: file);
+    // 迷你条在播时保持迷你模式直接切歌，否则进全屏播放页
+    await MediaPlayerPage.openOrMini(context, ref,
+        sourceId: sourceId, file: file);
     return;
   }
   if (mediaType == 'novel') {
@@ -54,18 +57,12 @@ Future<void> openMediaItem(
         await ComicReaderPage.open(context, sourceId: sourceId, file: file);
         return;
       }
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('该压缩包不是漫画，暂不支持浏览')));
+      showTopSnackBar(context, '该压缩包不是漫画，暂不支持浏览');
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text('打开失败：$e')));
+      showTopSnackBar(context, '打开失败：$e');
     }
     return;
   }
-  ScaffoldMessenger.of(context)
-    ..clearSnackBars()
-    ..showSnackBar(SnackBar(content: Text('打开 ${filePath.split('/').last}')));
+  showTopSnackBar(context, '打开 ${filePath.split('/').last}');
 }

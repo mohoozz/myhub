@@ -137,7 +137,7 @@ class FileApi extends ApiClient {
     }
   }
 
-  /// 视频缩略图 URL（需自行附带 Authorization 头加载）。
+  /// 音视频缩略图 URL（音频提取内嵌专辑封面；需自行附带 Authorization 头加载）。
   String thumbnailUrl(int sourceId, String path) {
     return '${Env.apiBaseUrl}/api/files/thumbnail?source=$sourceId&path=${Uri.encodeComponent(path)}';
   }

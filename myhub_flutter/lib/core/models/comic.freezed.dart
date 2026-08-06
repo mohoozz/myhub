@@ -193,6 +193,11 @@ mixin _$ComicPage {
   String get name => throw _privateConstructorUsedError;
   int get size => throw _privateConstructorUsedError;
 
+  /// 图片像素尺寸（服务端仅对 ZIP/CBZ、EPUB 提供；RAR 为 0）。
+  /// 条漫模式据此精确计算页高与进度恢复。
+  int get width => throw _privateConstructorUsedError;
+  int get height => throw _privateConstructorUsedError;
+
   /// Serializes this ComicPage to a JSON map.
   Map<String, dynamic> toJson() => throw _privateConstructorUsedError;
 
@@ -208,7 +213,7 @@ abstract class $ComicPageCopyWith<$Res> {
   factory $ComicPageCopyWith(ComicPage value, $Res Function(ComicPage) then) =
       _$ComicPageCopyWithImpl<$Res, ComicPage>;
   @useResult
-  $Res call({int index, String name, int size});
+  $Res call({int index, String name, int size, int width, int height});
 }
 
 /// @nodoc
@@ -225,7 +230,13 @@ class _$ComicPageCopyWithImpl<$Res, $Val extends ComicPage>
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
-  $Res call({Object? index = null, Object? name = null, Object? size = null}) {
+  $Res call({
+    Object? index = null,
+    Object? name = null,
+    Object? size = null,
+    Object? width = null,
+    Object? height = null,
+  }) {
     return _then(
       _value.copyWith(
             index: null == index
@@ -239,6 +250,14 @@ class _$ComicPageCopyWithImpl<$Res, $Val extends ComicPage>
             size: null == size
                 ? _value.size
                 : size // ignore: cast_nullable_to_non_nullable
+                      as int,
+            width: null == width
+                ? _value.width
+                : width // ignore: cast_nullable_to_non_nullable
+                      as int,
+            height: null == height
+                ? _value.height
+                : height // ignore: cast_nullable_to_non_nullable
                       as int,
           )
           as $Val,
@@ -255,7 +274,7 @@ abstract class _$$ComicPageImplCopyWith<$Res>
   ) = __$$ComicPageImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({int index, String name, int size});
+  $Res call({int index, String name, int size, int width, int height});
 }
 
 /// @nodoc
@@ -271,7 +290,13 @@ class __$$ComicPageImplCopyWithImpl<$Res>
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
-  $Res call({Object? index = null, Object? name = null, Object? size = null}) {
+  $Res call({
+    Object? index = null,
+    Object? name = null,
+    Object? size = null,
+    Object? width = null,
+    Object? height = null,
+  }) {
     return _then(
       _$ComicPageImpl(
         index: null == index
@@ -286,6 +311,14 @@ class __$$ComicPageImplCopyWithImpl<$Res>
             ? _value.size
             : size // ignore: cast_nullable_to_non_nullable
                   as int,
+        width: null == width
+            ? _value.width
+            : width // ignore: cast_nullable_to_non_nullable
+                  as int,
+        height: null == height
+            ? _value.height
+            : height // ignore: cast_nullable_to_non_nullable
+                  as int,
       ),
     );
   }
@@ -298,6 +331,8 @@ class _$ComicPageImpl implements _ComicPage {
     required this.index,
     required this.name,
     this.size = 0,
+    this.width = 0,
+    this.height = 0,
   });
 
   factory _$ComicPageImpl.fromJson(Map<String, dynamic> json) =>
@@ -311,9 +346,18 @@ class _$ComicPageImpl implements _ComicPage {
   @JsonKey()
   final int size;
 
+  /// 图片像素尺寸（服务端仅对 ZIP/CBZ、EPUB 提供；RAR 为 0）。
+  /// 条漫模式据此精确计算页高与进度恢复。
+  @override
+  @JsonKey()
+  final int width;
+  @override
+  @JsonKey()
+  final int height;
+
   @override
   String toString() {
-    return 'ComicPage(index: $index, name: $name, size: $size)';
+    return 'ComicPage(index: $index, name: $name, size: $size, width: $width, height: $height)';
   }
 
   @override
@@ -323,12 +367,15 @@ class _$ComicPageImpl implements _ComicPage {
             other is _$ComicPageImpl &&
             (identical(other.index, index) || other.index == index) &&
             (identical(other.name, name) || other.name == name) &&
-            (identical(other.size, size) || other.size == size));
+            (identical(other.size, size) || other.size == size) &&
+            (identical(other.width, width) || other.width == width) &&
+            (identical(other.height, height) || other.height == height));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(runtimeType, index, name, size);
+  int get hashCode =>
+      Object.hash(runtimeType, index, name, size, width, height);
 
   /// Create a copy of ComicPage
   /// with the given fields replaced by the non-null parameter values.
@@ -349,6 +396,8 @@ abstract class _ComicPage implements ComicPage {
     required final int index,
     required final String name,
     final int size,
+    final int width,
+    final int height,
   }) = _$ComicPageImpl;
 
   factory _ComicPage.fromJson(Map<String, dynamic> json) =
@@ -360,6 +409,13 @@ abstract class _ComicPage implements ComicPage {
   String get name;
   @override
   int get size;
+
+  /// 图片像素尺寸（服务端仅对 ZIP/CBZ、EPUB 提供；RAR 为 0）。
+  /// 条漫模式据此精确计算页高与进度恢复。
+  @override
+  int get width;
+  @override
+  int get height;
 
   /// Create a copy of ComicPage
   /// with the given fields replaced by the non-null parameter values.

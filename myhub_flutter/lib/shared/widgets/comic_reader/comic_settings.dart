@@ -24,7 +24,11 @@ enum ComicReadingDirection {
 
 /// 漫画阅读器偏好设置。
 class ComicReaderSettings {
-  const ComicReaderSettings({this.viewMode, this.direction});
+  const ComicReaderSettings({
+    this.viewMode,
+    this.direction,
+    this.webtoonWidthFactor,
+  });
 
   /// 阅读模式；null = 自动（横屏/宽屏双页，其余单页）。
   final ComicViewMode? viewMode;
@@ -32,17 +36,27 @@ class ComicReaderSettings {
   /// 双页阅读方向；null = 默认日漫 rtl。
   final ComicReadingDirection? direction;
 
+  /// 条漫宽度占比（0.3~1.0）；null = 默认占满全宽。
+  final double? webtoonWidthFactor;
+
   /// 实际阅读方向（缺省 rtl）。
   ComicReadingDirection get effectiveDirection =>
       direction ?? ComicReadingDirection.rtl;
 
+  /// 实际条漫宽度占比（缺省 1.0 占满全宽）。
+  double get effectiveWebtoonWidthFactor => webtoonWidthFactor ?? 1.0;
+
   ComicReaderSettings copyWith({
     ComicViewMode? Function()? viewMode,
     ComicReadingDirection? Function()? direction,
+    double? Function()? webtoonWidthFactor,
   }) {
     return ComicReaderSettings(
       viewMode: viewMode != null ? viewMode() : this.viewMode,
       direction: direction != null ? direction() : this.direction,
+      webtoonWidthFactor: webtoonWidthFactor != null
+          ? webtoonWidthFactor()
+          : this.webtoonWidthFactor,
     );
   }
 }
@@ -56,6 +70,7 @@ final comicReaderSettingsProvider =
 class ComicReaderSettingsNotifier extends Notifier<ComicReaderSettings> {
   static const _kViewMode = 'comic.view_mode';
   static const _kDirection = 'comic.direction';
+  static const _kWebtoonWidth = 'comic.webtoon_width';
 
   /// 标记用户已显式修改（防止异步恢复覆盖新值）。
   var _dirty = false;
@@ -73,6 +88,7 @@ class ComicReaderSettingsNotifier extends Notifier<ComicReaderSettings> {
       viewMode: ComicViewMode.values.asNameMap()[prefs.getString(_kViewMode)],
       direction: ComicReadingDirection.values
           .asNameMap()[prefs.getString(_kDirection)],
+      webtoonWidthFactor: prefs.getDouble(_kWebtoonWidth),
     );
   }
 
@@ -95,5 +111,13 @@ class ComicReaderSettingsNotifier extends Notifier<ComicReaderSettings> {
     state = state.copyWith(direction: () => direction);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kDirection, direction.name);
+  }
+
+  /// 调节条漫宽度占比（持久化）。
+  Future<void> setWebtoonWidthFactor(double factor) async {
+    _dirty = true;
+    state = state.copyWith(webtoonWidthFactor: () => factor);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kWebtoonWidth, factor);
   }
 }

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
-import 'package:myhub_flutter/features/browse/widgets/file_icon.dart';
+import 'package:myhub_flutter/features/browse/widgets/file_cover.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 
 /// 文件网格视图。
@@ -17,6 +17,7 @@ class FileGridView extends StatelessWidget {
     this.favoriteSourceId,
     this.onToggleFavorite,
     this.onShowMenu,
+    this.onParentTap,
     ValueChanged<FileItem>? onLongPress,
     super.key,
   }) : onLongPress = onLongPress ?? onToggleSelect;
@@ -35,6 +36,9 @@ class FileGridView extends StatelessWidget {
   /// 右键呼出上下文菜单（桌面端），携带点击全局坐标。
   final void Function(FileItem item, Offset position)? onShowMenu;
 
+  /// 非空时在网格首位插入 ".." 返回上级卡片。
+  final VoidCallback? onParentTap;
+
   @override
   Widget build(BuildContext context) {
     final grid = GridView.builder(
@@ -46,11 +50,16 @@ class FileGridView extends StatelessWidget {
         crossAxisSpacing: 12,
         childAspectRatio: 0.95,
       ),
-      itemCount: items.length,
+      itemCount: items.length + (onParentTap == null ? 0 : 1),
       itemBuilder: (context, index) {
+        if (onParentTap != null) {
+          if (index == 0) return _ParentCard(onTap: onParentTap!);
+          index--;
+        }
         final item = items[index];
         return _FileCard(
           item: item,
+          coverSourceId: favoriteSourceId,
           selectionMode: selectionMode,
           selected: selectedPaths.contains(item.path),
           favorited:
@@ -72,9 +81,55 @@ class FileGridView extends StatelessWidget {
   }
 }
 
+/// ".." 返回上级卡片（网格首位）。
+class _ParentCard extends StatelessWidget {
+  const _ParentCard({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: theme.cardTheme.color,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                LucideIcons.folderUp,
+                size: 36,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(height: 10),
+              Text('..', style: theme.textTheme.bodySmall),
+              const SizedBox(height: 4),
+              Text(
+                '返回上级',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontSize: 10,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FileCard extends StatelessWidget {
   const _FileCard({
     required this.item,
+    required this.coverSourceId,
     required this.onTap,
     required this.onLongPress,
     required this.selectionMode,
@@ -85,6 +140,9 @@ class _FileCard extends StatelessWidget {
   });
 
   final FileItem item;
+
+  /// 当前路径源 ID（封面缩略图加载用）。
+  final int? coverSourceId;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final bool selectionMode;
@@ -116,10 +174,19 @@ class _FileCard extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    fileIconOf(item),
-                    size: 36,
-                    color: fileIconColorOf(context, item),
+                  Expanded(
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 72),
+                        child: AspectRatio(
+                          aspectRatio: 1,
+                          child: FileCover(
+                            item: item,
+                            sourceId: coverSourceId,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   Text(

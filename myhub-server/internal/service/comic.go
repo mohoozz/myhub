@@ -38,6 +38,10 @@ type ComicPage struct {
 	Index int    `json:"index"`
 	Name  string `json:"name"`
 	Size  int64  `json:"size"`
+	// 图片像素尺寸（仅 ZIP/CBZ、EPUB 提供，供客户端精确计算
+	// 条漫页高与进度恢复；RAR 顺序扫描代价高不提供，为 0）
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }
 
 // ComicService 漫画阅读业务逻辑
@@ -183,7 +187,9 @@ func (s *ComicService) openStream(ctx context.Context, sourceID uint, p string) 
 	return a.ReadStream(ctx, p, 0, -1)
 }
 
-// Pages 漫画页列表（ZIP/CBZ 中央目录，RAR/CBR 顺序扫描，EPUB 图集按 spine/manifest）
+// Pages 漫画页列表（ZIP/CBZ 中央目录，RAR/CBR 顺序扫描，EPUB 图集按
+// spine/manifest），并逐页解码图片尺寸（仅读文件头，供客户端条漫
+// 模式精确计算页高与进度恢复；RAR 顺序扫描代价高不提供）。
 func (s *ComicService) Pages(ctx context.Context, sourceID uint, p string) ([]ComicPage, error) {
 	ext := strings.ToLower(filepath.Ext(p))
 	switch ext {
@@ -195,11 +201,12 @@ func (s *ComicService) Pages(ctx context.Context, sourceID uint, p string) ([]Co
 		if closer != nil {
 			defer closer.Close()
 		}
-		entries, err := parser.ZIPImagePages(ra, size)
+		pages, err := zipComicPages(ra, size)
 		if err != nil {
 			return nil, err
 		}
-		return toComicPages(entries), nil
+		fillZIPPageSizes(ra, size, pages)
+		return pages, nil
 
 	case ".rar", ".cbr":
 		rc, err := s.openStream(ctx, sourceID, p)
@@ -214,15 +221,38 @@ func (s *ComicService) Pages(ctx context.Context, sourceID uint, p string) ([]Co
 		return toComicPages(entries), nil
 
 	case ".epub":
-		return s.epubPages(ctx, sourceID, p)
+		return s.epubPages(ctx, sourceID, p, true)
 
 	default:
 		return nil, parser.ErrNotArchive
 	}
 }
 
-// epubPages EPUB 图集页列表：spine 顺序中的图片条目；无 spine 图片时回退 manifest 图片自然排序
-func (s *ComicService) epubPages(ctx context.Context, sourceID uint, p string) ([]ComicPage, error) {
+// zipComicPages ZIP 图片页列表（不含尺寸，Page 取图等轻量路径用）
+func zipComicPages(ra io.ReaderAt, size int64) ([]ComicPage, error) {
+	entries, err := parser.ZIPImagePages(ra, size)
+	if err != nil {
+		return nil, err
+	}
+	return toComicPages(entries), nil
+}
+
+// fillZIPPageSizes 逐页解码图片尺寸回填（仅读文件头，失败页保持 0）
+func fillZIPPageSizes(ra io.ReaderAt, size int64, pages []ComicPage) {
+	for i := range pages {
+		rc, err := parser.OpenZIPEntry(ra, size, pages[i].Name)
+		if err != nil {
+			continue
+		}
+		pages[i].Width, pages[i].Height = parser.ImageSize(rc)
+		_ = rc.Close()
+	}
+}
+
+// epubPages EPUB 图集页列表：spine 顺序中的图片条目；无 spine 图片时
+// 回退 manifest 图片自然排序。withSizes 时逐页解码图片尺寸回填
+// （仅读文件头，失败页保持 0；Page 取图等轻量路径传 false）。
+func (s *ComicService) epubPages(ctx context.Context, sourceID uint, p string, withSizes bool) ([]ComicPage, error) {
 	e, closer, err := s.openEPUBViaReader(ctx, sourceID, p)
 	if err != nil {
 		return nil, err
@@ -231,26 +261,18 @@ func (s *ComicService) epubPages(ctx context.Context, sourceID uint, p string) (
 		defer closer.Close()
 	}
 
-	var pages []ComicPage
-	for _, idref := range e.Spine {
-		if it, ok := e.Manifest[idref]; ok && strings.HasPrefix(it.MediaType, "image/") {
-			pages = append(pages, ComicPage{Index: len(pages), Name: it.Href})
-		}
-	}
-	if len(pages) == 0 {
-		names := make([]string, 0, len(e.Manifest))
-		for _, it := range e.Manifest {
-			if strings.HasPrefix(it.MediaType, "image/") {
-				names = append(names, it.Href)
-			}
-		}
-		parser.NaturalSort(names)
-		for _, n := range names {
-			pages = append(pages, ComicPage{Index: len(pages), Name: n})
-		}
-	}
+	pages := epubImagePages(e)
 	if len(pages) == 0 {
 		return nil, ErrNotComic
+	}
+	if withSizes {
+		for i := range pages {
+			data, err := e.ReadByHref(pages[i].Name)
+			if err != nil {
+				continue
+			}
+			pages[i].Width, pages[i].Height = parser.ImageSize(bytes.NewReader(data))
+		}
 	}
 	return pages, nil
 }
@@ -300,20 +322,12 @@ func toComicPages(entries []parser.ArchiveEntry) []ComicPage {
 	return pages
 }
 
-// Page 返回单页图片内容（页码从 0 开始，与 Pages 返回的 index 对应）
+// Page 返回单页图片内容（页码从 0 开始，与 Pages 返回的 index 对应）。
+// 页列表走轻量路径（不解码图片尺寸），避免每次取图全量扫描。
 func (s *ComicService) Page(ctx context.Context, sourceID uint, p string, n int) ([]byte, string, error) {
 	if n < 0 {
 		return nil, "", ErrPageOutOfRange
 	}
-	pages, err := s.Pages(ctx, sourceID, p)
-	if err != nil {
-		return nil, "", err
-	}
-	if n >= len(pages) {
-		return nil, "", ErrPageOutOfRange
-	}
-	name := pages[n].Name
-
 	ext := strings.ToLower(filepath.Ext(p))
 	switch ext {
 	case ".zip", ".cbz":
@@ -324,13 +338,20 @@ func (s *ComicService) Page(ctx context.Context, sourceID uint, p string, n int)
 		if closer != nil {
 			defer closer.Close()
 		}
-		rc, err := parser.OpenZIPEntry(ra, size, name)
+		pages, err := zipComicPages(ra, size)
+		if err != nil {
+			return nil, "", err
+		}
+		if n >= len(pages) {
+			return nil, "", ErrPageOutOfRange
+		}
+		rc, err := parser.OpenZIPEntry(ra, size, pages[n].Name)
 		if err != nil {
 			return nil, "", err
 		}
 		defer rc.Close()
 		data, err := io.ReadAll(rc)
-		return data, name, err
+		return data, pages[n].Name, err
 
 	case ".rar", ".cbr":
 		rc, err := s.openStream(ctx, sourceID, p)
@@ -338,8 +359,21 @@ func (s *ComicService) Page(ctx context.Context, sourceID uint, p string, n int)
 			return nil, "", err
 		}
 		defer rc.Close()
+		entries, err := parser.RARImagePages(rc)
+		if err != nil {
+			return nil, "", err
+		}
+		if n >= len(entries) {
+			return nil, "", ErrPageOutOfRange
+		}
+		name := entries[n].Name
+		rc2, err := s.openStream(ctx, sourceID, p)
+		if err != nil {
+			return nil, "", err
+		}
+		defer rc2.Close()
 		var buf bytes.Buffer
-		if err := parser.ExtractRAREntry(rc, name, &buf); err != nil {
+		if err := parser.ExtractRAREntry(rc2, name, &buf); err != nil {
 			return nil, "", err
 		}
 		return buf.Bytes(), name, nil
@@ -352,12 +386,41 @@ func (s *ComicService) Page(ctx context.Context, sourceID uint, p string, n int)
 		if closer != nil {
 			defer closer.Close()
 		}
-		data, err := e.ReadByHref(name)
-		return data, name, err
+		pages := epubImagePages(e)
+		if n >= len(pages) {
+			return nil, "", ErrPageOutOfRange
+		}
+		data, err := e.ReadByHref(pages[n].Name)
+		return data, pages[n].Name, err
 
 	default:
 		return nil, "", parser.ErrNotArchive
 	}
+}
+
+// epubImagePages EPUB 图集页列表：spine 顺序中的图片条目；无 spine
+// 图片时回退 manifest 图片自然排序。
+func epubImagePages(e *parser.EPUB) []ComicPage {
+	var pages []ComicPage
+	for _, idref := range e.Spine {
+		if it, ok := e.Manifest[idref]; ok && strings.HasPrefix(it.MediaType, "image/") {
+			pages = append(pages, ComicPage{Index: len(pages), Name: it.Href})
+		}
+	}
+	if len(pages) > 0 {
+		return pages
+	}
+	names := make([]string, 0, len(e.Manifest))
+	for _, it := range e.Manifest {
+		if strings.HasPrefix(it.MediaType, "image/") {
+			names = append(names, it.Href)
+		}
+	}
+	parser.NaturalSort(names)
+	for _, n := range names {
+		pages = append(pages, ComicPage{Index: len(pages), Name: n})
+	}
+	return pages
 }
 
 // ArchiveTree 普通压缩包文件树

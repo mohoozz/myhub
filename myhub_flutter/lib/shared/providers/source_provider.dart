@@ -17,6 +17,7 @@ class SourceFormData {
     required this.type,
     this.mountPoint = '',
     this.webdavUrl = '',
+    this.webdavLanUrl = '',
     this.webdavUsername = '',
     this.webdavPassword = '',
     this.enabled = true,
@@ -26,6 +27,7 @@ class SourceFormData {
   final SourceType type;
   final String mountPoint;
   final String webdavUrl;
+  final String webdavLanUrl;
   final String webdavUsername;
   final String webdavPassword;
   final bool enabled;
@@ -38,6 +40,7 @@ class SourceFormData {
       if (type == SourceType.webdav)
         'config_json': jsonEncode({
           'url': webdavUrl,
+          if (webdavLanUrl.isNotEmpty) 'lan_url': webdavLanUrl,
           'username': webdavUsername,
           'password': webdavPassword,
         })
@@ -97,16 +100,37 @@ class SourceListNotifier extends AsyncNotifier<List<Source>> {
     await refresh();
   }
 
-  /// 连接测试：成功返回 null，失败返回错误信息。
-  Future<String?> testConnection(int id) async {
+  /// 连接测试：更新状态指示并返回结果（含实际链路信息）。
+  Future<SourceTestResult> testConnection(int id) async {
     try {
-      await _api.testConnection(id);
-      return null;
+      final network = await _api.testConnection(id);
+      _setTestStatus(id, true);
+      return SourceTestResult(network: network);
     } catch (e) {
-      return e.toString();
+      _setTestStatus(id, false);
+      return SourceTestResult(error: e.toString());
     }
   }
+
+  void _setTestStatus(int id, bool ok) {
+    final map = {...ref.read(sourceTestStatusProvider)};
+    map[id] = ok;
+    ref.read(sourceTestStatusProvider.notifier).state = map;
+  }
 }
+
+/// 连接测试结果：error 为 null 表示成功；network 为 'lan'/'wan'/null。
+class SourceTestResult {
+  const SourceTestResult({this.error, this.network});
+
+  final String? error;
+  final String? network;
+
+  bool get ok => error == null;
+}
+
+/// 各路径源最近一次连接测试结果（true=正常，false=异常），用于列表状态点。
+final sourceTestStatusProvider = StateProvider<Map<int, bool>>((ref) => {});
 
 /// 浏览页当前选中的路径源（null = 未选，自动取列表第一个）。
 final currentSourceProvider = StateProvider<Source?>((ref) => null);

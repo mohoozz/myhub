@@ -65,12 +65,16 @@ class SourceApi extends ApiClient {
     }
   }
 
-  /// 连接测试：成功返回 true，失败抛 ApiException。
-  Future<bool> testConnection(int id) async {
+  /// 连接测试：成功返回实际链路（'lan' 内网 / 'wan' 外网，本地源为 null），
+  /// 失败抛 ApiException。
+  Future<String?> testConnection(int id) async {
     try {
       final res = await dio.post<Map<String, dynamic>>('/sources/$id/test');
-      unwrap(res);
-      return true;
+      final data = unwrap(res);
+      if (data is Map<String, dynamic>) {
+        return data['network'] as String?;
+      }
+      return null;
     } catch (e) {
       rethrowAsApi(e);
     }

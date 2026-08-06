@@ -20,6 +20,8 @@ _$ComicPageImpl _$$ComicPageImplFromJson(Map<String, dynamic> json) =>
       index: (json['index'] as num).toInt(),
       name: json['name'] as String,
       size: (json['size'] as num?)?.toInt() ?? 0,
+      width: (json['width'] as num?)?.toInt() ?? 0,
+      height: (json['height'] as num?)?.toInt() ?? 0,
     );
 
 Map<String, dynamic> _$$ComicPageImplToJson(_$ComicPageImpl instance) =>
@@ -27,6 +29,8 @@ Map<String, dynamic> _$$ComicPageImplToJson(_$ComicPageImpl instance) =>
       'index': instance.index,
       'name': instance.name,
       'size': instance.size,
+      'width': instance.width,
+      'height': instance.height,
     };
 
 _$ComicPagesImpl _$$ComicPagesImplFromJson(Map<String, dynamic> json) =>

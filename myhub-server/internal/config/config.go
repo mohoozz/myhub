@@ -44,8 +44,9 @@ type StorageConfig struct {
 
 // DataConfig 数据目录配置
 type DataConfig struct {
-	ThumbsDir string `mapstructure:"thumbs_dir"` // 视频缩略图缓存目录
-	HLSDir    string `mapstructure:"hls_dir"`    // HLS 转码输出目录
+	ThumbsDir  string `mapstructure:"thumbs_dir"`  // 视频缩略图缓存目录
+	HLSDir     string `mapstructure:"hls_dir"`     // HLS 转码输出目录
+	AvatarsDir string `mapstructure:"avatars_dir"` // 用户头像存储目录
 }
 
 // InternalConfig 内部接口配置（供 OpenClaw 等内部服务回传）
@@ -87,6 +88,7 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("storage.allowed_roots", []string{})
 	v.SetDefault("data.thumbs_dir", "data/thumbs")
 	v.SetDefault("data.hls_dir", "data/hls")
+	v.SetDefault("data.avatars_dir", "data/avatars")
 	v.SetDefault("internal.token", "myhub-internal-token-please-change")
 	v.SetDefault("trash.retention_days", 30)
 	v.SetDefault("web.dir", "")

@@ -160,8 +160,9 @@ func (h *SourceHandler) Test(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.sourceSvc.Test(c.Request.Context(), id); mapSourceError(c, err) {
+	network, err := h.sourceSvc.Test(c.Request.Context(), id)
+	if mapSourceError(c, err) {
 		return
 	}
-	Success(c, gin.H{"message": "连接正常"})
+	Success(c, gin.H{"message": "连接正常", "network": network})
 }

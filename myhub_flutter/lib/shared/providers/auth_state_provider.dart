@@ -59,7 +59,10 @@ class AuthStateNotifier extends Notifier<AuthState> {
       state = const AuthState(status: AuthStatus.unauthenticated);
       return;
     }
-    state = const AuthState(status: AuthStatus.authenticated);
+    state = AuthState(
+      status: AuthStatus.authenticated,
+      username: JwtUtils.username(token),
+    );
   }
 
   /// 标记已登录（登录成功后调用）。

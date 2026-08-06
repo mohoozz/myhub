@@ -11,16 +11,26 @@ abstract final class JwtUtils {
 
   /// 解析 exp 声明为本地时间；解析失败返回 null。
   static DateTime? expiresAt(String token) {
+    final exp = _payload(token)?['exp'];
+    if (exp is! num) return null;
+    return DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000);
+  }
+
+  /// 解析 username 声明；解析失败返回 null。
+  static String? username(String token) {
+    final username = _payload(token)?['username'];
+    return username is String && username.isNotEmpty ? username : null;
+  }
+
+  /// 解析 JWT payload（不验签）；解析失败返回 null。
+  static Map<String, dynamic>? _payload(String token) {
     final parts = token.split('.');
     if (parts.length != 3) return null;
     try {
       final payload = parts[1];
       final padded = payload.padRight((payload.length + 3) ~/ 4 * 4, '=');
       final json = jsonDecode(utf8.decode(base64Url.decode(padded)));
-      if (json is! Map<String, dynamic>) return null;
-      final exp = json['exp'];
-      if (exp is! num) return null;
-      return DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000);
+      return json is Map<String, dynamic> ? json : null;
     } catch (_) {
       return null;
     }

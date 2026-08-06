@@ -29,6 +29,12 @@ type FileInfo struct {
 	ModTime time.Time `json:"mod_time"` // 修改时间
 }
 
+// NetworkReporter 可选能力接口：报告适配器实际使用的网络链路。
+// 返回值："lan" 内网 / "wan" 外网；不实现的适配器视为无链路信息。
+type NetworkReporter interface {
+	Network() string
+}
+
 // IStorageAdapter 存储适配器接口。
 // 所有 path 均为相对挂载点根目录的路径（"/" 表示根），实现方负责防目录穿越。
 // ReadStream 的 length < 0 表示从 offset 读到文件末尾。

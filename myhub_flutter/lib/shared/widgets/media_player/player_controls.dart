@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/gesture_handler.dart';
+import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
 
 /// 控制栏无操作自动隐藏延时。
 const Duration _kHideDelay = Duration(seconds: 3);
@@ -24,7 +25,9 @@ class PlayerControls extends StatefulWidget {
     required this.player,
     required this.title,
     required this.onBack,
+    required this.osd,
     this.loading = false,
+    this.buffering = false,
     this.onToggleFullscreen,
     this.isFullscreen = false,
   });
@@ -38,8 +41,14 @@ class PlayerControls extends StatefulWidget {
   /// 返回上一页。
   final VoidCallback onBack;
 
+  /// 屏幕中央数值反馈通道（键盘/按钮/手势调节共用）。
+  final PlayerOsd osd;
+
   /// 首次加载中：隐藏中央大按钮（顶/底栏仍可用，可返回）。
   final bool loading;
+
+  /// 播放中缓冲：隐藏中央大按钮，避免与页面级缓冲转圈重叠。
+  final bool buffering;
 
   /// 系统全屏切换（桌面端）；为 null 时隐藏全屏按钮（移动端）。
   final VoidCallback? onToggleFullscreen;
@@ -203,16 +212,26 @@ class _PlayerControlsState extends State<PlayerControls> {
   void _setVolume(double v) {
     _player.setVolume(v);
     if (v > 0) _volumeBeforeMute = v;
+    widget.osd.show(_volumeIconFor(v), '${v.round()}%');
     _wake();
   }
 
   void _toggleMute() {
     if (_volume > 0) {
       _player.setVolume(0);
+      widget.osd.show(LucideIcons.volumeX, '静音');
     } else {
-      _player.setVolume(_volumeBeforeMute > 0 ? _volumeBeforeMute : 100);
+      final v = _volumeBeforeMute > 0 ? _volumeBeforeMute : 100.0;
+      _player.setVolume(v);
+      widget.osd.show(_volumeIconFor(v), '${v.round()}%');
     }
     _wake();
+  }
+
+  static IconData _volumeIconFor(double v) {
+    if (v <= 0) return LucideIcons.volumeX;
+    if (v < 50) return LucideIcons.volume1;
+    return LucideIcons.volume2;
   }
 
   static String _speedLabel(double s) => playbackSpeedLabel(s);
@@ -250,6 +269,7 @@ class _PlayerControlsState extends State<PlayerControls> {
                       : null,
                   onTap: () {
                     _player.setRate(s);
+                    widget.osd.show(LucideIcons.gauge, _speedLabel(s));
                     Navigator.of(sheetContext).pop();
                   },
                 ),
@@ -348,6 +368,7 @@ class _PlayerControlsState extends State<PlayerControls> {
       onHover: (_) => _wake(),
       child: PlayerGestureDetector(
         player: _player,
+        osd: widget.osd,
         // 轻触画面：切换控制栏显隐
         onTap: _toggleVisible,
         // 调节手势：重置自动隐藏计时
@@ -370,12 +391,16 @@ class _PlayerControlsState extends State<PlayerControls> {
               right: 0,
               child: _fade(_buildTopBar(context)),
             ),
-            // 中央大按钮：播放/暂停（加载中不显示）
+            // 中央大按钮：播放/暂停（加载/缓冲中不显示，
+            // 缓冲时页面级转圈独占中央，避免重叠）
             Center(
               child: IgnorePointer(
-                ignoring: !_visible || widget.loading,
+                ignoring: !_visible || widget.loading || widget.buffering,
                 child: AnimatedOpacity(
-                  opacity: _visible && !widget.loading ? 1 : 0,
+                  opacity:
+                      _visible && !widget.loading && !widget.buffering
+                          ? 1
+                          : 0,
                   duration: const Duration(milliseconds: 200),
                   child: Material(
                     color: Colors.black45,
@@ -404,6 +429,8 @@ class _PlayerControlsState extends State<PlayerControls> {
               bottom: 0,
               child: _fade(_buildBottomBar(context)),
             ),
+            // 中央数值反馈胶囊（手势/键盘/按钮调节共用，置顶渲染）
+            PlayerOsdView(osd: widget.osd),
           ],
         ),
       ),

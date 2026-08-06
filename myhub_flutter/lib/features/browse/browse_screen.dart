@@ -17,6 +17,7 @@ import 'package:myhub_flutter/features/browse/widgets/move_target_picker.dart';
 import 'package:myhub_flutter/features/browse/widgets/upload_sheet.dart';
 import 'package:myhub_flutter/features/favorites/providers/favorite_provider.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_reader.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/media_player.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/epub_reader.dart';
@@ -50,7 +51,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     if (item.isVideo || item.isAudio) {
       final source = ref.read(effectiveSourceProvider);
       if (source == null) return;
-      MediaPlayerPage.open(context, sourceId: source.id, file: item);
+      // 迷你条在播时保持迷你模式直接切歌，否则进全屏播放页
+      MediaPlayerPage.openOrMini(context, ref, sourceId: source.id, file: item);
       return;
     }
     if (item.isNovel) {
@@ -78,9 +80,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       _openArchive(source.id, item);
       return;
     }
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text('打开 ${item.name}')));
+    showTopSnackBar(context, '打开 ${item.name}');
   }
 
   /// 压缩包打开：漫画嗅探 → 漫画阅读器；否则提示（压缩包浏览后续提供）。
@@ -92,9 +92,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         await ComicReaderPage.open(context, sourceId: sourceId, file: item);
         return;
       }
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('该压缩包不是漫画，暂不支持浏览')));
+      showTopSnackBar(context, '该压缩包不是漫画，暂不支持浏览');
     } catch (e) {
       _showError(e);
     }
@@ -102,13 +100,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
 
   void _showError(Object e) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(e is ApiException ? e.message : '操作失败：$e'),
-        ),
-      );
+    showTopSnackBar(context, e is ApiException ? e.message : '操作失败：$e');
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -193,9 +185,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       ref.read(selectionProvider.notifier).clear();
     });
     if (mounted) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('已加入收藏')));
+      showTopSnackBar(context, '已加入收藏');
     }
   }
 
@@ -449,7 +439,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                     child: Column(
                       children: [
                         // 非根目录时提供 ".." 返回上级
-                        if (path != '/')
+                        // 网格模式下 ".." 以卡片形式插入网格首位（见 FileGridView）
+                        if (path != '/' && viewMode == BrowseViewMode.list)
                           _ParentEntry(
                             onTap: () => ref
                                 .read(browsePathProvider.notifier)
@@ -508,6 +499,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
           return const _EmptyState();
         }
         final selection = ref.watch(selectionProvider);
+        final path = ref.watch(browsePathProvider);
         final selectionNotifier = ref.read(selectionProvider.notifier);
         final selectionMode = selection.isNotEmpty;
         final favoritePaths = ref.watch(favoritePathsProvider);
@@ -525,6 +517,10 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
             FileGridView(
               items: items,
               onOpen: _openItem,
+              onParentTap: path == '/'
+                  ? null
+                  : () => ref.read(browsePathProvider.notifier).state =
+                      parentPathOf(path),
               onRefresh: () => ref.read(fileListProvider.notifier).refresh(),
               selectionMode: selectionMode,
               selectedPaths: selection,
@@ -562,7 +558,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     return PopupMenuButton<SortSpec>(
       tooltip: '排序',
       position: PopupMenuPosition.under,
-      onSelected: (s) => ref.read(sortProvider.notifier).state = s,
+      onSelected: (s) => ref.read(sortProvider.notifier).update(s),
       itemBuilder: (context) => [
         for (final field in SortField.values)
           for (final asc in [true, false])

@@ -2,7 +2,13 @@ package parser
 
 import (
 	"archive/zip"
+	"bytes"
+	"encoding/binary"
 	"errors"
+	"image"
+	_ "image/gif"  // DecodeConfig 格式注册
+	_ "image/jpeg" // DecodeConfig 格式注册
+	_ "image/png"  // DecodeConfig 格式注册
 	"io"
 	"path"
 	"sort"
@@ -11,6 +17,8 @@ import (
 	"unicode"
 
 	"github.com/nwaples/rardecode/v2"
+	_ "golang.org/x/image/bmp"  // DecodeConfig 格式注册
+	_ "golang.org/x/image/webp" // DecodeConfig 格式注册
 )
 
 // 压缩包相关错误
@@ -35,6 +43,73 @@ var imageExts = map[string]bool{
 // IsImageName 判断文件名是否为图片
 func IsImageName(name string) bool {
 	return imageExts[strings.ToLower(path.Ext(name))]
+}
+
+// ImageSize 从图片流解码像素尺寸（仅读文件头，开销极小）；
+// 支持 jpeg/png/gif/webp/bmp，avif 走 ISOBMFF 容器 ispe 盒兜底
+// 解析，其余不识别的格式返回 0,0。
+func ImageSize(r io.Reader) (int, int) {
+	// 读入少量头部字节：先走注册解码器，失败后按 avif 容器兜底
+	head, _ := io.ReadAll(io.LimitReader(r, 64<<10))
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(head))
+	if err == nil {
+		return cfg.Width, cfg.Height
+	}
+	return avifSize(head)
+}
+
+// avifSize 解析 AVIF（HEIF/ISOBMFF 容器）尺寸：ftyp 品牌校验后
+// 沿 meta → iprp → ipco → ispe 盒层级取宽高。无 Go 解码器可用，
+// 仅作兜底；解析失败返回 0,0（客户端按实测宽高比回退）。
+func avifSize(data []byte) (int, int) {
+	if len(data) < 12 || string(data[4:8]) != "ftyp" {
+		return 0, 0
+	}
+	if brand := string(data[8:12]); brand != "avif" && brand != "avis" {
+		return 0, 0
+	}
+	meta := findISOBMFFBox(data, "meta")
+	if len(meta) < 4 {
+		return 0, 0
+	}
+	iprp := findISOBMFFBox(meta[4:], "iprp") // meta 为 FullBox，跳过版本/标志
+	ipco := findISOBMFFBox(iprp, "ipco")
+	ispe := findISOBMFFBox(ipco, "ispe")
+	if len(ispe) < 12 { // FullBox 4 字节 + 宽高各 4 字节
+		return 0, 0
+	}
+	w := binary.BigEndian.Uint32(ispe[4:8])
+	h := binary.BigEndian.Uint32(ispe[8:12])
+	if w == 0 || h == 0 {
+		return 0, 0
+	}
+	return int(w), int(h)
+}
+
+// findISOBMFFBox 在盒序列中查找指定类型的盒，返回其负载（不含盒头）。
+func findISOBMFFBox(data []byte, typ string) []byte {
+	for len(data) >= 8 {
+		size := uint64(binary.BigEndian.Uint32(data[0:4]))
+		header := 8
+		if size == 1 { // largesize
+			if len(data) < 16 {
+				return nil
+			}
+			size = binary.BigEndian.Uint64(data[8:16])
+			header = 16
+		}
+		if size == 0 { // 延伸至末尾
+			size = uint64(len(data))
+		}
+		if size < uint64(header) || size > uint64(len(data)) {
+			return nil
+		}
+		if string(data[4:8]) == typ {
+			return data[header:size]
+		}
+		data = data[size:]
+	}
+	return nil
 }
 
 // NaturalLess 自然排序比较：page2 < page10（数字段按数值比较）

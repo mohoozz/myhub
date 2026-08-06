@@ -13,6 +13,7 @@ class PlayerSettings {
   const PlayerSettings({
     this.defaultSpeed = 1.0,
     this.preferTranscode = false,
+    this.volume = 100.0,
   });
 
   /// 默认倍速（0.5 ~ 2.0）。
@@ -21,10 +22,18 @@ class PlayerSettings {
   /// 转码偏好：true 时优先 HLS 转码播放，false 优先直通。
   final bool preferTranscode;
 
-  PlayerSettings copyWith({double? defaultSpeed, bool? preferTranscode}) {
+  /// 上次使用的音量（0 ~ 100），重启应用后恢复。
+  final double volume;
+
+  PlayerSettings copyWith({
+    double? defaultSpeed,
+    bool? preferTranscode,
+    double? volume,
+  }) {
     return PlayerSettings(
       defaultSpeed: defaultSpeed ?? this.defaultSpeed,
       preferTranscode: preferTranscode ?? this.preferTranscode,
+      volume: volume ?? this.volume,
     );
   }
 }
@@ -41,6 +50,7 @@ final playerSettingsProvider =
 class PlayerSettingsNotifier extends Notifier<PlayerSettings> {
   static const _kDefaultSpeed = 'player.default_speed';
   static const _kPreferTranscode = 'player.prefer_transcode';
+  static const _kVolume = 'player.volume';
 
   /// 标记用户已显式修改（防止异步恢复覆盖新值）。
   var _dirty = false;
@@ -57,6 +67,7 @@ class PlayerSettingsNotifier extends Notifier<PlayerSettings> {
     state = PlayerSettings(
       defaultSpeed: (prefs.getDouble(_kDefaultSpeed) ?? 1.0).clamp(0.5, 2.0),
       preferTranscode: prefs.getBool(_kPreferTranscode) ?? false,
+      volume: (prefs.getDouble(_kVolume) ?? 100.0).clamp(0.0, 100.0),
     );
   }
 
@@ -66,5 +77,6 @@ class PlayerSettingsNotifier extends Notifier<PlayerSettings> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_kDefaultSpeed, settings.defaultSpeed);
     await prefs.setBool(_kPreferTranscode, settings.preferTranscode);
+    await prefs.setDouble(_kVolume, settings.volume);
   }
 }

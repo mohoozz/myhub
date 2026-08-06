@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/trash_item.dart';
 import 'package:myhub_flutter/features/trash/providers/trash_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 
 /// 回收站页（pushed outside the navigation shell）。
 /// 左滑还原，右滑彻底删除（二次确认），顶栏清空。
@@ -158,9 +159,7 @@ class _TrashRow extends ConsumerWidget {
         } catch (e) {
           await notifier.refresh();
           if (context.mounted) {
-            ScaffoldMessenger.of(context)
-              ..clearSnackBars()
-              ..showSnackBar(SnackBar(content: Text('操作失败：$e')));
+            showTopSnackBar(context, '操作失败：$e');
           }
         }
       },

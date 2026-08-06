@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
-import 'package:myhub_flutter/features/browse/widgets/file_icon.dart';
+import 'package:myhub_flutter/features/browse/widgets/file_cover.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 
 /// 文件列表视图。
@@ -63,6 +63,7 @@ class FileListView extends StatelessWidget {
         final item = items[index];
         return _FileRow(
           item: item,
+          coverSourceId: favoriteSourceId,
           selectionMode: selectionMode,
           selected: selectedPaths.contains(item.path),
           favorited:
@@ -87,6 +88,7 @@ class FileListView extends StatelessWidget {
 class _FileRow extends StatelessWidget {
   const _FileRow({
     required this.item,
+    required this.coverSourceId,
     required this.onTap,
     required this.onLongPress,
     required this.selectionMode,
@@ -97,6 +99,9 @@ class _FileRow extends StatelessWidget {
   });
 
   final FileItem item;
+
+  /// 当前路径源 ID（封面缩略图加载用）。
+  final int? coverSourceId;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final bool selectionMode;
@@ -130,10 +135,15 @@ class _FileRow extends StatelessWidget {
                       : theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-            Icon(
-              fileIconOf(item),
-              size: 20,
-              color: fileIconColorOf(context, item),
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: FileCover(
+                item: item,
+                sourceId: coverSourceId,
+                iconSize: 20,
+                borderRadius: 6,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(

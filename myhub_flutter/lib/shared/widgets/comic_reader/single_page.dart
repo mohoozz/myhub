@@ -1,9 +1,13 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_page_image.dart';
+import 'package:myhub_flutter/shared/widgets/comic_reader/paged_viewer.dart';
 
-/// 单页模式（TODO 7.2）：PageView 左右滑动翻页，
-/// 每张图 InteractiveViewer 双指缩放/拖拽，轻触切换控制栏显隐。
-class ComicSinglePageMode extends StatefulWidget {
+/// 单页模式（TODO 7.2）：每屏一张图。
+///
+/// 交互统一由 [ComicPagedViewer] 提供：左右滑动 / 点击分区 / 键盘 /
+/// 滚轮翻页，双指捏合与 Ctrl+滚轮缩放，点击中部切换控制栏显隐。
+class ComicSinglePageMode extends StatelessWidget {
   const ComicSinglePageMode({
     super.key,
     required this.pageCount,
@@ -12,6 +16,7 @@ class ComicSinglePageMode extends StatefulWidget {
     required this.initialPage,
     required this.onPageChanged,
     required this.onToggleChrome,
+    this.jumpTo,
   });
 
   /// 总页数。
@@ -32,42 +37,22 @@ class ComicSinglePageMode extends StatefulWidget {
   /// 轻触画面回调（切换顶/底栏显隐）。
   final VoidCallback onToggleChrome;
 
-  @override
-  State<ComicSinglePageMode> createState() => _ComicSinglePageModeState();
-}
-
-class _ComicSinglePageModeState extends State<ComicSinglePageMode> {
-  late final PageController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = PageController(initialPage: widget.initialPage);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  /// 页码跳转通知（进度条拖动，值为页码 0 起）。
+  final ValueListenable<int>? jumpTo;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: widget.onToggleChrome,
-      child: PageView.builder(
-        controller: _controller,
-        itemCount: widget.pageCount,
-        onPageChanged: widget.onPageChanged,
-        itemBuilder: (context, i) => InteractiveViewer(
-          maxScale: 5,
-          child: Center(
-            child: ComicPageImage(
-              url: widget.urlOf(i),
-              headers: widget.headers,
-              pageNumber: i + 1,
-            ),
-          ),
+    return ComicPagedViewer(
+      itemCount: pageCount,
+      initialIndex: initialPage,
+      onIndexChanged: onPageChanged,
+      onToggleChrome: onToggleChrome,
+      jumpTo: jumpTo,
+      itemBuilder: (context, i) => Center(
+        child: ComicPageImage(
+          url: urlOf(i),
+          headers: headers,
+          pageNumber: i + 1,
         ),
       ),
     );

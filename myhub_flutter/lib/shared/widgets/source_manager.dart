@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/source.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 
 /// 路径源管理组件（设置页嵌入）。
 ///
@@ -92,6 +93,7 @@ class _SourceRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final testOk = ref.watch(sourceTestStatusProvider)[source.id];
     final subtitle = source.type == SourceType.webdav
         ? _webdavHost(source.configJson)
         : source.mountPoint;
@@ -118,11 +120,29 @@ class _SourceRow extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                source.name,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w500,
-                ),
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      source.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  if (testOk != null) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: testOk ? Colors.green : colorScheme.error,
+                      ),
+                    ),
+                  ],
+                ],
               ),
               Text(
                 subtitle,
@@ -177,14 +197,20 @@ class _SourceRow extends ConsumerWidget {
   }
 
   Future<void> _test(BuildContext context, WidgetRef ref) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final error =
+    final result =
         await ref.read(sourceListProvider.notifier).testConnection(source.id);
-    messenger
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(content: Text(error == null ? '连接正常' : '连接失败：$error')),
-      );
+    if (!context.mounted) return;
+    final String message;
+    if (!result.ok) {
+      message = '连接失败：${result.error}';
+    } else if (result.network == 'lan') {
+      message = '连接成功（内网）';
+    } else if (result.network == 'wan') {
+      message = '连接成功（外网）';
+    } else {
+      message = '连接正常';
+    }
+    showTopSnackBar(context, message);
   }
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
@@ -232,6 +258,7 @@ class _SourceEditDialogState extends ConsumerState<SourceEditDialog> {
   final _nameController = TextEditingController();
   final _mountController = TextEditingController();
   final _urlController = TextEditingController();
+  final _lanUrlController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
 
@@ -253,6 +280,7 @@ class _SourceEditDialogState extends ConsumerState<SourceEditDialog> {
         try {
           final cfg = jsonDecode(s.configJson) as Map<String, dynamic>;
           _urlController.text = cfg['url'] as String? ?? '';
+          _lanUrlController.text = cfg['lan_url'] as String? ?? '';
           _usernameController.text = cfg['username'] as String? ?? '';
           _passwordController.text = cfg['password'] as String? ?? '';
         } catch (_) {}
@@ -265,6 +293,7 @@ class _SourceEditDialogState extends ConsumerState<SourceEditDialog> {
     _nameController.dispose();
     _mountController.dispose();
     _urlController.dispose();
+    _lanUrlController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -276,6 +305,7 @@ class _SourceEditDialogState extends ConsumerState<SourceEditDialog> {
       type: _type,
       mountPoint: _mountController.text.trim(),
       webdavUrl: _urlController.text.trim(),
+      webdavLanUrl: _lanUrlController.text.trim(),
       webdavUsername: _usernameController.text.trim(),
       webdavPassword: _passwordController.text,
       enabled: widget.existing?.enabled ?? true,
@@ -353,6 +383,14 @@ class _SourceEditDialogState extends ConsumerState<SourceEditDialog> {
                 decoration: const InputDecoration(
                   labelText: 'WebDAV 地址',
                   hintText: 'https://nas.example.com:5006',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _lanUrlController,
+                decoration: const InputDecoration(
+                  labelText: '内网地址（可选）',
+                  hintText: 'http://192.168.1.10:5006',
                 ),
               ),
               const SizedBox(height: 12),

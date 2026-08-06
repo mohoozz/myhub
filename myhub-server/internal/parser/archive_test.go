@@ -3,7 +3,13 @@ package parser
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"testing"
+
+	"golang.org/x/image/bmp"
 )
 
 func TestNaturalSort(t *testing.T) {
@@ -55,6 +61,79 @@ func buildTestZIP(t *testing.T, entries map[string][]byte) []byte {
 }
 
 func fakeJPEG() []byte { return []byte{0xFF, 0xD8, 0xFF, 0xD9} }
+
+// encodeImage 用指定编码器生成 13x7 测试图片
+func encodeImage(t *testing.T, encode func(*bytes.Buffer, image.Image) error) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 13, 7))
+	var buf bytes.Buffer
+	if err := encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// buildWebPLossless 手工构造最小 VP8L（无损 webp）头部：
+// RIFF/WEBP 容器 + VP8L 块，0x2F 签名后按位打包 宽高-1（各 14 位）。
+func buildWebPLossless(width, height uint32) []byte {
+	var bits uint32 = (width - 1) | ((height - 1) << 14)
+	vp8l := []byte{0x2F, byte(bits), byte(bits >> 8), byte(bits >> 16), byte(bits >> 24)}
+	chunk := make([]byte, 8+len(vp8l))
+	copy(chunk[0:4], "VP8L")
+	binary.LittleEndian.PutUint32(chunk[4:8], uint32(len(vp8l)))
+	copy(chunk[8:], vp8l)
+	riff := make([]byte, 12+len(chunk))
+	copy(riff[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(riff[4:8], uint32(4+len(chunk)))
+	copy(riff[8:12], "WEBP")
+	copy(riff[12:], chunk)
+	return riff
+}
+
+// buildAVIF 手工构造最小 AVIF 容器（ftyp + meta/iprp/ipco/ispe）
+func buildAVIF(width, height uint32) []byte {
+	box := func(typ string, payload []byte) []byte {
+		b := make([]byte, 8+len(payload))
+		binary.BigEndian.PutUint32(b[0:4], uint32(len(b)))
+		copy(b[4:8], typ)
+		copy(b[8:], payload)
+		return b
+	}
+	ispePayload := make([]byte, 12) // FullBox 版本/标志 4 字节 + 宽高
+	binary.BigEndian.PutUint32(ispePayload[4:8], width)
+	binary.BigEndian.PutUint32(ispePayload[8:12], height)
+	ipco := box("ipco", box("ispe", ispePayload))
+	iprp := box("iprp", ipco)
+	meta := box("meta", append(make([]byte, 4), iprp...)) // FullBox 版本/标志
+	ftyp := box("ftyp", append([]byte("avif"), make([]byte, 8)...))
+	return append(ftyp, meta...)
+}
+
+func TestImageSize_Formats(t *testing.T) {
+	cases := map[string][]byte{
+		"jpeg": encodeImage(t, func(b *bytes.Buffer, i image.Image) error {
+			return jpeg.Encode(b, i, nil)
+		}),
+		"png": encodeImage(t, func(b *bytes.Buffer, i image.Image) error {
+			return png.Encode(b, i)
+		}),
+		"webp": buildWebPLossless(13, 7),
+		"bmp": encodeImage(t, func(b *bytes.Buffer, i image.Image) error {
+			return bmp.Encode(b, i)
+		}),
+		"avif": buildAVIF(13, 7),
+	}
+	for format, data := range cases {
+		w, h := ImageSize(bytes.NewReader(data))
+		if w != 13 || h != 7 {
+			t.Errorf("%s: ImageSize = %dx%d，期望 13x7", format, w, h)
+		}
+	}
+	// 非图片数据返回 0,0
+	if w, h := ImageSize(bytes.NewReader([]byte("not an image"))); w != 0 || h != 0 {
+		t.Errorf("非图片: ImageSize = %dx%d，期望 0x0", w, h)
+	}
+}
 
 func TestZIPImagePages(t *testing.T) {
 	data := buildTestZIP(t, map[string][]byte{

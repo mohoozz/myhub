@@ -22,6 +22,11 @@ abstract class ComicPage with _$ComicPage {
     required int index,
     required String name,
     @Default(0) int size,
+
+    /// 图片像素尺寸（服务端仅对 ZIP/CBZ、EPUB 提供；RAR 为 0）。
+    /// 条漫模式据此精确计算页高与进度恢复。
+    @Default(0) int width,
+    @Default(0) int height,
   }) = _ComicPage;
 
   factory ComicPage.fromJson(Map<String, dynamic> json) =>

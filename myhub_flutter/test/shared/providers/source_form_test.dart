@@ -25,6 +25,7 @@ void main() {
         type: SourceType.webdav,
         mountPoint: '/media',
         webdavUrl: 'https://nas.example.com:5006',
+        webdavLanUrl: 'http://192.168.1.10:5006',
         webdavUsername: 'user',
         webdavPassword: 'pass',
       );
@@ -33,8 +34,21 @@ void main() {
       expect(payload['mount_point'], '/media');
       final cfg = jsonDecode(payload['config_json'] as String);
       expect(cfg['url'], 'https://nas.example.com:5006');
+      expect(cfg['lan_url'], 'http://192.168.1.10:5006');
       expect(cfg['username'], 'user');
       expect(cfg['password'], 'pass');
+    });
+
+    test('WebDAV 内网地址为空时不写入 lan_url', () {
+      const form = SourceFormData(
+        name: 'NAS',
+        type: SourceType.webdav,
+        webdavUrl: 'https://nas.example.com:5006',
+      );
+      final cfg =
+          jsonDecode(form.toPayload()['config_json'] as String)
+              as Map<String, dynamic>;
+      expect(cfg.containsKey('lan_url'), isFalse);
     });
 
     test('编辑停用状态保留', () {

@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/core/theme/theme_mode_provider.dart';
-import 'package:myhub_flutter/shared/widgets/avatar_menu.dart';
+import 'package:myhub_flutter/shared/widgets/avatar_button.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 
 /// Adaptive navigation shell around the [StatefulNavigationShell].
@@ -80,7 +80,7 @@ class _CompactShell extends StatelessWidget {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: Center(child: AvatarMenuButton(onGoBranch: onSelect)),
+            child: const Center(child: AvatarButton()),
           ),
         ],
       ),
@@ -143,7 +143,7 @@ class _RailShell extends ConsumerWidget {
             child: Column(
               children: [
                 const SizedBox(height: 16),
-                AvatarMenuButton(onGoBranch: onSelect),
+                const AvatarButton(),
                 const SizedBox(height: 20),
                 for (final item in _items) ...[
                   _RailItem(

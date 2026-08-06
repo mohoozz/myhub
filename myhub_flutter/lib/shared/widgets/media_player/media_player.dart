@@ -10,8 +10,10 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
+import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/audio_cover_mode.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_controls.dart';
+import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -50,6 +52,22 @@ class MediaPlayerPage extends ConsumerStatefulWidget {
     );
   }
 
+  /// 智能打开媒体：迷你条在播时直接切换会话（保持迷你模式，不进全屏页），
+  /// 否则 push 全屏播放页。
+  static Future<void> openOrMini(
+    BuildContext context,
+    WidgetRef ref, {
+    required int sourceId,
+    required FileItem file,
+  }) {
+    final controller = ref.read(mediaPlayerProvider);
+    if (controller.miniVisible.value && controller.hasMedia) {
+      controller.play(sourceId, file);
+      return Future.value();
+    }
+    return open(context, sourceId: sourceId, file: file);
+  }
+
   @override
   ConsumerState<MediaPlayerPage> createState() => _MediaPlayerPageState();
 }
@@ -57,6 +75,13 @@ class MediaPlayerPage extends ConsumerStatefulWidget {
 class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
   late final MediaPlayerController _controller;
   late final Player _player;
+
+  /// 沉浸式标题栏开关（缓存 notifier，dispose 后 ref 不可再用）。
+  late final StateController<bool> _immersiveTitleBar;
+
+  /// 屏幕中央数值反馈（键盘/手势/按钮调节共用）。
+  final PlayerOsd _osd = PlayerOsd();
+
   StreamSubscription<dynamic>? _bufferingSub;
 
   bool _buffering = false;
@@ -88,6 +113,12 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
           setState(() => _fullscreen = v);
         }
       });
+      // 沉浸式黑色标题栏（播放页为纯黑背景，白底标题栏会突兀）；
+      // initState 处于组件树锁定阶段，与 pageOpened 同理延迟到帧后修改
+      _immersiveTitleBar = ref.read(immersiveTitleBarProvider.notifier);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _immersiveTitleBar.state = true;
+      });
     }
   }
 
@@ -105,8 +136,17 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
     if (isDesktopPlatform && _fullscreen) {
       unawaited(windowManager.setFullScreen(false));
     }
+    // 退出播放页，标题栏恢复主题色；
+    // dispose 处于组件树锁定阶段，同步改 provider 会抛异常并中断后续
+    // pageClosed()（迷你条因此不显示），统一延迟到帧后执行
+    if (isDesktopPlatform) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _immersiveTitleBar.state = false;
+      });
+    }
     _controller.isVideoMode.removeListener(_applyOrientationLock);
     unawaited(_bufferingSub?.cancel());
+    _osd.dispose();
     // 播放继续，迷你条接管（有错误时保持隐藏）
     _controller.pageClosed();
     super.dispose();
@@ -149,12 +189,19 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
       target = duration;
     }
     _player.seek(target);
+    final forward = delta >= Duration.zero;
+    _osd.show(
+      forward ? LucideIcons.fastForward : LucideIcons.rewind,
+      '${forward ? '+' : '-'}${delta.inSeconds.abs()}s  '
+      '${formatPlaybackTime(target)}',
+    );
   }
 
   /// ↑/↓：音量 ±5%。
   void _changeVolume(double delta) {
     final v = (_player.state.volume + delta).clamp(0.0, 100.0);
     _player.setVolume(v);
+    _osd.show(_volumeIcon(v), '${v.round()}%');
   }
 
   /// M：静音切换（记住静音前音量）。
@@ -163,9 +210,18 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
     if (v > 0) {
       _volumeBeforeMute = v;
       _player.setVolume(0);
+      _osd.show(LucideIcons.volumeX, '静音');
     } else {
-      _player.setVolume(_volumeBeforeMute > 0 ? _volumeBeforeMute : 100);
+      final restored = _volumeBeforeMute > 0 ? _volumeBeforeMute : 100.0;
+      _player.setVolume(restored);
+      _osd.show(_volumeIcon(restored), '${restored.round()}%');
     }
+  }
+
+  static IconData _volumeIcon(double v) {
+    if (v <= 0) return LucideIcons.volumeX;
+    if (v < 50) return LucideIcons.volume1;
+    return LucideIcons.volume2;
   }
 
   /// 全局键盘绑定（页面级：加载/错误状态下 Esc 同样可用）。
@@ -230,21 +286,33 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
                     PlayerControls(
                       player: _player,
                       title: widget.file.name,
+                      osd: _osd,
                       loading: loading,
+                      buffering: _buffering,
                       onBack: () => Navigator.of(context).maybePop(),
                       onToggleFullscreen:
                           isDesktopPlatform ? _toggleFullscreen : null,
                       isFullscreen: _fullscreen,
                     ),
-                  // 播放中的缓冲转圈（首次加载走 _LoadingView）
+                  // 播放中的缓冲转圈（首次加载走 _LoadingView）；
+                  // 圆形底托与中央播放按钮同风格，缓冲时按钮已隐藏不会重叠
                   if (!loading && !hasError && _buffering)
                     const Center(
-                      child: SizedBox(
-                        width: 36,
-                        height: 36,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 3,
-                          color: Colors.white70,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: SizedBox(
+                            width: 38,
+                            height: 38,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 3,
+                              color: Colors.white,
+                            ),
+                          ),
                         ),
                       ),
                     ),

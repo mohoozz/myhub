@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
 import 'package:myhub_flutter/shared/utils/open_media.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/reading_card.dart';
 
 /// "正在阅读"首页：全部未读完进度卡片网格，点击续读，长按标记已读完。
@@ -142,9 +143,7 @@ class _ProgressGrid extends ConsumerWidget {
                   .markFinished(p.sourceId, p.filePath);
             } catch (e) {
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context)
-                ..clearSnackBars()
-                ..showSnackBar(SnackBar(content: Text('操作失败：$e')));
+              showTopSnackBar(context, '操作失败：$e');
             }
           },
         ),

@@ -2,9 +2,12 @@ package adapter
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path"
 	"sort"
@@ -17,6 +20,7 @@ import (
 // WebDavConfig WebDAV 路径源配置（存于 Source.ConfigJSON）
 type WebDavConfig struct {
 	URL      string `json:"url"`      // WebDAV 服务地址，如 https://nas.example.com:5006
+	LanURL   string `json:"lan_url"`  // 内网地址（可选），可达时优先使用
 	Username string `json:"username"` // 用户名
 	Password string `json:"password"` // 密码
 	Insecure bool   `json:"insecure"` // 是否跳过 TLS 证书校验（自签名场景）
@@ -28,6 +32,7 @@ type WebDavConfig struct {
 type WebDavAdapter struct {
 	client   *gowebdav.Client
 	basePath string // 挂载点根路径（POSIX 风格，无尾 "/"）
+	network  string // 实际使用的链路："lan" 内网 / "wan" 外网
 }
 
 // NewWebDavAdapter 创建 WebDAV 适配器
@@ -35,14 +40,61 @@ func NewWebDavAdapter(cfg *WebDavConfig, basePath string) (*WebDavAdapter, error
 	if strings.TrimSpace(cfg.URL) == "" {
 		return nil, errors.New("WebDAV 配置缺少 url")
 	}
-	client := gowebdav.NewClient(cfg.URL, cfg.Username, cfg.Password)
+	// 配置了内网地址时优先探测内网，可达则使用内网连接，否则回退公网地址
+	url := cfg.URL
+	network := "wan"
+	if lan := strings.TrimSpace(cfg.LanURL); lan != "" && probeURL(lan, 3*time.Second) {
+		url = lan
+		network = "lan"
+	}
+	client := gowebdav.NewClient(url, cfg.Username, cfg.Password)
 	client.SetTimeout(30 * time.Second)
+	// 自定义 Transport：提高每主机空闲连接上限（默认仅 2）。
+	// 适配器被 SourceService 缓存后，Transport 长期复用，
+	// 流式 Range 高频请求的连接得以入池复用，减少 TIME_WAIT 堆积。
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	if cfg.Insecure {
+		// 用户显式配置跳过自签名证书校验
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	}
+	client.SetTransport(transport)
 
 	base := "/" + strings.Trim(path.Clean("/"+basePath), "/")
 	if base == "/" {
 		base = ""
 	}
-	return &WebDavAdapter{client: client, basePath: base}, nil
+	return &WebDavAdapter{client: client, basePath: base, network: network}, nil
+}
+
+// Network 返回实际使用的链路："lan" 内网 / "wan" 外网
+func (a *WebDavAdapter) Network() string { return a.network }
+
+// probeURL 短超时探测地址可达性，收到任意 HTTP 响应（含 401/404）即视为可达
+func probeURL(rawURL string, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return true
 }
 
 // resolve 将相对路径解析为服务器上的完整路径，并强制限制在 basePath 内。

@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 浏览页视图模式。
 enum BrowseViewMode { grid, list }
@@ -40,8 +43,97 @@ final viewModeProvider = StateProvider<BrowseViewMode>(
   (ref) => BrowseViewMode.list,
 );
 
-/// 排序规则。
-final sortProvider = StateProvider<SortSpec>((ref) => const SortSpec());
+/// 排序规则（按 路径源+目录 记忆，持久化到本地，LRU 缓存 500 条）。
+final sortProvider = NotifierProvider<SortNotifier, SortSpec>(
+  SortNotifier.new,
+);
+
+class SortNotifier extends Notifier<SortSpec> {
+  static const _kCacheKey = 'browse.sort_cache';
+  static const _kMaxEntries = 500;
+
+  /// 标记用户已显式修改（防止异步恢复覆盖新值）。
+  var _dirty = false;
+
+  @override
+  SortSpec build() {
+    final source = ref.watch(effectiveSourceProvider);
+    final path = ref.watch(browsePathProvider);
+    _dirty = false;
+    if (source != null) {
+      _restore(source.id, path);
+    }
+    return const SortSpec();
+  }
+
+  Future<void> _restore(int sourceId, String path) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cache = _decode(prefs.getString(_kCacheKey));
+    final entry = cache['$sourceId|$path'];
+    if (entry == null) {
+      if (!_dirty) state = const SortSpec();
+      return;
+    }
+    // 刷新访问时间（LRU 依据）
+    entry['at'] = DateTime.now().millisecondsSinceEpoch;
+    await _persist(prefs, cache);
+    if (_dirty) return;
+    state = SortSpec(
+      field: SortField.values.firstWhere(
+        (f) => f.name == entry['f'],
+        orElse: () => SortField.name,
+      ),
+      ascending: entry['asc'] as bool? ?? true,
+    );
+  }
+
+  /// 用户手动切换排序：更新状态并写入缓存。
+  Future<void> update(SortSpec spec) async {
+    _dirty = true;
+    state = spec;
+    final source = ref.read(effectiveSourceProvider);
+    if (source == null) return;
+    final path = ref.read(browsePathProvider);
+    final prefs = await SharedPreferences.getInstance();
+    final cache = _decode(prefs.getString(_kCacheKey));
+    cache['${source.id}|$path'] = {
+      'f': spec.field.name,
+      'asc': spec.ascending,
+      'at': DateTime.now().millisecondsSinceEpoch,
+    };
+    await _persist(prefs, cache);
+  }
+
+  static Map<String, Map<String, dynamic>> _decode(String? raw) {
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return map.map(
+        (k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)),
+      );
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> _persist(
+    SharedPreferences prefs,
+    Map<String, Map<String, dynamic>> cache,
+  ) async {
+    // LRU 淘汰：超过上限时优先删除最久未访问的路径
+    if (cache.length > _kMaxEntries) {
+      final keys = cache.keys.toList()
+        ..sort(
+          (a, b) => (cache[a]!['at'] as int? ?? 0)
+              .compareTo(cache[b]!['at'] as int? ?? 0),
+        );
+      for (final k in keys.take(cache.length - _kMaxEntries)) {
+        cache.remove(k);
+      }
+    }
+    await prefs.setString(_kCacheKey, jsonEncode(cache));
+  }
+}
 
 /// 当前目录搜索关键字（前端过滤）。
 final searchQueryProvider = StateProvider<String>((ref) => '');

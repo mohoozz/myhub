@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
 import 'package:myhub_flutter/features/auth/providers/auth_provider.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 
 /// Login page: logo title + credentials form.
 /// 登录成功后更新全局认证状态，由路由守卫自动跳转。
@@ -51,9 +52,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showTopSnackBar(context, message);
   }
 
   @override

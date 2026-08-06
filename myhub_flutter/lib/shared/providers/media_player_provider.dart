@@ -64,6 +64,9 @@ class MediaPlayerController {
   final List<StreamSubscription<dynamic>> _subs = [];
   Timer? _reportTimer;
 
+  /// 音量持久化的防抖计时器。
+  Timer? _volumeSaveTimer;
+
   int? _sourceId;
   FileItem? _file;
 
@@ -94,6 +97,11 @@ class MediaPlayerController {
 
   /// 迷你播放器可见性（全屏页打开时强制隐藏）。
   final ValueNotifier<bool> miniVisible = ValueNotifier(false);
+
+  /// 会话版本：每次切换媒体自增。
+  /// 迷你条据此重建（file/player 非可监听对象，切换会话后
+  /// 不重建会残留旧会话的画面与标题）。
+  final ValueNotifier<int> sessionVersion = ValueNotifier(0);
 
   Player? get player => _player;
   VideoController? get videoController => _videoController;
@@ -192,6 +200,7 @@ class MediaPlayerController {
     loading.value = true;
     error.value = null;
     isVideoMode.value = _guessIsVideo(file);
+    sessionVersion.value++; // 通知迷你条等 UI 重建订阅
 
     _player = _createPlayer(file.name);
     if (isVideoMode.value) {
@@ -204,6 +213,8 @@ class MediaPlayerController {
   }
 
   Future<void> _teardown() async {
+    _volumeSaveTimer?.cancel();
+    _volumeSaveTimer = null;
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -227,6 +238,7 @@ class MediaPlayerController {
     error.dispose();
     isVideoMode.dispose();
     miniVisible.dispose();
+    sessionVersion.dispose();
   }
 
   // ---------- 内部：Player 创建与状态监听 ----------
@@ -271,7 +283,22 @@ class MediaPlayerController {
       player.stream.tracks.listen(_onTracks),
       player.stream.completed.listen(_onCompleted),
       player.stream.error.listen(_onError),
+      player.stream.volume.listen(_onVolume),
     ]);
+  }
+
+  /// 音量变化：防抖 300ms 后持久化（重启应用恢复上次音量）。
+  void _onVolume(double v) {
+    _volumeSaveTimer?.cancel();
+    _volumeSaveTimer = Timer(const Duration(milliseconds: 300), () {
+      final settings = _ref.read(playerSettingsProvider);
+      if ((settings.volume - v).abs() < 0.5) return;
+      unawaited(
+        _ref
+            .read(playerSettingsProvider.notifier)
+            .update(settings.copyWith(volume: v)),
+      );
+    });
   }
 
   void _onPlaying(bool v) {
@@ -367,16 +394,22 @@ class MediaPlayerController {
         play: true,
       );
       if (!identical(_player, player)) return;
+      final settings = _ref.read(playerSettingsProvider);
       // 应用默认倍速（1.0 时跳过避免多余调用）
-      final speed = _ref.read(playerSettingsProvider).defaultSpeed;
-      if (speed != 1.0) {
-        unawaited(player.setRate(speed));
+      if (settings.defaultSpeed != 1.0) {
+        unawaited(player.setRate(settings.defaultSpeed));
       }
-      // 恢复上次播放位置
+      // 恢复上次音量（新建 Player 默认 100）
+      if ((player.state.volume - settings.volume).abs() > 0.5) {
+        unawaited(player.setVolume(settings.volume));
+      }
+      // 恢复上次播放位置：open 返回 ≠ 文件加载完成，
+      // 此时 seek 会被 mpv 丢弃（表现为从头播放），需等 demuxer 就绪后再 seek。
+      // 注意 _pendingResume 在 seek 真正执行时才清除，
+      // 保证直链/HLS 兜底互换重新 open 后仍能恢复。
       final resume = _pendingResume;
-      _pendingResume = null;
       if (resume != null) {
-        unawaited(player.seek(resume));
+        unawaited(_seekWhenReady(player, resume));
       }
       // 外挂字幕自动检测加载（仅一次；失败不影响播放）
       if (!_subsLoaded) {
@@ -385,6 +418,26 @@ class MediaPlayerController {
       }
     } catch (e) {
       _onError('$e');
+    }
+  }
+
+  /// 等待 demuxer 就绪（duration 非零）后 seek 到恢复位置。
+  ///
+  /// media_kit 的 open 仅等待命令下发，网络流加载完成前 mpv 尚无时长，
+  /// 期间下达的 seek 会被丢弃；超时或会话切换则静默放弃（从头播放）。
+  Future<void> _seekWhenReady(Player player, Duration target) async {
+    try {
+      if (player.state.duration <= Duration.zero) {
+        await player.stream.duration
+            .firstWhere((d) => d > Duration.zero)
+            .timeout(const Duration(seconds: 20));
+      }
+      if (!identical(_player, player)) return; // 会话已切换
+      if (_pendingResume == null) return; // 已被其他路径消费
+      _pendingResume = null;
+      await player.seek(target);
+    } catch (_) {
+      // 超时 / Player 已销毁：放弃恢复
     }
   }
 

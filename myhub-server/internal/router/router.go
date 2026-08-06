@@ -83,6 +83,8 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 	{
 		api.PUT("/auth/password", authHandler.ChangePassword)
 		api.GET("/auth/me", authHandler.Me)
+		api.PUT("/auth/avatar", authHandler.UploadAvatar)
+		api.GET("/auth/avatar", authHandler.GetAvatar)
 
 		// 路径源管理
 		sources := api.Group("/sources")

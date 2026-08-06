@@ -1,9 +1,8 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
+import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
 
 /// 播放器手势识别层（TODO 5.4）。
 ///
@@ -11,7 +10,7 @@ import 'package:myhub_flutter/shared/utils/format.dart';
 /// * 右侧 1/3 竖滑：调节音量；
 /// * 左侧 1/3 竖滑：调节亮度（软件调光，经 [onBrightnessChanged] 通知外部渲染遮罩）；
 /// * 双击左/右半区：快退/快进 10s；
-/// * 调节时屏幕中央悬浮胶囊实时反馈（图标 + 数值）。
+/// * 调节时经 [osd] 在屏幕中央悬浮胶囊实时反馈（图标 + 数值）。
 ///
 /// 作为控制栏的根节点使用：单击经 [onTap] 切换控制栏显隐，
 /// 任意调节手势经 [onInteraction] 通知外部重置自动隐藏计时。
@@ -20,6 +19,7 @@ class PlayerGestureDetector extends StatefulWidget {
   const PlayerGestureDetector({
     super.key,
     required this.player,
+    required this.osd,
     required this.child,
     this.onTap,
     this.onInteraction,
@@ -28,6 +28,9 @@ class PlayerGestureDetector extends StatefulWidget {
 
   /// 已打开媒体的 Player。
   final Player player;
+
+  /// 屏幕中央数值反馈通道（与键盘/按钮调节共用）。
+  final PlayerOsd osd;
 
   /// 控制栏内容（顶/底栏、中央按钮等）。
   final Widget child;
@@ -56,9 +59,6 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   /// 双击快退/快进秒数。
   static const int _doubleTapSeekSec = 10;
 
-  Timer? _feedbackTimer;
-  ({IconData icon, String text})? _feedback;
-
   // 水平拖动 seek 状态
   double _dragStartX = 0;
   Duration _seekStart = Duration.zero;
@@ -77,29 +77,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
 
   Player get _player => widget.player;
 
-  @override
-  void dispose() {
-    _feedbackTimer?.cancel();
-    super.dispose();
-  }
-
-  // ---------- 悬浮胶囊 ----------
-
-  void _showFeedback(IconData icon, String text) {
-    _feedbackTimer?.cancel();
-    setState(() => _feedback = (icon: icon, text: text));
-  }
-
-  void _dismissFeedbackLater([
-    Duration delay = const Duration(milliseconds: 600),
-  ]) {
-    _feedbackTimer?.cancel();
-    _feedbackTimer = Timer(delay, () {
-      if (mounted) {
-        setState(() => _feedback = null);
-      }
-    });
-  }
+  PlayerOsd get _osd => widget.osd;
 
   // ---------- 双击快退/快进 ----------
 
@@ -109,12 +87,11 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
     final target =
         _clampPosition(_player.state.position + delta, _player.state.duration);
     _player.seek(target);
-    _showFeedback(
+    _osd.show(
       forward ? LucideIcons.fastForward : LucideIcons.rewind,
       '${forward ? '+' : '-'}$_doubleTapSeekSec'
       's  ${formatPlaybackTime(target)}',
     );
-    _dismissFeedbackLater();
     widget.onInteraction?.call();
   }
 
@@ -137,7 +114,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
       _player.state.duration,
     );
     _seekTarget = target;
-    _showFeedback(
+    _osd.showHold(
       seconds >= 0 ? LucideIcons.fastForward : LucideIcons.rewind,
       '${seconds >= 0 ? '+' : '-'}${seconds.abs().round()}s  ${formatPlaybackTime(target)}',
     );
@@ -150,7 +127,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
       _player.seek(target);
     }
     _seekTarget = null;
-    _dismissFeedbackLater();
+    _osd.dismiss();
   }
 
   Duration _clampPosition(Duration pos, Duration duration) {
@@ -182,12 +159,12 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
       case _VerticalMode.volume:
         final v = (_vStartValue + delta * 100).clamp(0.0, 100.0);
         _player.setVolume(v);
-        _showFeedback(_volumeIcon(v), '${v.round()}%');
+        _osd.showHold(_volumeIcon(v), '${v.round()}%');
       case _VerticalMode.brightness:
         final b = (_vStartValue + delta).clamp(0.0, 1.0);
         _brightness = b;
         widget.onBrightnessChanged?.call(b);
-        _showFeedback(
+        _osd.showHold(
           b > 0.5 ? LucideIcons.sun : LucideIcons.sunDim,
           '${(b * 100).round()}%',
         );
@@ -199,7 +176,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
 
   void _endVertical() {
     _vMode = _VerticalMode.none;
-    _dismissFeedbackLater();
+    _osd.dismiss();
   }
 
   IconData _volumeIcon(double v) {
@@ -224,26 +201,16 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
           onHorizontalDragStart: _startSeek,
           onHorizontalDragUpdate: (d) => _updateSeek(d, width),
           onHorizontalDragEnd: (_) => _endSeek(),
-          onHorizontalDragCancel: _dismissFeedbackLater,
+          onHorizontalDragCancel: _osd.dismiss,
           onVerticalDragStart: (d) => _startVertical(d, width),
           onVerticalDragUpdate: (d) => _updateVertical(d, height),
           onVerticalDragEnd: (_) => _endVertical(),
           onVerticalDragCancel: () {
             _vMode = _VerticalMode.none;
-            _dismissFeedbackLater();
+            _osd.dismiss();
           },
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              widget.child,
-              if (_feedback != null)
-                IgnorePointer(
-                  child: Center(
-                    child: _FeedbackCapsule(feedback: _feedback!),
-                  ),
-                ),
-            ],
-          ),
+          // OSD 胶囊由控制栏统一挂载在顶层（键盘/按钮调节也要显示）
+          child: widget.child,
         );
       },
     );
@@ -251,36 +218,3 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
 }
 
 enum _VerticalMode { none, volume, brightness }
-
-/// 屏幕中央悬浮胶囊：图标 + 数值，调节手势期间实时反馈。
-class _FeedbackCapsule extends StatelessWidget {
-  const _FeedbackCapsule({required this.feedback});
-
-  final ({IconData icon, String text}) feedback;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(feedback.icon, size: 18, color: Colors.white),
-          const SizedBox(width: 10),
-          Text(
-            feedback.text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
