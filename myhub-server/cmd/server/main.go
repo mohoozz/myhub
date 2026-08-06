@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -44,11 +45,19 @@ func main() {
 	r, cleanup := router.Setup(cfg, db)
 
 	// 3.1 定时任务：每天 03:00 清理过期回收站条目
+	// 保留天数优先读 AppConfig（设置页可改），缺省回退配置文件
 	sourceSvc := service.NewSourceService(cfg, repository.NewSourceRepository(db))
 	trashSvc := service.NewTrashService(sourceSvc, repository.NewTrashRepository(db))
+	configRepo := repository.NewConfigRepository(db)
 	cronRunner := cron.New()
 	if _, err := cronRunner.AddFunc("0 3 * * *", func() {
-		trashSvc.CleanupExpired(context.Background(), cfg.Trash.RetentionDays)
+		days := cfg.Trash.RetentionDays
+		if v, err := configRepo.Get("trash.retention_days"); err == nil {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				days = n
+			}
+		}
+		trashSvc.CleanupExpired(context.Background(), days)
 	}); err != nil {
 		log.Fatalf("注册回收站清理任务失败: %v", err)
 	}

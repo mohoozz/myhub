@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/favorite.dart';
 import 'package:myhub_flutter/features/favorites/providers/favorite_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
+import 'package:myhub_flutter/shared/utils/open_media.dart';
 
 /// 收藏页：星标文件/文件夹，网格/列表切换，点星即时取消收藏。
 class FavoritesScreen extends ConsumerStatefulWidget {
@@ -167,7 +168,7 @@ class _FavoriteList extends ConsumerWidget {
       itemBuilder: (context, index) {
         final f = items[index];
         return InkWell(
-          onTap: () => _openItem(context, f),
+          onTap: () => _openItem(context, ref, f),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(
@@ -229,7 +230,7 @@ class _FavoriteGrid extends ConsumerWidget {
       itemBuilder: (context, index) {
         final f = items[index];
         return InkWell(
-          onTap: () => _openItem(context, f),
+          onTap: () => _openItem(context, ref, f),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.all(10),
@@ -299,9 +300,14 @@ class _StarButton extends ConsumerWidget {
   }
 }
 
-/// 点击条目：TODO(5/6 章) 按类型进入播放器/阅读器。
-void _openItem(BuildContext context, Favorite f) {
-  ScaffoldMessenger.of(context)
-    ..clearSnackBars()
-    ..showSnackBar(SnackBar(content: Text('打开 ${f.filePath.split('/').last}')));
+/// 点击条目：按媒体类型路由到对应播放器/阅读器（见 [openMediaItem]）。
+Future<void> _openItem(BuildContext context, WidgetRef ref, Favorite f) {
+  return openMediaItem(
+    context,
+    ref,
+    sourceId: f.sourceId,
+    filePath: f.filePath,
+    mediaType: f.mediaType,
+    size: f.size,
+  );
 }

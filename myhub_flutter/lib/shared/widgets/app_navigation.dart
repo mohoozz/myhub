@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/core/theme/theme_mode_provider.dart';
 import 'package:myhub_flutter/shared/widgets/avatar_menu.dart';
+import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 
 /// Adaptive navigation shell around the [StatefulNavigationShell].
 ///
@@ -23,7 +25,7 @@ class AppNavigation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
+    Widget child = LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < 600) {
           return _CompactShell(shell: shell, onSelect: _goBranch);
@@ -31,6 +33,25 @@ class AppNavigation extends StatelessWidget {
         return _RailShell(shell: shell, onSelect: _goBranch);
       },
     );
+    // 桌面端全局快捷键：Ctrl+1..5 切换主 Tab
+    if (isDesktopPlatform) {
+      child = CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.digit1, control: true):
+              () => _goBranch(AppBranches.reading),
+          const SingleActivator(LogicalKeyboardKey.digit2, control: true):
+              () => _goBranch(AppBranches.favorites),
+          const SingleActivator(LogicalKeyboardKey.digit3, control: true):
+              () => _goBranch(AppBranches.feed),
+          const SingleActivator(LogicalKeyboardKey.digit4, control: true):
+              () => _goBranch(AppBranches.browse),
+          const SingleActivator(LogicalKeyboardKey.digit5, control: true):
+              () => _goBranch(AppBranches.settings),
+        },
+        child: Focus(autofocus: true, child: child),
+      );
+    }
+    return child;
   }
 }
 
@@ -63,7 +84,8 @@ class _CompactShell extends StatelessWidget {
           ),
         ],
       ),
-      body: shell,
+      // SafeArea：iOS 横屏刘海/Dynamic Island 保护
+      body: SafeArea(child: shell),
       bottomNavigationBar: NavigationBar(
         selectedIndex: selected,
         onDestinationSelected: (index) => onSelect(_visibleBranches[index]),
@@ -160,7 +182,8 @@ class _RailShell extends ConsumerWidget {
               ],
             ),
           ),
-          Expanded(child: shell),
+          // SafeArea：iOS 横屏刘海/Dynamic Island 保护（桌面端为 no-op）
+          Expanded(child: SafeArea(child: shell)),
         ],
       ),
     );

@@ -16,6 +16,7 @@ class FileGridView extends StatelessWidget {
     this.favoritePaths = const {},
     this.favoriteSourceId,
     this.onToggleFavorite,
+    this.onShowMenu,
     ValueChanged<FileItem>? onLongPress,
     super.key,
   }) : onLongPress = onLongPress ?? onToggleSelect;
@@ -30,6 +31,9 @@ class FileGridView extends StatelessWidget {
   final Set<String> favoritePaths;
   final int? favoriteSourceId;
   final ValueChanged<FileItem>? onToggleFavorite;
+
+  /// 右键呼出上下文菜单（桌面端），携带点击全局坐标。
+  final void Function(FileItem item, Offset position)? onShowMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +61,9 @@ class FileGridView extends StatelessWidget {
           onToggleFavorite: onToggleFavorite == null
               ? null
               : () => onToggleFavorite!(item),
+          onSecondaryTapUp: onShowMenu == null
+              ? null
+              : (d) => onShowMenu!(item, d.globalPosition),
         );
       },
     );
@@ -74,6 +81,7 @@ class _FileCard extends StatelessWidget {
     required this.selected,
     required this.favorited,
     this.onToggleFavorite,
+    this.onSecondaryTapUp,
   });
 
   final FileItem item;
@@ -83,6 +91,7 @@ class _FileCard extends StatelessWidget {
   final bool selected;
   final bool favorited;
   final VoidCallback? onToggleFavorite;
+  final GestureTapUpCallback? onSecondaryTapUp;
 
   @override
   Widget build(BuildContext context) {
@@ -90,6 +99,7 @@ class _FileCard extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
+      onSecondaryTapUp: onSecondaryTapUp,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(10),

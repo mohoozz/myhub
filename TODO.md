@@ -380,72 +380,72 @@
 
 ### 5.1 播放器核心
 
-- [ ] `shared/widgets/media_player/media_player.dart`：播放器主 Widget
+- [x] `shared/widgets/media_player/media_player.dart`：播放器主 Widget
   - 集成 `media_kit`：`Player` + `VideoController`
   - 初始化：平台特定配置（Android/iOS/桌面）
-  - 播放源构建：直接 URL（直通格式）+ HLS URL（转码兜底）
+  - 播放源构建：直接 URL（直通格式）+ HLS URL（转码兜底，失败自动互换重试一次）
   - 视频/音频自动识别（根据 mediaType 或扩展名）
   - 全屏播放使用 `Navigator.push` 独立路由
   - 暗色沉浸背景（纯黑 `#000000`）
-- [ ] 加载状态：中央 `CircularProgressIndicator` + "加载中..."
-- [ ] 缓冲指示器：控制栏进度条显示缓冲区间
-- [ ] 错误状态：错误信息 + 重试按钮
+- [x] 加载状态：中央 `CircularProgressIndicator` + "加载中..."
+- [x] 缓冲指示器：控制栏进度条显示缓冲区间
+- [x] 错误状态：错误信息 + 重试按钮
 
 ### 5.2 播放控制
 
-- [ ] `shared/widgets/media_player/player_controls.dart`：自定义控制栏（Overlay）
-  - 播放/暂停按钮（中央大按钮，点击或轻触画面）
-  - 进度条：`Slider` 可拖拽 + 缓冲进度叠加
+- [x] `shared/widgets/media_player/player_controls.dart`：自定义控制栏（Overlay）
+  - 播放/暂停按钮（中央大按钮，轻触画面切换控制栏显隐）
+  - 进度条：可拖拽 + 缓冲进度叠加
   - 当前时间 / 总时长（`Text` 格式 `mm:ss`）
   - 倍速选择：`BottomSheet` 列表（0.5x/0.75x/1.0x/1.25x/1.5x/2.0x）
-  - 音量滑块：水平 `Slider` + 静音按钮
-  - 全屏切换按钮
-  - 控制栏 3 秒无操作自动隐藏
-- [ ] 锁定屏幕方向（全屏时横屏锁定）
+  - 音量滑块：水平 `Slider`（宽屏内嵌）+ 静音按钮
+  - 全屏切换按钮（桌面端系统级全屏）
+  - 控制栏 3 秒无操作自动隐藏（暂停时常显，桌面端鼠标移动唤醒）
+- [x] 锁定屏幕方向（移动端视频全屏时横屏锁定，退出恢复竖屏）
 
 ### 5.3 音频唱片封面模式
 
-- [ ] `shared/widgets/media_player/audio_cover_mode.dart`：音频播放 UI
+- [x] `shared/widgets/media_player/audio_cover_mode.dart`：音频播放 UI
   - 封面图片：`RotationTransition` 旋转动效（播放时旋转，暂停时停止）
-  - 无封面时显示音乐图标占位
-  - 标题 + 作者信息（居中显示）
+  - 封面来源：同目录同名图片 / cover / folder / front（无封面时显示音乐图标占位）
+  - 标题 + 作者信息（居中显示，按 "作者 - 标题" 文件名解析）
   - 控制栏与视频完全一致
-- [ ] 视频/音频模式自动切换
+- [x] 视频/音频模式自动切换（按实际媒体轨校正，albumart 内嵌封面不算视频轨）
 
 ### 5.4 手势控制
 
-- [ ] `shared/widgets/media_player/gesture_handler.dart`：手势识别层
-  - 水平滑动：调节进度（±10s 起，随滑动距离增加）
+- [x] `shared/widgets/media_player/gesture_handler.dart`：手势识别层
+  - 水平滑动：调节进度（±10s 起，随滑动距离增加，满幅约 ±120s）
   - 右侧 1/3 竖滑：调节音量
-  - 左侧 1/3 竖滑：调节亮度（`MediaQuery` 或系统亮度 API）
+  - 左侧 1/3 竖滑：调节亮度（软件调光遮罩，跨平台一致）
   - 双击左半区：快退 10s
   - 双击右半区：快进 10s
   - 调节时屏幕中央悬浮胶囊实时反馈（进度时间 / 音量% / 亮度% 图标 + 数值）
 
 ### 5.5 键盘控制（桌面端）
 
-- [ ] `CallbackShortcuts` + `Focus` 全局键盘监听
+- [x] `CallbackShortcuts` + `Focus` 全局键盘监听（页面级，加载/错误状态下 Esc 可用）
   - `←`/`→`：快退/快进 5s
   - `↑`/`↓`：调节音量 5%
   - `空格`：播放/暂停
   - `Esc`：退出全屏播放器
   - `F`：全屏切换
-  - `M`：静音切换
+  - `M`：静音切换（记住静音前音量）
 
 ### 5.6 字幕支持
 
-- [ ] 外挂字幕自动检测：同目录同名 srt/ass/vtt 文件
-- [ ] 字幕加载与显示（media_kit 内置 subtitle 支持）
-- [ ] 字幕轨切换按钮（如有多个字幕）
+- [x] 外挂字幕自动检测：同目录同名 srt/ass/ssa/vtt 文件（含 `name.zh.srt` 语言后缀约定）
+- [x] 字幕加载与显示（media_kit 内置 subtitle 支持，srt/ass/ssa 经后端转 WebVTT，vtt 透传）
+- [x] 字幕轨切换按钮（存在字幕轨时显示，BottomSheet 列表含"关闭字幕"）
 
 ### 5.7 播放进度与迷你播放器
 
-- [ ] 播放进度自动上报：每 5 秒节流 → `PUT /api/progress`
-- [ ] 打开已播放文件自动恢复进度（seek 到上次位置）
-- [ ] `shared/widgets/media_player/mini_player.dart`：迷你播放器
+- [x] 播放进度自动上报：每 5 秒节流 → `PUT /api/progress`（暂停/停止/播完即时补报）
+- [x] 打开已播放文件自动恢复进度（seek 到上次位置，已完成或过短则从头播放）
+- [x] `shared/widgets/media_player/mini_player.dart`：迷你播放器
   - 底部迷你条：文件名、细进度条、播放/暂停圆形按钮、关闭按钮
-  - 使用全局 `Overlay` 实现，跨页面保持
-  - 点击迷你条展开全屏播放器
+  - 使用全局 `Overlay` 实现，跨页面保持（播放会话由全局 `mediaPlayerProvider` 持有）
+  - 点击迷你条展开全屏播放器（复用同一会话，不重新加载）
   - 关闭按钮停止播放并移除 Overlay
   - 拖拽到底部可关闭
 
@@ -464,46 +464,46 @@
 
 ### 6.1 TXT 阅读器
 
-- [ ] `shared/widgets/novel_reader/novel_reader.dart`：阅读器主 Widget
-- [ ] 章节列表加载：`GET /api/reader/novel/chapters`
-- [ ] 章节内容按需加载：`GET /api/reader/novel/content?chapter=N`
-- [ ] `shared/widgets/novel_reader/page_mode.dart`：翻页模式
+- [x] `shared/widgets/novel_reader/novel_reader.dart`：阅读器主 Widget
+- [x] 章节列表加载：`GET /api/reader/novel/chapters`（大文件索引构建中 2s 轮询，60s 超时）
+- [x] 章节内容按需加载：`GET /api/reader/novel/content?chapter=N`（内存缓存）
+- [x] `shared/widgets/novel_reader/page_mode.dart`：翻页模式
   - `PageView.builder` 左右滑动翻页
-  - 每页计算可容纳字数，按屏幕高度切分
-  - 翻页动画（`PageView` 默认滑动效果）
-- [ ] `shared/widgets/novel_reader/scroll_mode.dart`：滚动模式
-  - `ListView.builder` 上下连续滚动
-  - 章节间平滑衔接
-- [ ] 章节预加载：当前章节 ± 1
+  - 每页计算可容纳字数，按屏幕高度切分（`TextPainter` 行边界对齐，不出半行）
+  - 翻页动画（`PageView` 默认滑动效果）；左/右 30% 轻触翻页，末页越界自动切章
+- [x] `shared/widgets/novel_reader/scroll_mode.dart`：滚动模式
+  - `CustomScrollView` + `center` 键双向无限列表，上下连续滚动
+  - 章节间平滑衔接（接近边缘且内容就绪时逐章延伸）
+- [x] 章节预加载：当前章节 ± 1
 
 ### 6.2 EPUB 阅读器
 
-- [ ] EPUB 元数据加载：书名、作者、封面、目录
-- [ ] 章节 HTML 渲染：`flutter_widget_from_html` 或自建富文本渲染
-- [ ] 静态资源加载（图片/CSS）
-- [ ] 翻页/滚动模式（与 TXT 共用阅读器壳）
+- [x] EPUB 元数据加载：书名、作者、封面、目录（封面/信息页 + 开始阅读）
+- [x] 章节 HTML 渲染：自建轻量富文本渲染（`epub_html.dart` 标签栈解析 → 富文本原子，可用 TextPainter 分页；flutter_widget_from_html 无法分页故自建）
+- [x] 静态资源加载（图片经 resource 接口按 href 加载，字节缓存；后端 `ReadItem` 补 href 兜底）
+- [x] 翻页/滚动模式（与 TXT 共用阅读器壳交互；图集型 EPUB 提示转漫画阅读器）
 
 ### 6.3 阅读器设置
 
-- [ ] `shared/widgets/novel_reader/reader_settings.dart`：设置面板
-  - `ModalBottomSheet` 弹出
-  - 字号调节：`Slider`（12~24px）
-  - 行距调节：`Slider`（1.2~2.5）
+- [x] `shared/widgets/novel_reader/reader_settings.dart`：设置面板
+  - `ModalBottomSheet` 弹出（阅读器顶栏设置按钮触发，TXT/EPUB 共用）
+  - 字号调节：`Slider`（12~24px，0.5 步进）
+  - 行距调节：`Slider`（1.2~2.5，0.1 步进）
   - 三种主题切换：日间（白底 `#ffffff` 黑字）、夜间（黑底 `#000000` 白字）、护眼（暖纸 `#f5f0e8` 底 + 深棕 `#4a3728` 字）
-  - 翻页模式切换（翻页/滚动）
-  - 设置持久化到 `SharedPreferences`
-- [ ] 思源宋体（`Noto Serif SC`）应用于正文
-- [ ] 亮色模式阅读器也使用独立背景色（不受全局主题影响）
+  - 翻页模式切换（翻页/滚动，`SegmentedButton`）
+  - 设置持久化到 `SharedPreferences`（滑动结束才落盘）
+- [x] 思源宋体（`Noto Serif SC`）应用于正文（`GoogleFonts.notoSerifSc`，加载失败回退系统字体）
+- [x] 亮色模式阅读器也使用独立背景色（`Scaffold` 背景始终取主题色，不受全局主题影响；EPUB 原子缓存随样式签名失效重解析）
 
 ### 6.4 目录与进度
 
-- [ ] `shared/widgets/novel_reader/chapter_drawer.dart`：目录抽屉
-  - `Drawer` 从右侧滑出
+- [x] `shared/widgets/novel_reader/chapter_drawer.dart`：目录抽屉
+  - `Drawer` 从右侧滑出（顶栏按钮开启，禁用边缘拖出避免与翻页手势冲突）
   - 章节列表，当前章节高亮
   - 点击跳转到对应章节
-- [ ] 阅读进度实时显示：底部进度条 + 百分比文字
-- [ ] 上/下一章按钮（底部悬浮或章节末尾）
-- [ ] 进度自动上报后端（退出阅读器时保存）
+- [x] 阅读进度实时显示：底部进度条 + 百分比文字（翻页模式按 章+页内进度 折算，滚动模式按滚动比例）
+- [x] 上/下一章按钮（底部栏，与进度条同行）
+- [x] 进度自动上报后端（退出阅读器时保存 `progress_json={chapter,page}` + percent；打开时自动恢复章节，EPUB 有进度则跳过封面页直接续读）
 
 ---
 
@@ -511,43 +511,43 @@
 
 ### 7.1 漫画数据加载
 
-- [ ] `shared/widgets/comic_reader/comic_reader.dart`：漫画阅读器主 Widget
-- [ ] 漫画页列表加载：`GET /api/reader/comic/pages`
-- [ ] 单页图片加载：`GET /api/reader/comic/page?n=N` + `cached_network_image`
-- [ ] 漫画识别策略复用后端判定，前端根据返回类型路由到对应阅读器
+- [x] `shared/widgets/comic_reader/comic_reader.dart`：漫画阅读器主 Widget
+- [x] 漫画页列表加载：`GET /api/reader/comic/pages`
+- [x] 单页图片加载：`GET /api/reader/comic/page?n=N` + `cached_network_image`（JWT 请求头，`ComicApi.pageUrl()` 构建完整 URL）
+- [x] 漫画识别策略复用后端判定，前端根据返回类型路由到对应阅读器（cbz/cbr 直开；zip/rar 经 detect 嗅探路由；图集型 EPUB 一键转交漫画阅读器）
 
 ### 7.2 阅读模式
 
-- [ ] `shared/widgets/comic_reader/single_page.dart`：单页模式
+- [x] `shared/widgets/comic_reader/single_page.dart`：单页模式
   - `PageView.builder` 左右滑动翻页
   - `InteractiveViewer` 包裹每张图片，支持双指缩放/拖拽
   - 点击切换控制栏显隐
-- [ ] `shared/widgets/comic_reader/double_page.dart`：双页模式
-  - 横屏/平板自动启用
-  - `PageView` 每页显示两张图（`Row` 左右排列）
-  - 从右向左阅读（日漫方向）或从左向右（可配置）
-- [ ] `shared/widgets/comic_reader/webtoon_mode.dart`：条漫模式
+- [x] `shared/widgets/comic_reader/double_page.dart`：双页模式
+  - 横屏/平板自动启用（未手动选择模式时，横屏或宽度 ≥840 自动双页）
+  - `PageView` 每页显示两张图（`Row` 左右排列，整组共用一个 InteractiveViewer 同步缩放）
+  - 从右向左阅读（日漫方向，默认）或从左向右（顶栏按钮切换，持久化）
+- [x] `shared/widgets/comic_reader/webtoon_mode.dart`：条漫模式
   - `ListView.builder` 纵向连续滚动
   - 每张图全宽显示
-  - `InteractiveViewer` 支持双指缩放
-- [ ] 模式切换按钮：底部悬浮 `SegmentedButton`（单页/双页/条漫）
+  - `InteractiveViewer`（panEnabled: false）支持双指缩放，单指滚动归 ListView
+- [x] 模式切换按钮：底部悬浮 `SegmentedButton`（单页/双页/条漫，随控制栏显隐，选择持久化到 SharedPreferences）
 
 ### 7.3 预加载
 
-- [ ] 当前页 ± 3 页预加载
-  - `cached_network_image` 的 `precacheImage` 方法
+- [x] 当前页 ± 3 页预加载（`preloader.dart`：`ComicPreloader`，页列表就绪与翻页回调驱动）
+  - `cached_network_image` 的 `precacheImage` 方法（与 ComicPageImage 同一 headers 实例，缓存命中）
   - 正向翻页时前向优先（+1/+2/+3 先于 -1/-2/-3）
   - 反向翻页时后向优先
-- [ ] 预加载队列管理：最多同时预加载 3 张
+- [x] 预加载队列管理：最多同时预加载 3 张（完成一张补一张，翻页时重排等待队列，失败静默）
 
 ### 7.4 控制栏与进度
 
-- [ ] 顶部悬浮控制栏（Overlay，点击显示/隐藏）：
+- [x] 顶部悬浮控制栏（Overlay，点击显示/隐藏）：
   - 页码指示器：`当前页 / 总页数`
   - 返回按钮
-  - 模式切换按钮
-- [ ] 阅读页码进度自动上报
-- [ ] 下次打开恢复上次页码
+  - 模式切换按钮（底部悬浮 `SegmentedButton`，见 7.2；顶栏另含双页方向切换）
+- [x] 阅读页码进度自动上报（退出阅读器时 `PUT /api/progress`，`progress_json={page}`，mediaType=comic）
+- [x] 下次打开恢复上次页码（与页列表并行加载，首次构建即定位；已读完则从头；条漫模式恢复页码显示，滚动位置受列表高度限制无法精确定位）
 
 ### 7.5 翻完推荐下一本（F-208，新增）
 
@@ -561,21 +561,21 @@
 
 ## 8. Flutter 前端 - 阅读进度与"正在阅读"（F-205）
 
-- [ ] `features/reading/providers/reading_provider.dart`：进度数据管理
+- [x] `features/reading/providers/reading_provider.dart`：进度数据管理
   - 加载全部进度列表
   - 按 updated_at 降序排列
   - 下拉刷新
-- [ ] `features/reading/screens/reading_screen.dart`："正在阅读"首页
+- [x] `features/reading/screens/reading_screen.dart`："正在阅读"首页（实现于 `features/reading/reading_screen.dart`）
   - `GridView` 卡片网格（2 列自适应）
   - `shared/widgets/reading_card.dart`：进度卡片
-    - 封面/类型图标
+    - 封面/类型图标（cover 字段优先，视频回退 FFmpeg 缩略图，其余类型渐变+图标）
     - 类型徽标（小说/漫画/视频/音频，蓝色胶囊小标）
     - 标题（单行省略）
     - 细进度条（4px，蓝色）
     - 最后阅读时间（相对时间，如"3 小时前"）
-  - 卡片整体可点击 → 进入对应阅读器/播放器并恢复进度
+  - 卡片整体可点击 → 进入对应阅读器/播放器并恢复进度（打开逻辑提取为 `shared/utils/open_media.dart`，与收藏页共用）
   - 长按卡片 → "标记为已读完"选项
-- [ ] 空状态：书本图标 + "还没有阅读记录，去浏览页看看吧"
+- [x] 空状态：书本图标 + "还没有阅读记录，去浏览页看看吧"
 
 ---
 
@@ -603,59 +603,61 @@
 
 ## 10. Flutter 前端 - 设置模块（F-401 ~ F-403）
 
-- [ ] `features/settings/screens/settings_screen.dart`：设置页 UI
+- [x] `features/settings/screens/settings_screen.dart`：设置页 UI（实现于 `features/settings/settings_screen.dart`）
   - 分组卡片列表：`ListView` + `Card` + `ListTile`
   - 每组：标题 + 列表行（行尾 chevron 或 Switch）
-- [ ] 路径源管理：条目列表 + iOS 风格开关 + 添加按钮
-- [ ] 阅读器偏好：字号、主题、翻页模式、漫画方向
-- [ ] 播放设置：默认倍速、转码质量偏好
-- [ ] 动态设置：抓取频率、保留条数上限、平台凭据
-- [ ] 账号安全：修改密码行
-- [ ] 系统信息：存储用量、任务日志
-- [ ] 设置持久化：`GET/PUT /api/config`
-- [ ] Flutter 专属设置：
+- [x] 路径源管理：条目列表 + iOS 风格开关（`Switch.adaptive`）+ 添加按钮
+- [x] 阅读器偏好：字号、行距、主题、翻页模式（复用阅读器 provider）、漫画模式/方向（复用漫画 provider，新增"自动"恢复）
+- [x] 播放设置：默认倍速、转码质量偏好（`playerSettingsProvider`，播放器打开时应用倍速、转码偏好决定直链/HLS 优先级）
+- [x] 动态设置：抓取频率、保留条数上限（经 `/api/config` 持久化，M5 消费）；平台凭据（订阅时扫码获取，文案提示）
+- [x] 账号安全：修改密码行
+- [x] 系统信息：存储用量（图片缓存大小 + 清理按钮）；任务日志待 M5 动态模块落地
+- [x] 设置持久化：`GET/PUT /api/config`（`appConfigProvider`；回收站保留天数后端定时任务已改读 DB 配置）
+- [x] Flutter 专属设置：
   - 离线缓存管理（显示缓存大小 + 清理按钮）
-  - 主题跟随系统开关
-  - 关于（版本号、开源许可）
+  - 主题跟随系统开关（关闭后可手动选亮/暗）
+  - 关于（版本号 `package_info_plus`、开源许可 `showLicensePage`）
 
 ---
 
 ## 11. Flutter 前端 - 多平台适配（F-501）
 
+> 前置：`flutter create --platforms=android,ios` 已补充 Android/iOS 平台入口。
+
 ### 11.1 Android
 
-- [ ] 边缘到边缘（Edge-to-Edge）：`SystemUiOverlayStyle` 透明状态栏/导航栏
-- [ ] 状态栏图标颜色跟随主题
-- [ ] 系统返回手势兼容（`PopScope`）
-- [ ] Material 3 动态取色（可选，Android 12+）
+- [x] 边缘到边缘（Edge-to-Edge）：`SystemUiMode.edgeToEdge` + 透明状态栏/导航栏（`AnnotatedRegion<SystemUiOverlayStyle>`）
+- [x] 状态栏图标颜色跟随主题（按 effectiveThemeMode 推导明暗）
+- [x] 系统返回手势兼容（浏览页 `PopScope`：多选中先退出多选，子目录先回上级）
+- [x] Material 3 动态取色（`dynamic_color`，Android 12+ 生效，其余回退品牌色）
 
 ### 11.2 iOS
 
-- [ ] `SafeArea` 适配：刘海屏、Dynamic Island
-- [ ] 状态栏样式跟随主题
-- [ ] 系统侧滑返回手势兼容（go_router 默认支持）
-- [ ] 橡皮筋滚动效果（`BouncingScrollPhysics`）
+- [x] `SafeArea` 适配：导航壳内容区 SafeArea（刘海屏、Dynamic Island）
+- [x] 状态栏样式跟随主题（同一 `AnnotatedRegion` 覆盖）
+- [x] 系统侧滑返回手势兼容（go_router/Material 默认支持，无需改动）
+- [x] 橡皮筋滚动效果（`AppScrollBehavior`：iOS/macOS `BouncingScrollPhysics`）
 
 ### 11.3 平板/折叠屏
 
-- [ ] NavigationRail 自适应（600px 断点）
-- [ ] 双页漫画模式（横屏自动启用）
-- [ ] 设置页双栏布局（左侧导航 + 右侧内容）
+- [x] NavigationRail 自适应（600px 断点，2.3 已落地）
+- [x] 双页漫画模式（横屏自动启用，7.2 已落地；设置页可选"自动"）
+- [x] 设置页双栏布局（>=1080px：左侧分组导航 + 右侧内容）
 
 ### 11.4 桌面端
 
-- [ ] 键盘快捷键全局（`CallbackShortcuts`）
-- [ ] 窗口最小尺寸限制（480×320）
-- [ ] 文件拖拽上传（`desktop_drop`）
-- [ ] 右键上下文菜单（文件操作）
-- [ ] 窗口标题栏自定义（可选）
+- [x] 键盘快捷键全局（`CallbackShortcuts`：Ctrl+1..5 切换主 Tab；播放器页内快捷键 5.5 已落地）
+- [x] 窗口最小尺寸限制（480×320，`window_manager.setMinimumSize`）
+- [x] 文件拖拽上传（`desktop_drop`，4.3 已落地）
+- [x] 右键上下文菜单（文件网格/列表行：打开/收藏/重命名/移动/复制/删除）
+- [x] 窗口标题栏自定义（`WindowTitleBar`，0.3 已落地）
 
 ### 11.5 横竖屏适配
 
-- [ ] `OrientationBuilder` 处理横竖屏切换
-- [ ] 视频播放器：竖屏正常/横屏全屏
-- [ ] 漫画阅读器：竖屏单页/横屏双页
-- [ ] 浏览页：横屏增加列数
+- [x] 横竖屏切换处理（漫画阅读器自动模式按 MediaQuery 宽高比判定，等效 OrientationBuilder）
+- [x] 视频播放器：竖屏正常/横屏全屏（移动端全屏横屏锁定，5.2 已落地）
+- [x] 漫画阅读器：竖屏单页/横屏双页（7.2 已落地）
+- [x] 浏览页：横屏增加列数（`maxCrossAxisExtent` 自适应宽度）
 
 ---
 
@@ -663,11 +665,11 @@
 
 ### 12.1 离线进度缓存与同步（F-502）
 
-- [ ] drift 数据库 `local_progress` 表：本地进度存储
-- [ ] 阅读器/播放器退出时：同时保存到本地 drift 和后端 API
-- [ ] 网络不可用时：仅保存到本地 drift，设置 `synced = false`
-- [ ] 网络恢复时：批量上传未同步的进度（`synced = false` 的记录）
-- [ ] 冲突处理：后端时间戳更新 → 以最新为准
+- [x] drift 数据库 `local_progress` 表：本地进度存储
+- [x] 阅读器/播放器退出时：同时保存到本地 drift 和后端 API（`data/repositories/progress_repository.dart`：本地优先写入，随后尝试上报）
+- [x] 网络不可用时：仅保存到本地 drift，设置 `synced = false`
+- [x] 网络恢复时：批量上传未同步的进度（`shared/providers/progress_sync_provider.dart`：connectivity_plus 监听，恢复时 `syncPending()` 批量上传）
+- [x] 冲突处理：后端时间戳更新 → 以最新为准（`syncPending`/`get`/`listMerged` 均比较 updated_at，后端较新则回写本地并跳过上传）
 
 ### 12.2 离线下载（F-503，二期）
 
@@ -688,68 +690,17 @@
 
 ---
 
-## 13. 测试
-
-### 13.1 Go 后端测试
-
-- [ ] 单元测试：各 Service 层（Mock Repository）
-- [ ] 单元测试：存储适配器（LocalAdapter、WebDavAdapter）
-- [ ] 单元测试：TXT 编码检测、章节切分
-- [ ] 集成测试：API 端点（`httptest` 包）
-- [ ] 测试覆盖率 > 60%
-
-### 13.2 Flutter 前端测试
-
-- [ ] 单元测试：数据模型序列化/反序列化
-- [ ] 单元测试：Repository 层（Mock dio）
-- [ ] Widget 测试：核心组件（文件网格、播放器控制栏、阅读器翻页）
-- [ ] Widget 测试：主题切换、导航切换
-- [ ] 集成测试：登录 → 浏览 → 播放 → 阅读 完整流程
-- [ ] 多设备 Golden 测试（UI 截图对比）
-
----
-
-## 14. 部署与发布
-
-### 14.1 Go 后端部署
-
-- [ ] `Dockerfile`：多阶段构建（golang:alpine 编译 → alpine 运行，含 FFmpeg）
-- [ ] `docker-compose.yml`：Go 后端 + Caddy + OpenClaw（可选）+ OpenList（可选）
-- [ ] `Caddyfile`：反代配置 + 自动 HTTPS
-- [ ] 健康检查端点：`GET /api/health`
-- [ ] SQLite 每日自动备份（cron + shell 脚本）
-- [ ] 环境变量文档（`config.yaml` 注释）
-
-### 14.2 Flutter 前端发布
-
-- [ ] Android：签名配置（`key.properties`）、Gradle 构建、APK/AAB 输出
-- [ ] iOS：Xcode 配置（Bundle ID、签名）、Archive → TestFlight / IPA
-- [ ] Windows：MSIX 打包（`msix` 包）
-- [ ] macOS：DMG 打包、公证（Notarization）
-- [ ] Linux：AppImage / Flatpak / Snap
-- [ ] Web（可选）：`flutter build web` → 部署到 Caddy 静态目录
-- [ ] CI/CD：GitHub Actions 多平台自动构建
-- [ ] 版本管理：语义化版本 + `CHANGELOG.md`
-
----
-
-## 里程碑检查点
-
-- [ ] **M0**：Go 后端脚手架 + 鉴权 + 路径源 + 文件管理 API 可用；Flutter 脚手架 + 路由 + 主题 + 登录可用
-- [ ] **M1**：Flutter 文件浏览/上传/操作/回收站/收藏可用
-- [ ] **M2**：Flutter 视频/音频播放器（media_kit）+ 迷你播放器 + 连续播放推荐可用
-- [ ] **M3**：Flutter 小说/漫画阅读器 + 阅读进度 + "正在阅读"首页 + 连续阅读推荐可用
-- [ ] **M4 v1.0**：多平台适配完成，设置模块收尾，离线进度缓存，Go 后端全部 API 就绪
-- [ ] **M5 v1.1**：动态模块 + 离线下载 + 系统通知
-
-
-
 ## 体验优化、bug修复
 ---
 
-
+- [ ] mini播放器条，做成一个悬浮式的，类似灵动岛那样子
+- [ ] 播放器播放起始时，屏幕中央，开始按钮和旋转圈动画重叠了
+- [ ] 播放器快进、音量、亮度等等调节时，需要有一个数值的显示
 - [ ] 服务器启动时从配置文件读取部分配置：db数据、缓存数据存储路径；端口、日志级别、日志路径；ffmpeg路径；
 - [ ] 点击头像框，直接跳到个人主页
-
+- [ ] 路径源，测试链接正常时候，给一个绿点提示，异常时候，给一个红点提示
+- [ ] 保存PC窗口每次打开的大小和位置
+- [ ] 先完成路径显示设置的缓存，然后再，5.8 连续播放推荐（F-207，新增） 
+- [ ] 加一个内置的浏览器
 
 ---

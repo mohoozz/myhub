@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"path"
 	"strings"
 
@@ -303,14 +304,23 @@ func readXML(files map[string]*zip.File, name string, v interface{}) error {
 	return xml.Unmarshal(data, v)
 }
 
-// ReadItem 按 manifest ID 读取条目内容与 MediaType
+// ReadItem 按 manifest ID 读取条目内容与 MediaType。
+// ID 未命中时按 zip 内完整路径（href）兜底读取——前端经 TOC 拿到的
+// 章节地址与章节 HTML 中 img src 的相对路径解析结果均为 href。
 func (e *EPUB) ReadItem(id string) ([]byte, string, error) {
-	it, ok := e.Manifest[id]
-	if !ok {
-		return nil, "", ErrItemNotFound
+	if it, ok := e.Manifest[id]; ok {
+		data, err := e.ReadByHref(it.Href)
+		return data, it.MediaType, err
 	}
-	data, err := e.ReadByHref(it.Href)
-	return data, it.MediaType, err
+	data, err := e.ReadByHref(id)
+	if err != nil {
+		return nil, "", err
+	}
+	mt := mime.TypeByExtension(path.Ext(id))
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+	return data, mt, nil
 }
 
 // ReadByHref 按 zip 内路径读取内容

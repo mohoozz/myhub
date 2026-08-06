@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/api_client.dart';
 import 'package:myhub_flutter/core/api/dio_client.dart';
+import 'package:myhub_flutter/core/config/env.dart';
 
 final comicApiProvider = Provider<ComicApi>(
   (ref) => ComicApi(ref.watch(dioProvider)),
@@ -67,6 +68,13 @@ class ComicApi extends ApiClient {
     } catch (e) {
       rethrowAsApi(e);
     }
+  }
+
+  /// 单页图片完整 URL（供 CachedNetworkImage 等直接加载，需自带 JWT 头）。
+  /// 页码 [n] 从 0 开始，与 pages() 返回的 index 对应。
+  String pageUrl(int sourceId, String path, int n) {
+    return '${Env.apiBaseUrl}/api/reader/comic/page'
+        '?source=$sourceId&path=${Uri.encodeComponent(path)}&n=$n';
   }
 
   /// 压缩包文件树。返回 {entries, total}。

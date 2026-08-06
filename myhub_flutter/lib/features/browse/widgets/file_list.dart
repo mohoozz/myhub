@@ -16,6 +16,7 @@ class FileListView extends StatelessWidget {
     this.favoritePaths = const {},
     this.favoriteSourceId,
     this.onToggleFavorite,
+    this.onShowMenu,
     ValueChanged<FileItem>? onLongPress,
     super.key,
   }) : onLongPress = onLongPress ?? onToggleSelect;
@@ -49,6 +50,9 @@ class FileListView extends StatelessWidget {
   /// 星标点击（收藏/取消收藏）。
   final ValueChanged<FileItem>? onToggleFavorite;
 
+  /// 右键呼出上下文菜单（桌面端），携带点击全局坐标。
+  final void Function(FileItem item, Offset position)? onShowMenu;
+
   @override
   Widget build(BuildContext context) {
     final list = ListView.separated(
@@ -69,6 +73,9 @@ class FileListView extends StatelessWidget {
           onToggleFavorite: onToggleFavorite == null
               ? null
               : () => onToggleFavorite!(item),
+          onSecondaryTapUp: onShowMenu == null
+              ? null
+              : (d) => onShowMenu!(item, d.globalPosition),
         );
       },
     );
@@ -86,6 +93,7 @@ class _FileRow extends StatelessWidget {
     required this.selected,
     required this.favorited,
     this.onToggleFavorite,
+    this.onSecondaryTapUp,
   });
 
   final FileItem item;
@@ -95,6 +103,7 @@ class _FileRow extends StatelessWidget {
   final bool selected;
   final bool favorited;
   final VoidCallback? onToggleFavorite;
+  final GestureTapUpCallback? onSecondaryTapUp;
 
   @override
   Widget build(BuildContext context) {
@@ -102,6 +111,7 @@ class _FileRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
+      onSecondaryTapUp: onSecondaryTapUp,
       child: Container(
         color: selected
             ? theme.colorScheme.primary.withValues(alpha: 0.08)

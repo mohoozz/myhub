@@ -3,20 +3,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/data/database/app_database.dart';
+import 'package:myhub_flutter/shared/widgets/comic_reader/comic_settings.dart';
+import 'package:myhub_flutter/shared/widgets/novel_reader/reader_settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('ReaderSettingsNotifier', () {
+  group('ReaderSettingsNotifier（小说阅读器）', () {
     test('默认值', () {
       SharedPreferences.setMockInitialValues({});
       final container = ProviderContainer();
       addTearDown(container.dispose);
       final s = container.read(readerSettingsProvider);
       expect(s.fontSize, 16);
+      expect(s.lineHeight, 1.6);
       expect(s.theme, ReaderTheme.day);
-      expect(s.comicDirection, ComicDirection.rtl);
+      expect(s.mode, ReaderMode.page);
     });
 
     test('更新并持久化 + 恢复', () async {
@@ -24,17 +27,17 @@ void main() {
       final container = ProviderContainer();
       addTearDown(container.dispose);
 
-      await container.read(readerSettingsProvider.notifier).update(
-            const ReaderSettings(
-              fontSize: 20,
-              theme: ReaderTheme.night,
-              pageMode: ReaderPageMode.scroll,
-            ),
-          );
+      final notifier = container.read(readerSettingsProvider.notifier);
+      notifier.setFontSize(20);
+      notifier.setTheme(ReaderTheme.night);
+      notifier.setMode(ReaderMode.scroll);
+      // setFontSize/setTheme/setMode 内部异步落盘，等待完成
+      await Future<void>.delayed(const Duration(milliseconds: 10));
 
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getDouble('reader.font_size'), 20);
-      expect(prefs.getString('reader.theme'), 'night');
+      expect(prefs.getDouble('reader_font_size'), 20);
+      expect(prefs.getString('reader_theme'), 'night');
+      expect(prefs.getString('reader_mode'), 'scroll');
 
       // 新容器恢复
       final container2 = ProviderContainer();
@@ -44,7 +47,35 @@ void main() {
       final restored = container2.read(readerSettingsProvider);
       expect(restored.fontSize, 20);
       expect(restored.theme, ReaderTheme.night);
-      expect(restored.pageMode, ReaderPageMode.scroll);
+      expect(restored.mode, ReaderMode.scroll);
+    });
+  });
+
+  group('ComicReaderSettingsNotifier', () {
+    test('默认方向 RTL，修改后持久化 + 恢复', () async {
+      SharedPreferences.setMockInitialValues({});
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      expect(
+        container.read(comicReaderSettingsProvider).effectiveDirection,
+        ComicReadingDirection.rtl,
+      );
+
+      await container
+          .read(comicReaderSettingsProvider.notifier)
+          .setDirection(ComicReadingDirection.ltr);
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('comic.direction'), 'ltr');
+
+      final container2 = ProviderContainer();
+      addTearDown(container2.dispose);
+      container2.read(comicReaderSettingsProvider);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(
+        container2.read(comicReaderSettingsProvider).effectiveDirection,
+        ComicReadingDirection.ltr,
+      );
     });
   });
 

@@ -25,8 +25,15 @@ myhub/
 | --- | --- |
 | Go | 1.26+ |
 | Flutter | 3.44+（启用 Windows 桌面支持） |
+| Visual Studio Build Tools 2022 | C++ 桌面开发工作负载，含 ATL 组件 |
 | FFmpeg | 6+（缩略图 / HLS 转码，可后续安装） |
 | Docker | 可选，用于部署 |
+
+> **Windows 特别注意**：Flutter Windows 桌面端编译依赖 Visual Studio Build Tools 2022，并且 `flutter_secure_storage_windows` 插件需要 **C++ ATL** 组件。如果编译遇到 `无法打开包括文件: "atlstr.h"` 错误，说明缺少 ATL。可通过以下命令安装：
+> ```powershell
+> & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" install --productId Microsoft.VisualStudio.Product.BuildTools --channelId VisualStudio.17.Release --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.ATL --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended --passive --norestart
+> ```
+> 或打开 Visual Studio Installer，在"单个组件"中勾选 **C++ ATL for latest v143 build tools (x86 & x64)**。
 
 ## 快速开始
 

@@ -157,7 +157,7 @@ class _SourceRow extends ConsumerWidget {
           icon: Icon(LucideIcons.trash2, color: colorScheme.error),
           onPressed: () => _confirmDelete(context, ref),
         ),
-        Switch(
+        Switch.adaptive(
           value: source.enabled,
           onChanged: (v) =>
               ref.read(sourceListProvider.notifier).toggle(source, v),

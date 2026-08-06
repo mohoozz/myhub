@@ -11,8 +11,12 @@ import 'package:myhub_flutter/core/config/env.dart';
 /// * 字幕：/api/stream/subtitle?source=&path=
 abstract final class StreamApi {
   /// 原始流地址（支持 Range）。
+  ///
+  /// 逐段百分号编码：文件名中的 `#`（片段分隔符）、`?`、`%`、空格等
+  /// 字符必须转义，否则路径会被截断或解析错误（`Uri.encodeFull` 不够）。
   static String streamUrl(int sourceId, String path) {
-    return '${Env.apiBaseUrl}/api/stream/$sourceId${Uri.encodeFull(path)}';
+    final encoded = path.split('/').map(Uri.encodeComponent).join('/');
+    return '${Env.apiBaseUrl}/api/stream/$sourceId$encoded';
   }
 
   /// HLS 播放列表地址。

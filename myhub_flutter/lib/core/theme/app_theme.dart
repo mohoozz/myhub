@@ -11,20 +11,23 @@ abstract final class AppTheme {
   static const double _inputRadius = 8;
   static const double _progressHeight = 4;
 
-  static ThemeData light() {
-    const colorScheme = ColorScheme.light(
-      primary: AppColors.primaryLight,
-      onPrimary: Colors.white,
-      secondary: AppColors.primaryLight,
-      onSecondary: Colors.white,
-      surface: AppColors.backgroundLight,
-      onSurface: AppColors.textPrimaryLight,
-      onSurfaceVariant: AppColors.textSecondaryLight,
-      outline: AppColors.dividerLight,
-      error: Color(0xFFDC2626),
-      onError: Colors.white,
-      surfaceTint: Colors.transparent,
-    );
+  /// [dynamicScheme]：Android 12+ Material You 动态取色（可选，缺省用品牌色）。
+  static ThemeData light({ColorScheme? dynamicScheme}) {
+    final colorScheme = (dynamicScheme ??
+            const ColorScheme.light(
+              primary: AppColors.primaryLight,
+              onPrimary: Colors.white,
+              secondary: AppColors.primaryLight,
+              onSecondary: Colors.white,
+              surface: AppColors.backgroundLight,
+              onSurface: AppColors.textPrimaryLight,
+              onSurfaceVariant: AppColors.textSecondaryLight,
+              outline: AppColors.dividerLight,
+              error: Color(0xFFDC2626),
+              onError: Colors.white,
+              surfaceTint: Colors.transparent,
+            ))
+        .copyWith(surfaceTint: Colors.transparent);
     return _build(
       colorScheme: colorScheme,
       cardColor: AppColors.cardLight,
@@ -39,20 +42,23 @@ abstract final class AppTheme {
     );
   }
 
-  static ThemeData dark() {
-    const colorScheme = ColorScheme.dark(
-      primary: AppColors.primaryDark,
-      onPrimary: Colors.white,
-      secondary: AppColors.primaryDark,
-      onSecondary: Colors.white,
-      surface: AppColors.backgroundDark,
-      onSurface: AppColors.textPrimaryDark,
-      onSurfaceVariant: AppColors.textSecondaryDark,
-      outline: AppColors.dividerDark,
-      error: Color(0xFFEF4444),
-      onError: Colors.white,
-      surfaceTint: Colors.transparent,
-    );
+  /// [dynamicScheme]：Android 12+ Material You 动态取色（可选，缺省用品牌色）。
+  static ThemeData dark({ColorScheme? dynamicScheme}) {
+    final colorScheme = (dynamicScheme ??
+            const ColorScheme.dark(
+              primary: AppColors.primaryDark,
+              onPrimary: Colors.white,
+              secondary: AppColors.primaryDark,
+              onSecondary: Colors.white,
+              surface: AppColors.backgroundDark,
+              onSurface: AppColors.textPrimaryDark,
+              onSurfaceVariant: AppColors.textSecondaryDark,
+              outline: AppColors.dividerDark,
+              error: Color(0xFFEF4444),
+              onError: Colors.white,
+              surfaceTint: Colors.transparent,
+            ))
+        .copyWith(surfaceTint: Colors.transparent);
     return _build(
       colorScheme: colorScheme,
       cardColor: AppColors.cardDark,

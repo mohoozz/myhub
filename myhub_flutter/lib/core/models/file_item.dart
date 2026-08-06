@@ -25,4 +25,5 @@ abstract class FileItem with _$FileItem {
   bool get isNovel => mediaType == 'novel';
   bool get isComic => mediaType == 'comic';
   bool get isImage => mediaType == 'image';
+  bool get isArchive => mediaType == 'archive';
 }

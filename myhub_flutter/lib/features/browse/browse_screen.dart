@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
+import 'package:myhub_flutter/core/api/comic_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
 import 'package:myhub_flutter/features/browse/providers/file_actions.dart';
@@ -16,6 +17,10 @@ import 'package:myhub_flutter/features/browse/widgets/move_target_picker.dart';
 import 'package:myhub_flutter/features/browse/widgets/upload_sheet.dart';
 import 'package:myhub_flutter/features/favorites/providers/favorite_provider.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
+import 'package:myhub_flutter/shared/widgets/comic_reader/comic_reader.dart';
+import 'package:myhub_flutter/shared/widgets/media_player/media_player.dart';
+import 'package:myhub_flutter/shared/widgets/novel_reader/epub_reader.dart';
+import 'package:myhub_flutter/shared/widgets/novel_reader/novel_reader.dart';
 import 'package:myhub_flutter/shared/widgets/source_selector.dart';
 
 /// File browser page：路径源选择 + 面包屑 + 搜索 + 排序 + 网格/列表视图。
@@ -42,10 +47,57 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       ref.read(browsePathProvider.notifier).state = item.path;
       return;
     }
-    // TODO(5/6 章)：接入播放器/阅读器
+    if (item.isVideo || item.isAudio) {
+      final source = ref.read(effectiveSourceProvider);
+      if (source == null) return;
+      MediaPlayerPage.open(context, sourceId: source.id, file: item);
+      return;
+    }
+    if (item.isNovel) {
+      // 后端 novel 类型即 txt/epub
+      final source = ref.read(effectiveSourceProvider);
+      if (source == null) return;
+      if (item.name.toLowerCase().endsWith('.epub')) {
+        EpubReaderPage.open(context, sourceId: source.id, file: item);
+      } else {
+        NovelReaderPage.open(context, sourceId: source.id, file: item);
+      }
+      return;
+    }
+    if (item.isComic) {
+      // cbz/cbr 扩展名直接判定为漫画
+      final source = ref.read(effectiveSourceProvider);
+      if (source == null) return;
+      ComicReaderPage.open(context, sourceId: source.id, file: item);
+      return;
+    }
+    if (item.isArchive) {
+      // zip/rar 等普通压缩包：后端内容嗅探，漫画则路由到漫画阅读器
+      final source = ref.read(effectiveSourceProvider);
+      if (source == null) return;
+      _openArchive(source.id, item);
+      return;
+    }
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text('打开 ${item.name}')));
+  }
+
+  /// 压缩包打开：漫画嗅探 → 漫画阅读器；否则提示（压缩包浏览后续提供）。
+  Future<void> _openArchive(int sourceId, FileItem item) async {
+    try {
+      final res = await ref.read(comicApiProvider).detect(sourceId, item.path);
+      if (!mounted) return;
+      if (res['is_comic'] == true) {
+        await ComicReaderPage.open(context, sourceId: sourceId, file: item);
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('该压缩包不是漫画，暂不支持浏览')));
+    } catch (e) {
+      _showError(e);
+    }
   }
 
   void _showError(Object e) {
@@ -147,6 +199,92 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     }
   }
 
+  /// 右键上下文菜单（桌面端）：单条目打开/收藏/重命名/移动/复制/删除。
+  Future<void> _showItemMenu(FileItem item, Offset position) async {
+    final sourceId = ref.read(effectiveSourceProvider)?.id;
+    final isFav = sourceId != null &&
+        ref
+            .read(favoritePathsProvider)
+            .contains('$sourceId|${item.path}');
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(position.dx, position.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        _menuItem('open', LucideIcons.squareArrowOutUpRight, '打开'),
+        if (!item.isDir && sourceId != null)
+          _menuItem(
+            'favorite',
+            LucideIcons.star,
+            isFav ? '取消收藏' : '收藏',
+          ),
+        const PopupMenuDivider(),
+        _menuItem('rename', LucideIcons.pencil, '重命名'),
+        _menuItem('move', LucideIcons.folderInput, '移动到…'),
+        _menuItem('copy', LucideIcons.copy, '复制到…'),
+        const PopupMenuDivider(),
+        _menuItem('delete', LucideIcons.trash2, '删除', destructive: true),
+      ],
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'open':
+        _openItem(item);
+      case 'favorite':
+        if (sourceId != null) {
+          await _run(
+            () => ref
+                .read(favoriteListProvider.notifier)
+                .toggle(sourceId, item.path),
+          );
+        }
+      case 'rename':
+        final name = await showRenameDialog(context, item.name);
+        if (name == null || name == item.name || !mounted) return;
+        await _run(() => ref.read(fileActionsProvider).rename(item, name));
+      case 'move':
+        final target = await MoveTargetPicker.show(context, title: '移动到…');
+        if (target == null || !mounted) return;
+        await _run(
+          () => ref.read(fileActionsProvider).move([item.path], target),
+        );
+      case 'copy':
+        final target = await MoveTargetPicker.show(context, title: '复制到…');
+        if (target == null || !mounted) return;
+        await _run(
+          () => ref.read(fileActionsProvider).copy([item.path], target),
+        );
+      case 'delete':
+        final confirmed = await showDeleteConfirmDialog(context, 1);
+        if (!(confirmed ?? false) || !mounted) return;
+        await _run(() => ref.read(fileActionsProvider).delete([item.path]));
+    }
+  }
+
+  PopupMenuItem<String> _menuItem(
+    String value,
+    IconData icon,
+    String label, {
+    bool destructive = false,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final color = destructive ? colorScheme.error : colorScheme.onSurface;
+    return PopupMenuItem<String>(
+      value: value,
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 10),
+          Text(label, style: TextStyle(color: color)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -158,9 +296,20 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     final filesAsync = ref.watch(visibleFilesProvider);
     final selection = ref.watch(selectionProvider);
 
-    return Align(
-      alignment: Alignment.topCenter,
-      child: ConstrainedBox(
+    // 系统返回手势兼容：多选中 → 退出多选；子目录 → 回上级；否则正常出栈
+    return PopScope(
+      canPop: selection.isEmpty && path == '/',
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (selection.isNotEmpty) {
+          ref.read(selectionProvider.notifier).clear();
+        } else {
+          ref.read(browsePathProvider.notifier).state = parentPathOf(path);
+        }
+      },
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 860),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
@@ -333,6 +482,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
             ],
           ),
         ),
+        ),
       ),
     );
   }
@@ -385,6 +535,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
               favoritePaths: favoritePaths,
               favoriteSourceId: favoriteSourceId,
               onToggleFavorite: toggleFavorite,
+              onShowMenu: _showItemMenu,
             ),
             FileListView(
               items: items,
@@ -399,6 +550,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
               favoritePaths: favoritePaths,
               favoriteSourceId: favoriteSourceId,
               onToggleFavorite: toggleFavorite,
+              onShowMenu: _showItemMenu,
             ),
           ],
         );
