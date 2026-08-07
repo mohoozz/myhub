@@ -9,6 +9,7 @@ class FileGridView extends StatelessWidget {
   const FileGridView({
     required this.items,
     required this.onOpen,
+    this.controller,
     this.onRefresh,
     this.selectionMode = false,
     this.selectedPaths = const {},
@@ -27,6 +28,9 @@ class FileGridView extends StatelessWidget {
 
   final List<FileItem> items;
   final ValueChanged<FileItem> onOpen;
+
+  /// 滚动控制器（用于大目录下高亮定位时先按索引估算滚动位置）。
+  final ScrollController? controller;
   final Future<void> Function()? onRefresh;
   final bool selectionMode;
   final Set<String> selectedPaths;
@@ -54,6 +58,7 @@ class FileGridView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final grid = GridView.builder(
+      controller: controller,
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(

@@ -440,9 +440,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
             ),
             Expanded(
               child: Text(
-                _chapterTitle(_chapter).isNotEmpty
-                    ? _chapterTitle(_chapter)
-                    : widget.file.name,
+                widget.file.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: _style.foreground, fontSize: 15),

@@ -164,7 +164,8 @@ class _FavoriteList extends ConsumerWidget {
     final theme = Theme.of(context);
     return ListView.separated(
       itemCount: items.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, indent: 54),
+      separatorBuilder: (_, __) =>
+          const Divider(height: 1, indent: 54, endIndent: 56),
       itemBuilder: (context, index) {
         final f = items[index];
         return InkWell(

@@ -63,17 +63,29 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   /// 距顶部多少像素时预接上一章。
   static const double _backwardTrigger = 200;
 
+  /// 初始窗口：当前章节前后各预渲染 N 章（让用户能立即上下滚动）。
+  static const int _initWindow = 2;
+
   final ScrollController _controller = ScrollController();
   final UniqueKey _centerKey = UniqueKey();
 
   /// 当前加载窗口 [_first, _last]。
-  late int _first = widget.initialChapter;
-  late int _last = widget.initialChapter;
+  late int _first = widget.totalChapters > 0
+      ? (widget.initialChapter - _initWindow)
+          .clamp(0, widget.totalChapters - 1)
+      : 0;
+  late int _last = widget.totalChapters > 0
+      ? (widget.initialChapter + _initWindow)
+          .clamp(0, widget.totalChapters - 1)
+      : 0;
 
   @override
   void initState() {
     super.initState();
-    widget.ensureChapter(widget.initialChapter);
+    // 初始窗口内所有章节立即触发预加载，否则会显示 loading 圈且无法滚动
+    for (var i = _first; i <= _last; i++) {
+      widget.ensureChapter(i);
+    }
     _controller.addListener(_maybeExtend);
     _restoreFraction();
   }
@@ -114,6 +126,11 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   }
 
   /// 接近列表边缘时扩展窗口（仅当边缘章节内容已就绪，逐章延伸）。
+  ///
+  /// 当滑到列表两端时，前后已无内容可滑（minScrollExtent/maxScrollExtent），
+  /// 此时只要还有未加载的章节就继续扩展——这是用户能持续向上/向下滚动的关键。
+  /// 仅在用户实际滚动触发（atTop/atBottom 为 true）时扩展，避免首帧
+  /// `pos.pixels == minScrollExtent` 立刻扩展导致一次性把窗口推到 0。
   void _maybeExtend() {
     if (!_controller.hasClients) return;
     final pos = _controller.position;
@@ -123,17 +140,21 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
         ((pos.pixels - pos.minScrollExtent) / extent).clamp(0.0, 1.0),
       );
     }
-    if (pos.pixels > pos.maxScrollExtent - _forwardTrigger &&
-        _last < widget.totalChapters - 1 &&
-        widget.contentOf(_last) != null) {
-      setState(() => _last++);
-      unawaited(widget.ensureChapter(_last));
-    }
-    if (pos.pixels < pos.minScrollExtent + _backwardTrigger &&
+    // 向前扩展：用户滑到顶部 200px 内（实际滚动触发），且还有前向章节
+    final atTop = pos.pixels <= pos.minScrollExtent + _backwardTrigger;
+    if (atTop &&
         _first > 0 &&
         widget.contentOf(_first) != null) {
       setState(() => _first--);
       unawaited(widget.ensureChapter(_first));
+    }
+    // 向后扩展：用户滑到底部 1200px 内（实际滚动触发），且还有后向章节
+    final atBottom = pos.pixels >= pos.maxScrollExtent - _forwardTrigger;
+    if (atBottom &&
+        _last < widget.totalChapters - 1 &&
+        widget.contentOf(_last) != null) {
+      setState(() => _last++);
+      unawaited(widget.ensureChapter(_last));
     }
   }
 

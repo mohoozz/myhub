@@ -10,6 +10,7 @@ import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 import 'package:myhub_flutter/shared/utils/app_cache.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
+import 'package:myhub_flutter/shared/widgets/avatar_button.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_settings.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/reader_settings.dart';
 import 'package:myhub_flutter/shared/widgets/source_manager.dart';
@@ -61,7 +62,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// 窄屏：全部分组单列堆叠。
   Widget _buildSinglePane(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
+      padding: const EdgeInsets.fromLTRB(7, 24, 7, 24),
       child: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -69,6 +70,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // 顶部用户卡片：替代原 AppBar 上的头像入口，
+              // 点击跳转个人主页（设置/查看头像）。
+              const _ProfileHeader(),
+              const SizedBox(height: 24),
               for (final section in _sections) ...[
                 section.child,
                 const SizedBox(height: 16),
@@ -111,6 +116,60 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 child: SingleChildScrollView(
                   child: _sections[_selected].child,
                 ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 窄屏设置页顶部"我的"卡片：
+/// 替代原 AppBar 右上角头像框，点击跳转到个人主页设置头像。
+class _ProfileHeader extends ConsumerWidget {
+  const _ProfileHeader();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final auth = ref.watch(authStateProvider);
+    return Material(
+      color: theme.colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => context.push('/profile'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              const UserAvatar(radius: 26),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      auth.username ?? '未登录',
+                      style: theme.textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '点击编辑头像与资料',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                LucideIcons.chevronRight,
+                color: theme.colorScheme.onSurfaceVariant,
+                size: 20,
               ),
             ],
           ),
@@ -232,40 +291,29 @@ class _AppearanceSection extends ConsumerWidget {
     return _SectionCard(
       title: '外观',
       children: [
-        _ActionRow(
-          icon: LucideIcons.sunMoon,
-          label: '主题跟随系统',
-          trailing: Switch.adaptive(
-            value: mode == ThemeMode.system,
-            onChanged: (follow) {
-              if (follow) {
-                notifier.setMode(ThemeMode.system);
-              } else {
-                final dark = Theme.of(context).brightness == Brightness.dark;
-                notifier.setMode(dark ? ThemeMode.dark : ThemeMode.light);
-              }
-            },
-          ),
+        // 三态分段选择：跟随系统 / 亮色 / 暗色。
+        // 三个选项始终可见，避免"开关关掉才能看到固定方向"的二段式交互。
+        SegmentedButton<ThemeMode>(
+          segments: const [
+            ButtonSegment(
+              value: ThemeMode.system,
+              label: Text('跟随系统'),
+              icon: Icon(LucideIcons.sunMoon, size: 15),
+            ),
+            ButtonSegment(
+              value: ThemeMode.light,
+              label: Text('亮色'),
+              icon: Icon(LucideIcons.sun, size: 15),
+            ),
+            ButtonSegment(
+              value: ThemeMode.dark,
+              label: Text('暗色'),
+              icon: Icon(LucideIcons.moon, size: 15),
+            ),
+          ],
+          selected: {mode},
+          onSelectionChanged: (s) => notifier.setMode(s.first),
         ),
-        if (mode != ThemeMode.system) ...[
-          const SizedBox(height: 10),
-          SegmentedButton<ThemeMode>(
-            segments: const [
-              ButtonSegment(
-                value: ThemeMode.light,
-                label: Text('亮色'),
-                icon: Icon(LucideIcons.sun, size: 15),
-              ),
-              ButtonSegment(
-                value: ThemeMode.dark,
-                label: Text('暗色'),
-                icon: Icon(LucideIcons.moon, size: 15),
-              ),
-            ],
-            selected: {mode},
-            onSelectionChanged: (s) => notifier.setMode(s.first),
-          ),
-        ],
       ],
     );
   }
@@ -410,6 +458,20 @@ class _PlayerSection extends ConsumerWidget {
           ],
           onChanged: (v) =>
               notifier.update(settings.copyWith(preferTranscode: v)),
+        ),
+        _ActionRow(
+          icon: LucideIcons.compass,
+          label: '自动水平仪（视频随设备旋转）',
+          trailing: Switch.adaptive(
+            value: settings.orientation == PlayerOrientation.sensor,
+            onChanged: (v) => notifier.update(
+              settings.copyWith(
+                orientation: v
+                    ? PlayerOrientation.sensor
+                    : PlayerOrientation.portrait,
+              ),
+            ),
+          ),
         ),
       ],
     );

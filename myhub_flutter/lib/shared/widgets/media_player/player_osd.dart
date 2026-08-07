@@ -54,8 +54,11 @@ class PlayerOsd {
 
 /// 悬浮胶囊视图：订阅 [PlayerOsd] 并渲染反馈内容。
 ///
-/// 显示在顶部居中（顶栏下方）而非屏幕正中央，
-/// 避免与中央播放按钮/缓冲转圈重叠。
+/// 显示位置：屏幕**中下 1/3** 处水平居中。
+/// * 避开了顶部文件名（动态岛机型上顶栏较高，`top: 72` 仍可能重叠）；
+/// * 避开了中央播放按钮（与 OSD 同时出现时也只在调节瞬间，
+///   此时中央播放按钮已被隐藏/淡化）；
+/// * 避开底部控制栏（位于 1/3 处，距离底栏较远）。
 class PlayerOsdView extends StatelessWidget {
   const PlayerOsdView({super.key, required this.osd});
 
@@ -69,33 +72,31 @@ class PlayerOsdView extends StatelessWidget {
         if (feedback == null) return const SizedBox.shrink();
         return IgnorePointer(
           child: Align(
-            alignment: Alignment.topCenter,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 72),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.72),
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(feedback.icon, size: 18, color: Colors.white),
-                    const SizedBox(width: 10),
-                    Text(
-                      feedback.text,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontFeatures: [FontFeature.tabularFigures()],
-                      ),
+            // 中下 1/3：屏幕垂直方向靠下，避免与顶栏/中央大按钮/底栏重叠。
+            alignment: const Alignment(0, 0.35),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 10,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(feedback.icon, size: 18, color: Colors.white),
+                  const SizedBox(width: 10),
+                  Text(
+                    feedback.text,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontFeatures: [FontFeature.tabularFigures()],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),

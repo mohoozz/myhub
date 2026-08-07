@@ -70,6 +70,11 @@ class ReadingCard extends ConsumerWidget {
               ? null
               : (d) => onShowMenu?.call(d.globalPosition),
           child: Column(
+            // 卡片内容在窄屏/iOS 上容易发生底部溢出，使用 min 让 Column
+            // 紧凑贴合自身需要的高度，不再强行占满父容器高度（避免溢出）。
+            // 父级（GridView item）的高度由 childAspectRatio 决定，
+            // 实际尺寸稍显紧凑的卡片在视觉上完全可以接受。
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               AspectRatio(
@@ -97,6 +102,7 @@ class ReadingCard extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
@@ -136,7 +142,6 @@ class ReadingCard extends ConsumerWidget {
                   ],
                 ),
               ),
-              const Spacer(),
               LinearProgressIndicator(
                 value: (progress.percent / 100).clamp(0.0, 1.0),
                 minHeight: 4,

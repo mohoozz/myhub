@@ -51,8 +51,8 @@ void main() {
           ),
         ),
       );
-      expect(find.text('NAS'), findsOneWidget);
-      await tester.tap(find.text('NAS'));
+      expect(find.text('NAS/'), findsOneWidget);
+      await tester.tap(find.text('NAS/'));
       expect(navigated, isEmpty);
     });
 

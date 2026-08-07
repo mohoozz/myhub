@@ -265,9 +265,24 @@ class MediaPlayerController {
     );
     final platform = player.platform;
     if (platform is NativePlayer) {
-      if (Platform.isAndroid || Platform.isIOS) {
-        // 移动端：硬解优先，降低功耗
-        platform.setProperty('hwdec', 'auto');
+      if (Platform.isIOS) {
+        // iOS：优先使用 VideoToolbox 硬解（H.264/HEVC），功耗低；
+        // iOS Simulator 上无 VideoToolbox 硬解，mpv 会自动回退到软解。
+        platform.setProperty('hwdec', 'videotoolbox');
+        platform.setProperty('videotoolbox-allow-formats', 'all');
+        // iOS 上 libmpv 默认 gpu 视频输出在 Simulator 不可用时
+        // 会自动回退；显式声明可避免不必要的探测日志。
+        platform.setProperty('gpu-api', 'opengl');
+        // iOS 音频走 AudioUnit（AVAudioSession）；
+        // 模拟器无音频硬件时 mpv 会报 "Could not open/initialize audio device"，
+        // 显式声明后端避免反复探测；无音频设备时静默降级（不中断视频播放）。
+        platform.setProperty('ao', 'audio_unit');
+        // 暂停/结束后保持连接，避免 iOS 后台 AV 清理引发会话异常
+        platform.setProperty('keep-open', 'always');
+        platform.setProperty('keep-paused', 'yes');
+      } else if (Platform.isAndroid) {
+        // Android：硬解优先（mediacodec）
+        platform.setProperty('hwdec', 'mediacodec');
       } else {
         // 桌面端：保守硬解，规避个别驱动解码异常
         platform.setProperty('hwdec', 'auto-safe');
@@ -302,6 +317,7 @@ class MediaPlayerController {
   }
 
   void _onPlaying(bool v) {
+    debugPrint('[player] _onPlaying=$v everPlayed=$_everPlayed');
     if (v) {
       _everPlayed = true;
       loading.value = false;

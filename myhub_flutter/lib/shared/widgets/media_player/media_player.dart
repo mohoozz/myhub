@@ -9,9 +9,11 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/audio_cover_mode.dart';
+import 'package:myhub_flutter/shared/widgets/media_player/orientation_watcher.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_controls.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
@@ -93,6 +95,12 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   /// 键盘静音前的音量记忆（M 键取消静音时恢复）。
   double _volumeBeforeMute = 100;
 
+  /// 当前生效的方向偏好（控制栏按钮三态循环：portrait → landscape → sensor）。
+  late PlayerOrientation _orientation;
+
+  /// 水平仪监听器（仅 `sensor` 模式启用）。
+  final OrientationWatcher _orientationWatcher = OrientationWatcher();
+
   /// 迷你模式拖拽/收起动画控制器：
   /// 拖动时 set value 跟手，松手时 [AnimationController.animateTo] 回弹或收起。
   late final AnimationController _miniAnim = AnimationController(
@@ -124,8 +132,17 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
       if (!mounted) return;
       setState(() => _buffering = b);
     });
+    // 读取用户方向偏好（持久化：上次竖屏/横屏/水平仪自动）。
+    // 注意：PlayerSettings 异步从 SharedPreferences 恢复，首次 build() 返回默认
+    // portrait；故先取默认值，再用 ref.listen 在异步恢复完成后同步一次。
+    _orientation = ref.read(playerSettingsProvider).orientation;
     // 模式（视频/音频）变化时同步调整方向锁定
     _controller.isVideoMode.addListener(_applyOrientationLock);
+    _orientationWatcher.tiltListenable.addListener(_onTiltChanged);
+    // 监听方向偏好恢复（从 SharedPreferences 异步加载完成时）：
+    // 更新会话内 _orientation 并重新应用，保证打开播放器即沿用上次方向。
+    // 注意：ref.listen 必须在 build 中调用（Riverpod 限制），
+    // 实际位置见 _MediaPlayerPageState.build。
     _applyOrientationLock();
     if (isDesktopPlatform) {
       windowManager.isFullScreen().then((v) {
@@ -144,10 +161,12 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
 
   @override
   void dispose() {
-    // 视频模式曾锁定横屏，退出时恢复竖屏
-    if (!kIsWeb &&
-        (Platform.isAndroid || Platform.isIOS) &&
-        _controller.isVideoMode.value) {
+    // 移动端兜底：退出播放页恢复竖屏。
+    // 正常的 _exitAndStop / _enterMiniMode 路径已先 await 过 orientation，
+    // 这里保留以防异常路径（如 Flutter 路由强制销毁）漏掉恢复。
+    // 异步调用无须 await：dispose 同步返回，framework 会在原生方向
+    // 过渡动画期间自然完成 setter。
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.portraitUp,
       ]);
@@ -165,6 +184,8 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
       });
     }
     _controller.isVideoMode.removeListener(_applyOrientationLock);
+    _orientationWatcher.tiltListenable.removeListener(_onTiltChanged);
+    unawaited(_orientationWatcher.stop());
     unawaited(_bufferingSub?.cancel());
     _osd.dispose();
     _miniAnim.dispose();
@@ -173,19 +194,101 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     super.dispose();
   }
 
-  /// 按当前模式应用屏幕方向（仅移动端）：视频锁定横屏，音频恢复竖屏。
+  /// 移动端：先 await 把方向切回竖屏，再交还流程。
+  ///
+  /// iOS 上 [SystemChrome.setPreferredOrientations] 会触发原生 UIViewController
+  /// 旋转动画（约 300ms）；如果不先 await，pop 与旋转过渡并发，
+  /// 横屏 Scaffold 已销毁而原生 view 还在旋转，画面会闪一帧异常（控制栏
+  /// 残影、边缘拉伸）。统一在这里同步关掉方向再继续退出/收起。
+  Future<void> _restorePortraitOrientation() async {
+    if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
+    await SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+    ]);
+  }
+
+  /// 按当前模式和方向偏好应用屏幕方向（仅移动端）。
+  ///
+  /// 三种策略：
+  /// * [PlayerOrientation.portrait]  - 视频/音频均锁定竖屏；
+  /// * [PlayerOrientation.landscape] - 视频锁定横屏，音频保持竖屏；
+  /// * [PlayerOrientation.sensor]    - 视频跟随水平仪，音频保持竖屏。
   void _applyOrientationLock() {
     if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
-    if (_controller.isVideoMode.value) {
-      SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    } else {
-      SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.portraitUp,
-      ]);
+    // 音频模式不参与横屏策略：唱片封面更适合竖屏
+    if (!_controller.isVideoMode.value) {
+      _setOrientations(const [DeviceOrientation.portraitUp]);
+      return;
     }
+    switch (_orientation) {
+      case PlayerOrientation.portrait:
+        _setOrientations(const [DeviceOrientation.portraitUp]);
+        _orientationWatcher.stop();
+      case PlayerOrientation.landscape:
+        _setOrientations(const [
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+        _orientationWatcher.stop();
+      case PlayerOrientation.sensor:
+        // 启动水平仪监听；初始姿态决定首次方向，之后由 [_onTiltChanged] 驱动
+        _orientationWatcher.start();
+        final initial = orientationsFor(_orientationWatcher.currentTilt);
+        if (initial.isNotEmpty) {
+          _setOrientations(initial);
+        } else {
+          // 设备水平放置未决：先允许竖屏，由首帧姿态修正
+          _setOrientations(const [DeviceOrientation.portraitUp]);
+        }
+    }
+  }
+
+  Future<void> _setOrientations(List<DeviceOrientation> list) async {
+    if (list.isEmpty) return;
+    await SystemChrome.setPreferredOrientations(list);
+  }
+
+  /// 水平仪姿态变化：仅在 `sensor` 模式下应用。
+  void _onTiltChanged() {
+    if (!mounted) return;
+    if (_orientation != PlayerOrientation.sensor) return;
+    if (!_controller.isVideoMode.value) return;
+    final list = orientationsFor(_orientationWatcher.currentTilt);
+    if (list.isEmpty) return;
+    _setOrientations(list);
+  }
+
+  /// 控制栏方向按钮：portrait ↔ landscape 二态切换。
+  ///
+  /// 按钮只关心"当前方向"与"目标方向"，跟"水平仪自动"互不耦合：
+  /// * 当前竖屏 → 切到横屏；
+  /// * 当前横屏 → 切到竖屏；
+  /// * 当前是水平仪（sensor）→ 切到竖屏（按一次固定方向更可控）。
+  /// "自动（水平仪）"模式由设置页配置（不在控制栏按钮路径上）。
+  ///
+  /// 注意：方向偏好**不持久化**——每次进入播放页默认竖屏，
+  /// 切换仅对当前会话生效；离开页面即重置回竖屏。
+  Future<void> _toggleOrientation() async {
+    final next = switch (_orientation) {
+      PlayerOrientation.landscape => PlayerOrientation.portrait,
+      PlayerOrientation.portrait => PlayerOrientation.landscape,
+      PlayerOrientation.sensor => PlayerOrientation.portrait,
+    };
+    setState(() => _orientation = next);
+    // 持久化方向偏好：下次打开播放器沿用上次的竖屏/横屏选择。
+    final settings = ref.read(playerSettingsProvider);
+    unawaited(
+      ref
+          .read(playerSettingsProvider.notifier)
+          .update(settings.copyWith(orientation: next)),
+    );
+    _applyOrientationLock();
+    _osd.show(
+      next == PlayerOrientation.landscape
+          ? LucideIcons.rectangleHorizontal
+          : LucideIcons.rectangleVertical,
+      next == PlayerOrientation.landscape ? '横屏' : '竖屏',
+    );
   }
 
   /// 桌面端系统级全屏切换。
@@ -201,9 +304,12 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   // ---------- 退出 / 迷你模式 ----------
 
   /// 直接退出：停止播放并关闭播放页（不进入迷你模式）。
-  void _exitAndStop() {
+  Future<void> _exitAndStop() async {
+    // 先让原生视图开始旋转回竖屏，避免与 pop 动画并发造成一帧异常
+    await _restorePortraitOrientation();
     unawaited(_controller.stop());
-    Navigator.of(context).maybePop();
+    if (!mounted) return;
+    await Navigator.of(context).maybePop();
   }
 
   /// 进入迷你模式：先播收起动画（缩小下沉），结束后退出播放页，
@@ -212,13 +318,18 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     unawaited(_settleToMini());
   }
 
-  /// 收起动画：页面缩小下沉到底，结束后 pop 退出播放页。
+  /// 收起动画：页面缩小下沉到底，结束后先切回竖屏再 pop 退出播放页。
+  ///
+  /// pop 之前先恢复竖屏：横屏时收起动画与 iOS 原生旋转过渡并发，
+  /// 容易在动画末段叠出一帧控制栏残影 / 边缘异常。
   Future<void> _settleToMini() async {
     try {
       await _miniAnim.animateTo(1.0);
     } catch (_) {
       return; // 动画被销毁（页面已退出）
     }
+    if (!mounted) return;
+    await _restorePortraitOrientation();
     if (!mounted) return;
     unawaited(Navigator.of(context).maybePop());
   }
@@ -260,8 +371,13 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   }
 
   /// ↑/↓：音量 ±5%。
+  ///
+  /// 防御：iOS 模拟器上音频设备未初始化时，
+  /// `Player.state.volume` 可能返回 mpv 内部非语义值（如负数）；
+  /// 先把读到的值 clamp 到 [0, 100] 再叠加 delta。
   void _changeVolume(double delta) {
-    final v = (_player.state.volume + delta).clamp(0.0, 100.0);
+    final raw = _player.state.volume.clamp(0.0, 100.0);
+    final v = (raw + delta).clamp(0.0, 100.0);
     _player.setVolume(v);
     _osd.show(_volumeIcon(v), '${v.round()}%');
   }
@@ -307,6 +423,15 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
 
   @override
   Widget build(BuildContext context) {
+    // 监听方向偏好异步恢复（SharedPreferences 加载完成后同步）。
+    // Riverpod 限制：ref.listen 必须在 build 方法中调用。
+    // 仅同步方向变化，避免播放中外部改设置频繁切向。
+    ref.listen<PlayerSettings>(playerSettingsProvider, (previous, next) {
+      if (!mounted) return;
+      if (previous?.orientation == next.orientation) return;
+      _orientation = next.orientation;
+      _applyOrientationLock();
+    });
     return Scaffold(
       backgroundColor: Colors.black, // 沉浸式纯黑背景
       body: CallbackShortcuts(
@@ -386,6 +511,11 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                         ? _toggleFullscreen
                                         : null,
                                     isFullscreen: _fullscreen,
+                                    orientation: isDesktopPlatform
+                                        ? null
+                                        : _orientation,
+                                    onToggleOrientation:
+                                        isDesktopPlatform ? null : _toggleOrientation,
                                   ),
                                 // 播放中的缓冲转圈（首次加载走 _LoadingView）；
                                 // 圆形底托与中央播放按钮同风格，

@@ -36,11 +36,16 @@ class SelectionNotifier extends Notifier<Set<String>> {
     state = {path};
   }
 
-  /// 多选模式下切换选中。
+  /// 多选模式下切换选中：全部取消选中后自动退出多选模式，
+  /// 避免用户明明已经没勾选项、底部却仍占据一行 action bar。
   void toggle(String path) {
     final next = {...state};
     if (!next.remove(path)) {
       next.add(path);
+    }
+    if (next.isEmpty) {
+      // 所有项都已取消，同时退出 selectionMode 让 toolbar 隐藏并恢复普通浏览。
+      ref.read(selectionModeProvider.notifier).exit();
     }
     state = next;
   }

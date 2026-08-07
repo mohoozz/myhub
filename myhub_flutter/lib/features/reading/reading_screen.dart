@@ -304,6 +304,10 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     // 依次切换路径源、进入所在目录、标记高亮目标，再切到浏览 Tab
     ref.read(currentSourceProvider.notifier).state = source;
     ref.read(browsePathProvider.notifier).state = parentPathOf(p.filePath);
+    // 先重置为 null 再设置：即使对同一个文件重复"定位到浏览页"，
+    // 也能强制触发 highlightFileProvider 变化，从而让浏览页重新滚动定位
+    // （否则 provider 值不变，ref.listen 不会回调，第二次起定位失效）。
+    ref.read(highlightFileProvider.notifier).state = null;
     ref.read(highlightFileProvider.notifier).state = p.filePath;
     final shell = StatefulNavigationShell.of(context);
     shell.goBranch(AppBranches.browse, initialLocation: false);
@@ -324,7 +328,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 860),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 24, 28, 0),
+          padding: const EdgeInsets.fromLTRB(7, 24, 7, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -463,7 +467,10 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
               maxCrossAxisExtent: 220,
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
-              childAspectRatio: 0.98,
+              // 高度 = 宽度 / childAspectRatio。
+              // iOS 窄屏下文本与进度条容易溢出，这里把比例调小一点，
+              // 让卡片更高一些，留出充分空间。
+              childAspectRatio: 0.88,
             ),
             itemCount: items.length,
             itemBuilder: (context, index) {

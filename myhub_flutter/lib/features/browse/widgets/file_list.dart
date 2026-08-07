@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
@@ -9,6 +12,7 @@ class FileListView extends StatelessWidget {
   const FileListView({
     required this.items,
     required this.onOpen,
+    this.controller,
     this.onRefresh,
     this.selectionMode = false,
     this.selectedPaths = const {},
@@ -25,6 +29,9 @@ class FileListView extends StatelessWidget {
   });
 
   final List<FileItem> items;
+
+  /// 滚动控制器（用于大目录下高亮定位时先按索引估算滚动位置）。
+  final ScrollController? controller;
 
   /// 点击条目：目录进入，文件打开（由上层决定行为）。
   final ValueChanged<FileItem> onOpen;
@@ -68,9 +75,11 @@ class FileListView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final list = ListView.separated(
+      controller: controller,
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: items.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, indent: 54),
+      separatorBuilder: (_, __) =>
+          const Divider(height: 1, indent: 54, endIndent: 56),
       itemBuilder: (context, index) {
         final item = items[index];
         final highlighted = highlightPath != null && item.path == highlightPath;
@@ -142,6 +151,8 @@ class _FileRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    // 移动端列表不显示"修改时间"列，窄屏下信息更聚焦。
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
     // 外层处理移动端长按弹菜单：该手势仅在桌面端长按（进入多选）为空时注册，
     // 与内层 InkWell 的长按手势互斥，不会同时响应。
     return GestureDetector(
@@ -206,16 +217,18 @@ class _FileRow extends StatelessWidget {
                   ),
                 ),
               ),
-              Expanded(
-                flex: 2,
-                child: Text(
-                  formatModTime(item.modTime),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 11,
-                    color: colorScheme.onSurfaceVariant,
+              // 修改时间列：仅桌面端显示（宽屏信息完整，窄屏去掉避免挤压）
+              if (isMobile == false)
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    formatModTime(item.modTime),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 11,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
               IconButton(
                 iconSize: 15,
                 visualDensity: VisualDensity.compact,

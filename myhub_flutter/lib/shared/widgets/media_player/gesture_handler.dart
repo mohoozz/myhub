@@ -27,6 +27,8 @@ class PlayerGestureDetector extends StatefulWidget {
     this.onBrightnessChanged,
     this.onMiniDrag,
     this.onMiniDragEnd,
+    this.onLongPress,
+    this.enabled = true,
   });
 
   /// 已打开媒体的 Player。
@@ -40,6 +42,12 @@ class PlayerGestureDetector extends StatefulWidget {
 
   /// 单击（显隐控制栏）。
   final VoidCallback? onTap;
+
+  /// 长按（进入锁定状态）。
+  final VoidCallback? onLongPress;
+
+  /// 是否允许手势操作（锁定状态下为 false，屏蔽 seek/音量/亮度/双击/迷你拖拽）。
+  final bool enabled;
 
   /// 任意调节手势发生（重置控制栏自动隐藏计时）。
   final VoidCallback? onInteraction;
@@ -229,22 +237,28 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
+        // enabled=false（锁定态）：屏蔽所有手势，仅保留长按解锁入口交由
+        // 锁图标处理（此处不响应，避免与锁图标的点击冲突）。
+        final enabled = widget.enabled;
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onTap: widget.onTap,
-          onDoubleTapDown: (d) => _doubleTapX = d.localPosition.dx,
-          onDoubleTap: () => _handleDoubleTap(width),
-          onHorizontalDragStart: _startSeek,
-          onHorizontalDragUpdate: (d) => _updateSeek(d, width),
-          onHorizontalDragEnd: (_) => _endSeek(),
-          onHorizontalDragCancel: _osd.dismiss,
-          onVerticalDragStart: (d) => _startVertical(d, width),
-          onVerticalDragUpdate: (d) => _updateVertical(d, height),
-          onVerticalDragEnd: (_) => _endVertical(),
-          onVerticalDragCancel: () {
-            _vMode = _VerticalMode.none;
-            _osd.dismiss();
-          },
+          onTap: enabled ? widget.onTap : null,
+          onLongPress: enabled ? widget.onLongPress : null,
+          onDoubleTapDown: enabled ? (d) => _doubleTapX = d.localPosition.dx : null,
+          onDoubleTap: enabled ? () => _handleDoubleTap(width) : null,
+          onHorizontalDragStart: enabled ? _startSeek : null,
+          onHorizontalDragUpdate: enabled ? (d) => _updateSeek(d, width) : null,
+          onHorizontalDragEnd: enabled ? (_) => _endSeek() : null,
+          onHorizontalDragCancel: enabled ? _osd.dismiss : null,
+          onVerticalDragStart: enabled ? (d) => _startVertical(d, width) : null,
+          onVerticalDragUpdate: enabled ? (d) => _updateVertical(d, height) : null,
+          onVerticalDragEnd: enabled ? (_) => _endVertical() : null,
+          onVerticalDragCancel: enabled
+              ? () {
+                  _vMode = _VerticalMode.none;
+                  _osd.dismiss();
+                }
+              : null,
           // OSD 胶囊由控制栏统一挂载在顶层（键盘/按钮调节也要显示）
           child: widget.child,
         );

@@ -23,6 +23,8 @@ dependencies:
   media_kit: ^1.2.0
   media_kit_video: ^1.2.0
   media_kit_libs_video: ^1.0.5
+  # Sensors (水平仪/重力感应，用于自动横竖屏切换)
+  sensors_plus: ^6.1.0
   # Image caching
   cached_network_image: ^3.4.1
   # Local database

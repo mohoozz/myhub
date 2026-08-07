@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -22,11 +21,32 @@ class ReaderStyle {
   final Color background;
   final Color foreground;
 
-  /// 正文样式：思源宋体（Noto Serif SC）。
-  TextStyle get textStyle => GoogleFonts.notoSerifSc(
+  /// 正文字体家族回退栈。
+  ///
+  /// 不依赖 google_fonts 的运行时网络下载（iOS 上会导致文字在下载完成的
+  /// 前后反复切换而闪烁/空白）。优先使用系统自带的中文衬线/黑体字体，
+  /// 缺失时逐级回退到系统默认，保证首帧 [TextPainter] 分页与渲染字体一致。
+  static const List<String> _fontStack = [
+    // 系统自带中文衬线字体（优先呈现"宋体"阅读观感）
+    'Songti SC', // iOS 宋体
+    'STSong', // macOS 华文宋体
+    'Noto Serif CJK SC', // Android/Linux 思源宋体
+    'Source Han Serif SC', // Android 思源宋体别名
+    'Noto Serif SC', // 系统已内置时（不触发下载）
+    // 以上均缺失时回退到系统中文黑体（iOS 苹方 / Android 思源黑体）
+    'PingFang SC',
+    'Heiti SC',
+    'Noto Sans CJK SC',
+    'Noto Sans SC',
+  ];
+
+  /// 正文样式：本地字体栈（不触发运行时字体下载，避免 iOS 文字闪烁/空白）。
+  TextStyle get textStyle => TextStyle(
         fontSize: fontSize,
         height: lineHeight,
         color: foreground,
+        fontFamily: _fontStack.first,
+        fontFamilyFallback: _fontStack.skip(1).toList(),
       );
 
   /// 页眉/辅助文字色。

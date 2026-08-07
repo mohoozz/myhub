@@ -25,7 +25,12 @@ class BreadcrumbBar extends StatelessWidget {
         path.split('/').where((s) => s.isNotEmpty).toList();
 
     final chips = <Widget>[
-      _chip(context, rootLabel, '/', isLast: segments.isEmpty),
+      _chip(
+        context,
+        segments.isEmpty ? '$rootLabel/' : rootLabel,
+        '/',
+        isLast: segments.isEmpty,
+      ),
     ];
     for (var i = 0; i < segments.length; i++) {
       chips.add(_separator(theme));

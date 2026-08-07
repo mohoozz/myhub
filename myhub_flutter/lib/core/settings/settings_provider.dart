@@ -8,12 +8,32 @@ const List<double> kPlaybackSpeeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 String playbackSpeedLabel(double s) =>
     s == s.roundToDouble() ? '${s.toStringAsFixed(1)}x' : '${s}x';
 
+/// 播放方向偏好。
+///
+/// 视频模式下的方向策略：
+/// * [portrait]   强制竖屏（默认，移动端 App 主流体验）；
+/// * [landscape]  强制横屏；
+/// * [sensor]     跟随水平仪自动切换（未锁定方向时）。
+enum PlayerOrientation {
+  portrait,
+  landscape,
+  sensor;
+
+  static PlayerOrientation fromName(String? name) {
+    for (final v in values) {
+      if (v.name == name) return v;
+    }
+    return portrait;
+  }
+}
+
 /// 播放偏好设置。
 class PlayerSettings {
   const PlayerSettings({
     this.defaultSpeed = 1.0,
     this.preferTranscode = false,
     this.volume = 100.0,
+    this.orientation = PlayerOrientation.portrait,
   });
 
   /// 默认倍速（0.5 ~ 2.0）。
@@ -25,15 +45,23 @@ class PlayerSettings {
   /// 上次使用的音量（0 ~ 100），重启应用后恢复。
   final double volume;
 
+  /// 视频方向偏好：竖屏 / 横屏 / 水平仪自动切换。
+  ///
+  /// 注意：方向偏好会持久化到 SharedPreferences，
+  /// 下次打开播放器沿用上次的设置。
+  final PlayerOrientation orientation;
+
   PlayerSettings copyWith({
     double? defaultSpeed,
     bool? preferTranscode,
     double? volume,
+    PlayerOrientation? orientation,
   }) {
     return PlayerSettings(
       defaultSpeed: defaultSpeed ?? this.defaultSpeed,
       preferTranscode: preferTranscode ?? this.preferTranscode,
       volume: volume ?? this.volume,
+      orientation: orientation ?? this.orientation,
     );
   }
 }
@@ -51,6 +79,7 @@ class PlayerSettingsNotifier extends Notifier<PlayerSettings> {
   static const _kDefaultSpeed = 'player.default_speed';
   static const _kPreferTranscode = 'player.prefer_transcode';
   static const _kVolume = 'player.volume';
+  static const _kOrientation = 'player.orientation';
 
   /// 标记用户已显式修改（防止异步恢复覆盖新值）。
   var _dirty = false;
@@ -68,6 +97,9 @@ class PlayerSettingsNotifier extends Notifier<PlayerSettings> {
       defaultSpeed: (prefs.getDouble(_kDefaultSpeed) ?? 1.0).clamp(0.5, 2.0),
       preferTranscode: prefs.getBool(_kPreferTranscode) ?? false,
       volume: (prefs.getDouble(_kVolume) ?? 100.0).clamp(0.0, 100.0),
+      // 方向偏好从持久化恢复：上次设置是竖屏就保持竖屏，横屏就保持横屏，
+      // 水平仪自动就保持自动。
+      orientation: PlayerOrientation.fromName(prefs.getString(_kOrientation)),
     );
   }
 
@@ -78,5 +110,7 @@ class PlayerSettingsNotifier extends Notifier<PlayerSettings> {
     await prefs.setDouble(_kDefaultSpeed, settings.defaultSpeed);
     await prefs.setBool(_kPreferTranscode, settings.preferTranscode);
     await prefs.setDouble(_kVolume, settings.volume);
+    // 方向偏好持久化：下次打开沿用上次设置。
+    await prefs.setString(_kOrientation, settings.orientation.name);
   }
 }

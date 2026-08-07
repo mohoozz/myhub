@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit/media_kit.dart';
@@ -34,6 +36,8 @@ class PlayerControls extends StatefulWidget {
     this.onMiniDragEnd,
     this.onToggleFullscreen,
     this.isFullscreen = false,
+    this.orientation,
+    this.onToggleOrientation,
   });
 
   /// 已打开媒体的 media_kit Player。
@@ -71,6 +75,13 @@ class PlayerControls extends StatefulWidget {
   /// 当前是否系统全屏。
   final bool isFullscreen;
 
+  /// 当前方向偏好（仅移动端显示方向切换悬浮按钮）。
+  final PlayerOrientation? orientation;
+
+  /// 方向切换回调（点击在 portrait ↔ landscape 之间切换）；
+  /// 视频模式专属。null 时不渲染悬浮按钮。
+  final VoidCallback? onToggleOrientation;
+
   @override
   State<PlayerControls> createState() => _PlayerControlsState();
 }
@@ -101,6 +112,9 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   /// 拖拽进度条时的预览位置（null = 未拖拽）。
   Duration? _dragPosition;
+
+  /// 锁定状态：长按进入，屏蔽所有手势与调节按钮，中央仅剩锁图标。
+  bool _locked = false;
 
   Player get _player => widget.player;
 
@@ -183,9 +197,9 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   void _startHideTimer() {
     _hideTimer?.cancel();
-    if (!_playing) return; // 暂停时不自动隐藏
+    if (!_playing || _locked) return; // 暂停或锁定时不自动隐藏
     _hideTimer = Timer(_kHideDelay, () {
-      if (mounted && _playing) {
+      if (mounted && _playing && !_locked) {
         setState(() => _visible = false);
       }
     });
@@ -200,12 +214,30 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   void _toggleVisible() {
+    if (_locked) return; // 锁定时轻触不切换显隐（锁定态常显）
     setState(() => _visible = !_visible);
     if (_visible) {
       _startHideTimer();
     } else {
       _hideTimer?.cancel();
     }
+  }
+
+  // ---------- 锁定 ----------
+
+  /// 长按进入锁定：常显控制栏、屏蔽手势与调节按钮，中央仅留锁图标。
+  void _lock() {
+    _hideTimer?.cancel();
+    setState(() {
+      _locked = true;
+      _visible = true;
+    });
+  }
+
+  /// 点击中央锁图标解锁：恢复手势与按钮，重新开始自动隐藏计时。
+  void _unlock() {
+    setState(() => _locked = false);
+    _startHideTimer();
   }
 
   // ---------- 播放动作 ----------
@@ -386,8 +418,12 @@ class _PlayerControlsState extends State<PlayerControls> {
       child: PlayerGestureDetector(
         player: _player,
         osd: widget.osd,
-        // 轻触画面：切换控制栏显隐
+        // 轻触画面：切换控制栏显隐（锁定态由手势层屏蔽）
         onTap: _toggleVisible,
+        // 长按进入锁定
+        onLongPress: _lock,
+        // 锁定态屏蔽全部手势
+        enabled: !_locked,
         // 调节手势：重置自动隐藏计时
         onInteraction: _wake,
         onBrightnessChanged: (b) => setState(() => _brightness = b),
@@ -403,50 +439,83 @@ class _PlayerControlsState extends State<PlayerControls> {
                   color: Colors.black.withValues(alpha: 1.0 - _brightness),
                 ),
               ),
-            // 顶栏：返回 + 文件名
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: _fade(_buildTopBar(context)),
-            ),
-            // 中央大按钮：播放/暂停（加载/缓冲中不显示，
-            // 缓冲时页面级转圈独占中央，避免重叠）
+            // 顶栏：返回 + 文件名（锁定态隐藏，防止误触退出）
+            if (!_locked)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: _fade(_buildTopBar(context)),
+              ),
+            // 中央大按钮：锁定态显示锁图标（点击解锁），
+            // 否则显示播放/暂停（加载/缓冲中不显示，缓冲时页面级转圈独占中央）。
             Center(
-              child: IgnorePointer(
-                ignoring: !_visible || widget.loading || widget.buffering,
-                child: AnimatedOpacity(
-                  opacity: _visible && !widget.loading && !widget.buffering
-                      ? 1
-                      : 0,
-                  duration: const Duration(milliseconds: 200),
-                  child: Material(
-                    color: Colors.black45,
-                    shape: const CircleBorder(),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: _togglePlay,
-                      child: Padding(
-                        padding: const EdgeInsets.all(18),
-                        child: Icon(
-                          _playing ? LucideIcons.pause : LucideIcons.play,
-                          size: 42,
-                          color: Colors.white,
+              child: _locked
+                  ? _buildUnlockButton()
+                  : IgnorePointer(
+                      ignoring:
+                          !_visible || widget.loading || widget.buffering,
+                      child: AnimatedOpacity(
+                        opacity: _visible &&
+                                !widget.loading &&
+                                !widget.buffering
+                            ? 1
+                            : 0,
+                        duration: const Duration(milliseconds: 200),
+                        child: Material(
+                          color: Colors.black45,
+                          shape: const CircleBorder(),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: _togglePlay,
+                            child: Padding(
+                              padding: const EdgeInsets.all(18),
+                              child: Icon(
+                                _playing
+                                    ? LucideIcons.pause
+                                    : LucideIcons.play,
+                                size: 42,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
+                    ),
+            ),
+            // 方向切换悬浮按钮（仅移动端）：贴屏幕左侧中部显示，
+            // 跟随控制栏显隐（轻触画面/暂停时显，自动隐藏延时到时隐）。
+            // SafeArea 只保留左侧 inset：iPhone 横屏时刘海/Dynamic Island
+            // 位于屏幕左边缘正中（inset 约 59），不避开会把按钮完全挡住。
+            // 锁定时隐藏方向按钮，避免误触与视觉干扰
+            if (_isMobile && !_locked)
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: SafeArea(
+                  top: false,
+                  right: false,
+                  bottom: false,
+                  child: SizedBox(
+                    width: 72,
+                    height: double.infinity,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: _fade(_buildOrientationFabContent()),
                     ),
                   ),
                 ),
               ),
-            ),
-            // 底栏
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _fade(_buildBottomBar(context)),
-            ),
+            // 底栏（锁定态隐藏，防止误触调节进度/音量等）
+            if (!_locked)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _fade(_buildBottomBar(context)),
+              ),
             // 中央数值反馈胶囊（手势/键盘/按钮调节共用，置顶渲染）
             PlayerOsdView(osd: widget.osd),
           ],
@@ -483,6 +552,73 @@ class _PlayerControlsState extends State<PlayerControls> {
             ),
             const SizedBox(width: 12),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 移动端（非桌面、非 Web）才显示方向悬浮按钮。
+  bool get _isMobile =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  /// 仅 iOS 平台（用于 iOS 端隐藏音量按钮，仅保留手势调节）。
+  bool get _isIOS => !kIsWeb && Platform.isIOS;
+
+  /// 中央锁图标按钮：锁定态常显，点击解锁。
+  Widget _buildUnlockButton() {
+    return Material(
+      color: Colors.black54,
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: _unlock,
+        child: const Tooltip(
+          message: '解锁',
+          child: Padding(
+            padding: EdgeInsets.all(18),
+            child: Icon(
+              LucideIcons.lock,
+              size: 38,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 方向切换悬浮按钮（仅移动端 + 仅视频模式）：
+  /// 屏幕**左侧**中部固定位置的圆形按钮，包 [_fade] 跟随控制栏显隐。
+  /// 图标使用 lucide [LucideIcons.rotateCw]（顺时针旋转箭头），
+  /// 表达"旋转方向"语义最直观。
+  Widget _buildOrientationFabContent() {
+    if (widget.onToggleOrientation == null) return const SizedBox.shrink();
+    final cur = widget.orientation ?? PlayerOrientation.portrait;
+    final isLandscape = cur == PlayerOrientation.landscape;
+    return Padding(
+      padding: const EdgeInsets.only(left: 14),
+      child: Material(
+        color: Colors.black54,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () {
+            widget.onToggleOrientation!();
+            _wake();
+          },
+          child: Tooltip(
+            message: isLandscape ? '切换到竖屏' : '切换到横屏',
+            child: const Padding(
+              padding: EdgeInsets.all(12),
+              child: Icon(
+                LucideIcons.rotateCw,
+                size: 22,
+                color: Colors.white,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -552,15 +688,17 @@ class _PlayerControlsState extends State<PlayerControls> {
                   icon: const Icon(LucideIcons.subtitles),
                   onPressed: _showSubtitleSheet,
                 ),
-              // 音量
-              IconButton(
-                iconSize: 20,
-                color: Colors.white,
-                tooltip: _volume > 0 ? '静音' : '取消静音',
-                icon: Icon(_volumeIcon),
-                onPressed: _toggleMute,
-              ),
-              if (showVolumeSlider)
+              // 音量按钮：iOS 上隐藏，仅保留手势滑动调节音量。
+              // 桌面端保留静音按钮（点击切换 0 / 上次音量），更符合 PC 习惯。
+              if (!_isIOS)
+                IconButton(
+                  iconSize: 20,
+                  color: Colors.white,
+                  tooltip: _volume > 0 ? '静音' : '取消静音',
+                  icon: Icon(_volumeIcon),
+                  onPressed: _toggleMute,
+                ),
+              if (showVolumeSlider && !_isIOS)
                 SizedBox(
                   width: 96,
                   child: SliderTheme(
@@ -745,3 +883,7 @@ class _ProgressBarState extends State<_ProgressBar> {
     );
   }
 }
+
+/// 之前自定义的 `_OrientationLockIconPainter`（圆环+菱形+括号组合）已废弃——
+/// 用户反馈不够直观，方向切换按钮改用 lucide `rotateCw` 顺时针旋转箭头。
+/// 保留此处注释说明设计变更。

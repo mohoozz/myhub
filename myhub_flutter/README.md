@@ -1,4 +1,4 @@
-# myhub_flutter
+# Myhub
 
 A new Flutter project.
 

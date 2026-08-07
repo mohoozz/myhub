@@ -62,11 +62,16 @@ class _CompactShell extends StatelessWidget {
   final StatefulNavigationShell shell;
   final ValueChanged<int> onSelect;
 
-  /// Branches shown in the bottom bar: reading / feed / browse.
+  /// Branches shown in the bottom bar: reading / feed / browse / settings.
+  ///
+  /// 移动端底部 4 Tab：日常三类页面 + "我的"（设置入口）。
+  /// PC 端仍走侧边栏（[_RailShell]），[AppBranches.settings] 在那里以
+  /// 设置图标形式挂在底部。
   static const List<int> _visibleBranches = [
     AppBranches.reading,
     AppBranches.feed,
     AppBranches.browse,
+    AppBranches.settings,
   ];
 
   @override
@@ -75,18 +80,15 @@ class _CompactShell extends StatelessWidget {
         ? _visibleBranches.indexOf(shell.currentIndex)
         : 0;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('myhub'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: const Center(child: AvatarButton()),
-          ),
-        ],
-      ),
-      // SafeArea：iOS 横屏刘海/Dynamic Island 保护
+      // 移动端不再显示 AppBar：右上角头像已下沉到"我的"Tab 头部，
+      // 避免顶栏占位造成阅读区上方留白。
       body: SafeArea(child: shell),
       bottomNavigationBar: NavigationBar(
+        // 隐藏选中项的背景胶囊（indicatorColor = 透明），
+        // 选中和未选中态仅靠图标/文字颜色区分。
+        indicatorColor: Colors.transparent,
+        // 整体高度比默认 80 略小：紧凑布局，避免底部留白过多。
+        height: 64,
         selectedIndex: selected,
         onDestinationSelected: (index) => onSelect(_visibleBranches[index]),
         destinations: const [
@@ -101,6 +103,10 @@ class _CompactShell extends StatelessWidget {
           NavigationDestination(
             icon: Icon(LucideIcons.folder),
             label: '浏览',
+          ),
+          NavigationDestination(
+            icon: Icon(LucideIcons.userRound),
+            label: '我的',
           ),
         ],
       ),
