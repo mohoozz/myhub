@@ -25,6 +25,19 @@ class FileApi extends ApiClient {
     }
   }
 
+  /// 查询单个文件信息（名称/路径/大小/修改时间/媒体类型）。
+  Future<Map<String, dynamic>> fileInfo(int sourceId, String path) async {
+    try {
+      final res = await dio.get<Map<String, dynamic>>(
+        '/files/info',
+        queryParameters: {'source': sourceId, 'path': path},
+      );
+      return (unwrap(res) as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } catch (e) {
+      rethrowAsApi(e);
+    }
+  }
+
   /// 新建文件夹。
   Future<void> mkdir(int sourceId, String path) async {
     try {
@@ -140,5 +153,24 @@ class FileApi extends ApiClient {
   /// 音视频缩略图 URL（音频提取内嵌专辑封面；需自行附带 Authorization 头加载）。
   String thumbnailUrl(int sourceId, String path) {
     return '${Env.apiBaseUrl}/api/files/thumbnail?source=$sourceId&path=${Uri.encodeComponent(path)}';
+  }
+
+  /// 图片原图 URL（需自行附带 Authorization 头加载）。
+  String imageUrl(int sourceId, String path) {
+    return '${Env.apiBaseUrl}/api/files/image?source=$sourceId&path=${Uri.encodeComponent(path)}';
+  }
+
+  /// 纯文本预览（不支持预览的文件经"纯文本"入口加载）。
+  /// 返回 {name, size, content, truncated}；非文本文件后端返回 400。
+  Future<Map<String, dynamic>> textPreview(int sourceId, String path) async {
+    try {
+      final res = await dio.get<Map<String, dynamic>>(
+        '/files/text',
+        queryParameters: {'source': sourceId, 'path': path},
+      );
+      return (unwrap(res) as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } catch (e) {
+      rethrowAsApi(e);
+    }
   }
 }

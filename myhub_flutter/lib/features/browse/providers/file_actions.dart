@@ -5,6 +5,22 @@ import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
 
+/// 多选模式开关：与 [selectionProvider] 解耦，支持"一键进入多选但暂未选中任何项"。
+final selectionModeProvider = NotifierProvider<SelectionModeNotifier, bool>(
+  SelectionModeNotifier.new,
+);
+
+class SelectionModeNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  /// 进入多选模式（不预选任何条目）。
+  void enter() => state = true;
+
+  /// 退出多选模式。
+  void exit() => state = false;
+}
+
 /// 多选状态：非空集合即处于多选模式。
 final selectionProvider = NotifierProvider<SelectionNotifier, Set<String>>(
   SelectionNotifier.new,
@@ -15,7 +31,10 @@ class SelectionNotifier extends Notifier<Set<String>> {
   Set<String> build() => {};
 
   /// 长按进入多选。
-  void enter(String path) => state = {path};
+  void enter(String path) {
+    ref.read(selectionModeProvider.notifier).enter();
+    state = {path};
+  }
 
   /// 多选模式下切换选中。
   void toggle(String path) {
@@ -28,11 +47,15 @@ class SelectionNotifier extends Notifier<Set<String>> {
 
   /// 全选。
   void selectAll(List<FileItem> items) {
+    ref.read(selectionModeProvider.notifier).enter();
     state = items.map((e) => e.path).toSet();
   }
 
   /// 退出多选。
-  void clear() => state = {};
+  void clear() {
+    ref.read(selectionModeProvider.notifier).exit();
+    state = {};
+  }
 }
 
 /// 上传任务状态。
@@ -70,8 +93,8 @@ class UploadTask {
 /// 上传队列（多文件排队逐个上传）。
 final uploadQueueProvider =
     NotifierProvider<UploadQueueNotifier, List<UploadTask>>(
-  UploadQueueNotifier.new,
-);
+      UploadQueueNotifier.new,
+    );
 
 class UploadQueueNotifier extends Notifier<List<UploadTask>> {
   int _nextId = 0;
@@ -80,9 +103,7 @@ class UploadQueueNotifier extends Notifier<List<UploadTask>> {
   List<UploadTask> build() => [];
 
   void _update(int id, UploadTask Function(UploadTask) update) {
-    state = [
-      for (final t in state) t.id == id ? update(t) : t,
-    ];
+    state = [for (final t in state) t.id == id ? update(t) : t];
   }
 
   /// 清空已完成/失败任务。
@@ -91,7 +112,11 @@ class UploadQueueNotifier extends Notifier<List<UploadTask>> {
   }
 
   /// 入队并执行上传（由 FileActions 调用）。
-  Future<void> enqueue(String filePath, Future<void> Function(UploadTask, void Function(int sent, int total)) runner) async {
+  Future<void> enqueue(
+    String filePath,
+    Future<void> Function(UploadTask, void Function(int sent, int total))
+    runner,
+  ) async {
     final task = UploadTask(
       id: _nextId++,
       name: filePath.split(RegExp(r'[\\/]')).last,
@@ -183,12 +208,7 @@ class FileActions {
     final queue = _ref.read(uploadQueueProvider.notifier);
     for (final path in filePaths) {
       await queue.enqueue(path, (task, onProgress) async {
-        await _api.uploadFiles(
-          sourceId,
-          dir,
-          [path],
-          onProgress: onProgress,
-        );
+        await _api.uploadFiles(sourceId, dir, [path], onProgress: onProgress);
       });
     }
     await _refresh();

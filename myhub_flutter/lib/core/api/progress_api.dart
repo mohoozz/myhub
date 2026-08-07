@@ -53,8 +53,8 @@ class ProgressApi extends ApiClient {
     }
   }
 
-  /// 标记已读完。
-  Future<void> markFinished(int sourceId, String filePath) async {
+  /// 删除阅读记录。
+  Future<void> delete(int sourceId, String filePath) async {
     try {
       final res = await dio.delete<Map<String, dynamic>>(
         '/progress',

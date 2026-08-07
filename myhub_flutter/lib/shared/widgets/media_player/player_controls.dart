@@ -14,9 +14,10 @@ const Duration _kHideDelay = Duration(seconds: 3);
 /// 自定义播放器控制栏 Overlay（TODO 5.2）。
 ///
 /// 覆盖在播放画面之上：
-/// * 顶栏：返回 + 文件名；
+/// * 顶栏：退出（停止播放）+ 文件名；
 /// * 中央大按钮：播放/暂停；
-/// * 底栏：播放/暂停、时间、进度条（缓冲叠加）、倍速、音量、全屏；
+/// * 底栏：播放/暂停、时间、进度条（缓冲叠加）、倍速、音量、
+///   迷你播放、全屏；
 /// * 轻触画面切换显隐，播放中 [_kHideDelay] 无操作自动隐藏（暂停时常显），
 ///   桌面端鼠标移动自动唤醒。
 class PlayerControls extends StatefulWidget {
@@ -28,6 +29,9 @@ class PlayerControls extends StatefulWidget {
     required this.osd,
     this.loading = false,
     this.buffering = false,
+    this.onMini,
+    this.onMiniDrag,
+    this.onMiniDragEnd,
     this.onToggleFullscreen,
     this.isFullscreen = false,
   });
@@ -49,6 +53,17 @@ class PlayerControls extends StatefulWidget {
 
   /// 播放中缓冲：隐藏中央大按钮，避免与页面级缓冲转圈重叠。
   final bool buffering;
+
+  /// 进入迷你模式：退出播放页但保持播放（底部迷你条接管）。
+  /// 为 null 时隐藏迷你按钮。
+  final VoidCallback? onMini;
+
+  /// 移动端：中间区域向下拖动进入迷你模式的拖动进度（0~1）。
+  /// 为 null 时手势层中间区域不识别拖拽。
+  final ValueChanged<double>? onMiniDrag;
+
+  /// 移动端：迷你拖拽松手时的最终进度（页面据此判定进入迷你或回弹）。
+  final ValueChanged<double>? onMiniDragEnd;
 
   /// 系统全屏切换（桌面端）；为 null 时隐藏全屏按钮（移动端）。
   final VoidCallback? onToggleFullscreen;
@@ -297,7 +312,8 @@ class _PlayerControlsState extends State<PlayerControls> {
       backgroundColor: const Color(0xFF141414),
       builder: (sheetContext) {
         final primary = Theme.of(sheetContext).colorScheme.primary;
-        final off = _currentSub == null ||
+        final off =
+            _currentSub == null ||
             _currentSub!.id == 'no' ||
             _currentSub!.id == 'auto';
         return SafeArea(
@@ -327,8 +343,9 @@ class _PlayerControlsState extends State<PlayerControls> {
                   title: Text(
                     _subLabel(track),
                     style: TextStyle(
-                      color:
-                          _currentSub?.id == track.id ? primary : Colors.white,
+                      color: _currentSub?.id == track.id
+                          ? primary
+                          : Colors.white,
                       fontSize: 14,
                     ),
                   ),
@@ -374,6 +391,8 @@ class _PlayerControlsState extends State<PlayerControls> {
         // 调节手势：重置自动隐藏计时
         onInteraction: _wake,
         onBrightnessChanged: (b) => setState(() => _brightness = b),
+        onMiniDrag: widget.onMiniDrag,
+        onMiniDragEnd: widget.onMiniDragEnd,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -397,10 +416,9 @@ class _PlayerControlsState extends State<PlayerControls> {
               child: IgnorePointer(
                 ignoring: !_visible || widget.loading || widget.buffering,
                 child: AnimatedOpacity(
-                  opacity:
-                      _visible && !widget.loading && !widget.buffering
-                          ? 1
-                          : 0,
+                  opacity: _visible && !widget.loading && !widget.buffering
+                      ? 1
+                      : 0,
                   duration: const Duration(milliseconds: 200),
                   child: Material(
                     color: Colors.black45,
@@ -452,7 +470,7 @@ class _PlayerControlsState extends State<PlayerControls> {
           children: [
             IconButton(
               icon: const Icon(LucideIcons.arrowLeft, color: Colors.white),
-              tooltip: '返回',
+              tooltip: '退出',
               onPressed: widget.onBack,
             ),
             Expanded(
@@ -552,10 +570,12 @@ class _PlayerControlsState extends State<PlayerControls> {
                       inactiveTrackColor: Colors.white24,
                       thumbColor: Colors.white,
                       overlayColor: Colors.white24,
-                      thumbShape:
-                          const RoundSliderThumbShape(enabledThumbRadius: 5),
-                      overlayShape:
-                          const RoundSliderOverlayShape(overlayRadius: 10),
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 5,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 10,
+                      ),
                     ),
                     child: Slider(
                       value: (_volume / 100).clamp(0.0, 1.0),
@@ -563,15 +583,26 @@ class _PlayerControlsState extends State<PlayerControls> {
                     ),
                   ),
                 ),
+              // 进入迷你模式：退出播放页，播放由底部迷你条接管
+              if (widget.onMini != null)
+                IconButton(
+                  iconSize: 20,
+                  color: Colors.white,
+                  tooltip: '迷你播放',
+                  icon: const Icon(LucideIcons.pictureInPicture),
+                  onPressed: widget.onMini,
+                ),
               // 全屏切换（桌面端）
               if (widget.onToggleFullscreen != null)
                 IconButton(
                   iconSize: 20,
                   color: Colors.white,
                   tooltip: widget.isFullscreen ? '退出全屏' : '全屏',
-                  icon: Icon(widget.isFullscreen
-                      ? LucideIcons.minimize
-                      : LucideIcons.maximize),
+                  icon: Icon(
+                    widget.isFullscreen
+                        ? LucideIcons.minimize
+                        : LucideIcons.maximize,
+                  ),
                   onPressed: widget.onToggleFullscreen,
                 ),
             ],
@@ -619,9 +650,8 @@ class _ProgressBarState extends State<_ProgressBar> {
 
   bool get _seekable => widget.duration > Duration.zero;
 
-  Duration _durationOf(double frac) => Duration(
-        milliseconds: (frac * widget.duration.inMilliseconds).round(),
-      );
+  Duration _durationOf(double frac) =>
+      Duration(milliseconds: (frac * widget.duration.inMilliseconds).round());
 
   double _fracOf(double dx, double width) =>
       width <= 0 ? 0 : (dx / width).clamp(0.0, 1.0);
@@ -646,8 +676,10 @@ class _ProgressBarState extends State<_ProgressBar> {
     final totalMs = widget.duration.inMilliseconds;
     final playedFrac = !_seekable
         ? 0.0
-        : (_dragFrac ?? widget.position.inMilliseconds / totalMs)
-            .clamp(0.0, 1.0);
+        : (_dragFrac ?? widget.position.inMilliseconds / totalMs).clamp(
+            0.0,
+            1.0,
+          );
     final bufferFrac = !_seekable
         ? 0.0
         : (widget.buffered.inMilliseconds / totalMs).clamp(0.0, 1.0);
@@ -655,14 +687,13 @@ class _ProgressBarState extends State<_ProgressBar> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final thumbLeft =
-            (playedFrac * width - _thumbRadius).clamp(0.0, width);
+        final thumbLeft = (playedFrac * width - _thumbRadius).clamp(0.0, width);
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapDown: _seekable
-              ? (d) => widget.onSeek(_durationOf(
-                    _fracOf(d.localPosition.dx, width),
-                  ))
+              ? (d) => widget.onSeek(
+                  _durationOf(_fracOf(d.localPosition.dx, width)),
+                )
               : null,
           onHorizontalDragStart: _seekable
               ? (d) => _updateDrag(d.localPosition.dx, width)
@@ -687,18 +718,12 @@ class _ProgressBarState extends State<_ProgressBar> {
                 // 缓冲区间
                 FractionallySizedBox(
                   widthFactor: bufferFrac,
-                  child: Container(
-                    height: _trackHeight,
-                    color: Colors.white38,
-                  ),
+                  child: Container(height: _trackHeight, color: Colors.white38),
                 ),
                 // 已播放
                 FractionallySizedBox(
                   widthFactor: playedFrac,
-                  child: Container(
-                    height: _trackHeight,
-                    color: Colors.white,
-                  ),
+                  child: Container(height: _trackHeight, color: Colors.white),
                 ),
                 // 滑块
                 Positioned(

@@ -32,7 +32,8 @@ func mapFileError(c *gin.Context, err error) bool {
 		Fail(c, http.StatusForbidden, http.StatusForbidden, "路径越权")
 	case errors.Is(err, adapter.ErrNotDirectory), errors.Is(err, adapter.ErrIsDirectory),
 		errors.Is(err, service.ErrInvalidName), errors.Is(err, service.ErrCrossSourceDir),
-		errors.Is(err, service.ErrNotVideo):
+		errors.Is(err, service.ErrNotVideo), errors.Is(err, service.ErrNotImage),
+		errors.Is(err, service.ErrNotText):
 		Fail(c, http.StatusBadRequest, http.StatusBadRequest, err.Error())
 	case errors.Is(err, service.ErrNoFFmpeg):
 		Fail(c, http.StatusNotImplemented, http.StatusNotImplemented, err.Error())
@@ -69,6 +70,24 @@ func (h *FileHandler) List(c *gin.Context) {
 		return
 	}
 	Success(c, items)
+}
+
+// Info GET /api/files/info?source=&path=（返回单个文件信息）
+func (h *FileHandler) Info(c *gin.Context) {
+	sourceID, ok := parseSourceID(c, c.Query("source"))
+	if !ok {
+		return
+	}
+	p := c.Query("path")
+	if p == "" {
+		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "缺少 path 参数")
+		return
+	}
+	item, err := h.fileSvc.Info(c.Request.Context(), sourceID, p)
+	if mapFileError(c, err) {
+		return
+	}
+	Success(c, item)
 }
 
 // MkdirRequest 新建文件夹请求体
@@ -227,4 +246,40 @@ func (h *FileHandler) Thumbnail(c *gin.Context) {
 		return
 	}
 	c.File(thumbPath)
+}
+
+// Image GET /api/files/image?source=&path=（返回图片原始字节流）
+func (h *FileHandler) Image(c *gin.Context) {
+	sourceID, ok := parseSourceID(c, c.Query("source"))
+	if !ok {
+		return
+	}
+	p := c.Query("path")
+	if p == "" {
+		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "缺少 path 参数")
+		return
+	}
+	data, name, err := h.fileSvc.Image(c.Request.Context(), sourceID, p)
+	if mapFileError(c, err) {
+		return
+	}
+	c.Data(http.StatusOK, imageContentType(name), data)
+}
+
+// TextPreview GET /api/files/text?source=&path=（返回 UTF-8 纯文本内容）
+func (h *FileHandler) TextPreview(c *gin.Context) {
+	sourceID, ok := parseSourceID(c, c.Query("source"))
+	if !ok {
+		return
+	}
+	p := c.Query("path")
+	if p == "" {
+		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "缺少 path 参数")
+		return
+	}
+	res, err := h.fileSvc.TextPreview(c.Request.Context(), sourceID, p)
+	if mapFileError(c, err) {
+		return
+	}
+	Success(c, res)
 }

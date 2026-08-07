@@ -18,6 +18,7 @@ class EpubScrollMode extends StatefulWidget {
     required this.ensureChapter,
     required this.style,
     required this.imageBuilder,
+    this.initialFraction,
     this.onToggleChrome,
     this.onProgress,
   });
@@ -42,6 +43,10 @@ class EpubScrollMode extends StatefulWidget {
 
   /// 图片内容构建（固定尺寸盒内）。
   final Widget Function(ImgAtom atom) imageBuilder;
+
+  /// 初始滚动进度（0.0 ~ 1.0，恢复阅读进度用；null = 从头）。
+  /// 无分章（单章"全文"）时也依赖它定位章节内滚动位置。
+  final double? initialFraction;
 
   /// 轻触正文（切换顶栏显隐）。
   final VoidCallback? onToggleChrome;
@@ -68,12 +73,42 @@ class _EpubScrollModeState extends State<EpubScrollMode> {
     super.initState();
     widget.ensureChapter(widget.initialChapter);
     _controller.addListener(_maybeExtend);
+    _restoreFraction();
+  }
+
+  @override
+  void didUpdateWidget(covariant EpubScrollMode oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 恢复进度异步完成：initialFraction 从 null → 值，此时定位滚动位置
+    if (widget.initialFraction != oldWidget.initialFraction) {
+      _restoreFraction();
+    }
   }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  /// 按 [widget.initialFraction] 定位滚动位置。
+  /// 内容可能未布局完成（extent <= 0），延后到下一帧重试。
+  void _restoreFraction() {
+    final f = widget.initialFraction;
+    if (f == null || f <= 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_controller.hasClients) return;
+      final pos = _controller.position;
+      final extent = pos.maxScrollExtent - pos.minScrollExtent;
+      if (extent <= 0) {
+        // 章节内容尚未布局（异步加载中），延后重试
+        _restoreFraction();
+        return;
+      }
+      _controller.jumpTo(
+        pos.minScrollExtent + extent * f.clamp(0.0, 1.0),
+      );
+    });
   }
 
   void _maybeExtend() {

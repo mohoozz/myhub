@@ -36,6 +36,11 @@ data:
   thumbs_dir: "data/thumbs"
   # HLS 转码输出目录（m3u8 与 ts 分片）
   hls_dir: "data/hls"
+  # 漫画整包缓存目录：非本地路径源（如 WebDAV）的漫画文件下载缓存，
+  # 避免 pages/page 每次请求重复下载远程文件（源未变化时直接命中缓存）
+  comic_cache_dir: "data/comic_cache"
+  # 漫画缓存容量上限（MB），超过后按修改时间清理最旧缓存；<=0 不限制
+  comic_cache_max_mb: 1024
 
 trash:
   # 回收站保留天数，超时由定时任务自动彻底删除

@@ -59,7 +59,7 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 	readerHandler := handler.NewReaderHandler(readerSvc)
 
 	configRepo := repository.NewConfigRepository(db)
-	comicSvc := service.NewComicService(sourceSvc, configRepo)
+	comicSvc := service.NewComicService(sourceSvc, configRepo, cfg.Data.ComicCacheDir, cfg.Data.ComicCacheMaxMB)
 	comicHandler := handler.NewComicHandler(comicSvc)
 
 	progressRepo := repository.NewProgressRepository(db)
@@ -101,6 +101,7 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 		files := api.Group("/files")
 		{
 			files.GET("", fileHandler.List)
+			files.GET("/info", fileHandler.Info)
 			files.POST("/mkdir", fileHandler.Mkdir)
 			files.POST("/upload", fileHandler.Upload)
 			files.POST("/rename", fileHandler.Rename)
@@ -108,6 +109,8 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 			files.POST("/copy", fileHandler.Copy)
 			files.DELETE("", fileHandler.Delete)
 			files.GET("/thumbnail", fileHandler.Thumbnail)
+			files.GET("/image", fileHandler.Image)
+			files.GET("/text", fileHandler.TextPreview)
 		}
 
 		// 回收站
@@ -153,7 +156,7 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 		// 阅读进度
 		api.GET("/progress", progressHandler.List)
 		api.PUT("/progress", progressHandler.Save)
-		api.DELETE("/progress", progressHandler.Finish)
+		api.DELETE("/progress", progressHandler.Delete)
 
 		// 系统配置
 		api.GET("/config", configHandler.GetAll)

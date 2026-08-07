@@ -25,7 +25,17 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.memory() : super(NativeDatabase.memory());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) => m.createAll(),
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.addColumn(localProgress, localProgress.deleted);
+          }
+        },
+      );
 
   static QueryExecutor _openConnection() {
     return LazyDatabase(() async {
@@ -56,17 +66,52 @@ class AppDatabase extends _$AppDatabase {
         .getSingleOrNull();
   }
 
-  /// 全部进度（按更新时间降序）。
+  /// 全部进度（按更新时间降序，排除本地已删除待同步的记录）。
   Future<List<LocalProgressData>> allProgress() {
     return (select(localProgress)
+          ..where((t) => t.deleted.equals(false))
           ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
         .get();
   }
 
-  /// 待同步进度。
+  /// 本地已删除待同步的记录（离线删除后联网时据此补删后端）。
+  Future<List<LocalProgressData>> deletedProgress() {
+    return (select(localProgress)..where((t) => t.deleted.equals(true)))
+        .get();
+  }
+
+  /// 待同步进度（含删除待同步）。
   Future<List<LocalProgressData>> unsyncedProgress() {
     return (select(localProgress)..where((t) => t.synced.equals(false)))
         .get();
+  }
+
+  /// 标记本地进度为已删除（待同步删除）。
+  Future<int> markProgressDeleted(
+    int sourceId,
+    String filePath, {
+    DateTime? updatedAt,
+  }) {
+    return (update(localProgress)
+          ..where(
+            (t) => t.sourceId.equals(sourceId) & t.filePath.equals(filePath),
+          ))
+        .write(
+          LocalProgressCompanion(
+            deleted: const Value(true),
+            synced: const Value(false),
+            updatedAt: Value(updatedAt ?? DateTime.now()),
+          ),
+        );
+  }
+
+  /// 物理删除本地进度。
+  Future<int> deleteProgress(int sourceId, String filePath) {
+    return (delete(localProgress)
+          ..where(
+            (t) => t.sourceId.equals(sourceId) & t.filePath.equals(filePath),
+          ))
+        .go();
   }
 
   /// 标记已同步。

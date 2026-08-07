@@ -8,8 +8,9 @@ import 'package:flutter/material.dart';
 /// 手势调节（进度/音量/亮度）、键盘调节（快进/音量/静音）、
 /// 底栏按钮调节共用同一通道，避免多处各自渲染反馈。
 class PlayerOsd {
-  final ValueNotifier<({IconData icon, String text})?> _state =
-      ValueNotifier(null);
+  final ValueNotifier<({IconData icon, String text})?> _state = ValueNotifier(
+    null,
+  );
   Timer? _timer;
 
   /// 供 [PlayerOsdView] 订阅。
@@ -72,29 +73,29 @@ class PlayerOsdView extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.only(top: 72),
               child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 18,
-                vertical: 10,
-              ),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.72),
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(feedback.icon, size: 18, color: Colors.white),
-                  const SizedBox(width: 10),
-                  Text(
-                    feedback.text,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontFeatures: [FontFeature.tabularFigures()],
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(feedback.icon, size: 18, color: Colors.white),
+                    const SizedBox(width: 10),
+                    Text(
+                      feedback.text,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
               ),
             ),
           ),

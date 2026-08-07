@@ -114,6 +114,21 @@ class $LocalProgressTable extends LocalProgress
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _deletedMeta = const VerificationMeta(
+    'deleted',
+  );
+  @override
+  late final GeneratedColumn<bool> deleted = GeneratedColumn<bool>(
+    'deleted',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("deleted" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _syncedMeta = const VerificationMeta('synced');
   @override
   late final GeneratedColumn<bool> synced = GeneratedColumn<bool>(
@@ -149,6 +164,7 @@ class $LocalProgressTable extends LocalProgress
     progressJson,
     percent,
     finished,
+    deleted,
     synced,
     updatedAt,
   ];
@@ -224,6 +240,12 @@ class $LocalProgressTable extends LocalProgress
         finished.isAcceptableOrUnknown(data['finished']!, _finishedMeta),
       );
     }
+    if (data.containsKey('deleted')) {
+      context.handle(
+        _deletedMeta,
+        deleted.isAcceptableOrUnknown(data['deleted']!, _deletedMeta),
+      );
+    }
     if (data.containsKey('synced')) {
       context.handle(
         _syncedMeta,
@@ -287,6 +309,10 @@ class $LocalProgressTable extends LocalProgress
         DriftSqlType.bool,
         data['${effectivePrefix}finished'],
       )!,
+      deleted: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}deleted'],
+      )!,
       synced: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}synced'],
@@ -315,6 +341,9 @@ class LocalProgressData extends DataClass
   final String progressJson;
   final double percent;
   final bool finished;
+
+  /// 本地已删除待同步标记：离线删除时置 true，联网后由同步任务删后端并清理。
+  final bool deleted;
   final bool synced;
   final DateTime updatedAt;
   const LocalProgressData({
@@ -327,6 +356,7 @@ class LocalProgressData extends DataClass
     required this.progressJson,
     required this.percent,
     required this.finished,
+    required this.deleted,
     required this.synced,
     required this.updatedAt,
   });
@@ -342,6 +372,7 @@ class LocalProgressData extends DataClass
     map['progress_json'] = Variable<String>(progressJson);
     map['percent'] = Variable<double>(percent);
     map['finished'] = Variable<bool>(finished);
+    map['deleted'] = Variable<bool>(deleted);
     map['synced'] = Variable<bool>(synced);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     return map;
@@ -358,6 +389,7 @@ class LocalProgressData extends DataClass
       progressJson: Value(progressJson),
       percent: Value(percent),
       finished: Value(finished),
+      deleted: Value(deleted),
       synced: Value(synced),
       updatedAt: Value(updatedAt),
     );
@@ -378,6 +410,7 @@ class LocalProgressData extends DataClass
       progressJson: serializer.fromJson<String>(json['progressJson']),
       percent: serializer.fromJson<double>(json['percent']),
       finished: serializer.fromJson<bool>(json['finished']),
+      deleted: serializer.fromJson<bool>(json['deleted']),
       synced: serializer.fromJson<bool>(json['synced']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -395,6 +428,7 @@ class LocalProgressData extends DataClass
       'progressJson': serializer.toJson<String>(progressJson),
       'percent': serializer.toJson<double>(percent),
       'finished': serializer.toJson<bool>(finished),
+      'deleted': serializer.toJson<bool>(deleted),
       'synced': serializer.toJson<bool>(synced),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -410,6 +444,7 @@ class LocalProgressData extends DataClass
     String? progressJson,
     double? percent,
     bool? finished,
+    bool? deleted,
     bool? synced,
     DateTime? updatedAt,
   }) => LocalProgressData(
@@ -422,6 +457,7 @@ class LocalProgressData extends DataClass
     progressJson: progressJson ?? this.progressJson,
     percent: percent ?? this.percent,
     finished: finished ?? this.finished,
+    deleted: deleted ?? this.deleted,
     synced: synced ?? this.synced,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -438,6 +474,7 @@ class LocalProgressData extends DataClass
           : this.progressJson,
       percent: data.percent.present ? data.percent.value : this.percent,
       finished: data.finished.present ? data.finished.value : this.finished,
+      deleted: data.deleted.present ? data.deleted.value : this.deleted,
       synced: data.synced.present ? data.synced.value : this.synced,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -455,6 +492,7 @@ class LocalProgressData extends DataClass
           ..write('progressJson: $progressJson, ')
           ..write('percent: $percent, ')
           ..write('finished: $finished, ')
+          ..write('deleted: $deleted, ')
           ..write('synced: $synced, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -472,6 +510,7 @@ class LocalProgressData extends DataClass
     progressJson,
     percent,
     finished,
+    deleted,
     synced,
     updatedAt,
   );
@@ -488,6 +527,7 @@ class LocalProgressData extends DataClass
           other.progressJson == this.progressJson &&
           other.percent == this.percent &&
           other.finished == this.finished &&
+          other.deleted == this.deleted &&
           other.synced == this.synced &&
           other.updatedAt == this.updatedAt);
 }
@@ -502,6 +542,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
   final Value<String> progressJson;
   final Value<double> percent;
   final Value<bool> finished;
+  final Value<bool> deleted;
   final Value<bool> synced;
   final Value<DateTime> updatedAt;
   const LocalProgressCompanion({
@@ -514,6 +555,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
     this.progressJson = const Value.absent(),
     this.percent = const Value.absent(),
     this.finished = const Value.absent(),
+    this.deleted = const Value.absent(),
     this.synced = const Value.absent(),
     this.updatedAt = const Value.absent(),
   });
@@ -527,6 +569,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
     this.progressJson = const Value.absent(),
     this.percent = const Value.absent(),
     this.finished = const Value.absent(),
+    this.deleted = const Value.absent(),
     this.synced = const Value.absent(),
     required DateTime updatedAt,
   }) : sourceId = Value(sourceId),
@@ -543,6 +586,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
     Expression<String>? progressJson,
     Expression<double>? percent,
     Expression<bool>? finished,
+    Expression<bool>? deleted,
     Expression<bool>? synced,
     Expression<DateTime>? updatedAt,
   }) {
@@ -556,6 +600,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
       if (progressJson != null) 'progress_json': progressJson,
       if (percent != null) 'percent': percent,
       if (finished != null) 'finished': finished,
+      if (deleted != null) 'deleted': deleted,
       if (synced != null) 'synced': synced,
       if (updatedAt != null) 'updated_at': updatedAt,
     });
@@ -571,6 +616,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
     Value<String>? progressJson,
     Value<double>? percent,
     Value<bool>? finished,
+    Value<bool>? deleted,
     Value<bool>? synced,
     Value<DateTime>? updatedAt,
   }) {
@@ -584,6 +630,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
       progressJson: progressJson ?? this.progressJson,
       percent: percent ?? this.percent,
       finished: finished ?? this.finished,
+      deleted: deleted ?? this.deleted,
       synced: synced ?? this.synced,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -619,6 +666,9 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
     if (finished.present) {
       map['finished'] = Variable<bool>(finished.value);
     }
+    if (deleted.present) {
+      map['deleted'] = Variable<bool>(deleted.value);
+    }
     if (synced.present) {
       map['synced'] = Variable<bool>(synced.value);
     }
@@ -640,6 +690,7 @@ class LocalProgressCompanion extends UpdateCompanion<LocalProgressData> {
           ..write('progressJson: $progressJson, ')
           ..write('percent: $percent, ')
           ..write('finished: $finished, ')
+          ..write('deleted: $deleted, ')
           ..write('synced: $synced, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -1270,6 +1321,7 @@ typedef $$LocalProgressTableCreateCompanionBuilder =
       Value<String> progressJson,
       Value<double> percent,
       Value<bool> finished,
+      Value<bool> deleted,
       Value<bool> synced,
       required DateTime updatedAt,
     });
@@ -1284,6 +1336,7 @@ typedef $$LocalProgressTableUpdateCompanionBuilder =
       Value<String> progressJson,
       Value<double> percent,
       Value<bool> finished,
+      Value<bool> deleted,
       Value<bool> synced,
       Value<DateTime> updatedAt,
     });
@@ -1339,6 +1392,11 @@ class $$LocalProgressTableFilterComposer
 
   ColumnFilters<bool> get finished => $composableBuilder(
     column: $table.finished,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get deleted => $composableBuilder(
+    column: $table.deleted,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1407,6 +1465,11 @@ class $$LocalProgressTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get deleted => $composableBuilder(
+    column: $table.deleted,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get synced => $composableBuilder(
     column: $table.synced,
     builder: (column) => ColumnOrderings(column),
@@ -1455,6 +1518,9 @@ class $$LocalProgressTableAnnotationComposer
 
   GeneratedColumn<bool> get finished =>
       $composableBuilder(column: $table.finished, builder: (column) => column);
+
+  GeneratedColumn<bool> get deleted =>
+      $composableBuilder(column: $table.deleted, builder: (column) => column);
 
   GeneratedColumn<bool> get synced =>
       $composableBuilder(column: $table.synced, builder: (column) => column);
@@ -1507,6 +1573,7 @@ class $$LocalProgressTableTableManager
                 Value<String> progressJson = const Value.absent(),
                 Value<double> percent = const Value.absent(),
                 Value<bool> finished = const Value.absent(),
+                Value<bool> deleted = const Value.absent(),
                 Value<bool> synced = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
               }) => LocalProgressCompanion(
@@ -1519,6 +1586,7 @@ class $$LocalProgressTableTableManager
                 progressJson: progressJson,
                 percent: percent,
                 finished: finished,
+                deleted: deleted,
                 synced: synced,
                 updatedAt: updatedAt,
               ),
@@ -1533,6 +1601,7 @@ class $$LocalProgressTableTableManager
                 Value<String> progressJson = const Value.absent(),
                 Value<double> percent = const Value.absent(),
                 Value<bool> finished = const Value.absent(),
+                Value<bool> deleted = const Value.absent(),
                 Value<bool> synced = const Value.absent(),
                 required DateTime updatedAt,
               }) => LocalProgressCompanion.insert(
@@ -1545,6 +1614,7 @@ class $$LocalProgressTableTableManager
                 progressJson: progressJson,
                 percent: percent,
                 finished: finished,
+                deleted: deleted,
                 synced: synced,
                 updatedAt: updatedAt,
               ),

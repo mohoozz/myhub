@@ -17,10 +17,13 @@ class FileGridView extends StatelessWidget {
     this.favoriteSourceId,
     this.onToggleFavorite,
     this.onShowMenu,
+    this.onLongPressMenu,
     this.onParentTap,
-    ValueChanged<FileItem>? onLongPress,
+    this.highlightPath,
+    this.highlightKey,
+    this.onLongPress,
     super.key,
-  }) : onLongPress = onLongPress ?? onToggleSelect;
+  });
 
   final List<FileItem> items;
   final ValueChanged<FileItem> onOpen;
@@ -36,8 +39,17 @@ class FileGridView extends StatelessWidget {
   /// 右键呼出上下文菜单（桌面端），携带点击全局坐标。
   final void Function(FileItem item, Offset position)? onShowMenu;
 
+  /// 移动端长按（非多选模式）呼出与右键相同的上下文菜单。
+  final void Function(FileItem item, Offset position)? onLongPressMenu;
+
   /// 非空时在网格首位插入 ".." 返回上级卡片。
   final VoidCallback? onParentTap;
+
+  /// 高亮定位文件路径：匹配项显示高亮边框。
+  final String? highlightPath;
+
+  /// 高亮项的 GlobalKey（供上层滚动定位）。
+  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -57,23 +69,31 @@ class FileGridView extends StatelessWidget {
           index--;
         }
         final item = items[index];
-        return _FileCard(
+        final highlighted = highlightPath != null && item.path == highlightPath;
+        Widget card = _FileCard(
           item: item,
           coverSourceId: favoriteSourceId,
           selectionMode: selectionMode,
           selected: selectedPaths.contains(item.path),
-          favorited:
-              favoritePaths.contains('$favoriteSourceId|${item.path}'),
+          highlighted: highlighted,
+          favorited: favoritePaths.contains('$favoriteSourceId|${item.path}'),
           onTap: () =>
               selectionMode ? onToggleSelect?.call(item) : onOpen(item),
-          onLongPress: () => onLongPress?.call(item),
+          onLongPress: onLongPress == null ? null : () => onLongPress!(item),
           onToggleFavorite: onToggleFavorite == null
               ? null
               : () => onToggleFavorite!(item),
           onSecondaryTapUp: onShowMenu == null
               ? null
               : (d) => onShowMenu!(item, d.globalPosition),
+          onLongPressMenu: onLongPressMenu == null
+              ? null
+              : (d) => onLongPressMenu!(item, d.globalPosition),
         );
+        if (highlighted && highlightKey != null) {
+          card = KeyedSubtree(key: highlightKey, child: card);
+        }
+        return card;
       },
     );
     if (onRefresh == null) return grid;
@@ -103,13 +123,31 @@ class _ParentCard extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                LucideIcons.folderUp,
-                size: 36,
-                color: theme.colorScheme.primary,
+              Expanded(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 72),
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: Center(
+                        child: Icon(
+                          LucideIcons.folderUp,
+                          size: 36,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(height: 10),
-              Text('..', style: theme.textTheme.bodySmall),
+              Text(
+                '..',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall,
+              ),
               const SizedBox(height: 4),
               Text(
                 '返回上级',
@@ -135,8 +173,10 @@ class _FileCard extends StatelessWidget {
     required this.selectionMode,
     required this.selected,
     required this.favorited,
+    this.highlighted = false,
     this.onToggleFavorite,
     this.onSecondaryTapUp,
+    this.onLongPressMenu,
   });
 
   final FileItem item;
@@ -144,97 +184,114 @@ class _FileCard extends StatelessWidget {
   /// 当前路径源 ID（封面缩略图加载用）。
   final int? coverSourceId;
   final VoidCallback onTap;
-  final VoidCallback onLongPress;
+  final VoidCallback? onLongPress;
   final bool selectionMode;
   final bool selected;
   final bool favorited;
+
+  /// 高亮定位提示（来自"正在阅读"页跳转）。
+  final bool highlighted;
   final VoidCallback? onToggleFavorite;
   final GestureTapUpCallback? onSecondaryTapUp;
+
+  /// 移动端长按（非多选模式）呼出上下文菜单，携带按下位置。
+  final GestureLongPressStartCallback? onLongPressMenu;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      onSecondaryTapUp: onSecondaryTapUp,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: theme.cardTheme.color,
-          borderRadius: BorderRadius.circular(12),
-          border: selected
-              ? Border.all(color: theme.colorScheme.primary, width: 1.5)
-              : null,
-        ),
-        child: Stack(
-          children: [
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 72),
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: FileCover(
-                            item: item,
-                            sourceId: coverSourceId,
+    final colorScheme = theme.colorScheme;
+    // 外层处理移动端长按弹菜单：该手势仅在桌面端长按（进入多选）为空时注册，
+    // 与内层 InkWell 的长按手势互斥，不会同时响应。
+    return GestureDetector(
+      onLongPressStart: onLongPressMenu,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        onSecondaryTapUp: onSecondaryTapUp,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: theme.cardTheme.color,
+            borderRadius: BorderRadius.circular(12),
+            border: highlighted
+                ? Border.all(color: colorScheme.primary, width: 1.6)
+                : selected
+                ? Border.all(color: colorScheme.primary, width: 1.5)
+                : null,
+          ),
+          child: Stack(
+            children: [
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 72),
+                          child: AspectRatio(
+                            aspectRatio: 1,
+                            child: FileCover(
+                              item: item,
+                              sourceId: coverSourceId,
+                            ),
                           ),
                         ),
                       ),
                     ),
+                    const SizedBox(height: 10),
+                    Text(
+                      item.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: highlighted ? colorScheme.primary : null,
+                        fontWeight: highlighted ? FontWeight.w600 : null,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      item.isDir ? '文件夹' : formatBytes(item.size),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 10,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selectionMode)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Icon(
+                    selected ? LucideIcons.circleCheck : LucideIcons.circle,
+                    size: 18,
+                    color: selected
+                        ? colorScheme.primary
+                        : colorScheme.onSurfaceVariant,
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    item.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    item.isDir ? '文件夹' : formatBytes(item.size),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: 10,
-                      color: theme.colorScheme.onSurfaceVariant,
+                )
+              else
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: GestureDetector(
+                    onTap: onToggleFavorite,
+                    child: Icon(
+                      LucideIcons.star,
+                      size: 15,
+                      color: favorited
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ],
-              ),
-            ),
-            if (selectionMode)
-              Positioned(
-                top: 0,
-                right: 0,
-                child: Icon(
-                  selected ? LucideIcons.circleCheck : LucideIcons.circle,
-                  size: 18,
-                  color: selected
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.onSurfaceVariant,
                 ),
-              )
-            else
-              Positioned(
-                top: 0,
-                right: 0,
-                child: GestureDetector(
-                  onTap: onToggleFavorite,
-                  child: Icon(
-                    LucideIcons.star,
-                    size: 15,
-                    color: favorited
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

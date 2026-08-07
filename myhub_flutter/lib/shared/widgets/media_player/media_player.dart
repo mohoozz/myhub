@@ -72,7 +72,8 @@ class MediaPlayerPage extends ConsumerStatefulWidget {
   ConsumerState<MediaPlayerPage> createState() => _MediaPlayerPageState();
 }
 
-class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
+class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
+    with SingleTickerProviderStateMixin {
   late final MediaPlayerController _controller;
   late final Player _player;
 
@@ -91,6 +92,25 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
 
   /// 键盘静音前的音量记忆（M 键取消静音时恢复）。
   double _volumeBeforeMute = 100;
+
+  /// 迷你模式拖拽/收起动画控制器：
+  /// 拖动时 set value 跟手，松手时 [AnimationController.animateTo] 回弹或收起。
+  late final AnimationController _miniAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  );
+
+  /// 向下拖动进入迷你模式：位移上限（屏高比例）。
+  static const double _miniDragDyFactor = 0.45;
+
+  /// 向下拖动进入迷你模式：缩放下限。
+  static const double _miniMinScale = 0.62;
+
+  /// 向下拖动进入迷你模式：圆角上限。
+  static const double _miniMaxRadius = 20;
+
+  /// 进入迷你模式的拖动进度阈值（超过则收起进入迷你，否则回弹）。
+  static const double _miniThreshold = 0.25;
 
   @override
   void initState() {
@@ -128,9 +148,9 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
     if (!kIsWeb &&
         (Platform.isAndroid || Platform.isIOS) &&
         _controller.isVideoMode.value) {
-      SystemChrome.setPreferredOrientations(
-        const [DeviceOrientation.portraitUp],
-      );
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+      ]);
     }
     // 桌面端系统全屏不带出播放器页
     if (isDesktopPlatform && _fullscreen) {
@@ -147,6 +167,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
     _controller.isVideoMode.removeListener(_applyOrientationLock);
     unawaited(_bufferingSub?.cancel());
     _osd.dispose();
+    _miniAnim.dispose();
     // 播放继续，迷你条接管（有错误时保持隐藏）
     _controller.pageClosed();
     super.dispose();
@@ -161,9 +182,9 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
         DeviceOrientation.landscapeRight,
       ]);
     } else {
-      SystemChrome.setPreferredOrientations(
-        const [DeviceOrientation.portraitUp],
-      );
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+      ]);
     }
   }
 
@@ -174,6 +195,47 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
     await windowManager.setFullScreen(target);
     if (mounted) {
       setState(() => _fullscreen = target);
+    }
+  }
+
+  // ---------- 退出 / 迷你模式 ----------
+
+  /// 直接退出：停止播放并关闭播放页（不进入迷你模式）。
+  void _exitAndStop() {
+    unawaited(_controller.stop());
+    Navigator.of(context).maybePop();
+  }
+
+  /// 进入迷你模式：先播收起动画（缩小下沉），结束后退出播放页，
+  /// 播放继续由底部迷你条接管（与中间向下拖动过渡一致）。
+  void _enterMiniMode() {
+    unawaited(_settleToMini());
+  }
+
+  /// 收起动画：页面缩小下沉到底，结束后 pop 退出播放页。
+  Future<void> _settleToMini() async {
+    try {
+      await _miniAnim.animateTo(1.0);
+    } catch (_) {
+      return; // 动画被销毁（页面已退出）
+    }
+    if (!mounted) return;
+    unawaited(Navigator.of(context).maybePop());
+  }
+
+  /// 中间区域向下拖动：页面跟随位移/缩放/圆角。
+  void _onMiniDrag(double fraction) {
+    if (!mounted) return;
+    _miniAnim.value = fraction;
+  }
+
+  /// 松手：超过阈值收起进入迷你模式，否则回弹全屏。
+  void _onMiniDragEnd(double fraction) {
+    if (!mounted) return;
+    if (fraction >= _miniThreshold) {
+      unawaited(_settleToMini());
+    } else {
+      _miniAnim.animateTo(0);
     }
   }
 
@@ -226,24 +288,22 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
 
   /// 全局键盘绑定（页面级：加载/错误状态下 Esc 同样可用）。
   Map<ShortcutActivator, VoidCallback> get _keyBindings => {
-        const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-            _seekBy(const Duration(seconds: -5)),
-        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-            _seekBy(const Duration(seconds: 5)),
-        const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-            _changeVolume(5),
-        const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-            _changeVolume(-5),
-        const SingleActivator(LogicalKeyboardKey.space): _player.playOrPause,
-        const SingleActivator(LogicalKeyboardKey.escape): () =>
-            Navigator.of(context).maybePop(),
-        const SingleActivator(LogicalKeyboardKey.keyF): () {
-          if (isDesktopPlatform) {
-            _toggleFullscreen();
-          }
-        },
-        const SingleActivator(LogicalKeyboardKey.keyM): _toggleMute,
-      };
+    const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+        _seekBy(const Duration(seconds: -5)),
+    const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+        _seekBy(const Duration(seconds: 5)),
+    const SingleActivator(LogicalKeyboardKey.arrowUp): () => _changeVolume(5),
+    const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+        _changeVolume(-5),
+    const SingleActivator(LogicalKeyboardKey.space): _player.playOrPause,
+    const SingleActivator(LogicalKeyboardKey.escape): _exitAndStop,
+    const SingleActivator(LogicalKeyboardKey.keyF): () {
+      if (isDesktopPlatform) {
+        _toggleFullscreen();
+      }
+    },
+    const SingleActivator(LogicalKeyboardKey.keyM): _toggleMute,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -265,77 +325,122 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage> {
               final isVideo = _controller.isVideoMode.value;
               final videoController = _controller.videoController;
               final hasError = error != null;
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  // 视频画面 / 音频唱片封面模式
-                  if (isVideo && videoController != null)
-                    Video(
-                      controller: videoController,
-                      controls: null, // 自定义控制栏见 player_controls.dart
-                      fill: Colors.black,
-                    )
-                  else
-                    AudioCoverMode(
-                      player: _player,
-                      sourceId: widget.sourceId,
-                      file: widget.file,
-                    ),
-                  // 自定义控制栏 Overlay（错误态不挂载，错误视图自带返回按钮）
-                  if (!hasError)
-                    PlayerControls(
-                      player: _player,
-                      title: widget.file.name,
-                      osd: _osd,
-                      loading: loading,
-                      buffering: _buffering,
-                      onBack: () => Navigator.of(context).maybePop(),
-                      onToggleFullscreen:
-                          isDesktopPlatform ? _toggleFullscreen : null,
-                      isFullscreen: _fullscreen,
-                    ),
-                  // 播放中的缓冲转圈（首次加载走 _LoadingView）；
-                  // 圆形底托与中央播放按钮同风格，缓冲时按钮已隐藏不会重叠
-                  if (!loading && !hasError && _buffering)
-                    const Center(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: Colors.black45,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Padding(
-                          padding: EdgeInsets.all(20),
-                          child: SizedBox(
-                            width: 38,
-                            height: 38,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 3,
-                              color: Colors.white,
+              return AnimatedBuilder(
+                animation: _miniAnim,
+                builder: (context, _) {
+                  final f = _miniAnim.value;
+                  final size = MediaQuery.sizeOf(context);
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // 拖动/收起时露出的底层背景（模拟下层页面，
+                      // 让"向下拖出迷你条"的过渡有层次感）
+                      ColoredBox(
+                        color: f > 0.001
+                            ? const Color(0xFF161616)
+                            : Colors.black,
+                      ),
+                      Transform.translate(
+                        offset: Offset(0, f * _miniDragDyFactor * size.height),
+                        child: Transform.scale(
+                          scale: 1 - (1 - _miniMinScale) * f,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(
+                              _miniMaxRadius * f,
+                            ),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                // 视频画面 / 音频唱片封面模式
+                                if (isVideo && videoController != null)
+                                  Video(
+                                    controller: videoController,
+                                    controls:
+                                        null, // 自定义控制栏见 player_controls.dart
+                                    fill: Colors.black,
+                                  )
+                                else
+                                  AudioCoverMode(
+                                    player: _player,
+                                    sourceId: widget.sourceId,
+                                    file: widget.file,
+                                  ),
+                                // 自定义控制栏 Overlay（错误态不挂载，
+                                // 错误视图自带返回按钮）
+                                if (!hasError)
+                                  PlayerControls(
+                                    player: _player,
+                                    title: widget.file.name,
+                                    osd: _osd,
+                                    loading: loading,
+                                    buffering: _buffering,
+                                    onBack: _exitAndStop,
+                                    onMini: _enterMiniMode,
+                                    onMiniDrag: isDesktopPlatform
+                                        ? null
+                                        : _onMiniDrag,
+                                    onMiniDragEnd: isDesktopPlatform
+                                        ? null
+                                        : _onMiniDragEnd,
+                                    onToggleFullscreen: isDesktopPlatform
+                                        ? _toggleFullscreen
+                                        : null,
+                                    isFullscreen: _fullscreen,
+                                  ),
+                                // 播放中的缓冲转圈（首次加载走 _LoadingView）；
+                                // 圆形底托与中央播放按钮同风格，
+                                // 缓冲时按钮已隐藏不会重叠
+                                if (!loading && !hasError && _buffering)
+                                  const Center(
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        color: Colors.black45,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Padding(
+                                        padding: EdgeInsets.all(20),
+                                        child: SizedBox(
+                                          width: 38,
+                                          height: 38,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 3,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                if (loading && !hasError) const _LoadingView(),
+                                if (hasError) ...[
+                                  _ErrorView(
+                                    message: error,
+                                    onRetry: _controller.retry,
+                                  ),
+                                  Positioned(
+                                    top: 0,
+                                    left: 0,
+                                    child: SafeArea(
+                                      bottom: false,
+                                      child: IconButton(
+                                        icon: const Icon(
+                                          LucideIcons.arrowLeft,
+                                          color: Colors.white,
+                                        ),
+                                        tooltip: '返回',
+                                        onPressed: () =>
+                                            Navigator.of(context).maybePop(),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  if (loading && !hasError) const _LoadingView(),
-                  if (hasError) ...[
-                    _ErrorView(message: error, onRetry: _controller.retry),
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      child: SafeArea(
-                        bottom: false,
-                        child: IconButton(
-                          icon: const Icon(
-                            LucideIcons.arrowLeft,
-                            color: Colors.white,
-                          ),
-                          tooltip: '返回',
-                          onPressed: () => Navigator.of(context).maybePop(),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
+                    ],
+                  );
+                },
               );
             },
           ),
@@ -364,10 +469,7 @@ class _LoadingView extends StatelessWidget {
             ),
           ),
           SizedBox(height: 16),
-          Text(
-            '加载中...',
-            style: TextStyle(color: Colors.white70, fontSize: 13),
-          ),
+          Text('加载中...', style: TextStyle(color: Colors.white70, fontSize: 13)),
         ],
       ),
     );

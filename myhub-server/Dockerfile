@@ -37,6 +37,7 @@ EXPOSE 8080
 ENV MYHUB_SERVER_MODE=release \
     MYHUB_DATABASE_PATH=/data/myhub.db \
     MYHUB_DATA_THUMBS_DIR=/data/thumbs \
-    MYHUB_DATA_HLS_DIR=/data/hls
+    MYHUB_DATA_HLS_DIR=/data/hls \
+    MYHUB_DATA_COMIC_CACHE_DIR=/data/comic_cache
 
 ENTRYPOINT ["/app/myhub-server"]

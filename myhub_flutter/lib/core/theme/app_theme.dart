@@ -122,6 +122,24 @@ abstract final class AppTheme {
           borderRadius: BorderRadius.circular(_cardRadius),
         ),
       ),
+      bottomSheetTheme: BottomSheetThemeData(
+        // 暗色主题：弹窗卡片色 #121212 与纯黑背景 #000000 对比度太弱，
+        // 加上无边框会"融为一体"。统一用 cardColor + 1px 分隔线作为边界，
+        // 不依赖阴影（避免明/暗主题切换时阴影"突然出现"造成的视觉跳动）。
+        backgroundColor: cardColor,
+        elevation: 0,
+        modalElevation: 0,
+        shadowColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(_cardRadius),
+          ),
+          side: isDark ? BorderSide(color: dividerColor) : BorderSide.none,
+        ),
+        showDragHandle: false, // 各 sheet 自行决定
+        dragHandleColor: dividerColor,
+      ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           // 40px-tall pill => 20px radius capsule.

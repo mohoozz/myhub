@@ -107,8 +107,9 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
     String? found;
     final dir = _parentDirOf(widget.file.path);
     try {
-      final items =
-          await ref.read(fileApiProvider).listFiles(widget.sourceId, dir);
+      final items = await ref
+          .read(fileApiProvider)
+          .listFiles(widget.sourceId, dir);
       final names = [
         for (final e in items)
           if (e is Map<String, dynamic> && e['is_dir'] != true)
@@ -138,11 +139,10 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
               dir == '/' ? '/$found' : '$dir/$found',
             )
           : ref
-              .read(fileApiProvider)
-              .thumbnailUrl(widget.sourceId, widget.file.path);
+                .read(fileApiProvider)
+                .thumbnailUrl(widget.sourceId, widget.file.path);
       _coverHeaders = {
-        if (token != null && token.isNotEmpty)
-          'Authorization': 'Bearer $token',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
       };
     });
   }

@@ -84,7 +84,11 @@ class ChapterDrawer extends StatelessWidget {
   }
 }
 
-/// 阅读器底部栏（TODO 6.4）：上/下一章按钮 + 进度条 + 百分比。
+/// 阅读器底部栏（TODO 6.4）：上一章 + 进度/设置 + 下一章。
+///
+/// 布局对齐漫画阅读器：上一章 / 下一章位于两侧图标按钮，
+/// 中央底部放进度条、设置按钮与百分比（设置相关控件集中于中央），
+/// 顶栏不再保留设置入口，避免分散操作焦点。
 class ReaderBottomBar extends StatelessWidget {
   const ReaderBottomBar({
     super.key,
@@ -92,6 +96,7 @@ class ReaderBottomBar extends StatelessWidget {
     required this.progress,
     this.onPrevChapter,
     this.onNextChapter,
+    this.onOpenSettings,
   });
 
   final ReaderStyle style;
@@ -105,58 +110,81 @@ class ReaderBottomBar extends StatelessWidget {
   /// 下一章（null = 禁用）。
   final VoidCallback? onNextChapter;
 
+  /// 打开阅读设置面板（字号 / 行距 / 主题 / 翻页模式）。
+  final VoidCallback? onOpenSettings;
+
   @override
   Widget build(BuildContext context) {
     final percent = (progress.clamp(0.0, 1.0) * 100).toStringAsFixed(1);
+    final disabledFg = style.subtle.withValues(alpha: 0.5);
     return Container(
       color: style.background,
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+        child: SizedBox(
+          height: 56,
           child: Row(
             children: [
-              TextButton.icon(
+              // 左：上一章（图标按钮，紧凑）
+              IconButton(
                 onPressed: onPrevChapter,
-                icon: const Icon(LucideIcons.chevronLeft, size: 16),
-                label: const Text('上一章'),
-                style: TextButton.styleFrom(
-                  foregroundColor: style.foreground,
-                  disabledForegroundColor:
-                      style.subtle.withValues(alpha: 0.5),
-                  textStyle: const TextStyle(fontSize: 13),
-                ),
+                icon: const Icon(LucideIcons.chevronLeft, size: 20),
+                tooltip: '上一章',
+                color: style.foreground,
+                disabledColor: disabledFg,
               ),
+              // 中央：进度条 + 百分比 + 设置按钮
               Expanded(
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    LinearProgressIndicator(
-                      value: progress.clamp(0.0, 1.0),
-                      minHeight: 2,
-                      backgroundColor:
-                          style.subtle.withValues(alpha: 0.25),
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(style.foreground),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '$percent%',
-                      style: TextStyle(color: style.subtle, fontSize: 11),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: LinearProgressIndicator(
+                            value: progress.clamp(0.0, 1.0),
+                            minHeight: 2,
+                            backgroundColor:
+                                style.subtle.withValues(alpha: 0.25),
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(style.foreground),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '$percent%',
+                          style: TextStyle(color: style.subtle, fontSize: 11),
+                        ),
+                        const SizedBox(width: 4),
+                        // 设置按钮：与漫画底栏的"模式切换"中央对齐
+                        if (onOpenSettings != null)
+                          IconButton(
+                            onPressed: onOpenSettings,
+                            icon: const Icon(LucideIcons.settings2, size: 18),
+                            tooltip: '阅读设置',
+                            color: style.foreground,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                          )
+                        else
+                          const SizedBox(width: 32),
+                      ],
                     ),
                   ],
                 ),
               ),
-              TextButton.icon(
+              // 右：下一章（图标按钮，紧凑）
+              IconButton(
                 onPressed: onNextChapter,
-                icon: const Text('下一章'),
-                label: const Icon(LucideIcons.chevronRight, size: 16),
-                style: TextButton.styleFrom(
-                  foregroundColor: style.foreground,
-                  disabledForegroundColor:
-                      style.subtle.withValues(alpha: 0.5),
-                  textStyle: const TextStyle(fontSize: 13),
-                ),
+                icon: const Icon(LucideIcons.chevronRight, size: 20),
+                tooltip: '下一章',
+                color: style.foreground,
+                disabledColor: disabledFg,
               ),
             ],
           ),

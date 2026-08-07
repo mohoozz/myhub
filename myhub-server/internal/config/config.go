@@ -47,6 +47,11 @@ type DataConfig struct {
 	ThumbsDir  string `mapstructure:"thumbs_dir"`  // 视频缩略图缓存目录
 	HLSDir     string `mapstructure:"hls_dir"`     // HLS 转码输出目录
 	AvatarsDir string `mapstructure:"avatars_dir"` // 用户头像存储目录
+	// 漫画整包缓存目录：非本地路径源（如 WebDAV）的漫画文件下载缓存，
+	// 避免 pages/page 每次请求重复下载远程文件
+	ComicCacheDir string `mapstructure:"comic_cache_dir"`
+	// 漫画缓存容量上限（MB），超过后按修改时间清理最旧缓存；<=0 不限制
+	ComicCacheMaxMB int `mapstructure:"comic_cache_max_mb"`
 }
 
 // InternalConfig 内部接口配置（供 OpenClaw 等内部服务回传）
@@ -89,6 +94,8 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("data.thumbs_dir", "data/thumbs")
 	v.SetDefault("data.hls_dir", "data/hls")
 	v.SetDefault("data.avatars_dir", "data/avatars")
+	v.SetDefault("data.comic_cache_dir", "data/comic_cache")
+	v.SetDefault("data.comic_cache_max_mb", 1024)
 	v.SetDefault("internal.token", "myhub-internal-token-please-change")
 	v.SetDefault("trash.retention_days", 30)
 	v.SetDefault("web.dir", "")

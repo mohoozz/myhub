@@ -70,20 +70,20 @@ func (h *ProgressHandler) Save(c *gin.Context) {
 	Success(c, nil)
 }
 
-// FinishRequest 标记已读完请求体
-type FinishRequest struct {
+// ProgressDeleteRequest 删除阅读记录请求体
+type ProgressDeleteRequest struct {
 	SourceID uint   `json:"source_id" binding:"required"`
 	FilePath string `json:"file_path" binding:"required"`
 }
 
-// Finish DELETE /api/progress（标记已读完）
-func (h *ProgressHandler) Finish(c *gin.Context) {
-	var req FinishRequest
+// Delete DELETE /api/progress（删除阅读记录）
+func (h *ProgressHandler) Delete(c *gin.Context) {
+	var req ProgressDeleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "参数错误：source_id 与 file_path 均为必填")
 		return
 	}
-	if err := h.progressSvc.MarkFinished(req.SourceID, req.FilePath); err != nil {
+	if err := h.progressSvc.Delete(req.SourceID, req.FilePath); err != nil {
 		if errors.Is(err, service.ErrProgressNotFound) {
 			Fail(c, http.StatusNotFound, http.StatusNotFound, err.Error())
 			return

@@ -49,9 +49,9 @@ func (s *ProgressService) Save(p *model.ReadingProgress) error {
 	return s.progressRepo.Upsert(p)
 }
 
-// MarkFinished 标记已读完
-func (s *ProgressService) MarkFinished(sourceID uint, filePath string) error {
-	if err := s.progressRepo.MarkFinished(sourceID, filePath); err != nil {
+// Delete 删除阅读记录
+func (s *ProgressService) Delete(sourceID uint, filePath string) error {
+	if err := s.progressRepo.Delete(sourceID, filePath); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrProgressNotFound
 		}

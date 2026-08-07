@@ -14,6 +14,9 @@ class LocalProgress extends Table {
   TextColumn get progressJson => text().withDefault(const Constant(''))();
   RealColumn get percent => real().withDefault(const Constant(0))();
   BoolColumn get finished => boolean().withDefault(const Constant(false))();
+
+  /// 本地已删除待同步标记：离线删除时置 true，联网后由同步任务删后端并清理。
+  BoolColumn get deleted => boolean().withDefault(const Constant(false))();
   BoolColumn get synced => boolean().withDefault(const Constant(false))();
   DateTimeColumn get updatedAt => dateTime()();
 

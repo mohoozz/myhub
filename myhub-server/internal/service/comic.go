@@ -48,11 +48,19 @@ type ComicPage struct {
 type ComicService struct {
 	sourceSvc  *SourceService
 	configRepo *repository.ConfigRepository
+	// 远程源漫画按块缓存目录与容量上限（<=0 不限制），见 comic_cache.go
+	cacheDir      string
+	cacheMaxBytes int64
 }
 
 // NewComicService 创建 ComicService
-func NewComicService(sourceSvc *SourceService, configRepo *repository.ConfigRepository) *ComicService {
-	return &ComicService{sourceSvc: sourceSvc, configRepo: configRepo}
+func NewComicService(sourceSvc *SourceService, configRepo *repository.ConfigRepository, cacheDir string, cacheMaxMB int) *ComicService {
+	return &ComicService{
+		sourceSvc:      sourceSvc,
+		configRepo:     configRepo,
+		cacheDir:       cacheDir,
+		cacheMaxBytes:  int64(cacheMaxMB) << 20,
+	}
 }
 
 // Detect 漫画识别：手动覆盖 > 扩展名 > 路径源标记 > 内容嗅探
@@ -148,13 +156,12 @@ func (s *ComicService) SetOverride(sourceID uint, p string, isComic bool) error 
 	return s.configRepo.Set(comicOverrideKey(sourceID, p), v)
 }
 
-// openReaderAt 打开随机访问 Reader：本地源直接文件，其他源加载内存
+// openReaderAt 打开随机访问 Reader（ZIP/CBZ/EPUB 用）：
+//   - 本地源：直接读文件；
+//   - 远程源（如 WebDAV）：按块 Range 缓存 ReaderAt，按需下载页面字节块，
+//     避免整包下载，二次阅读命中本地磁盘缓存。
 func (s *ComicService) openReaderAt(ctx context.Context, sourceID uint, p string) (io.ReaderAt, int64, io.Closer, error) {
-	a, _, err := s.sourceSvc.GetAdapter(sourceID)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	fi, err := a.Stat(ctx, p)
+	a, source, err := s.sourceSvc.GetAdapter(sourceID)
 	if err != nil {
 		return nil, 0, nil, err
 	}
@@ -164,25 +171,35 @@ func (s *ComicService) openReaderAt(ctx context.Context, sourceID uint, p string
 		if err != nil {
 			return nil, 0, nil, err
 		}
-		return f, fi.Size, f, nil
+		st, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return nil, 0, nil, err
+		}
+		return f, st.Size(), f, nil
 	}
-	rc, err := a.ReadStream(ctx, p, 0, -1)
+	ra, size, err := s.openCachedReaderAt(ctx, a, source.ID, p)
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	defer rc.Close()
-	data, err := io.ReadAll(io.LimitReader(rc, 512<<20))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	return bytes.NewReader(data), int64(len(data)), nil, nil
+	return ra, size, nopCloser{}, nil
 }
 
-// openStream 打开顺序读取流（RAR 用）
+// nopCloser 空关闭器（cachedReaderAt 的 Close 为空，无需持有磁盘句柄）。
+type nopCloser struct{}
+
+func (nopCloser) Close() error { return nil }
+
+// openStream 打开顺序读取流（RAR/CBR 用）：RAR 必须顺序解压，无法按块
+// Range 随机读，故始终走远程流式（本地源直接读文件）。
 func (s *ComicService) openStream(ctx context.Context, sourceID uint, p string) (io.ReadCloser, error) {
 	a, _, err := s.sourceSvc.GetAdapter(sourceID)
 	if err != nil {
 		return nil, err
+	}
+	if la, ok := a.(*adapter.LocalAdapter); ok {
+		abs := filepath.Join(la.Root(), filepath.FromSlash(strings.TrimPrefix(p, "/")))
+		return os.Open(abs)
 	}
 	return a.ReadStream(ctx, p, 0, -1)
 }
@@ -279,38 +296,18 @@ func (s *ComicService) epubPages(ctx context.Context, sourceID uint, p string, w
 
 // openEPUBViaReader 复用 ReaderService 的 EPUB 打开逻辑（独立实例避免循环依赖）
 func (s *ComicService) openEPUBViaReader(ctx context.Context, sourceID uint, p string) (*parser.EPUB, io.Closer, error) {
-	a, _, err := s.sourceSvc.GetAdapter(sourceID)
+	ra, size, closer, err := s.openReaderAt(ctx, sourceID, p)
 	if err != nil {
 		return nil, nil, err
 	}
-	fi, err := a.Stat(ctx, p)
+	e, err := parser.OpenEPUB(ra, size)
 	if err != nil {
-		return nil, nil, err
-	}
-	if la, ok := a.(*adapter.LocalAdapter); ok {
-		abs := filepath.Join(la.Root(), filepath.FromSlash(strings.TrimPrefix(p, "/")))
-		f, err := os.Open(abs)
-		if err != nil {
-			return nil, nil, err
+		if closer != nil {
+			_ = closer.Close()
 		}
-		e, err := parser.OpenEPUB(f, fi.Size)
-		if err != nil {
-			_ = f.Close()
-			return nil, nil, err
-		}
-		return e, f, nil
-	}
-	rc, err := a.ReadStream(ctx, p, 0, -1)
-	if err != nil {
 		return nil, nil, err
 	}
-	defer rc.Close()
-	data, err := io.ReadAll(io.LimitReader(rc, 512<<20))
-	if err != nil {
-		return nil, nil, err
-	}
-	e, err := parser.OpenEPUB(bytes.NewReader(data), int64(len(data)))
-	return e, nil, err
+	return e, closer, nil
 }
 
 // toComicPages 转换条目为页列表

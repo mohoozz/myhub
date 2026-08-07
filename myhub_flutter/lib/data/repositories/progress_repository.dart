@@ -45,6 +45,8 @@ class ProgressRepository {
         cover: Value(cover ?? ''),
         progressJson: Value(progressJson ?? ''),
         percent: Value(percent ?? 0),
+        // 重新产生进度时取消删除标记（此前可能被本地删除待同步）
+        deleted: const Value(false),
         synced: const Value(false),
         updatedAt: Value(now),
       ),
@@ -69,32 +71,19 @@ class ProgressRepository {
     }
   }
 
-  /// 标记已读完：本地标记 + 后端上报（离线时待同步补偿）。
-  Future<void> markFinished(int sourceId, String filePath) async {
+  /// 删除阅读记录：本地标记删除 + 后端删除（离线时保留待同步删除）。
+  Future<void> delete(int sourceId, String filePath) async {
     final now = DateTime.now();
     final local = await _db.getProgress(sourceId, filePath);
-    await _db.upsertProgress(
-      LocalProgressCompanion(
-        sourceId: Value(sourceId),
-        filePath: Value(filePath),
-        mediaType: Value(local?.mediaType ?? ''),
-        title: Value(local?.title ?? ''),
-        cover: Value(local?.cover ?? ''),
-        progressJson: Value(local?.progressJson ?? ''),
-        percent: const Value(100),
-        finished: const Value(true),
-        synced: const Value(false),
-        updatedAt: Value(now),
-      ),
-    );
+    if (local != null && !local.deleted) {
+      await _db.markProgressDeleted(sourceId, filePath, updatedAt: now);
+    }
     try {
-      await _api.markFinished(sourceId, filePath);
-      final row = await _db.getProgress(sourceId, filePath);
-      if (row != null && !row.updatedAt.isAfter(now)) {
-        await _db.markProgressSynced(row.id);
-      }
+      await _api.delete(sourceId, filePath);
+      // 后端删除成功，物理清理本地记录
+      await _db.deleteProgress(sourceId, filePath);
     } catch (_) {
-      // 离线：保留 synced=false，syncPending 时补调后端
+      // 离线：保留 deleted=true 标记，联网后由 syncPending 补删
     }
   }
 
@@ -102,8 +91,11 @@ class ProgressRepository {
   ///
   /// 后端较新时回写本地缓存（synced=true）；本地较新且未同步时
   /// 由 [syncPending] 统一补传。网络失败时静默返回本地记录。
+  ///
+  /// 本地已删除待同步的记录视为不存在（返回 null）。
   Future<LocalProgressData?> get(int sourceId, String filePath) async {
     final local = await _db.getProgress(sourceId, filePath);
+    if (local != null && local.deleted) return null;
     try {
       final items = await _api.list();
       for (final e in items) {
@@ -130,8 +122,12 @@ class ProgressRepository {
   /// 合并本地 + 后端进度列表（以最新为准），供"正在阅读"页使用。
   ///
   /// 后端较新的记录回写本地缓存；仅在本地存在的未同步记录保留展示。
+  /// 本地已删除待同步的记录不展示、不被后端复活。
   Future<List<ReadingProgress>> listMerged() async {
     final local = await _db.allProgress();
+    final deletedKeys = {
+      for (final p in await _db.deletedProgress()) _key(p.sourceId, p.filePath),
+    };
     final merged = <String, ReadingProgress>{
       for (final p in local) _key(p.sourceId, p.filePath): _fromLocal(p),
     };
@@ -141,6 +137,7 @@ class ProgressRepository {
         if (e is! Map<String, dynamic>) continue;
         final remote = ReadingProgress.fromJson(e);
         final k = _key(remote.sourceId, remote.filePath);
+        if (deletedKeys.contains(k)) continue;
         final existing = merged[k];
         final remoteAt = remote.updatedAt;
         if (existing == null ||
@@ -157,7 +154,7 @@ class ProgressRepository {
     return merged.values.toList();
   }
 
-  /// 批量上传未同步进度（网络恢复时调用）。
+  /// 批量上传未同步进度/补删未同步删除（网络恢复时调用）。
   ///
   /// 冲突处理：上传前先拉取后端列表，后端 updated_at 较新的记录
   /// 跳过上传并用后端数据覆盖本地（以最新为准）。
@@ -177,6 +174,16 @@ class ProgressRepository {
       return;
     }
     for (final p in unsynced) {
+      if (p.deleted) {
+        // 离线删除补偿：后端删除后物理清理本地记录
+        try {
+          await _api.delete(p.sourceId, p.filePath);
+          await _db.deleteProgress(p.sourceId, p.filePath);
+        } catch (_) {
+          // 单条失败不影响其余记录，下轮再试
+        }
+        continue;
+      }
       final r = remote[_key(p.sourceId, p.filePath)];
       final remoteAt = r?.updatedAt;
       if (r != null && remoteAt != null && remoteAt.isAfter(p.updatedAt)) {
@@ -185,19 +192,15 @@ class ProgressRepository {
         continue;
       }
       try {
-        if (p.finished) {
-          await _api.markFinished(p.sourceId, p.filePath);
-        } else {
-          await _api.save(
-            sourceId: p.sourceId,
-            filePath: p.filePath,
-            mediaType: p.mediaType,
-            title: p.title,
-            cover: p.cover,
-            progressJson: p.progressJson,
-            percent: p.percent,
-          );
-        }
+        await _api.save(
+          sourceId: p.sourceId,
+          filePath: p.filePath,
+          mediaType: p.mediaType,
+          title: p.title,
+          cover: p.cover,
+          progressJson: p.progressJson,
+          percent: p.percent,
+        );
         await _db.markProgressSynced(p.id);
       } catch (_) {
         // 单条失败不影响其余记录，下轮再试
@@ -217,6 +220,7 @@ class ProgressRepository {
         progressJson: Value(p.progressJson),
         percent: Value(p.percent),
         finished: Value(p.finished),
+        deleted: const Value(false),
         synced: const Value(true),
         updatedAt: Value(p.updatedAt ?? DateTime.now()),
       ),

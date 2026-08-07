@@ -45,11 +45,11 @@ func (r *ProgressRepository) Upsert(p *model.ReadingProgress) error {
 	}).Create(p).Error
 }
 
-// MarkFinished 标记已读完
-func (r *ProgressRepository) MarkFinished(sourceID uint, filePath string) error {
-	result := r.db.Model(&model.ReadingProgress{}).
+// Delete 删除进度记录
+func (r *ProgressRepository) Delete(sourceID uint, filePath string) error {
+	result := r.db.
 		Where("source_id = ? AND file_path = ?", sourceID, filePath).
-		Updates(map[string]interface{}{"finished": true, "percent": 100})
+		Delete(&model.ReadingProgress{})
 	if result.Error != nil {
 		return result.Error
 	}

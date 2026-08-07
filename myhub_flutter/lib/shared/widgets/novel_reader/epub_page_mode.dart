@@ -16,6 +16,7 @@ class EpubPageMode extends StatefulWidget {
     required this.style,
     required this.imageBuilder,
     this.startAtEnd = false,
+    this.initialPage,
     this.onPrevChapter,
     this.onNextChapter,
     this.onToggleChrome,
@@ -36,6 +37,9 @@ class EpubPageMode extends StatefulWidget {
 
   /// 初始定位到末页（从下一章回退进入时）。
   final bool startAtEnd;
+
+  /// 初始页码（恢复进度时精确定位到上次阅读的页）。
+  final int? initialPage;
 
   /// 越过首页（null = 无上一章）。
   final VoidCallback? onPrevChapter;
@@ -66,9 +70,46 @@ class _EpubPageModeState extends State<EpubPageMode> {
 
   List<List<RichAtom>> _pages = const [];
   String _cacheKey = '';
+
+  /// 当前页码。组件重建时由 [initState] 重新初始化为
+  /// `widget.initialPage`（恢复进度时跳到上次阅读的页），其它场景为 0。
   int _page = 0;
+
+  /// startAtEnd 一次性处理：进入章节时若 _page == 0 且要求定位末页，
+  /// 帧末 jump 到 _pages.length - 1。
   bool _initialJumpDone = false;
   bool _chapterNavCooldown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 恢复进度（widget.initialPage != null）：首帧 _page 初始化为上次阅读页。
+    // 不在 initState 中 jumpToPage：此时 _controller 尚未 attach 到 PageView，
+    // _pages 也可能未就绪（章节内容异步加载），统一在 [_repaginateIfNeeded]
+    // （_pages 已填、PageView 已 attach）里确保 _controller 同步。
+    _page = widget.initialPage ?? 0;
+  }
+
+  @override
+  void didUpdateWidget(covariant EpubPageMode oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 同一组件复用时（恢复流程 setState 触发 build，外部 key 不变）：
+    // 外部从"无 initialPage"切换到"有 initialPage"，更新 _page。
+    // 不在 _pages 未就绪时 clamp 到 0：保留恢复的页码，由
+    // [_repaginateIfNeeded]（_pages 加载完成后）统一负责 _controller 同步。
+    if (widget.initialPage != oldWidget.initialPage &&
+        widget.initialPage != null &&
+        widget.initialPage != _page) {
+      _page = widget.initialPage!;
+      if (_pages.isNotEmpty) {
+        _page = _page.clamp(0, _pages.length - 1);
+        if (_controller.hasClients &&
+            _controller.page?.round() != _page) {
+          _controller.jumpToPage(_page);
+        }
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -94,14 +135,24 @@ class _EpubPageModeState extends State<EpubPageMode> {
     if (_page >= _pages.length) {
       _page = _pages.length - 1;
     }
-    if (widget.startAtEnd && !_initialJumpDone && _pages.isNotEmpty) {
+    // 一次性初始定位：initState / didUpdateWidget 阶段 _controller 尚未 attach、
+    // _pages 也不一定就绪，统一的跳页动作推迟到分页后（PageView 已 attach）执行。
+    // 优先级：恢复进度（_page != 0） > 末页定位（startAtEnd && _page == 0）> 默认 0。
+    if (!_initialJumpDone && _pages.isNotEmpty) {
       _initialJumpDone = true;
-      _page = _pages.length - 1;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _controller.hasClients) {
-          _controller.jumpToPage(_pages.length - 1);
-        }
-      });
+      final wantEnd = widget.startAtEnd && _page == 0 && _pages.length > 1;
+      if (wantEnd) {
+        _page = _pages.length - 1;
+      }
+      if (_page != 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _controller.hasClients) {
+            if (_controller.page?.round() != _page) {
+              _controller.jumpToPage(_page);
+            }
+          }
+        });
+      }
     }
     // 页数可能变化（重排/切章），帧末上报页内进度
     WidgetsBinding.instance.addPostFrameCallback((_) {

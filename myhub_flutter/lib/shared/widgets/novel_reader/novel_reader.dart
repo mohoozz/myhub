@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/reader_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
+import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/chapter_drawer.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/page_mode.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/reader_settings.dart';
@@ -93,6 +94,13 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   int _pageCount = 1;
   double _scrollFraction = 0;
 
+  /// 翻页/滚动/切章后防抖保存：阅读中持续落盘（对齐漫画 1s 防抖），
+  /// 关窗/强杀等未走 dispose 的场景也不丢进度。
+  Timer? _saveDebounce;
+
+  /// 恢复进度时跳到的页码（首帧定位后消费）。
+  int? _pendingPage;
+
   // ---- 顶栏显隐 ----
   bool _chromeVisible = true;
 
@@ -105,7 +113,8 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   @override
   void dispose() {
     _pollTimer?.cancel();
-    _saveProgress(); // 退出阅读器时保存进度（6.4）
+    _saveDebounce?.cancel();
+    _saveProgress(); // 退出阅读器时同步落盘（6.4）
     super.dispose();
   }
 
@@ -123,24 +132,55 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   }
 
   /// 保存当前进度：本地 drift + 后端双写（离线时待同步，F-502）。
-  void _saveProgress() {
+  ///
+  /// 进度 JSON 记录：
+  /// * chapter：最近阅读的章节（滚动模式按滚动比例折算）；
+  /// * page：章节内页码（仅翻页模式，恢复时精确定位到上次页）；
+  /// * scroll：全书滚动比例（仅滚动模式，0.0~1.0）。无分章（单章"全文"）
+  ///   时 chapter 恒为 0、page 不更新，必须依赖 scroll 恢复章节内位置。
+  Future<void> _saveProgress() async {
     if (_chapters.isEmpty) return;
+    final isScroll = _mode == ReaderMode.scroll;
     // 滚动模式按滚动比例折算章节
-    final chapter = _mode == ReaderMode.scroll
-        ? (_scrollFraction * (_chapters.length - 1)).round()
-        : _chapter;
-    unawaited(ref.read(progressRepositoryProvider).save(
-          sourceId: widget.sourceId,
-          filePath: widget.file.path,
-          mediaType: 'novel',
-          title: widget.file.name,
-          progressJson:
-              jsonEncode({'chapter': chapter, 'page': _pageInChapter}),
-          percent: _progress * 100,
-        ));
+    final chapter =
+        isScroll ? (_scrollFraction * (_chapters.length - 1)).round() : _chapter;
+    final page = isScroll ? 0 : _pageInChapter;
+    final scroll = isScroll ? _scrollFraction : 0.0;
+    final percent = _progress * 100;
+    try {
+      await ref.read(progressRepositoryProvider).save(
+            sourceId: widget.sourceId,
+            filePath: widget.file.path,
+            mediaType: 'novel',
+            title: widget.file.name,
+            progressJson: jsonEncode({
+              'chapter': chapter,
+              'page': page,
+              'scroll': scroll,
+            }),
+            percent: percent,
+          );
+      if (mounted) ref.invalidate(readingListProvider);
+    } catch (_) {
+      // 进度保存失败静默，不打断阅读
+    }
+  }
+
+  /// 防抖保存进度：翻页/滚动/切章停止 1 秒后落盘。
+  void _scheduleSave() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(seconds: 1), _saveProgress);
   }
 
   /// 打开时恢复上次阅读章节（已读完或小于第 1 章则不跳）。
+  ///
+  /// 同步记录 chapter + page：chapter > 0 时跳到对应章节并定位到 _pendingPage；
+  /// page > 0 时直接传给翻页模式首帧。page_mode 的 initState 会消费 [_pendingPage]
+  /// 初始化 _page，并通过 didUpdateWidget 处理后续 initialPage 变化。
+  /// [_pendingRestore] 在恢复流程期间为 true，区分恢复与用户主动切章（_goToChapter
+  /// 在 _pendingRestore=true 时使用 _pendingPage 初始化页码，结束后清空标志）。
+  bool _pendingRestore = false;
+
   Future<void> _restoreProgress() async {
     try {
       final p = await ref
@@ -149,11 +189,48 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
       if (p == null || p.finished) return;
       if (p.progressJson.isNotEmpty) {
         final decoded = jsonDecode(p.progressJson);
-        if (decoded is Map && decoded['chapter'] is num) {
-          final chapter = (decoded['chapter'] as num).toInt();
-          if (chapter > 0 && mounted) {
-            _goToChapter(chapter);
+        if (decoded is! Map || mounted == false) return;
+        final chapter =
+            decoded['chapter'] is num ? (decoded['chapter'] as num).toInt() : 0;
+        final page =
+            decoded['page'] is num ? (decoded['page'] as num).toInt() : 0;
+        final scroll = decoded['scroll'] is num
+            ? (decoded['scroll'] as num).toDouble()
+            : null;
+
+        // 滚动模式：优先恢复全书滚动比例（含无分章单章"全文"场景，
+        // chapter 恒 0、page 不更新，只能靠 scroll 定位）。
+        // 兼容旧进度：仅 chapter > 0 时跳到对应章节。
+        if (_mode == ReaderMode.scroll) {
+          if (scroll != null) {
+            setState(() {
+              _scrollFraction = scroll.clamp(0.0, 1.0);
+              _pageInChapter = 0;
+            });
+            // scroll_mode 通过 didUpdateWidget 消费 _scrollFraction 定位
+            return;
           }
+          if (chapter > 0 && chapter < _chapters.length) {
+            _pendingRestore = true;
+            _goToChapter(chapter);
+            _pendingRestore = false;
+          }
+          return;
+        }
+
+        // 翻页模式：chapter > 0 跳到章节，page > 0 定位章节内页码
+        if (chapter >= 0 && chapter < _chapters.length) {
+          _pendingRestore = true;
+          _pendingPage = page;
+          if (chapter > 0) {
+            _goToChapter(chapter);
+          } else if (page > 0) {
+            // 首章节有页内进度：触发一次同步以更新底栏百分比
+            setState(() => _pageInChapter = page);
+          }
+          // 恢复流程结束：清空 _pendingRestore（保留 _pendingPage 在 state 中
+          // 供 page_mode 通过 didUpdateWidget 消费；用户首次翻页后再清空）。
+          _pendingRestore = false;
         }
       }
     } catch (_) {
@@ -263,10 +340,16 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     setState(() {
       _chapter = index;
       _chapterFromEnd = fromEnd;
-      _pageInChapter = 0;
+      // 恢复流程：用 _pendingPage 初始化页码；用户主动切章：从首/末页开始。
+      _pageInChapter = _pendingRestore ? (_pendingPage ?? 0) : 0;
       _contentError = null;
     });
+    if (!_pendingRestore) {
+      // 用户主动切章：清空 _pendingPage，下次 build 时 page_mode 用 0 初始化
+      _pendingPage = null;
+    }
     _ensureAround(index);
+    _scheduleSave(); // 切章即落盘候选：1s 内若不再翻页则触发
   }
 
   void _retryContent() {
@@ -307,7 +390,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
             right: 0,
             child: _chrome(_buildTopBar()),
           ),
-          // 底栏：上/下一章 + 进度（6.4）
+          // 底栏：上/下一章 + 进度/设置（设置按钮位于中央底部，对齐漫画/视频播放器）
           Positioned(
             left: 0,
             right: 0,
@@ -322,6 +405,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
                 onNextChapter: _chapter < _chapters.length - 1
                     ? () => _goToChapter(_chapter + 1)
                     : null,
+                onOpenSettings: () => ReaderSettingsSheet.show(context),
               ),
             ),
           ),
@@ -368,12 +452,6 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
               icon: Icon(LucideIcons.list, color: _style.foreground),
               tooltip: '目录',
               onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-            ),
-            IconButton(
-              icon:
-                  Icon(LucideIcons.settings2, color: _style.foreground),
-              tooltip: '阅读设置',
-              onPressed: () => ReaderSettingsSheet.show(context),
             ),
             const SizedBox(width: 4),
           ],
@@ -426,9 +504,14 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
           contentOf: (i) => _contentCache[i],
           ensureChapter: _ensureChapter,
           style: _style,
+          // 恢复进度：_scrollFraction > 0 时定位到上次滚动位置
+          initialFraction: _scrollFraction > 0 ? _scrollFraction : null,
           onToggleChrome: () =>
               setState(() => _chromeVisible = !_chromeVisible),
-          onProgress: (f) => setState(() => _scrollFraction = f),
+          onProgress: (f) {
+            setState(() => _scrollFraction = f);
+            _scheduleSave();
+          },
         ),
       );
     }
@@ -456,11 +539,14 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     }
     return SafeArea(
       child: ReaderPageMode(
+        // 章节级 key：章节切换触发 page_mode 重建，initState 重新初始化 _page。
+        // 恢复进度的 _pendingPage 通过 initialPage 传入，由 didUpdateWidget 消费。
         key: ValueKey(_chapter),
         content: content,
         header: _chapterTitle(_chapter),
         style: _style,
         startAtEnd: _chapterFromEnd,
+        initialPage: _pendingPage,
         onPrevChapter:
             _chapter > 0 ? () => _goToChapter(_chapter - 1, fromEnd: true) : null,
         onNextChapter:
@@ -470,7 +556,11 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
           setState(() {
             _pageInChapter = page;
             _pageCount = pageCount;
+            // 用户首次翻页后清空 _pendingPage，避免后续 build 中 initialPage
+            // 干扰 page_mode（didUpdateWidget 会跳过 initialPage != _page 判断）。
+            _pendingPage = null;
           });
+          _scheduleSave();
         },
       ),
     );

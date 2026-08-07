@@ -86,6 +86,10 @@ class MyhubApp extends ConsumerWidget {
 }
 
 /// 平台自适应滚动物理：iOS/macOS 橡皮筋回弹，其余平台默认（Android 拉伸辉光）。
+///
+/// 桌面/Web 平台同时重写滚动条样式：持续显示明显 thumb（thickness 8、
+/// radius 4），避免默认的细线 thumb 在内容上显得突兀；移动端走默认行为
+/// （hover/touch 时显示），不打扰触摸阅读。
 class AppScrollBehavior extends MaterialScrollBehavior {
   const AppScrollBehavior();
 
@@ -97,6 +101,26 @@ class AppScrollBehavior extends MaterialScrollBehavior {
         const BouncingScrollPhysics(),
       _ => super.getScrollPhysics(context),
     };
+  }
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    if (kIsWeb || isDesktopPlatform) {
+      // 桌面/Web 显式声明：持续 thumb、圆角、明显厚度，hover 仍可拖动。
+      return Scrollbar(
+        controller: details.controller,
+        thumbVisibility: true,
+        thickness: 8,
+        radius: const Radius.circular(4),
+        interactive: true,
+        child: child,
+      );
+    }
+    return super.buildScrollbar(context, child, details);
   }
 }
 

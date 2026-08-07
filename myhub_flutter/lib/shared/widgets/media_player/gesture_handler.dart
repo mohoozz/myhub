@@ -9,6 +9,7 @@ import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
 /// * 水平滑动：调节进度（±10s 起，随滑动距离增加，满幅约 ±120s）；
 /// * 右侧 1/3 竖滑：调节音量；
 /// * 左侧 1/3 竖滑：调节亮度（软件调光，经 [onBrightnessChanged] 通知外部渲染遮罩）；
+/// * 中间区域向下拖动：进入迷你模式（经 [onMiniDrag]/[onMiniDragEnd]，仅移动端启用）；
 /// * 双击左/右半区：快退/快进 10s；
 /// * 调节时经 [osd] 在屏幕中央悬浮胶囊实时反馈（图标 + 数值）。
 ///
@@ -24,6 +25,8 @@ class PlayerGestureDetector extends StatefulWidget {
     this.onTap,
     this.onInteraction,
     this.onBrightnessChanged,
+    this.onMiniDrag,
+    this.onMiniDragEnd,
   });
 
   /// 已打开媒体的 Player。
@@ -44,9 +47,15 @@ class PlayerGestureDetector extends StatefulWidget {
   /// 亮度变化（0.0 ~ 1.0，软件调光遮罩由外部渲染）。
   final ValueChanged<double>? onBrightnessChanged;
 
+  /// 中间区域向下拖动进入迷你模式：拖动进度 0~1（向下位移 / 屏高）。
+  /// 为 null（桌面端）时中间区域不识别拖拽，保持无手势语义。
+  final ValueChanged<double>? onMiniDrag;
+
+  /// 迷你拖拽松手：最终拖动进度（页面据此判定进入迷你或回弹）。
+  final ValueChanged<double>? onMiniDragEnd;
+
   @override
-  State<PlayerGestureDetector> createState() =>
-      _PlayerGestureDetectorState();
+  State<PlayerGestureDetector> createState() => _PlayerGestureDetectorState();
 }
 
 class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
@@ -69,6 +78,12 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   double _vStartY = 0;
   double _vStartValue = 0;
 
+  /// 中间区域向下拖入迷你：当前向下位移（>0 才触发）。
+  double _vDy = 0;
+
+  /// 中间区域向下拖入迷你：松手时的最终拖动进度。
+  double _miniDragFraction = 0;
+
   /// 当前亮度（0.0 ~ 1.0，1.0 为不遮罩）。
   double _brightness = 1.0;
 
@@ -83,9 +98,13 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
 
   void _handleDoubleTap(double width) {
     final forward = _doubleTapX >= width / 2;
-    final delta = Duration(seconds: forward ? _doubleTapSeekSec : -_doubleTapSeekSec);
-    final target =
-        _clampPosition(_player.state.position + delta, _player.state.duration);
+    final delta = Duration(
+      seconds: forward ? _doubleTapSeekSec : -_doubleTapSeekSec,
+    );
+    final target = _clampPosition(
+      _player.state.position + delta,
+      _player.state.duration,
+    );
     _player.seek(target);
     _osd.show(
       forward ? LucideIcons.fastForward : LucideIcons.rewind,
@@ -108,7 +127,8 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
     final dx = d.localPosition.dx - _dragStartX;
     if (dx == 0) return;
     final seconds =
-        dx.sign * (_seekBaseSec + (dx.abs() / width) * (_seekFullSec - _seekBaseSec));
+        dx.sign *
+        (_seekBaseSec + (dx.abs() / width) * (_seekFullSec - _seekBaseSec));
     final target = _clampPosition(
       _seekStart + Duration(milliseconds: (seconds * 1000).round()),
       _player.state.duration,
@@ -140,12 +160,17 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
 
   void _startVertical(DragStartDetails d, double width) {
     _vStartY = d.localPosition.dy;
+    _vDy = 0;
+    _miniDragFraction = 0;
     if (d.localPosition.dx >= width * 2 / 3) {
       _vMode = _VerticalMode.volume;
       _vStartValue = _player.state.volume;
     } else if (d.localPosition.dx <= width / 3) {
       _vMode = _VerticalMode.brightness;
       _vStartValue = _brightness;
+    } else if (widget.onMiniDrag != null) {
+      // 中间区域：向下拖动进入迷你模式（仅移动端启用）
+      _vMode = _VerticalMode.mini;
     } else {
       _vMode = _VerticalMode.none;
     }
@@ -168,6 +193,14 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
           b > 0.5 ? LucideIcons.sun : LucideIcons.sunDim,
           '${(b * 100).round()}%',
         );
+      case _VerticalMode.mini:
+        // 仅响应向下拖动；向上无操作（保持中间区域原有语义）
+        _vDy = d.localPosition.dy - _vStartY;
+        if (_vDy > 0) {
+          _miniDragFraction = (_vDy / height).clamp(0.0, 1.0);
+          widget.onMiniDrag?.call(_miniDragFraction);
+        }
+        break;
       case _VerticalMode.none:
         break;
     }
@@ -175,6 +208,9 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   }
 
   void _endVertical() {
+    if (_vMode == _VerticalMode.mini) {
+      widget.onMiniDragEnd?.call(_miniDragFraction);
+    }
     _vMode = _VerticalMode.none;
     _osd.dismiss();
   }
@@ -217,4 +253,4 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   }
 }
 
-enum _VerticalMode { none, volume, brightness }
+enum _VerticalMode { none, volume, brightness, mini }

@@ -235,12 +235,42 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
 
   // ---------- 页列表 ----------
 
+  /// 压缩包扩展名：zip/rar 等需先经后端内容嗅探判定是否为漫画
+  /// （漫画库路径源后端按扩展名直判，成本极低）。
+  static const Set<String> _archiveExts = {
+    '.zip', '.rar', '.7z', '.tar', '.gz',
+  };
+
+  /// 是否为压缩包扩展名（cbz/cbr 后端已按扩展名直判为漫画，无需嗅探）。
+  static bool needsDetect(String path) => _archiveExts.contains(_extOf(path));
+
+  static String _extOf(String path) {
+    final name = path.split('/').last;
+    final dot = name.lastIndexOf('.');
+    return dot < 0 ? '' : name.substring(dot).toLowerCase();
+  }
+
   Future<void> _loadPages() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
+      // zip/rar 等普通压缩包先经后端嗅探确认是否为漫画，避免对
+      // 非漫画压缩包发起页列表请求；嗅探失败在阅读器内直接报错
+      if (needsDetect(widget.file.path)) {
+        final det = await ref
+            .read(comicApiProvider)
+            .detect(widget.sourceId, widget.file.path);
+        if (!mounted) return;
+        if (det['is_comic'] != true) {
+          setState(() {
+            _loading = false;
+            _error = '该压缩包不是漫画，暂不支持浏览';
+          });
+          return;
+        }
+      }
       // 页列表与上次进度并行加载，一并生效——首次构建即定位到
       // 上次页码（7.4；进度查询失败静默，从头阅读）
       final res = await ref

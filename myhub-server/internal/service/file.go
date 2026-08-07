@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -13,10 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"myhub-server/internal/adapter"
 	"myhub-server/internal/config"
 	"myhub-server/internal/model"
+	"myhub-server/internal/parser"
 	"myhub-server/internal/repository"
 )
 
@@ -25,7 +28,12 @@ var (
 	ErrCrossSourceDir = errors.New("跨源中转暂不支持目录")
 	ErrInvalidName    = errors.New("非法文件名")
 	ErrNotVideo       = errors.New("仅音视频文件支持缩略图")
+	ErrNotImage       = errors.New("仅图片文件支持预览")
+	ErrNotText        = errors.New("该文件不是纯文本或内容不可读")
 )
+
+// textPreviewMaxBytes 纯文本预览最大读取字节数（超出仅取头部并标记截断）。
+const textPreviewMaxBytes = 2 << 20
 
 // 媒体类型扩展名映射
 var mediaTypeByExt = map[string]string{
@@ -96,6 +104,22 @@ func (s *FileService) List(ctx context.Context, sourceID uint, p string) ([]File
 		})
 	}
 	return items, nil
+}
+
+// Info 查询单个文件信息（元信息 + 媒体类型）
+func (s *FileService) Info(ctx context.Context, sourceID uint, p string) (*FileItem, error) {
+	a, _, err := s.sourceSvc.GetAdapter(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := a.Stat(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return &FileItem{
+		FileInfo:  *fi,
+		MediaType: DetectMediaType(fi.Name, fi.IsDir),
+	}, nil
 }
 
 // Mkdir 新建文件夹
@@ -233,6 +257,137 @@ func (s *FileService) Delete(ctx context.Context, sourceID uint, paths []string)
 		}
 	}
 	return nil
+}
+
+// Image 读取图片文件原始字节（按扩展名校验，仅支持图片类型）。
+// 返回 (bytes, 文件名)；WebDAV 源流式读取整文件。
+func (s *FileService) Image(ctx context.Context, sourceID uint, p string) ([]byte, string, error) {
+	a, _, err := s.sourceSvc.GetAdapter(sourceID)
+	if err != nil {
+		return nil, "", err
+	}
+	fi, err := a.Stat(ctx, p)
+	if err != nil {
+		return nil, "", err
+	}
+	if fi.IsDir {
+		return nil, "", ErrNotImage
+	}
+	if DetectMediaType(fi.Name, false) != "image" {
+		return nil, "", ErrNotImage
+	}
+	rc, err := a.ReadStream(ctx, p, 0, -1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, fi.Name, nil
+}
+
+// TextPreviewResult 纯文本预览响应
+type TextPreviewResult struct {
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated"` // 文件超出预览上限，仅返回头部内容
+}
+
+// TextPreview 读取任意文件的纯文本预览：采样检测编码（UTF-8/GBK/Big5），
+// 解码为 UTF-8；超出 [textPreviewMaxBytes] 仅取头部并标记 truncated；
+// 明显为二进制文件（NUL/控制字符占比过高）时报 ErrNotText。
+func (s *FileService) TextPreview(ctx context.Context, sourceID uint, p string) (*TextPreviewResult, error) {
+	a, _, err := s.sourceSvc.GetAdapter(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := a.Stat(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if fi.IsDir {
+		return nil, adapter.ErrIsDirectory
+	}
+	// 空文件：直接返回空内容，避免对空文件发起 Range 读取
+	if fi.Size == 0 {
+		return &TextPreviewResult{Name: fi.Name, Size: 0, Content: ""}, nil
+	}
+
+	// 采样检测编码
+	sampleRC, err := a.ReadStream(ctx, p, 0, encodingSampleSize)
+	if err != nil {
+		return nil, err
+	}
+	sample, _ := io.ReadAll(sampleRC)
+	_ = sampleRC.Close()
+	if isBinarySample(sample) {
+		return nil, ErrNotText
+	}
+	encName := parser.DetectEncoding(sample)
+
+	// 超出上限仅读取头部
+	length := fi.Size
+	truncated := false
+	if length > textPreviewMaxBytes {
+		length = textPreviewMaxBytes
+		truncated = true
+	}
+	rc, err := a.ReadStream(ctx, p, 0, length)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	raw, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, err
+	}
+	content := parser.DecodeString(encName, raw)
+	// 解码后乱码（U+FFFD）占比过高视为非文本
+	if garbageRatio(content) > 0.1 {
+		return nil, ErrNotText
+	}
+	return &TextPreviewResult{
+		Name:      fi.Name,
+		Size:      fi.Size,
+		Content:   content,
+		Truncated: truncated,
+	}, nil
+}
+
+// isBinarySample 粗略判断字节采样是否为二进制：NUL 占比 >1%
+// 或不可打印控制字符（排除 \t\n\r\f）占比 >5% 视为二进制。
+func isBinarySample(sample []byte) bool {
+	if len(sample) == 0 {
+		return false
+	}
+	var nul, ctrl int
+	for _, b := range sample {
+		switch {
+		case b == 0:
+			nul++
+		case b < 0x09 || (b > 0x0D && b < 0x20):
+			ctrl++
+		}
+	}
+	if float64(nul)/float64(len(sample)) > 0.01 {
+		return true
+	}
+	return float64(ctrl)/float64(len(sample)) > 0.05
+}
+
+// garbageRatio 计算解码文本中替换符（U+FFFD）占比。
+func garbageRatio(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	runes := utf8.RuneCountInString(s)
+	if runes == 0 {
+		return 0
+	}
+	return float64(bytes.Count([]byte(s), []byte("\uFFFD"))) / float64(runes)
 }
 
 // Thumbnail 生成/获取音视频缩略图（FFmpeg，按 sourceID+path 缓存）

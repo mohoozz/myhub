@@ -135,6 +135,11 @@ class SortNotifier extends Notifier<SortSpec> {
   }
 }
 
+/// 浏览页高亮定位的目标文件路径（由"正在阅读"页跳转设置）。
+///
+/// 浏览页检测到该路径出现在当前目录列表时，用高亮边框提示并自动滚动定位。
+final highlightFileProvider = StateProvider<String?>((ref) => null);
+
 /// 当前目录搜索关键字（前端过滤）。
 final searchQueryProvider = StateProvider<String>((ref) => '');
 
