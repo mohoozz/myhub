@@ -92,7 +92,18 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _pageInChapter = 0;
   int _pageCount = 1;
-  double _scrollFraction = 0;
+
+  /// 全书滚动进度（滚动模式 0.0~1.0）。
+  ///
+  /// 用 [ValueNotifier] 而非普通字段：滚动过程中的 `onProgress` 只更新 notifier
+  /// 值、不触发父级 setState，避免每次滚动都重建整个 [ReaderScrollMode]
+  /// （小说单章是巨型 Text，全量重建会严重掉帧、滚动不跟手）。
+  /// 底栏进度条通过 [ValueListenableBuilder] 局部刷新。
+  final ValueNotifier<double> _scrollFraction = ValueNotifier(0);
+
+  /// 恢复进度时的目标滚动比例：仅用于首帧定位（传给 scroll_mode 的
+  /// `initialFraction`），恢复完成后置空，不随滚动变化。
+  double? _restoreFraction;
 
   /// 翻页/滚动/切章后防抖保存：阅读中持续落盘（对齐漫画 1s 防抖），
   /// 关窗/强杀等未走 dispose 的场景也不丢进度。
@@ -115,6 +126,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     _pollTimer?.cancel();
     _saveDebounce?.cancel();
     _saveProgress(); // 退出阅读器时同步落盘（6.4）
+    _scrollFraction.dispose();
     super.dispose();
   }
 
@@ -124,7 +136,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   double get _progress {
     if (_chapters.isEmpty) return 0;
     if (_mode == ReaderMode.scroll) {
-      return _scrollFraction.clamp(0.0, 1.0);
+      return _scrollFraction.value.clamp(0.0, 1.0);
     }
     return ((_chapter + (_pageInChapter + 1) / _pageCount) /
             _chapters.length)
@@ -142,10 +154,11 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     if (_chapters.isEmpty) return;
     final isScroll = _mode == ReaderMode.scroll;
     // 滚动模式按滚动比例折算章节
-    final chapter =
-        isScroll ? (_scrollFraction * (_chapters.length - 1)).round() : _chapter;
+    final chapter = isScroll
+        ? (_scrollFraction.value * (_chapters.length - 1)).round()
+        : _chapter;
     final page = isScroll ? 0 : _pageInChapter;
-    final scroll = isScroll ? _scrollFraction : 0.0;
+    final scroll = isScroll ? _scrollFraction.value : 0.0;
     final percent = _progress * 100;
     try {
       await ref.read(progressRepositoryProvider).save(
@@ -203,11 +216,13 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
         // 兼容旧进度：仅 chapter > 0 时跳到对应章节。
         if (_mode == ReaderMode.scroll) {
           if (scroll != null) {
-            setState(() {
-              _scrollFraction = scroll.clamp(0.0, 1.0);
-              _pageInChapter = 0;
-            });
-            // scroll_mode 通过 didUpdateWidget 消费 _scrollFraction 定位
+            final f = scroll.clamp(0.0, 1.0);
+            _scrollFraction.value = f;
+            _restoreFraction = f;
+            _pageInChapter = 0;
+            // 仅恢复进度时触发一次 rebuild，让 scroll_mode 通过 didUpdateWidget
+            // 消费 _restoreFraction 定位滚动位置（滚动中不再触发 rebuild）。
+            setState(() {});
             return;
           }
           if (chapter > 0 && chapter < _chapters.length) {
@@ -396,16 +411,21 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
             right: 0,
             bottom: 0,
             child: _chrome(
-              ReaderBottomBar(
-                style: _style,
-                progress: _progress,
-                onPrevChapter: _chapter > 0
-                    ? () => _goToChapter(_chapter - 1, fromEnd: true)
-                    : null,
-                onNextChapter: _chapter < _chapters.length - 1
-                    ? () => _goToChapter(_chapter + 1)
-                    : null,
-                onOpenSettings: () => ReaderSettingsSheet.show(context),
+              // 仅监听滚动进度 notifier 做局部刷新，滚动时父级不 rebuild，
+              // 避免整个阅读器重建导致掉帧不跟手。
+              ValueListenableBuilder<double>(
+                valueListenable: _scrollFraction,
+                builder: (context, _, __) => ReaderBottomBar(
+                  style: _style,
+                  progress: _progress,
+                  onPrevChapter: _chapter > 0
+                      ? () => _goToChapter(_chapter - 1, fromEnd: true)
+                      : null,
+                  onNextChapter: _chapter < _chapters.length - 1
+                      ? () => _goToChapter(_chapter + 1)
+                      : null,
+                  onOpenSettings: () => ReaderSettingsSheet.show(context),
+                ),
               ),
             ),
           ),
@@ -502,12 +522,15 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
           contentOf: (i) => _contentCache[i],
           ensureChapter: _ensureChapter,
           style: _style,
-          // 恢复进度：_scrollFraction > 0 时定位到上次滚动位置
-          initialFraction: _scrollFraction > 0 ? _scrollFraction : null,
+          // 恢复进度：_restoreFraction != null 时定位到上次滚动位置
+          initialFraction: _restoreFraction,
           onToggleChrome: () =>
               setState(() => _chromeVisible = !_chromeVisible),
           onProgress: (f) {
-            setState(() => _scrollFraction = f);
+            // 只更新 notifier（底栏进度局部刷新），不触发父级 setState，
+            // 避免滚动时重建整个 ReaderScrollMode 导致掉帧不跟手。
+            _scrollFraction.value = f;
+            _restoreFraction = null;
             _scheduleSave();
           },
         ),

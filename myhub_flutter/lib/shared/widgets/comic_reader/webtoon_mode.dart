@@ -93,6 +93,10 @@ class _ComicWebtoonModeState extends ConsumerState<ComicWebtoonMode> {
   final ScrollController _controller = ScrollController();
   int _reportedPage = -1;
 
+  /// 最近一次滚动的时刻。滑动刚结束后的一小段时间内，轻点屏幕用于"暂停"滚动，
+  /// 不应触发顶/底栏显隐切换（避免滑动过程中误触菜单）。
+  DateTime _lastScrollTime = DateTime.fromMillisecondsSinceEpoch(0);
+
   /// 初始滚动恢复是否仍待执行（用户滚动后放弃恢复，避免争抢）。
   bool _restorePending = false;
 
@@ -209,6 +213,7 @@ class _ComicWebtoonModeState extends ConsumerState<ComicWebtoonMode> {
 
   void _onScroll() {
     if (!_controller.hasClients) return;
+    _lastScrollTime = DateTime.now();
     _reportPage();
   }
 
@@ -268,7 +273,15 @@ class _ComicWebtoonModeState extends ConsumerState<ComicWebtoonMode> {
         ref.watch(comicReaderSettingsProvider).effectiveWebtoonWidthFactor;
     _itemWidth = MediaQuery.sizeOf(context).width * widthFactor;
     return GestureDetector(
-      onTap: widget.onToggleChrome,
+      onTap: () {
+        // 滑动刚结束（350ms 内）的轻点用于"暂停"滚动，不切换顶/底栏菜单，
+        // 避免滑动过程中误触弹菜单。
+        if (DateTime.now().difference(_lastScrollTime) <
+            const Duration(milliseconds: 350)) {
+          return;
+        }
+        widget.onToggleChrome();
+      },
       child: InteractiveViewer(
         panEnabled: false, // 单指交还给 ListView 滚动，双指捏合缩放
         maxScale: 3,

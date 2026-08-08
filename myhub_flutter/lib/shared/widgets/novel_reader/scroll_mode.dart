@@ -69,6 +69,17 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   final ScrollController _controller = ScrollController();
   final UniqueKey _centerKey = UniqueKey();
 
+  /// 最近一次滚动的时刻。滑动刚结束后的一小段时间内，轻点屏幕用于"暂停"滚动，
+  /// 不应触发顶/底栏显隐切换（避免误触菜单）。
+  DateTime _lastScrollTime = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 恢复进度是否已完成定位。完成后不再重复定位。
+  bool _restored = false;
+
+  /// 正在执行 jumpTo 定位（区分定位触发的滚动与用户手动滚动，
+  /// 避免把用户手动滚动误判为"放弃恢复"）。
+  bool _restoring = false;
+
   /// 当前加载窗口 [_first, _last]。
   late int _first = widget.totalChapters > 0
       ? (widget.initialChapter - _initWindow)
@@ -82,6 +93,9 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   @override
   void initState() {
     super.initState();
+    debugPrint('[scroll_mode] initState: initialChapter=${widget.initialChapter} '
+        'totalChapters=${widget.totalChapters} first=$_first last=$_last '
+        'initialFraction=${widget.initialFraction}');
     // 初始窗口内所有章节立即触发预加载，否则会显示 loading 圈且无法滚动
     for (var i = _first; i <= _last; i++) {
       widget.ensureChapter(i);
@@ -93,8 +107,16 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   @override
   void didUpdateWidget(covariant ReaderScrollMode oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 恢复进度异步完成：initialFraction 从 null → 值，此时定位滚动位置
-    if (widget.initialFraction != oldWidget.initialFraction) {
+    // 章节内容异步加载完成会触发本组件 rebuild（contentOf 是新闭包）。
+    // 此时主动扩展窗口，解决"滑到底后下一章加载完成却无法继续向下滚动"。
+    _syncWindow();
+    // 恢复进度：initialFraction 发生变化（null → 值），或内容加载驱动
+    // rebuild 后尚未定位成功，则再次尝试定位。这样即使首次定位时章节
+    // 尚未加载（extent=0），内容加载完成后也能通过 rebuild 重新定位，
+    // 避免"历史记录不生效、总是从头开始"。
+    if (!_restored &&
+        widget.initialFraction != null &&
+        widget.initialFraction! > 0) {
       _restoreFraction();
     }
   }
@@ -106,22 +128,26 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   }
 
   /// 按 [widget.initialFraction] 定位滚动位置。
-  /// 内容可能未布局完成（extent <= 0），延后到下一帧重试。
+  ///
+  /// 不做无限递归重试（避免每帧堆积 post-frame callback 导致界面卡死）；
+  /// 仅尝试一次：若内容尚未布局（extent <= 0，章节异步加载中）则本次放弃，
+  /// 由 [didUpdateWidget] 在内容加载完成触发 rebuild 时再次调用本方法重试，
+  /// 直至定位成功（[_restored]）。这样既能避免卡死，又能保证内容加载完成后
+  /// 一定完成定位，解决"历史记录不生效、总是从头开始"。
   void _restoreFraction() {
     final f = widget.initialFraction;
     if (f == null || f <= 0) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_controller.hasClients) return;
+      if (!mounted || !_controller.hasClients || _restored) return;
       final pos = _controller.position;
       final extent = pos.maxScrollExtent - pos.minScrollExtent;
-      if (extent <= 0) {
-        // 章节内容尚未布局（异步加载中），延后重试
-        _restoreFraction();
-        return;
-      }
+      if (extent <= 0) return; // 内容未就绪，等下次 rebuild 再试
+      _restoring = true;
       _controller.jumpTo(
         pos.minScrollExtent + extent * f.clamp(0.0, 1.0),
       );
+      _restoring = false;
+      _restored = true;
     });
   }
 
@@ -131,30 +157,65 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   /// 此时只要还有未加载的章节就继续扩展——这是用户能持续向上/向下滚动的关键。
   /// 仅在用户实际滚动触发（atTop/atBottom 为 true）时扩展，避免首帧
   /// `pos.pixels == minScrollExtent` 立刻扩展导致一次性把窗口推到 0。
+  ///
+  /// 滑到边缘时**总是**预加载相邻章节（即使当前边缘内容未就绪），避免用户
+  /// 快速下滑到 loading 边缘后因扩展条件 `contentOf(_last) != null` 不满足
+  /// 而"卡住"无法继续；相邻章节就绪后窗口即随之扩展。
+  /// 内容就绪后主动扩展窗口：前后边缘章节已加载则逐章延伸。
+  ///
+  /// 窗口扩展**不能只依赖滚动事件**（[_maybeExtend]）：当用户滑到底部、下一章
+  /// 内容异步加载完成后，若没有新滚动事件，窗口就不会扩展、`maxScrollExtent`
+  /// 不增长，导致"向下滚动不了"。因此内容加载完成触发 rebuild 时（见
+  /// [didUpdateWidget]）调用本方法，把已就绪的边缘章节纳入窗口。
+  /// 因内容逐章异步就绪，每次最多扩展少量章节，不会一次推到底。
+  bool _syncWindow() {
+    var changed = false;
+    // 向后扩展：下一章内容已就绪则纳入窗口
+    while (_last < widget.totalChapters - 1 &&
+        widget.contentOf(_last + 1) != null) {
+      _last++;
+      unawaited(widget.ensureChapter(_last + 1));
+      changed = true;
+    }
+    // 向前扩展：上一章内容已就绪则纳入窗口
+    while (_first > 0 && widget.contentOf(_first - 1) != null) {
+      _first--;
+      unawaited(widget.ensureChapter(_first - 1));
+      changed = true;
+    }
+    if (changed) {
+      debugPrint('[scroll_mode] _syncWindow: first=$_first last=$_last');
+    }
+    return changed;
+  }
+
   void _maybeExtend() {
     if (!_controller.hasClients) return;
     final pos = _controller.position;
     final extent = pos.maxScrollExtent - pos.minScrollExtent;
+    _lastScrollTime = DateTime.now();
+    // 用户手动滚动（非恢复定位触发）：放弃进度恢复，避免后续定位把位置拉回。
+    if (!_restoring && !_restored) {
+      _restored = true;
+    }
     if (extent > 0) {
       widget.onProgress?.call(
         ((pos.pixels - pos.minScrollExtent) / extent).clamp(0.0, 1.0),
       );
     }
-    // 向前扩展：用户滑到顶部 200px 内（实际滚动触发），且还有前向章节
+    // 向前：滑到顶部附近，预加载上一章（窗口扩展由 _syncWindow 在内容就绪后处理）
     final atTop = pos.pixels <= pos.minScrollExtent + _backwardTrigger;
-    if (atTop &&
-        _first > 0 &&
-        widget.contentOf(_first) != null) {
-      setState(() => _first--);
-      unawaited(widget.ensureChapter(_first));
+    if (atTop && _first > 0) {
+      unawaited(widget.ensureChapter(_first - 1));
     }
-    // 向后扩展：用户滑到底部 1200px 内（实际滚动触发），且还有后向章节
+    // 向后：滑到底部附近，预加载下一章（窗口扩展由 _syncWindow 在内容就绪后处理）
     final atBottom = pos.pixels >= pos.maxScrollExtent - _forwardTrigger;
-    if (atBottom &&
-        _last < widget.totalChapters - 1 &&
-        widget.contentOf(_last) != null) {
-      setState(() => _last++);
-      unawaited(widget.ensureChapter(_last));
+    if (atBottom && _last < widget.totalChapters - 1) {
+      unawaited(widget.ensureChapter(_last + 1));
+    }
+    // 预加载可能已让内容就绪，立即尝试扩展窗口
+    if ((atTop || atBottom) && _syncWindow() && mounted) {
+      setState(() {});
     }
   }
 
@@ -162,7 +223,15 @@ class _ReaderScrollModeState extends State<ReaderScrollMode> {
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: widget.onToggleChrome,
+      onTap: () {
+        // 滑动刚结束（350ms 内）的轻点用于"暂停"滚动，不切换顶/底栏菜单，
+        // 避免滑动过程中误触弹菜单。
+        if (DateTime.now().difference(_lastScrollTime) <
+            const Duration(milliseconds: 350)) {
+          return;
+        }
+        widget.onToggleChrome?.call();
+      },
       child: CustomScrollView(
         controller: _controller,
         center: _centerKey,

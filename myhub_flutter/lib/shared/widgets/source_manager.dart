@@ -39,11 +39,34 @@ class SourceManager extends ConsumerWidget {
           ),
           error: (err, _) => Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text(
-              '加载失败：$err',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.error,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '加载失败：$err',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => ref
+                          .read(sourceListProvider.notifier)
+                          .refresh(),
+                      icon: const Icon(LucideIcons.rotateCw, size: 14),
+                      label: const Text('重试'),
+                    ),
+                    if (showAddButton)
+                      TextButton.icon(
+                        onPressed: () => SourceEditDialog.show(context),
+                        icon: const Icon(LucideIcons.plus, size: 14),
+                        label: const Text('添加路径源'),
+                      ),
+                  ],
+                ),
+              ],
             ),
           ),
           data: (sources) {

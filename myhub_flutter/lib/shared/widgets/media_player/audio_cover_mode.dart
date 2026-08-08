@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/api/stream_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
@@ -26,8 +25,8 @@ class AudioCoverMode extends ConsumerStatefulWidget {
     required this.file,
   });
 
-  /// 已打开媒体的 Player（驱动旋转动效）。
-  final Player player;
+  /// 已打开媒体的播放器（media_kit Player 或 AvPlayerAdapter，驱动旋转动效）。
+  final dynamic player;
 
   /// 文件所属路径源 ID（封面探测用）。
   final int sourceId;
@@ -49,6 +48,7 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
 
   late final AnimationController _rotation;
   StreamSubscription<dynamic>? _playingSub;
+  bool _playing = false;
 
   String? _coverUrl;
   Map<String, String>? _coverHeaders;
@@ -60,11 +60,15 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
       vsync: this,
       duration: const Duration(seconds: 24),
     );
-    if (widget.player.state.playing) {
+    _playing = widget.player.state.playing as bool;
+    if (_playing) {
       _rotation.repeat();
     }
     // 播放时旋转，暂停时停止（保持当前角度）
-    _playingSub = widget.player.stream.playing.listen((playing) {
+    final playingStream = widget.player.stream.playing as Stream<bool>;
+    _playingSub = playingStream.listen((playing) {
+      if (!mounted) return;
+      setState(() => _playing = playing);
       if (playing) {
         _rotation.repeat();
       } else {
@@ -170,12 +174,40 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          RotationTransition(
-            turns: _rotation,
-            child: _VinylDisc(
-              size: discSize,
-              coverUrl: _coverUrl,
-              coverHeaders: _coverHeaders,
+          // 唱片 + 播放按钮叠加：唱片旋转，按钮不旋转但共享圆心
+          SizedBox(
+            width: discSize,
+            height: discSize,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                RotationTransition(
+                  turns: _rotation,
+                  child: _VinylDisc(
+                    size: discSize,
+                    coverUrl: _coverUrl,
+                    coverHeaders: _coverHeaders,
+                  ),
+                ),
+                // 中央播放按钮（不旋转，精确对齐唱片圆心）
+                Material(
+                  color: Colors.black54,
+                  shape: const CircleBorder(),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () => widget.player.playOrPause(),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Icon(
+                        _playing ? LucideIcons.pause : LucideIcons.play,
+                        size: 36,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 28),

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
+import 'package:myhub_flutter/shared/providers/av_player_adapter.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/gesture_handler.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
@@ -31,6 +32,7 @@ class PlayerControls extends StatefulWidget {
     required this.osd,
     this.loading = false,
     this.buffering = false,
+    this.showCenterPlayButton = true,
     this.onMini,
     this.onMiniDrag,
     this.onMiniDragEnd,
@@ -40,8 +42,8 @@ class PlayerControls extends StatefulWidget {
     this.onToggleOrientation,
   });
 
-  /// 已打开媒体的 media_kit Player。
-  final Player player;
+  /// 已打开媒体的播放器（media_kit Player 或 AvPlayerAdapter）。
+  final dynamic player;
 
   /// 顶栏显示的文件名。
   final String title;
@@ -57,6 +59,10 @@ class PlayerControls extends StatefulWidget {
 
   /// 播放中缓冲：隐藏中央大按钮，避免与页面级缓冲转圈重叠。
   final bool buffering;
+
+  /// 是否显示中央大播放按钮。音频模式下设为 false（按钮已嵌入唱片中央），
+  /// 避免与唱片中央按钮重叠以及和 OSD 进度提示冲突。
+  final bool showCenterPlayButton;
 
   /// 进入迷你模式：退出播放页但保持播放（底部迷你条接管）。
   /// 为 null 时隐藏迷你按钮。
@@ -116,23 +122,25 @@ class _PlayerControlsState extends State<PlayerControls> {
   /// 锁定状态：长按进入，屏蔽所有手势与调节按钮，中央仅剩锁图标。
   bool _locked = false;
 
-  Player get _player => widget.player;
+  dynamic get _player => widget.player;
 
   @override
   void initState() {
     super.initState();
     // 初始值取当前状态，后续由流驱动
-    _playing = _player.state.playing;
-    _position = _player.state.position;
-    _duration = _player.state.duration;
-    _buffered = _player.state.buffer;
-    _rate = _player.state.rate;
-    _volume = _player.state.volume;
-    _subTracks = _realSubTracks(_player.state.tracks.subtitle);
-    _currentSub = _player.state.track.subtitle;
+    final state = _player.state;
+    _playing = state.playing as bool;
+    _position = state.position as Duration;
+    _duration = state.duration as Duration;
+    _buffered = state.buffer as Duration;
+    _rate = state.rate as double;
+    _volume = state.volume as double;
+    _subTracks = _realSubTracks((state.tracks as Tracks).subtitle);
+    _currentSub = (state.track as Track).subtitle;
 
+    final stream = _player.stream;
     _subs.addAll([
-      _player.stream.playing.listen((v) {
+      (stream.playing as Stream<bool>).listen((v) {
         if (!mounted) return;
         setState(() {
           _playing = v;
@@ -144,31 +152,31 @@ class _PlayerControlsState extends State<PlayerControls> {
           _hideTimer?.cancel();
         }
       }),
-      _player.stream.position.listen((p) {
+      (stream.position as Stream<Duration>).listen((p) {
         if (!mounted) return;
         setState(() => _position = p);
       }),
-      _player.stream.duration.listen((d) {
+      (stream.duration as Stream<Duration>).listen((d) {
         if (!mounted) return;
         setState(() => _duration = d);
       }),
-      _player.stream.buffer.listen((b) {
+      (stream.buffer as Stream<Duration>).listen((b) {
         if (!mounted) return;
         setState(() => _buffered = b);
       }),
-      _player.stream.rate.listen((r) {
+      (stream.rate as Stream<double>).listen((r) {
         if (!mounted) return;
         setState(() => _rate = r);
       }),
-      _player.stream.volume.listen((v) {
+      (stream.volume as Stream<double>).listen((v) {
         if (!mounted) return;
         setState(() => _volume = v);
       }),
-      _player.stream.tracks.listen((t) {
+      (stream.tracks as Stream<Tracks>).listen((t) {
         if (!mounted) return;
         setState(() => _subTracks = _realSubTracks(t.subtitle));
       }),
-      _player.stream.track.listen((t) {
+      (stream.track as Stream<Track>).listen((t) {
         if (!mounted) return;
         setState(() => _currentSub = t.subtitle);
       }),
@@ -426,7 +434,14 @@ class _PlayerControlsState extends State<PlayerControls> {
         enabled: !_locked,
         // 调节手势：重置自动隐藏计时
         onInteraction: _wake,
-        onBrightnessChanged: (b) => setState(() => _brightness = b),
+        onBrightnessChanged: (b) {
+          setState(() => _brightness = b);
+          // iOS AVPlayer 模式：亮度同步到系统亮度（双向同步）
+          final p = _player;
+          if (p is AvPlayerAdapter) {
+            p.setBrightness(b);
+          }
+        },
         onMiniDrag: widget.onMiniDrag,
         onMiniDragEnd: widget.onMiniDragEnd,
         child: Stack(
@@ -449,10 +464,13 @@ class _PlayerControlsState extends State<PlayerControls> {
               ),
             // 中央大按钮：锁定态显示锁图标（点击解锁），
             // 否则显示播放/暂停（加载/缓冲中不显示，缓冲时页面级转圈独占中央）。
-            Center(
-              child: _locked
-                  ? _buildUnlockButton()
-                  : IgnorePointer(
+            // 音频模式下隐藏（按钮已嵌入 AudioCoverMode 唱片中央），
+            // 避免与唱片按钮重叠和 OSD 进度提示冲突。
+            if (widget.showCenterPlayButton)
+              Center(
+                child: _locked
+                    ? _buildUnlockButton()
+                    : IgnorePointer(
                       ignoring:
                           !_visible || widget.loading || widget.buffering,
                       child: AnimatedOpacity(

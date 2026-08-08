@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
@@ -75,7 +74,7 @@ class _MiniPlayerBar extends StatefulWidget {
   });
 
   final MediaPlayerController controller;
-  final Player player;
+  final dynamic player;
 
   /// 点击迷你条展开全屏播放器。
   final VoidCallback onExpand;
@@ -110,21 +109,21 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
   void initState() {
     super.initState();
     final player = widget.player;
-    _playing = player.state.playing;
-    _position = player.state.position;
-    _duration = player.state.duration;
-    _volume = player.state.volume;
+    _playing = player.state.playing as bool;
+    _position = player.state.position as Duration;
+    _duration = player.state.duration as Duration;
+    _volume = player.state.volume as double;
     _subs.addAll([
-      player.stream.playing.listen((v) {
+      (player.stream.playing as Stream<bool>).listen((v) {
         if (mounted) setState(() => _playing = v);
       }),
-      player.stream.position.listen((v) {
+      (player.stream.position as Stream<Duration>).listen((v) {
         if (mounted) setState(() => _position = v);
       }),
-      player.stream.duration.listen((v) {
+      (player.stream.duration as Stream<Duration>).listen((v) {
         if (mounted) setState(() => _duration = v);
       }),
-      player.stream.volume.listen((v) {
+      (player.stream.volume as Stream<double>).listen((v) {
         if (mounted) setState(() => _volume = v);
       }),
     ]);
@@ -142,7 +141,7 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
 
   /// 音量图标：静音切换（记住静音前音量）。
   void _toggleMute() {
-    final v = widget.player.state.volume;
+    final v = widget.player.state.volume as double;
     if (v > 0) {
       _volumeBeforeMute = v;
       widget.player.setVolume(0);
@@ -213,16 +212,61 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
                                 child: Row(
                                   children: [
                                     // 视频：左侧 64x36 播放小窗（复用全局
-                                    // VideoController，全屏页已关闭无冲突）；
+                                    // VideoController/AVPlayer texture，
+                                    // 全屏页已关闭无冲突）；
                                     // 音频：类型图标
                                     ValueListenableBuilder<bool>(
                                       valueListenable:
                                           widget.controller.isVideoMode,
                                       builder: (context, isVideo, _) {
+                                        if (!isVideo) {
+                                          return Icon(
+                                            LucideIcons.music,
+                                            size: 18,
+                                            color: colorScheme.onSurfaceVariant,
+                                          );
+                                        }
+                                        // iOS AVPlayer 模式：用 Texture 渲染
+                                        if (widget.controller.useAvPlayer) {
+                                          final texId =
+                                              widget.controller.textureId;
+                                          if (texId == null ||
+                                              texId.value <= 0) {
+                                            return Container(
+                                              width: 64,
+                                              height: 36,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black,
+                                                borderRadius:
+                                                    BorderRadius.circular(6),
+                                              ),
+                                              child: const Icon(Icons.movie,
+                                                  size: 18,
+                                                  color: Colors.white54),
+                                            );
+                                          }
+                                          return ClipRRect(
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            child: SizedBox(
+                                              width: 64,
+                                              height: 36,
+                                              child: ValueListenableBuilder<int>(
+                                                valueListenable: texId,
+                                                builder: (context, id, _) =>
+                                                    Texture(
+                                                  textureId: id,
+                                                  filterQuality:
+                                                      FilterQuality.low,
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                        // media_kit 模式：用 Video 渲染
                                         final videoController =
                                             widget.controller.videoController;
-                                        if (isVideo &&
-                                            videoController != null) {
+                                        if (videoController != null) {
                                           return ClipRRect(
                                             borderRadius: BorderRadius.circular(
                                               6,
@@ -266,7 +310,7 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
                                       clipBehavior: Clip.antiAlias,
                                       child: InkWell(
                                         customBorder: const CircleBorder(),
-                                        onTap: widget.player.playOrPause,
+                                        onTap: () => widget.player.playOrPause(),
                                         child: Padding(
                                           padding: const EdgeInsets.all(6),
                                           child: Icon(

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:media_kit/media_kit.dart';
+import 'package:myhub_flutter/shared/providers/av_player_adapter.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
 
@@ -31,8 +31,8 @@ class PlayerGestureDetector extends StatefulWidget {
     this.enabled = true,
   });
 
-  /// 已打开媒体的 Player。
-  final Player player;
+  /// 已打开媒体的播放器（media_kit Player 或 AvPlayerAdapter）。
+  final dynamic player;
 
   /// 屏幕中央数值反馈通道（与键盘/按钮调节共用）。
   final PlayerOsd osd;
@@ -73,9 +73,6 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   /// 水平滑动 seek：满幅约 ±120s。
   static const double _seekFullSec = 120;
 
-  /// 双击快退/快进秒数。
-  static const int _doubleTapSeekSec = 10;
-
   // 水平拖动 seek 状态
   double _dragStartX = 0;
   Duration _seekStart = Duration.zero;
@@ -95,29 +92,19 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   /// 当前亮度（0.0 ~ 1.0，1.0 为不遮罩）。
   double _brightness = 1.0;
 
-  /// 双击落点横坐标（onDoubleTap 不带位置，由 onDoubleTapDown 记录）。
-  double _doubleTapX = 0;
-
-  Player get _player => widget.player;
+  dynamic get _player => widget.player;
 
   PlayerOsd get _osd => widget.osd;
 
-  // ---------- 双击快退/快进 ----------
+  // ---------- 双击播放/暂停 ----------
 
-  void _handleDoubleTap(double width) {
-    final forward = _doubleTapX >= width / 2;
-    final delta = Duration(
-      seconds: forward ? _doubleTapSeekSec : -_doubleTapSeekSec,
-    );
-    final target = _clampPosition(
-      _player.state.position + delta,
-      _player.state.duration,
-    );
-    _player.seek(target);
+  void _handleDoubleTap() {
+    // playOrPause 异步，先读取当前状态，显示反转后的目标状态
+    final willPause = _player.state.playing as bool;
+    _player.playOrPause();
     _osd.show(
-      forward ? LucideIcons.fastForward : LucideIcons.rewind,
-      '${forward ? '+' : '-'}$_doubleTapSeekSec'
-      's  ${formatPlaybackTime(target)}',
+      willPause ? LucideIcons.pause : LucideIcons.play,
+      willPause ? '暂停' : '播放',
     );
     widget.onInteraction?.call();
   }
@@ -126,7 +113,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
 
   void _startSeek(DragStartDetails d) {
     _dragStartX = d.localPosition.dx;
-    _seekStart = _player.state.position;
+    _seekStart = _player.state.position as Duration;
     _seekTarget = null;
   }
 
@@ -139,7 +126,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
         (_seekBaseSec + (dx.abs() / width) * (_seekFullSec - _seekBaseSec));
     final target = _clampPosition(
       _seekStart + Duration(milliseconds: (seconds * 1000).round()),
-      _player.state.duration,
+      _player.state.duration as Duration,
     );
     _seekTarget = target;
     _osd.showHold(
@@ -172,9 +159,15 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
     _miniDragFraction = 0;
     if (d.localPosition.dx >= width * 2 / 3) {
       _vMode = _VerticalMode.volume;
-      _vStartValue = _player.state.volume;
+      _vStartValue = _player.state.volume as double;
     } else if (d.localPosition.dx <= width / 3) {
       _vMode = _VerticalMode.brightness;
+      // iOS AVPlayer 模式：从系统亮度初始化，避免第一次调节跳变
+      final player = widget.player;
+      if (player is AvPlayerAdapter) {
+        _brightness =
+            player.brightness.value.clamp(0.0, 1.0).toDouble();
+      }
       _vStartValue = _brightness;
     } else if (widget.onMiniDrag != null) {
       // 中间区域：向下拖动进入迷你模式（仅移动端启用）
@@ -244,8 +237,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
           behavior: HitTestBehavior.translucent,
           onTap: enabled ? widget.onTap : null,
           onLongPress: enabled ? widget.onLongPress : null,
-          onDoubleTapDown: enabled ? (d) => _doubleTapX = d.localPosition.dx : null,
-          onDoubleTap: enabled ? () => _handleDoubleTap(width) : null,
+          onDoubleTap: enabled ? _handleDoubleTap : null,
           onHorizontalDragStart: enabled ? _startSeek : null,
           onHorizontalDragUpdate: enabled ? (d) => _updateSeek(d, width) : null,
           onHorizontalDragEnd: enabled ? (_) => _endSeek() : null,

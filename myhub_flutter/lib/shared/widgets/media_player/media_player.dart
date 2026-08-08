@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
@@ -77,7 +76,8 @@ class MediaPlayerPage extends ConsumerStatefulWidget {
 class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     with SingleTickerProviderStateMixin {
   late final MediaPlayerController _controller;
-  late final Player _player;
+  /// 当前播放器（media_kit Player 或 AvPlayerAdapter，iOS 用 AVPlayer）。
+  late final dynamic _player;
 
   /// 沉浸式标题栏开关（缓存 notifier，dispose 后 ref 不可再用）。
   late final StateController<bool> _immersiveTitleBar;
@@ -128,7 +128,9 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     // 同步建立/复用会话，随后即可取到 Player
     _controller.play(widget.sourceId, widget.file);
     _player = _controller.player!;
-    _bufferingSub = _player.stream.buffering.listen((b) {
+    // buffering 流在 media_kit 和 AvPlayerAdapter 上都有
+    final bufferingStream = _player.stream.buffering as Stream<bool>;
+    _bufferingSub = bufferingStream.listen((b) {
       if (!mounted) return;
       setState(() => _buffering = b);
     });
@@ -354,8 +356,8 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
 
   /// ←/→：快退/快进 5s。
   void _seekBy(Duration delta) {
-    final duration = _player.state.duration;
-    var target = _player.state.position + delta;
+    final duration = _player.state.duration as Duration;
+    var target = (_player.state.position as Duration) + delta;
     if (target < Duration.zero) {
       target = Duration.zero;
     } else if (duration > Duration.zero && target > duration) {
@@ -376,7 +378,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   /// `Player.state.volume` 可能返回 mpv 内部非语义值（如负数）；
   /// 先把读到的值 clamp 到 [0, 100] 再叠加 delta。
   void _changeVolume(double delta) {
-    final raw = _player.state.volume.clamp(0.0, 100.0);
+    final raw = (_player.state.volume as double).clamp(0.0, 100.0);
     final v = (raw + delta).clamp(0.0, 100.0);
     _player.setVolume(v);
     _osd.show(_volumeIcon(v), '${v.round()}%');
@@ -384,7 +386,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
 
   /// M：静音切换（记住静音前音量）。
   void _toggleMute() {
-    final v = _player.state.volume;
+    final v = _player.state.volume as double;
     if (v > 0) {
       _volumeBeforeMute = v;
       _player.setVolume(0);
@@ -411,7 +413,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     const SingleActivator(LogicalKeyboardKey.arrowUp): () => _changeVolume(5),
     const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
         _changeVolume(-5),
-    const SingleActivator(LogicalKeyboardKey.space): _player.playOrPause,
+    const SingleActivator(LogicalKeyboardKey.space): () => _player.playOrPause(),
     const SingleActivator(LogicalKeyboardKey.escape): _exitAndStop,
     const SingleActivator(LogicalKeyboardKey.keyF): () {
       if (isDesktopPlatform) {
@@ -477,14 +479,92 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                               fit: StackFit.expand,
                               children: [
                                 // 视频画面 / 音频唱片封面模式
-                                if (isVideo && videoController != null)
-                                  Video(
-                                    controller: videoController,
-                                    controls:
-                                        null, // 自定义控制栏见 player_controls.dart
-                                    fill: Colors.black,
-                                  )
-                                else
+                                if (isVideo) ...[
+                                  if (_controller.useAvPlayer &&
+                                      _controller.textureId != null)
+                                    ValueListenableBuilder<int>(
+                                      valueListenable: _controller.textureId!,
+                                      builder: (context, texId, _) {
+                                        if (texId <= 0) {
+                                          return const ColoredBox(
+                                            color: Colors.black,
+                                            child: SizedBox.expand(),
+                                          );
+                                        }
+                                        // Texture 总是拉伸填满父容器，无法
+                                        // 直接按视频比例显示。视频原始比例
+                                        // 为 16:9（1920x1080）。按容器宽高
+                                        // 选择「宽度优先」或「高度优先」：
+                                        //   - 竖屏容器（w/h < 16/9）：宽度填满，
+                                        //     视频高度按 16:9 计算，上下留黑边
+                                        //   - 横屏容器（w/h >= 16/9）：高度填满，
+                                        //     视频宽度按 16:9 计算，左右留黑边
+                                        return LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            final w = constraints.maxWidth;
+                                            final h = constraints.maxHeight;
+                                            final videoH = w * 9 / 16;
+                                            if (videoH <= h) {
+                                              // 竖屏：宽度填满，按 16:9 计算高度
+                                              return Stack(
+                                                fit: StackFit.expand,
+                                                children: [
+                                                  const ColoredBox(
+                                                    color: Colors.black,
+                                                  ),
+                                                  Positioned(
+                                                    top: (h - videoH) / 2,
+                                                    left: 0,
+                                                    right: 0,
+                                                    height: videoH,
+                                                    child: Texture(
+                                                      textureId: texId,
+                                                      filterQuality:
+                                                          FilterQuality.medium,
+                                                    ),
+                                                  ),
+                                                ],
+                                              );
+                                            } else {
+                                              // 横屏：高度填满，按 16:9 计算宽度
+                                              final videoW = h * 16 / 9;
+                                              return Stack(
+                                                fit: StackFit.expand,
+                                                children: [
+                                                  const ColoredBox(
+                                                    color: Colors.black,
+                                                  ),
+                                                  Positioned(
+                                                    top: 0,
+                                                    bottom: 0,
+                                                    left: (w - videoW) / 2,
+                                                    width: videoW,
+                                                    child: Texture(
+                                                      textureId: texId,
+                                                      filterQuality:
+                                                          FilterQuality.medium,
+                                                    ),
+                                                  ),
+                                                ],
+                                              );
+                                            }
+                                          },
+                                        );
+                                      },
+                                    )
+                                  else if (videoController != null)
+                                    Video(
+                                      controller: videoController,
+                                      controls:
+                                          null, // 自定义控制栏见 player_controls.dart
+                                      fill: Colors.black,
+                                    )
+                                  else
+                                    const ColoredBox(
+                                      color: Colors.black,
+                                      child: SizedBox.expand(),
+                                    ),
+                                ] else
                                   AudioCoverMode(
                                     player: _player,
                                     sourceId: widget.sourceId,
@@ -499,6 +579,9 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                     osd: _osd,
                                     loading: loading,
                                     buffering: _buffering,
+                                    // 音频模式下隐藏中央按钮（按钮在唱片中央），
+                                    // 避免重叠和与 OSD 进度提示冲突。
+                                    showCenterPlayButton: isVideo,
                                     onBack: _exitAndStop,
                                     onMini: _enterMiniMode,
                                     onMiniDrag: isDesktopPlatform

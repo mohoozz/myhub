@@ -384,18 +384,18 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
             right: 0,
             child: _chrome(_buildTopBar(mode, settings)),
           ),
-          // 底栏：可拖动进度条 + 阅读模式切换（7.2）
+          // 底栏：仅可拖动进度条（参考小说阅读器底栏极简布局，避免大面积
+          // 可点击区域在滑动/翻页时误触；模式切换移至顶栏 PopupMenuButton）
           Positioned(
             left: 0,
             right: 0,
             bottom: 0,
             child: _chrome(
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_pages.isNotEmpty) _buildSeekBar(),
-                  _buildModeSwitcher(mode),
-                ],
+              Container(
+                color: const Color(0xCC000000),
+                child: _pages.isNotEmpty
+                    ? _buildSeekBar()
+                    : const SizedBox.shrink(),
               ),
             ),
           ),
@@ -551,11 +551,65 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
                 style: const TextStyle(color: _foreground, fontSize: 15),
               ),
             ),
-            if (_pages.isNotEmpty)
+            if (_pages.isNotEmpty) ...[
               Text(
                 '${_current + 1} / ${_pages.length}',
                 style: const TextStyle(color: _subtle, fontSize: 13),
               ),
+              // 阅读模式切换（单页/双页/条漫）：从底栏移至顶栏，
+              // 避免底栏大面积按钮在滑动/翻页时误触（参考小说阅读器
+              // 顶栏集中次要控件的设计）。
+              PopupMenuButton<ComicViewMode>(
+                tooltip: '阅读模式',
+                icon: Icon(
+                  switch (mode) {
+                    ComicViewMode.single => LucideIcons.fileImage,
+                    ComicViewMode.double => LucideIcons.columns2,
+                    ComicViewMode.webtoon => LucideIcons.rows3,
+                  },
+                  color: _foreground,
+                  size: 20,
+                ),
+                color: const Color(0xFF1A1A1A),
+                onSelected: (selected) {
+                  ref
+                      .read(comicReaderSettingsProvider.notifier)
+                      .setViewMode(selected);
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: ComicViewMode.single,
+                    child: Row(
+                      children: [
+                        Icon(LucideIcons.fileImage, size: 16),
+                        SizedBox(width: 8),
+                        Text('单页'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: ComicViewMode.double,
+                    child: Row(
+                      children: [
+                        Icon(LucideIcons.columns2, size: 16),
+                        SizedBox(width: 8),
+                        Text('双页'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: ComicViewMode.webtoon,
+                    child: Row(
+                      children: [
+                        Icon(LucideIcons.rows3, size: 16),
+                        SizedBox(width: 8),
+                        Text('条漫'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
             // 双页阅读方向切换（日漫 rtl / 国漫 ltr）
             if (mode == ComicViewMode.double)
               IconButton(
@@ -594,22 +648,24 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     final page = (_current + 1).clamp(1, total);
     return SafeArea(
       top: false,
+      // 紧凑布局：减小垂直 padding 缩短底栏高度，画面留白更多；
+      // 模式切换已移至顶栏，底栏不再被大面积按钮覆盖。
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
         child: Row(
           children: [
             Text(
               '$page',
-              style: const TextStyle(color: _subtle, fontSize: 12),
+              style: const TextStyle(color: _subtle, fontSize: 11),
             ),
             Expanded(
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
-                  trackHeight: 3,
+                  trackHeight: 2,
                   thumbShape:
-                      const RoundSliderThumbShape(enabledThumbRadius: 6),
+                      const RoundSliderThumbShape(enabledThumbRadius: 5),
                   overlayShape:
-                      const RoundSliderOverlayShape(overlayRadius: 12),
+                      const RoundSliderOverlayShape(overlayRadius: 10),
                   activeTrackColor: const Color(0xFF2563EB),
                   inactiveTrackColor: const Color(0x26FFFFFF),
                   thumbColor: Colors.white,
@@ -631,7 +687,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
             ),
             Text(
               '$total',
-              style: const TextStyle(color: _subtle, fontSize: 12),
+              style: const TextStyle(color: _subtle, fontSize: 11),
             ),
           ],
         ),
@@ -639,52 +695,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     );
   }
 
-  /// 底部悬浮模式切换：单页 / 双页 / 条漫。
-  Widget _buildModeSwitcher(ComicViewMode mode) {
-    return SafeArea(
-      top: false,
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: SegmentedButton<ComicViewMode>(
-            showSelectedIcon: false,
-            style: SegmentedButton.styleFrom(
-              backgroundColor: const Color(0xCC1A1A1A),
-              foregroundColor: _subtle,
-              selectedForegroundColor: Colors.white,
-              selectedBackgroundColor: const Color(0xFF2563EB),
-              side: const BorderSide(color: Color(0xFF2A2A2A)),
-              visualDensity: VisualDensity.compact,
-            ),
-            segments: const [
-              ButtonSegment(
-                value: ComicViewMode.single,
-                icon: Icon(LucideIcons.fileImage, size: 18),
-                label: Text('单页'),
-              ),
-              ButtonSegment(
-                value: ComicViewMode.double,
-                icon: Icon(LucideIcons.columns2, size: 18),
-                label: Text('双页'),
-              ),
-              ButtonSegment(
-                value: ComicViewMode.webtoon,
-                icon: Icon(LucideIcons.rows3, size: 18),
-                label: Text('条漫'),
-              ),
-            ],
-            selected: {mode},
-            onSelectionChanged: (selected) {
-              ref
-                  .read(comicReaderSettingsProvider.notifier)
-                  .setViewMode(selected.first);
-            },
-          ),
-        ),
-      ),
-    );
   }
-}
 
 /// 错误视图：错误信息 + 重试按钮。
 class _ComicErrorView extends StatelessWidget {
