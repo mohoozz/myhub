@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
@@ -115,6 +118,7 @@ class _ParentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
@@ -151,15 +155,23 @@ class _ParentCard extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall,
+                style: isMobile
+                    ? theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      )
+                    : theme.textTheme.bodySmall,
               ),
               const SizedBox(height: 4),
               Text(
                 '返回上级',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontSize: 10,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+                style: isMobile
+                    ? theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      )
+                    : theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 12,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
               ),
             ],
           ),
@@ -206,6 +218,28 @@ class _FileCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    // 移动端字号放大：参考"正在阅读"卡片标题（bodyMedium + w600）与
+    // 说明文字，iOS 窄屏下文件名/说明不再显得偏小。桌面端保持原样。
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    // 文件名：移动端用正文大号 + 加粗；桌面端保持 bodySmall + 高亮加粗。
+    final nameStyle = isMobile
+        ? theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: highlighted ? colorScheme.primary : null,
+          )
+        : theme.textTheme.bodySmall?.copyWith(
+            color: highlighted ? colorScheme.primary : null,
+            fontWeight: highlighted ? FontWeight.w600 : null,
+          );
+    // 二级说明文字（文件夹/大小）：移动端用 bodySmall(13px)，桌面端 12px。
+    final metaStyle = isMobile
+        ? theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          )
+        : theme.textTheme.bodySmall?.copyWith(
+            fontSize: 12,
+            color: colorScheme.onSurfaceVariant,
+          );
     // 外层处理移动端长按弹菜单：该手势仅在桌面端长按（进入多选）为空时注册，
     // 与内层 InkWell 的长按手势互斥，不会同时响应。
     return GestureDetector(
@@ -252,18 +286,12 @@ class _FileCard extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: highlighted ? colorScheme.primary : null,
-                        fontWeight: highlighted ? FontWeight.w600 : null,
-                      ),
+                      style: nameStyle,
                     ),
                     const SizedBox(height: 4),
                     Text(
                       item.isDir ? '文件夹' : formatBytes(item.size),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontSize: 10,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
+                      style: metaStyle,
                     ),
                   ],
                 ),

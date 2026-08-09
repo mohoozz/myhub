@@ -254,7 +254,7 @@ class _EpubPageModeState extends State<EpubPageMode> {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: widget.style.subtle,
-                                fontSize: 11,
+                                fontSize: 12,
                               ),
                             ),
                           ),
@@ -262,7 +262,7 @@ class _EpubPageModeState extends State<EpubPageMode> {
                             '${i + 1}/${_pages.length}',
                             style: TextStyle(
                               color: widget.style.subtle,
-                              fontSize: 11,
+                              fontSize: 12,
                             ),
                           ),
                         ],

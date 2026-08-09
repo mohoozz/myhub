@@ -75,6 +75,7 @@ class ReadingCard extends ConsumerWidget {
             // 父级（GridView item）的高度由 childAspectRatio 决定，
             // 实际尺寸稍显紧凑的卡片在视觉上完全可以接受。
             mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.start,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               AspectRatio(
@@ -100,7 +101,7 @@ class ReadingCard extends ConsumerWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -123,11 +124,11 @@ class ReadingCard extends ConsumerWidget {
                           color: colorScheme.onSurfaceVariant.withValues(
                             alpha: 0.75,
                           ),
-                          fontSize: 10,
+                          fontSize: 12,
                         ),
                       ),
                     ],
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
                       progress.finished
                           ? '已读完 · ${formatRelativeTime(progress.updatedAt)}'
@@ -142,10 +143,20 @@ class ReadingCard extends ConsumerWidget {
                   ],
                 ),
               ),
-              LinearProgressIndicator(
-                value: (progress.percent / 100).clamp(0.0, 1.0),
-                minHeight: 4,
-                backgroundColor: colorScheme.outline.withValues(alpha: 0.4),
+              // 进度条左右留出与文字相同的内边距，避免视觉上贴到卡片边缘；
+              // 用 ClipRRect + 较小高度呈现 iOS 风格细圆角进度条。
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 4, 10, 0),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: (progress.percent / 100).clamp(0.0, 1.0),
+                    minHeight: 3,
+                    backgroundColor: colorScheme.outline.withValues(
+                      alpha: 0.35,
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -176,7 +187,7 @@ class _FinishedBadge extends StatelessWidget {
             '已读完',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 10,
+              fontSize: 12,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -246,7 +257,7 @@ class ReadingTypeBadge extends StatelessWidget {
         _labels[mediaType] ?? '其他',
         style: theme.textTheme.labelSmall?.copyWith(
           color: Colors.white,
-          fontSize: 10,
+          fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -412,7 +423,7 @@ class ReadingListTile extends ConsumerWidget {
                           color: colorScheme.onSurfaceVariant.withValues(
                             alpha: 0.75,
                           ),
-                          fontSize: 10,
+                          fontSize: 12,
                         ),
                       ),
                     ],

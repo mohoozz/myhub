@@ -213,12 +213,18 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   ///
   /// 三种策略：
   /// * [PlayerOrientation.portrait]  - 视频/音频均锁定竖屏；
-  /// * [PlayerOrientation.landscape] - 视频锁定横屏，音频保持竖屏；
+  /// * [PlayerOrientation.landscape] - 视频/音频均锁定横屏；
   /// * [PlayerOrientation.sensor]    - 视频跟随水平仪，音频保持竖屏。
+  ///
+  /// 音频模式：手动 portrait/landscape 切换应生效（横竖屏按钮可用），
+  /// 仅 sensor（水平仪自动横竖屏）对音频禁用——唱片封面不适合随设备
+  /// 姿态自动旋转，自动模式回退竖屏。
   void _applyOrientationLock() {
     if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
-    // 音频模式不参与横屏策略：唱片封面更适合竖屏
-    if (!_controller.isVideoMode.value) {
+    // 音频模式 + 水平仪自动：保持竖屏（唱片封面不适合自动横竖屏）
+    if (!_controller.isVideoMode.value &&
+        _orientation == PlayerOrientation.sensor) {
+      _orientationWatcher.stop();
       _setOrientations(const [DeviceOrientation.portraitUp]);
       return;
     }
@@ -579,9 +585,6 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                     osd: _osd,
                                     loading: loading,
                                     buffering: _buffering,
-                                    // 音频模式下隐藏中央按钮（按钮在唱片中央），
-                                    // 避免重叠和与 OSD 进度提示冲突。
-                                    showCenterPlayButton: isVideo,
                                     onBack: _exitAndStop,
                                     onMini: _enterMiniMode,
                                     onMiniDrag: isDesktopPlatform

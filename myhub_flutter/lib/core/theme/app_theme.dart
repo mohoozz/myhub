@@ -204,14 +204,43 @@ abstract final class AppTheme {
         ),
         unselectedLabelTextStyle: TextStyle(color: textSecondary),
       ),
-      textTheme: (isDark
-              ? Typography.material2021().white
-              : Typography.material2021().black)
-          .apply(
-        bodyColor: textPrimary,
-        displayColor: textPrimary,
-        fontFamilyFallback: _fontFamilyFallback,
-      ),
+      textTheme: _scaledTextTheme(isDark, textPrimary),
+    );
+  }
+
+  /// 全局字号缩放。
+  ///
+  /// Material 3 默认正文 (bodyMedium) 只有 14px，在移动端偏小。这里做整体
+  /// 放大：bodyMedium 升到 15px，小字 (bodySmall/labelSmall) 提升比例略高，
+  /// 保证小标签在缩小时依然可读，标题层级随之同步放大。
+  /// 由于大部分页面通过 [TextTheme] 取字号，这一处缩放即可全局生效。
+  static TextTheme _scaledTextTheme(bool isDark, Color textPrimary) {
+    final base = (isDark
+            ? Typography.material2021().white
+            : Typography.material2021().black)
+        .apply(
+      bodyColor: textPrimary,
+      displayColor: textPrimary,
+      fontFamilyFallback: _fontFamilyFallback,
+    );
+    // 逐级放大：小字 +3px，正文 +1px，标题 +1px，大标题 +2px。
+    // 数值来源：主流 App（如微信/QQ/今日头条）正文约 15~16px，
+    // 辅助说明文字约 13px，标签约 12px。
+    return base.copyWith(
+      displayLarge: base.displayLarge?.copyWith(fontSize: 58),
+      displayMedium: base.displayMedium?.copyWith(fontSize: 46),
+      displaySmall: base.displaySmall?.copyWith(fontSize: 37),
+      headlineMedium: base.headlineMedium?.copyWith(fontSize: 29),
+      headlineSmall: base.headlineSmall?.copyWith(fontSize: 25),
+      titleLarge: base.titleLarge?.copyWith(fontSize: 23),
+      titleMedium: base.titleMedium?.copyWith(fontSize: 17),
+      titleSmall: base.titleSmall?.copyWith(fontSize: 15),
+      bodyLarge: base.bodyLarge?.copyWith(fontSize: 17),
+      bodyMedium: base.bodyMedium?.copyWith(fontSize: 15),
+      bodySmall: base.bodySmall?.copyWith(fontSize: 13),
+      labelLarge: base.labelLarge?.copyWith(fontSize: 15),
+      labelMedium: base.labelMedium?.copyWith(fontSize: 13),
+      labelSmall: base.labelSmall?.copyWith(fontSize: 12),
     );
   }
 

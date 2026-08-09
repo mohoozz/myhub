@@ -11,6 +11,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/api/stream_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
@@ -818,9 +819,10 @@ class MediaPlayerController {
       final token =
           await const FlutterSecureStorage().read(key: kAccessTokenKey);
       if (!identical(_player, player)) return; // 会话已切换
+      final baseUrl = _ref.read(apiBaseUrlProvider);
       final url = _useHls
-          ? StreamApi.hlsPlaylistUrl(sourceId, file.path)
-          : StreamApi.streamUrl(sourceId, file.path);
+          ? StreamApi.hlsPlaylistUrl(sourceId, file.path, baseUrl: baseUrl)
+          : StreamApi.streamUrl(sourceId, file.path, baseUrl: baseUrl);
       await player.open(
         Media(
           url,
@@ -972,7 +974,11 @@ class MediaPlayerController {
         final subPath = dir == '/' ? '/$name' : '$dir/$name';
         await player.setSubtitleTrack(
           SubtitleTrack.uri(
-            StreamApi.subtitleUrl(sourceId, subPath),
+            StreamApi.subtitleUrl(
+              sourceId,
+              subPath,
+              baseUrl: _ref.read(apiBaseUrlProvider),
+            ),
             title: name,
           ),
         );

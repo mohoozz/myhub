@@ -201,20 +201,31 @@ class _FileRow extends StatelessWidget {
                   item.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: highlighted ? colorScheme.primary : null,
-                    fontWeight: highlighted ? FontWeight.w600 : null,
-                  ),
+                  // 移动端放大：参考"正在阅读"列表标题（bodyMedium + w600），
+                  // 使 iOS 文件名更清晰。
+                  style: isMobile
+                      ? theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: highlighted ? colorScheme.primary : null,
+                        )
+                      : theme.textTheme.bodySmall?.copyWith(
+                          color: highlighted ? colorScheme.primary : null,
+                          fontWeight: highlighted ? FontWeight.w600 : null,
+                        ),
                 ),
               ),
               Expanded(
                 flex: 2,
                 child: Text(
                   item.isDir ? '-' : formatBytes(item.size),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 11,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+                  style: isMobile
+                      ? theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        )
+                      : theme.textTheme.bodySmall?.copyWith(
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
                 ),
               ),
               // 修改时间列：仅桌面端显示（宽屏信息完整，窄屏去掉避免挤压）
@@ -224,7 +235,7 @@ class _FileRow extends StatelessWidget {
                   child: Text(
                     formatModTime(item.modTime),
                     style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: 11,
+                      fontSize: 12,
                       color: colorScheme.onSurfaceVariant,
                     ),
                   ),

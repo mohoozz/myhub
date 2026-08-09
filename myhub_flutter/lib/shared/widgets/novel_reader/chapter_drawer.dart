@@ -154,7 +154,7 @@ class ReaderBottomBar extends StatelessWidget {
                         const SizedBox(width: 8),
                         Text(
                           '$percent%',
-                          style: TextStyle(color: style.subtle, fontSize: 11),
+                          style: TextStyle(color: style.subtle, fontSize: 12),
                         ),
                         const SizedBox(width: 4),
                         // 设置按钮：与漫画底栏的"模式切换"中央对齐

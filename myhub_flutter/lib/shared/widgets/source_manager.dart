@@ -172,7 +172,7 @@ class _SourceRow extends ConsumerWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodySmall?.copyWith(
-                  fontSize: 10,
+                  fontSize: 12,
                   color: colorScheme.onSurfaceVariant,
                 ),
               ),

@@ -253,7 +253,7 @@ class _ReaderPageModeState extends State<ReaderPageMode> {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: widget.style.subtle,
-                                fontSize: 11,
+                                fontSize: 12,
                               ),
                             ),
                           ),
@@ -261,7 +261,7 @@ class _ReaderPageModeState extends State<ReaderPageMode> {
                             '${i + 1}/${_pages.length}',
                             style: TextStyle(
                               color: widget.style.subtle,
-                              fontSize: 11,
+                              fontSize: 12,
                             ),
                           ),
                         ],

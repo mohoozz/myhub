@@ -8,6 +8,7 @@ import 'package:myhub_flutter/core/api/reader_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
+import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/chapter_drawer.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/page_mode.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/reader_settings.dart';
@@ -118,6 +119,8 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   @override
   void initState() {
     super.initState();
+    // 阅读器为沉浸式页面：进入时隐藏迷你播放器，避免悬浮条遮挡正文
+    ref.read(mediaPlayerProvider).pageOpened();
     _loadChapters();
   }
 
@@ -127,6 +130,8 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     _saveDebounce?.cancel();
     _saveProgress(); // 退出阅读器时同步落盘（6.4）
     _scrollFraction.dispose();
+    // 退出阅读器：媒体仍在播放时恢复迷你播放器
+    ref.read(mediaPlayerProvider).pageClosed();
     super.dispose();
   }
 

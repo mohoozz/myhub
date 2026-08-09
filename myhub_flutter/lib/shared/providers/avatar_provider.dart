@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/auth_api.dart';
-import 'package:myhub_flutter/core/config/env.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -64,5 +64,5 @@ class AvatarNotifier extends Notifier<String?> {
   }
 
   String _absolute(String url) =>
-      url.startsWith('http') ? url : '${Env.apiBaseUrl}$url';
+      url.startsWith('http') ? url : '${ref.read(apiBaseUrlProvider)}$url';
 }

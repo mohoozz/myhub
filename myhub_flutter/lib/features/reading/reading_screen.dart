@@ -27,6 +27,9 @@ class ReadingScreen extends ConsumerStatefulWidget {
 /// PC 端右键 / 移动端长按菜单项。
 enum _ReadingMenuAction { info, locate, delete }
 
+/// 标题栏「...」菜单项：多选 / 刷新。
+enum _HeaderMenuAction { select, refresh }
+
 class _ReadingScreenState extends ConsumerState<ReadingScreen> {
   /// 多选选中集合，key 为 "sourceId|filePath"。
   final Set<String> _selected = {};
@@ -328,12 +331,15 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 860),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(7, 24, 7, 0),
+          // 顶部间距：移动端顶部安全区 / Dynamic Island 已由父级 SafeArea
+          // 处理，这里只保留一个轻量内边距让标题与状态栏分开即可，
+          // 避免红框中那种明显的额外空白。
+          padding: const EdgeInsets.fromLTRB(7, 8, 7, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _buildHeader(theme, colorScheme, progressAsync, viewMode),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () =>
@@ -421,33 +427,57 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
           ),
         ),
         const Spacer(),
+        // 视图切换：列表 / 卡片两种模式用同一个按钮交替切换，
+        // 图标和 tooltip 跟随当前模式动态变化。
         IconButton(
-          icon: const Icon(LucideIcons.checkSquare, size: 16),
-          onPressed: _enterSelectionEmpty,
-          tooltip: '多选',
-          visualDensity: VisualDensity.compact,
-        ),
-        IconButton(
-          icon: const Icon(LucideIcons.rotateCw, size: 16),
-          onPressed: () => ref.read(readingListProvider.notifier).refresh(),
-          tooltip: '刷新',
-          visualDensity: VisualDensity.compact,
-        ),
-        IconButton(
-          icon: const Icon(LucideIcons.layoutGrid, size: 16),
-          color: viewMode == ReadingViewMode.grid ? colorScheme.primary : null,
+          icon: Icon(
+            viewMode == ReadingViewMode.grid
+                ? LucideIcons.layoutGrid
+                : LucideIcons.list,
+            size: 16,
+          ),
+          color: colorScheme.primary,
           onPressed: () => ref.read(readingViewModeProvider.notifier).state =
-              ReadingViewMode.grid,
-          tooltip: '网格视图',
+              viewMode == ReadingViewMode.grid
+                  ? ReadingViewMode.list
+                  : ReadingViewMode.grid,
+          tooltip: viewMode == ReadingViewMode.grid
+              ? '当前：网格视图，点击切换为列表'
+              : '当前：列表视图，点击切换为网格',
           visualDensity: VisualDensity.compact,
         ),
-        IconButton(
-          icon: const Icon(LucideIcons.list, size: 16),
-          color: viewMode == ReadingViewMode.list ? colorScheme.primary : null,
-          onPressed: () => ref.read(readingViewModeProvider.notifier).state =
-              ReadingViewMode.list,
-          tooltip: '列表视图',
-          visualDensity: VisualDensity.compact,
+        // 多选 + 刷新收纳到「...」菜单中，避免占用标题栏过多横向空间。
+        PopupMenuButton<_HeaderMenuAction>(
+          icon: const Icon(LucideIcons.ellipsis, size: 16),
+          tooltip: '更多',
+          onSelected: (action) {
+            switch (action) {
+              case _HeaderMenuAction.select:
+                _enterSelectionEmpty();
+              case _HeaderMenuAction.refresh:
+                ref.read(readingListProvider.notifier).refresh();
+            }
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(
+              value: _HeaderMenuAction.select,
+              child: ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(LucideIcons.checkSquare, size: 16),
+                title: Text('多选'),
+              ),
+            ),
+            PopupMenuItem(
+              value: _HeaderMenuAction.refresh,
+              child: ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(LucideIcons.rotateCw, size: 16),
+                title: Text('刷新'),
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -468,9 +498,10 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
               // 高度 = 宽度 / childAspectRatio。
-              // iOS 窄屏下文本与进度条容易溢出，这里把比例调小一点，
-              // 让卡片更高一些，留出充分空间。
-              childAspectRatio: 0.88,
+              // 比例越大卡片越"扁"。iOS 窄屏单列布局下把比例调大一些，
+              // 让卡片高度更贴合封面 + 文字 + 进度条的实际内容，
+              // 避免 GridView 单元格过高导致卡片底部出现大片空白。
+              childAspectRatio: 1.05,
             ),
             itemCount: items.length,
             itemBuilder: (context, index) {

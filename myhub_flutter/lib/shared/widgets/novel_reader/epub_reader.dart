@@ -9,6 +9,7 @@ import 'package:myhub_flutter/core/api/reader_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
+import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_reader.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/chapter_drawer.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/epub_html.dart';
@@ -102,6 +103,8 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
   @override
   void initState() {
     super.initState();
+    // 阅读器为沉浸式页面：进入时隐藏迷你播放器，避免悬浮条遮挡正文
+    ref.read(mediaPlayerProvider).pageOpened();
     _loadMeta();
   }
 
@@ -109,6 +112,8 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
   void dispose() {
     _saveDebounce?.cancel();
     _saveProgress(); // 退出阅读器时同步落盘（6.4）
+    // 退出阅读器：媒体仍在播放时恢复迷你播放器
+    ref.read(mediaPlayerProvider).pageClosed();
     super.dispose();
   }
 

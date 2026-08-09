@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/api/stream_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 
 /// 音频唱片封面模式（TODO 5.3）。
@@ -15,7 +16,7 @@ import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 /// * 黑胶唱片样式封面，`RotationTransition` 旋转动效：播放时旋转，暂停时停在当前角度；
 /// * 封面来源：同目录同名图片，或 cover/folder/front（jpg/jpeg/png/webp），
 ///   其次回退到后端缩略图接口提取的内嵌专辑封面，均无封面时显示音乐图标占位；
-/// * 标题 + 作者信息居中（按 "作者 - 标题" 文件名约定解析）；
+/// * 唱片居中显示，不重复标题/作者（与顶部标题栏一致，避免重复文字）；
 /// * 控制栏与视频完全一致（外层 Stack 挂载的 PlayerControls，与模式无关）。
 class AudioCoverMode extends ConsumerStatefulWidget {
   const AudioCoverMode({
@@ -85,20 +86,6 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
     super.dispose();
   }
 
-  /// 解析 "作者 - 标题.扩展名" 约定；无分隔符时作者为 null。
-  static (String, String?) _parseTitleArtist(String filename) {
-    var base = filename;
-    final dot = base.lastIndexOf('.');
-    if (dot > 0) {
-      base = base.substring(0, dot);
-    }
-    final sep = base.indexOf(' - ');
-    if (sep > 0 && sep < base.length - 3) {
-      return (base.substring(sep + 3).trim(), base.substring(0, sep).trim());
-    }
-    return (base, null);
-  }
-
   /// '/a/b/c.mp3' → '/a/b'
   static String _parentDirOf(String path) {
     final idx = path.lastIndexOf('/');
@@ -141,6 +128,7 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
           ? StreamApi.streamUrl(
               widget.sourceId,
               dir == '/' ? '/$found' : '$dir/$found',
+              baseUrl: ref.read(apiBaseUrlProvider),
             )
           : ref
                 .read(fileApiProvider)
@@ -166,79 +154,28 @@ class _AudioCoverModeState extends ConsumerState<AudioCoverMode>
 
   @override
   Widget build(BuildContext context) {
-    final (title, artist) = _parseTitleArtist(widget.file.name);
     final shortest = MediaQuery.sizeOf(context).shortestSide;
     final discSize = (shortest * 0.52).clamp(160.0, 320.0);
 
+    // 只居中显示唱片，不再在唱片下方重复显示标题/作者（与顶部标题栏一致，
+    // 避免重复）。
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 唱片 + 播放按钮叠加：唱片旋转，按钮不旋转但共享圆心
-          SizedBox(
-            width: discSize,
-            height: discSize,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                RotationTransition(
-                  turns: _rotation,
-                  child: _VinylDisc(
-                    size: discSize,
-                    coverUrl: _coverUrl,
-                    coverHeaders: _coverHeaders,
-                  ),
-                ),
-                // 中央播放按钮（不旋转，精确对齐唱片圆心）
-                Material(
-                  color: Colors.black54,
-                  shape: const CircleBorder(),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: () => widget.player.playOrPause(),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Icon(
-                        _playing ? LucideIcons.pause : LucideIcons.play,
-                        size: 36,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 28),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 48),
-            child: Text(
-              title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 17,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          if (artist != null && artist.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 48),
-              child: Text(
-                artist,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white54, fontSize: 13),
+      child: SizedBox(
+        width: discSize,
+        height: discSize,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            RotationTransition(
+              turns: _rotation,
+              child: _VinylDisc(
+                size: discSize,
+                coverUrl: _coverUrl,
+                coverHeaders: _coverHeaders,
               ),
             ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -285,18 +222,6 @@ class _VinylDisc extends StatelessWidget {
               )
             else
               const _CoverPlaceholder(),
-            // 中心孔
-            Center(
-              child: Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.black,
-                  border: Border.all(color: Colors.white24, width: 2),
-                ),
-              ),
-            ),
           ],
         ),
       ),

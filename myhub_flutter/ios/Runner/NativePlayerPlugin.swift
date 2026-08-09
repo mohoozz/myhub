@@ -113,6 +113,10 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       return
     }
     let headers = args["headers"] as? [String: String] ?? [:]
+    let title = args["title"] as? String ?? "Myhub"
+    // Flutter 侧显式告知原生是否为音频文件：音频不创建视频输出/纹理，
+    // 避免 Flutter 端 Texture 显示一个空圆圈占位。
+    let isAudio = (args["isAudio"] as? Bool) ?? false
     // 关键：texture 注册延迟到真正播放时（open），此时引擎渲染上下文已就绪，
     // registrar.textures() 返回的 relay 的 delegate 才有效，register 返回 >=1。
     let registry = registrar?.textures()
@@ -129,7 +133,7 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         eventSink: eventSink, textureRegistry: registry)
       NativePlayerPlugin.shared = controller
     }
-    controller.open(url: url, headers: headers)
+    controller.open(url: url, title: title, headers: headers, isAudio: isAudio)
     result(nil)
   }
 

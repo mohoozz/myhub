@@ -1,9 +1,14 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/core/theme/theme_mode_provider.dart';
+import 'package:myhub_flutter/features/auth/providers/auth_provider.dart';
 import 'package:myhub_flutter/features/auth/widgets/change_password_dialog.dart';
 import 'package:myhub_flutter/features/settings/providers/app_config_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
@@ -38,6 +43,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   static const List<({String title, IconData icon, Widget child})> _sections =
       [
+    (title: '服务器', icon: LucideIcons.server, child: _ServerSection()),
     (title: '账号安全', icon: LucideIcons.shieldCheck, child: _AccountSection()),
     (title: '外观', icon: LucideIcons.sunMoon, child: _AppearanceSection()),
     (title: '路径源管理', icon: LucideIcons.folderCog, child: _SourcesSection()),
@@ -62,7 +68,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// 窄屏：全部分组单列堆叠。
   Widget _buildSinglePane(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(7, 24, 7, 24),
+      padding: const EdgeInsets.fromLTRB(7, 8, 7, 24),
       child: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -239,6 +245,142 @@ Future<void> _saveConfig(
 }
 
 // ---------------------------------------------------------------------------
+// 服务器
+// ---------------------------------------------------------------------------
+
+/// 服务器地址配置：外网/内网双地址，客户端自动判断使用哪一路；保存后切换生效。
+class _ServerSection extends ConsumerWidget {
+  const _ServerSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final config = ref.watch(serverConfigProvider);
+
+    Future<void> edit() async {
+      final wanController = TextEditingController(text: config.wanUrl);
+      final lanController = TextEditingController(text: config.lanUrl);
+      final saved = await showDialog<({String wan, String lan})>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('服务器配置'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '请输入服务器主机地址（含协议与端口），外网必填，内网可选：',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: wanController,
+                autofocus: true,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: '外网地址',
+                  hintText: 'http://example.com:8080',
+                  prefixIcon: Icon(LucideIcons.server),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: lanController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: '内网地址（可选）',
+                  hintText: 'http://192.168.1.100:8080',
+                  prefixIcon: Icon(LucideIcons.home),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(
+                (wan: wanController.text, lan: lanController.text),
+              ),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      wanController.dispose();
+      lanController.dispose();
+      if (saved == null || saved.wan.trim().isEmpty) return;
+      await ref.read(serverConfigProvider.notifier).setUrls(
+        wanUrl: saved.wan,
+        lanUrl: saved.lan,
+      );
+      // 保存后立即自动判断内网/外网
+      await ref.read(serverConfigProvider.notifier).autoDetect();
+      if (context.mounted) showTopSnackBar(context, '服务器配置已更新');
+    }
+
+    Future<void> test() async {
+      final result =
+          await ref.read(serverConfigProvider.notifier).testConnection();
+      if (context.mounted) showTopSnackBar(context, result.message);
+    }
+
+    return _SectionCard(
+      title: '服务器',
+      children: [
+        _ActionRow(
+          icon: LucideIcons.server,
+          label: '外网地址',
+          trailing: Text(
+            config.wanUrl,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          onTap: edit,
+        ),
+        const Divider(height: 24),
+        _ActionRow(
+          icon: LucideIcons.home,
+          label: '内网地址',
+          trailing: Text(
+            config.hasLanUrl ? config.lanUrl : '未配置',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          onTap: edit,
+        ),
+        const Divider(height: 24),
+        _ActionRow(
+          icon: LucideIcons.plug,
+          label: '测试连接',
+          trailing: Text(
+            config.activeNetwork == 'lan' ? '当前：内网' : '当前：外网',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          onTap: test,
+        ),
+        const Divider(height: 24),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            '配置了内网地址时，客户端将优先连接内网，内网不可用再退回外网。',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 账号安全
 // ---------------------------------------------------------------------------
 
@@ -272,8 +414,38 @@ class _AccountSection extends ConsumerWidget {
             }
           },
         ),
+        const Divider(height: 24),
+        _ActionRow(
+          icon: LucideIcons.logOut,
+          label: '退出登录',
+          onTap: () => _confirmLogout(context, ref),
+        ),
       ],
     );
+  }
+
+  /// 确认后退出登录（清除本地 Token，路由守卫自动跳回登录页）。
+  Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('退出登录'),
+        content: const Text('确定要退出当前账号吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref.read(authProvider).logout();
+    }
   }
 }
 
@@ -640,9 +812,13 @@ class _CacheRowState extends State<_CacheRow> {
           Expanded(
             child: Text(
               '图片缓存',
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w500,
-              ),
+              style: (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
+                  ? theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    )
+                  : theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
             ),
           ),
           Text(
@@ -767,6 +943,12 @@ class _ActionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    // 移动端放大行标签：参考"正在阅读"列表（bodyMedium + w600），
+    // 避免 iOS 设置项文字偏小。
+    final labelStyle = isMobile
+        ? theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)
+        : theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w500);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -777,12 +959,7 @@ class _ActionRow extends StatelessWidget {
             Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                label,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+              child: Text(label, style: labelStyle),
             ),
             ?trailing,
             if (onTap != null && trailing == null)
@@ -822,13 +999,17 @@ class _SliderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    final labelStyle = isMobile
+        ? theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500)
+        : theme.textTheme.bodySmall;
     return SizedBox(
       height: 48,
       child: Row(
         children: [
           SizedBox(
             width: 64,
-            child: Text(label, style: theme.textTheme.bodySmall),
+            child: Text(label, style: labelStyle),
           ),
           Expanded(
             child: SliderTheme(
@@ -881,13 +1062,20 @@ class _DropdownRow<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    final labelStyle = isMobile
+        ? theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500)
+        : theme.textTheme.bodySmall;
+    final itemStyle = isMobile
+        ? theme.textTheme.bodyMedium
+        : theme.textTheme.bodySmall;
     return SizedBox(
       height: 48,
       child: Row(
         children: [
           SizedBox(
             width: 64,
-            child: Text(label, style: theme.textTheme.bodySmall),
+            child: Text(label, style: labelStyle),
           ),
           Expanded(
             child: SizedBox(
@@ -898,7 +1086,7 @@ class _DropdownRow<T> extends StatelessWidget {
                   for (final (v, label) in options)
                     DropdownMenuItem(
                       value: v,
-                      child: Text(label, style: theme.textTheme.bodySmall),
+                      child: Text(label, style: itemStyle),
                     ),
                 ],
                 onChanged: (v) {
@@ -907,7 +1095,7 @@ class _DropdownRow<T> extends StatelessWidget {
                 decoration: const InputDecoration(
                   contentPadding: EdgeInsets.symmetric(horizontal: 12),
                 ),
-                style: theme.textTheme.bodySmall,
+                style: itemStyle,
                 icon: Icon(
                   LucideIcons.chevronDown,
                   size: 15,
@@ -945,13 +1133,17 @@ class _StepperRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    final labelStyle = isMobile
+        ? theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500)
+        : theme.textTheme.bodySmall;
     return SizedBox(
       height: 48,
       child: Row(
         children: [
           SizedBox(
             width: 64,
-            child: Text(label, style: theme.textTheme.bodySmall),
+            child: Text(label, style: labelStyle),
           ),
           _StepButton(
             icon: LucideIcons.minus,

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:myhub_flutter/core/api/stream_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
@@ -186,9 +187,17 @@ class NativePlayerController {
     try {
       final token =
           await const FlutterSecureStorage().read(key: kAccessTokenKey);
-      final url = StreamApi.streamUrl(sourceId, file.path);
+      final url = StreamApi.streamUrl(
+        sourceId,
+        file.path,
+        baseUrl: _ref.read(apiBaseUrlProvider),
+      );
       await _channel.invokeMethod('open', {
         'url': url,
+        'title': file.name,
+        // 显式告知原生是否为音频：音频文件不创建视频输出/纹理，
+        // 避免 iOS 上 Texture 显示一个空圆圈（默认占位）。
+        'isAudio': file.isAudio,
         'headers': {
           if (token != null && token.isNotEmpty)
             'Authorization': 'Bearer $token',

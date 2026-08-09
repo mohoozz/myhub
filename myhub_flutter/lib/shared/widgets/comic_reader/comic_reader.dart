@@ -11,6 +11,7 @@ import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
+import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_settings.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/double_page.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/preloader.dart';
@@ -114,6 +115,8 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
   @override
   void initState() {
     super.initState();
+    // 阅读器为沉浸式页面：进入时隐藏迷你播放器，避免悬浮条遮挡画面
+    ref.read(mediaPlayerProvider).pageOpened();
     if (isDesktopPlatform) {
       // initState 处于组件树锁定阶段，延迟到帧后修改 provider
       _immersiveTitleBar = ref.read(immersiveTitleBarProvider.notifier);
@@ -136,6 +139,8 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
       });
     }
     unawaited(_saveProgress()); // 退出阅读器时补报页码进度（7.4）
+    // 退出阅读器：媒体仍在播放时恢复迷你播放器
+    ref.read(mediaPlayerProvider).pageClosed();
     super.dispose();
   }
 
@@ -656,7 +661,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
           children: [
             Text(
               '$page',
-              style: const TextStyle(color: _subtle, fontSize: 11),
+              style: const TextStyle(color: _subtle, fontSize: 12),
             ),
             Expanded(
               child: SliderTheme(
@@ -687,7 +692,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
             ),
             Text(
               '$total',
-              style: const TextStyle(color: _subtle, fontSize: 11),
+              style: const TextStyle(color: _subtle, fontSize: 12),
             ),
           ],
         ),

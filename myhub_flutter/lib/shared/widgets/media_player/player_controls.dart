@@ -32,7 +32,6 @@ class PlayerControls extends StatefulWidget {
     required this.osd,
     this.loading = false,
     this.buffering = false,
-    this.showCenterPlayButton = true,
     this.onMini,
     this.onMiniDrag,
     this.onMiniDragEnd,
@@ -59,10 +58,6 @@ class PlayerControls extends StatefulWidget {
 
   /// 播放中缓冲：隐藏中央大按钮，避免与页面级缓冲转圈重叠。
   final bool buffering;
-
-  /// 是否显示中央大播放按钮。音频模式下设为 false（按钮已嵌入唱片中央），
-  /// 避免与唱片中央按钮重叠以及和 OSD 进度提示冲突。
-  final bool showCenterPlayButton;
 
   /// 进入迷你模式：退出播放页但保持播放（底部迷你条接管）。
   /// 为 null 时隐藏迷你按钮。
@@ -142,14 +137,12 @@ class _PlayerControlsState extends State<PlayerControls> {
     _subs.addAll([
       (stream.playing as Stream<bool>).listen((v) {
         if (!mounted) return;
-        setState(() {
-          _playing = v;
-          if (!v) _visible = true; // 暂停时常显
-        });
-        if (v) {
-          _startHideTimer();
-        } else {
+        setState(() => _playing = v);
+        if (!v) {
+          _setVisible(true); // 暂停时常显
           _hideTimer?.cancel();
+        } else {
+          _startHideTimer();
         }
       }),
       (stream.position as Stream<Duration>).listen((p) {
@@ -208,7 +201,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     if (!_playing || _locked) return; // 暂停或锁定时不自动隐藏
     _hideTimer = Timer(_kHideDelay, () {
       if (mounted && _playing && !_locked) {
-        setState(() => _visible = false);
+        _setVisible(false);
       }
     });
   }
@@ -216,14 +209,14 @@ class _PlayerControlsState extends State<PlayerControls> {
   /// 任意交互时调用：显示控制栏并重置隐藏计时。
   void _wake() {
     if (!_visible) {
-      setState(() => _visible = true);
+      _setVisible(true);
     }
     _startHideTimer();
   }
 
   void _toggleVisible() {
     if (_locked) return; // 锁定时轻触不切换显隐（锁定态常显）
-    setState(() => _visible = !_visible);
+    _setVisible(!_visible);
     if (_visible) {
       _startHideTimer();
     } else {
@@ -231,20 +224,25 @@ class _PlayerControlsState extends State<PlayerControls> {
     }
   }
 
+  /// 设置控制栏显隐（统一出口，便于后续扩展联动）。
+  void _setVisible(bool v) {
+    if (_visible == v) return;
+    setState(() => _visible = v);
+  }
+
   // ---------- 锁定 ----------
 
   /// 长按进入锁定：常显控制栏、屏蔽手势与调节按钮，中央仅留锁图标。
   void _lock() {
     _hideTimer?.cancel();
-    setState(() {
-      _locked = true;
-      _visible = true;
-    });
+    setState(() => _locked = true);
+    _setVisible(true);
   }
 
   /// 点击中央锁图标解锁：恢复手势与按钮，重新开始自动隐藏计时。
   void _unlock() {
     setState(() => _locked = false);
+    _setVisible(true);
     _startHideTimer();
   }
 
@@ -462,46 +460,10 @@ class _PlayerControlsState extends State<PlayerControls> {
                 right: 0,
                 child: _fade(_buildTopBar(context)),
               ),
-            // 中央大按钮：锁定态显示锁图标（点击解锁），
-            // 否则显示播放/暂停（加载/缓冲中不显示，缓冲时页面级转圈独占中央）。
-            // 音频模式下隐藏（按钮已嵌入 AudioCoverMode 唱片中央），
-            // 避免与唱片按钮重叠和 OSD 进度提示冲突。
-            if (widget.showCenterPlayButton)
-              Center(
-                child: _locked
-                    ? _buildUnlockButton()
-                    : IgnorePointer(
-                      ignoring:
-                          !_visible || widget.loading || widget.buffering,
-                      child: AnimatedOpacity(
-                        opacity: _visible &&
-                                !widget.loading &&
-                                !widget.buffering
-                            ? 1
-                            : 0,
-                        duration: const Duration(milliseconds: 200),
-                        child: Material(
-                          color: Colors.black45,
-                          shape: const CircleBorder(),
-                          clipBehavior: Clip.antiAlias,
-                          child: InkWell(
-                            customBorder: const CircleBorder(),
-                            onTap: _togglePlay,
-                            child: Padding(
-                              padding: const EdgeInsets.all(18),
-                              child: Icon(
-                                _playing
-                                    ? LucideIcons.pause
-                                    : LucideIcons.play,
-                                size: 42,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-            ),
+            // 中央锁定解锁按钮：仅锁定态显示锁图标（点击解锁）。
+            // 已移除中央大播放/暂停按钮（播放/暂停由底栏按钮与手势控制，
+            // 避免遮挡画面中央）。
+            if (_locked) Center(child: _buildUnlockButton()),
             // 方向切换悬浮按钮（仅移动端）：贴屏幕左侧中部显示，
             // 跟随控制栏显隐（轻触画面/暂停时显，自动隐藏延时到时隐）。
             // SafeArea 只保留左侧 inset：iPhone 横屏时刘海/Dynamic Island

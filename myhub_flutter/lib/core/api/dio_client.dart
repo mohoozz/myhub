@@ -3,26 +3,36 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
-import 'package:myhub_flutter/core/config/env.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 
 /// Shared [Dio] instance for the whole app.
+///
+/// 监听服务器配置：用户切换服务器地址时重建 Dio，使后续请求发往新服务器。
 final dioProvider = Provider<Dio>(
-  (ref) => DioClient.create(
-    // 401 → 清除登录状态，路由守卫自动跳回登录页
-    onUnauthorized: () =>
-        ref.read(authStateProvider.notifier).markLoggedOut(),
-  ),
+  (ref) {
+    // watch 服务器地址：变化时本 provider 重建，Dio 也随之重建
+    final baseUrl = ref.watch(apiBaseUrlProvider);
+    return DioClient.create(
+      baseUrl: baseUrl,
+      // 401 → 清除登录状态，路由守卫自动跳回登录页
+      onUnauthorized: () =>
+          ref.read(authStateProvider.notifier).markLoggedOut(),
+    );
+  },
 );
 
 /// Factory for the pre-configured [Dio] singleton.
 abstract final class DioClient {
-  static Dio create({Future<void> Function()? onUnauthorized}) {
+  static Dio create({
+    required String baseUrl,
+    Future<void> Function()? onUnauthorized,
+  }) {
     final dio = Dio(
       BaseOptions(
-        // Env.apiBaseUrl 为主机地址（如 http://127.0.0.1:8080），
+        // baseUrl 为主机地址（如 http://127.0.0.1:8080），
         // 后端所有业务接口统一挂在 /api 前缀下。
-        baseUrl: '${Env.apiBaseUrl}/api',
+        baseUrl: '$baseUrl/api',
         connectTimeout: const Duration(seconds: 30),
         receiveTimeout: const Duration(seconds: 30),
         sendTimeout: const Duration(seconds: 30),

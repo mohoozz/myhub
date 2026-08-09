@@ -103,7 +103,7 @@ class UploadSheet extends ConsumerWidget {
       UploadStatus.uploading => Text(
           '${(task.progress * 100).toStringAsFixed(0)}%',
           style: theme.textTheme.bodySmall?.copyWith(
-            fontSize: 11,
+            fontSize: 12,
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),

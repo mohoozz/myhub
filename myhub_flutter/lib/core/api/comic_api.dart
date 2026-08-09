@@ -4,15 +4,21 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/api_client.dart';
 import 'package:myhub_flutter/core/api/dio_client.dart';
-import 'package:myhub_flutter/core/config/env.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 
 final comicApiProvider = Provider<ComicApi>(
-  (ref) => ComicApi(ref.watch(dioProvider)),
+  (ref) => ComicApi(
+    ref.watch(dioProvider),
+    baseUrl: ref.watch(apiBaseUrlProvider),
+  ),
 );
 
 /// 漫画阅读接口封装。
 class ComicApi extends ApiClient {
-  ComicApi(super.dio);
+  ComicApi(super.dio, {required this.baseUrl});
+
+  /// 当前生效的服务器主机地址。
+  final String baseUrl;
 
   /// 漫画识别。返回 {is_comic, reason}。
   Future<Map<String, dynamic>> detect(int sourceId, String path) async {
@@ -73,7 +79,7 @@ class ComicApi extends ApiClient {
   /// 单页图片完整 URL（供 CachedNetworkImage 等直接加载，需自带 JWT 头）。
   /// 页码 [n] 从 0 开始，与 pages() 返回的 index 对应。
   String pageUrl(int sourceId, String path, int n) {
-    return '${Env.apiBaseUrl}/api/reader/comic/page'
+    return '$baseUrl/api/reader/comic/page'
         '?source=$sourceId&path=${Uri.encodeComponent(path)}&n=$n';
   }
 

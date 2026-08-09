@@ -2,15 +2,21 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/api_client.dart';
 import 'package:myhub_flutter/core/api/dio_client.dart';
-import 'package:myhub_flutter/core/config/env.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 
 final fileApiProvider = Provider<FileApi>(
-  (ref) => FileApi(ref.watch(dioProvider)),
+  (ref) => FileApi(
+    ref.watch(dioProvider),
+    baseUrl: ref.watch(apiBaseUrlProvider),
+  ),
 );
 
 /// 文件管理接口封装。
 class FileApi extends ApiClient {
-  FileApi(super.dio);
+  FileApi(super.dio, {required this.baseUrl});
+
+  /// 当前生效的服务器主机地址。
+  final String baseUrl;
 
   /// 列目录（含媒体类型识别）。
   Future<List<dynamic>> listFiles(int sourceId, String path) async {
@@ -152,12 +158,12 @@ class FileApi extends ApiClient {
 
   /// 音视频缩略图 URL（音频提取内嵌专辑封面；需自行附带 Authorization 头加载）。
   String thumbnailUrl(int sourceId, String path) {
-    return '${Env.apiBaseUrl}/api/files/thumbnail?source=$sourceId&path=${Uri.encodeComponent(path)}';
+    return '$baseUrl/api/files/thumbnail?source=$sourceId&path=${Uri.encodeComponent(path)}';
   }
 
   /// 图片原图 URL（需自行附带 Authorization 头加载）。
   String imageUrl(int sourceId, String path) {
-    return '${Env.apiBaseUrl}/api/files/image?source=$sourceId&path=${Uri.encodeComponent(path)}';
+    return '$baseUrl/api/files/image?source=$sourceId&path=${Uri.encodeComponent(path)}';
   }
 
   /// 纯文本预览（不支持预览的文件经"纯文本"入口加载）。

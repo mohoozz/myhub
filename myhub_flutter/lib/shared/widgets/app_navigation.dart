@@ -79,36 +79,77 @@ class _CompactShell extends StatelessWidget {
     final selected = _visibleBranches.contains(shell.currentIndex)
         ? _visibleBranches.indexOf(shell.currentIndex)
         : 0;
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       // 移动端不再显示 AppBar：右上角头像已下沉到"我的"Tab 头部，
       // 避免顶栏占位造成阅读区上方留白。
       body: SafeArea(child: shell),
-      bottomNavigationBar: NavigationBar(
-        // 隐藏选中项的背景胶囊（indicatorColor = 透明），
-        // 选中和未选中态仅靠图标/文字颜色区分。
-        indicatorColor: Colors.transparent,
-        // 整体高度比默认 80 略小：紧凑布局，避免底部留白过多。
-        height: 64,
-        selectedIndex: selected,
-        onDestinationSelected: (index) => onSelect(_visibleBranches[index]),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(LucideIcons.house),
-            label: '阅读',
-          ),
-          NavigationDestination(
-            icon: Icon(LucideIcons.zap),
-            label: '动态',
-          ),
-          NavigationDestination(
-            icon: Icon(LucideIcons.folder),
-            label: '浏览',
-          ),
-          NavigationDestination(
-            icon: Icon(LucideIcons.userRound),
-            label: '我的',
-          ),
-        ],
+      bottomNavigationBar: Material(
+        // 顶部 1px 分隔线，把菜单栏和内容区"切开"，
+        // 避免和上面的浅色背景融为一体。
+        color: colorScheme.surface,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Divider(
+              height: 1,
+              thickness: 1,
+              color: colorScheme.outline,
+            ),
+            NavigationBarTheme(
+              // 1. 选中态图标/文字统一用品牌蓝（亮/暗主题都用 colorScheme.primary）
+              // 2. indicator 透明 + 关闭 overlay，去掉点击时的矩形高亮和选中胶囊
+              // 3. labelBehavior=alwaysHide：不显示任何文字，避免选中项"被弹起"的视觉跳跃
+              data: NavigationBarThemeData(
+                backgroundColor: colorScheme.surface,
+                surfaceTintColor: Colors.transparent,
+                indicatorColor: Colors.transparent,
+                indicatorShape: const RoundedRectangleBorder(),
+                overlayColor: WidgetStateProperty.all(Colors.transparent),
+                labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
+                iconTheme: WidgetStateProperty.resolveWith((states) {
+                  final selected = states.contains(WidgetState.selected);
+                  return IconThemeData(
+                    color: selected
+                        ? colorScheme.primary
+                        : colorScheme.onSurfaceVariant,
+                    size: 22,
+                  );
+                }),
+              ),
+              child: NavigationBar(
+                // 整体高度比默认 80 略小：紧凑布局，避免底部留白过多。
+                height: 52,
+                elevation: 0,
+                selectedIndex: selected,
+                onDestinationSelected: (index) =>
+                    onSelect(_visibleBranches[index]),
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(LucideIcons.house),
+                    selectedIcon: Icon(LucideIcons.house),
+                    label: '阅读',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(LucideIcons.zap),
+                    selectedIcon: Icon(LucideIcons.zap),
+                    label: '动态',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(LucideIcons.folder),
+                    selectedIcon: Icon(LucideIcons.folder),
+                    label: '浏览',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(LucideIcons.userRound),
+                    selectedIcon: Icon(LucideIcons.userRound),
+                    label: '我的',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -29,6 +29,17 @@ import 'package:myhub_flutter/shared/widgets/text_viewer/text_viewer.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart'
     show isDesktopPlatform;
 
+/// 头部「...」菜单项：上传 / 排序 / 多选 / 刷新 / 切换视图 / 新建文件夹 / 回收站。
+enum _BrowseMenuAction {
+  upload,
+  sort,
+  select,
+  refresh,
+  toggleView,
+  mkdir,
+  trash,
+}
+
 /// File browser page：路径源选择 + 面包屑 + 搜索 + 排序 + 网格/列表视图。
 class BrowseScreen extends ConsumerStatefulWidget {
   const BrowseScreen({super.key});
@@ -45,6 +56,10 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
 
   /// 高亮定位项的 GlobalKey（绑定到匹配文件，用于滚动定位）。
   final GlobalKey _highlightKey = GlobalKey();
+
+  /// 头部「...」按钮的 GlobalKey：从「排序」二级菜单触发时需要用它
+  /// 获取按钮位置，让排序菜单锚定在「...」按钮正下方。
+  final GlobalKey _moreMenuKey = GlobalKey();
 
   /// 网格/列表滚动控制器。
   ///
@@ -67,6 +82,35 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   /// 定位完成或超时后自动消失。
   bool _locating = false;
 
+  /// 浮起搜索框可见性：列表向下滚动超过 [_kSearchShowThreshold]
+  /// 时显示；滚回到顶部时隐藏。配合 [AnimatedSlide] 做丝滑过渡。
+  bool _searchBarVisible = false;
+
+  /// 上一次滚动像素位置，用于判断滚动方向。
+  double _lastScrollOffset = 0;
+
+  /// 触发浮起的滚动阈值：避免在顶部轻微 bounce 触发。
+  static const double _kSearchShowThreshold = 80;
+
+  /// 左边缘滑动手势：起始点全局 x 坐标（用于判断是否从左边缘开始）。
+  double? _edgeDragStartDx;
+
+  /// 左边缘滑动手势：起始点全局 y 坐标（保留以便将来扩展）。
+  double? _edgeDragStartDy;
+
+  /// 左边缘滑动手势：当前手势是否从左边缘激活。
+  ///
+  /// 仅当手势在屏幕最左 ~[_kEdgeSwipeZone] px 内启动时置为 true，
+  /// 否则视为普通横向滑动（如横向滚动的列表/未来横向元素），不触发返回。
+  bool _edgeDragActive = false;
+
+  /// 左边缘滑动激活区宽度（屏幕左边缘起，px）。
+  static const double _kEdgeSwipeZone = 30;
+
+  /// 触发返回上一级的水平滑动速度阈值（px/s，正值向右）。
+  /// 要求快速右滑，避免慢速横向拖动误触返回。
+  static const double _kEdgeSwipeVelocity = 300;
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -78,8 +122,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   /// 当前视图模式对应的滚动控制器（IndexedStack 中网格/列表各一个）。
   ScrollController get _activeScrollController =>
       ref.read(viewModeProvider) == BrowseViewMode.grid
-          ? _gridScrollController
-          : _listScrollController;
+      ? _gridScrollController
+      : _listScrollController;
 
   /// 高亮定位滚动。
   ///
@@ -368,11 +412,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         if (item.isNovel &&
             !item.name.toLowerCase().endsWith('.epub') &&
             !item.isDir)
-          _menuItem(
-            'openAsNovel',
-            LucideIcons.bookOpen,
-            '以小说阅读器打开',
-          ),
+          _menuItem('openAsNovel', LucideIcons.bookOpen, '以小说阅读器打开'),
         if (!item.isDir && sourceId != null)
           _menuItem('favorite', LucideIcons.star, isFav ? '取消收藏' : '收藏'),
         const PopupMenuDivider(),
@@ -391,11 +431,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         final source = ref.read(effectiveSourceProvider);
         if (source != null) {
           unawaited(
-            NovelReaderPage.open(
-              context,
-              sourceId: source.id,
-              file: item,
-            ),
+            NovelReaderPage.open(context, sourceId: source.id, file: item),
           );
         }
       case 'favorite':
@@ -452,7 +488,6 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
     final source = ref.watch(effectiveSourceProvider);
     final path = ref.watch(browsePathProvider);
     final viewMode = ref.watch(viewModeProvider);
@@ -507,192 +542,163 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 1. 路径源选择器（小胶囊，左对齐）
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: SourceSelector(
-                    onChanged: (_) =>
-                        ref.read(browsePathProvider.notifier).state = '/',
-                  ),
-                ),
-                const SizedBox(height: 10),
-                // 2. 当前路径 + 搜索栏（同一行：面包屑可滚动，搜索框宽度固定）
+                // 1. 顶部标题栏：路径源选择器（左，可横滑）+ 「...」菜单（右）。
+                //    把原本独立的"排序 / 上传"按钮都收纳进「...」菜单，
+                //    头部仅保留一行，避免 iOS 窄屏上两排控件 + 面包屑过于拥挤。
                 Row(
                   children: [
                     Expanded(
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: BreadcrumbBar(
-                          rootLabel: source?.name ?? '路径源',
-                          path: path,
-                          onNavigate: (target) =>
-                              ref.read(browsePathProvider.notifier).state =
-                                  target,
-                        ),
+                      child: SourceSelector(
+                        onChanged: (_) =>
+                            ref.read(browsePathProvider.notifier).state = '/',
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 180,
-                      height: 32,
-                      child: TextField(
-                        controller: _searchController,
-                        onChanged: (v) =>
-                            ref.read(searchQueryProvider.notifier).state = v,
-                        style: theme.textTheme.bodySmall,
-                        decoration: const InputDecoration(
-                          hintText: '搜索...',
-                          prefixIcon: Icon(LucideIcons.search, size: 14),
-                          contentPadding: EdgeInsets.symmetric(vertical: 8),
-                          isDense: true,
+                    const SizedBox(width: 4),
+                    PopupMenuButton<_BrowseMenuAction>(
+                      key: _moreMenuKey,
+                      icon: const Icon(LucideIcons.ellipsisVertical, size: 16),
+                      tooltip: '更多',
+                      position: PopupMenuPosition.under,
+                      onSelected: (action) => _onMenuAction(action),
+                      itemBuilder: (context) => [
+                        _buildMenuItem(
+                          icon: LucideIcons.upload,
+                          label: '上传',
+                          value: _BrowseMenuAction.upload,
                         ),
-                      ),
+                        _buildMenuItem(
+                          icon: LucideIcons.arrowDownUp,
+                          label: '排序',
+                          // 二级菜单显示当前排序：让用户知道当前生效的规则，
+                          // 同时也可作为入口引导到排序弹窗。
+                          subtitle:
+                              '${sort.label}${sort.ascending ? ' ↑' : ' ↓'}',
+                          value: _BrowseMenuAction.sort,
+                        ),
+                        _buildMenuItem(
+                          icon: LucideIcons.checkSquare,
+                          label: selectionMode ? '退出多选' : '多选',
+                          value: _BrowseMenuAction.select,
+                        ),
+                        _buildMenuItem(
+                          icon: LucideIcons.rotateCw,
+                          label: '刷新',
+                          value: _BrowseMenuAction.refresh,
+                        ),
+                        const PopupMenuDivider(),
+                        _buildMenuItem(
+                          icon: viewMode == BrowseViewMode.grid
+                              ? LucideIcons.list
+                              : LucideIcons.layoutGrid,
+                          label: viewMode == BrowseViewMode.grid
+                              ? '切换为列表视图'
+                              : '切换为网格视图',
+                          value: _BrowseMenuAction.toggleView,
+                        ),
+                        _buildMenuItem(
+                          icon: LucideIcons.folderPlus,
+                          label: '新建文件夹',
+                          value: _BrowseMenuAction.mkdir,
+                        ),
+                        _buildMenuItem(
+                          icon: LucideIcons.trash2,
+                          label: '回收站',
+                          value: _BrowseMenuAction.trash,
+                        ),
+                      ],
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                // 3. 操作工具栏：横向排列，窄屏时支持左右滚动，
-                //    避免 iPhone 窄屏下按钮被裁切。
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _sortMenu(theme, sort),
-                      IconButton(
-                        icon: const Icon(LucideIcons.checkSquare, size: 16),
-                        color: selectionMode ? colorScheme.primary : null,
-                        onPressed: () {
-                          if (selectionMode) {
-                            ref.read(selectionProvider.notifier).clear();
-                          } else {
-                            ref
-                                .read(selectionModeProvider.notifier)
-                                .enter();
-                          }
-                        },
-                        tooltip: selectionMode ? '退出多选' : '多选',
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      IconButton(
-                        icon: const Icon(LucideIcons.rotateCw, size: 16),
-                        onPressed: () =>
-                            ref.read(fileListProvider.notifier).refresh(),
-                        tooltip: '刷新',
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      IconButton(
-                        icon: const Icon(LucideIcons.layoutGrid, size: 16),
-                        color: viewMode == BrowseViewMode.grid
-                            ? colorScheme.primary
-                            : null,
-                        onPressed: () =>
-                            ref.read(viewModeProvider.notifier).state =
-                                BrowseViewMode.grid,
-                        tooltip: '网格视图',
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      IconButton(
-                        icon: const Icon(LucideIcons.list, size: 16),
-                        color: viewMode == BrowseViewMode.list
-                            ? colorScheme.primary
-                            : null,
-                        onPressed: () =>
-                            ref.read(viewModeProvider.notifier).state =
-                                BrowseViewMode.list,
-                        tooltip: '列表视图',
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      const SizedBox(width: 4),
-                      FilledButton.icon(
-                        onPressed: _pickAndUpload,
-                        icon: const Icon(LucideIcons.upload, size: 14),
-                        label: const Text('上传'),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(0, 30),
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                        ),
-                      ),
-                      PopupMenuButton<String>(
-                        icon: const Icon(LucideIcons.ellipsisVertical, size: 16),
-                        tooltip: '更多',
-                        position: PopupMenuPosition.under,
-                        onSelected: (v) {
-                          if (v == 'mkdir') _mkdir();
-                          if (v == 'trash') context.push('/trash');
-                        },
-                        itemBuilder: (context) => [
-                          PopupMenuItem<String>(
-                            value: 'mkdir',
-                            child: Row(
-                              children: [
-                                Icon(
-                                  LucideIcons.folderPlus,
-                                  size: 16,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                                const SizedBox(width: 10),
-                                const Text('新建文件夹'),
-                              ],
-                            ),
-                          ),
-                          PopupMenuItem<String>(
-                            value: 'trash',
-                            child: Row(
-                              children: [
-                                Icon(
-                                  LucideIcons.trash2,
-                                  size: 16,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                                const SizedBox(width: 10),
-                                const Text('回收站'),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                // 2. 当前路径（搜索框改为滚动列表时浮起，见下方 _SlidingSearchBar）
+                //    移动端隐藏：iOS / Android 顶部安全区 + 路径源 chip 已经占据
+                //    头部较多空间，再加面包屑会让窄屏头部过于拥挤。
+                //    移动端用户可通过 `..` 返回上级，路径信息可在多选/收藏
+                //    等对话框里查看，无需常驻头部。
+                if (isDesktopPlatform)
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: BreadcrumbBar(
+                      rootLabel: source?.name ?? '路径源',
+                      path: path,
+                      onNavigate: (target) =>
+                          ref.read(browsePathProvider.notifier).state = target,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: DropTarget(
-                          onDragDone: (details) => _dropUpload(
-                            details.files.map((f) => f.path).toList(),
+                if (isDesktopPlatform) const SizedBox(height: 8),
+                // 左边缘滑动返回上一级（移动端）：包裹文件列表区域，
+                // 仅捕获"从左边缘向右的快速滑动"，不影响列表的垂直滚动
+                // 与内部横向元素（behavior: translucent 不拦截命中）。
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onHorizontalDragStart: _onEdgeDragStart,
+                  onHorizontalDragEnd: _onEdgeDragEnd,
+                  child: Expanded(
+                    child: Stack(
+                      children: [
+                        // 浮起的搜索栏：默认隐藏，用户向下滚动列表超过
+                        // [_kSearchShowThreshold] 时滑入，回到顶部时滑出。
+                        // 直接放在 Stack 顶而非 Column，是因为它要覆盖在
+                        // 列表上方而不是挤掉列表的空间。
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: _SlidingSearchBar(
+                            visible: _searchBarVisible,
+                            controller: _searchController,
+                            onChanged: (v) =>
+                                ref.read(searchQueryProvider.notifier).state =
+                                    v,
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: theme.cardTheme.color,
-                              borderRadius: BorderRadius.circular(12),
+                        ),
+                        Positioned.fill(
+                          child: DropTarget(
+                            onDragDone: (details) => _dropUpload(
+                              details.files.map((f) => f.path).toList(),
                             ),
-                            clipBehavior: Clip.antiAlias,
-                            child: Column(
-                              children: [
-                                // 非根目录时提供 ".." 返回上级
-                                // 网格模式下 ".." 以卡片形式插入网格首位（见 FileGridView）
-                                if (path != '/' &&
-                                    viewMode == BrowseViewMode.list)
-                                  _ParentEntry(
-                                    onTap: () => ref
-                                        .read(browsePathProvider.notifier)
-                                        .state = parentPathOf(path),
-                                  ),
-                                Expanded(
-                                  child: _buildContent(filesAsync, viewMode),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: theme.cardTheme.color,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: NotificationListener<ScrollNotification>(
+                                onNotification: _onScrollNotify,
+                                child: Column(
+                                  children: [
+                                    // 非根目录时提供 ".." 返回上级
+                                    // 网格模式下 ".." 以卡片形式插入网格首位（见 FileGridView）
+                                    if (path != '/' &&
+                                        viewMode == BrowseViewMode.list)
+                                      _ParentEntry(
+                                        onTap: () =>
+                                            ref
+                                                .read(
+                                                  browsePathProvider.notifier,
+                                                )
+                                                .state = parentPathOf(
+                                              path,
+                                            ),
+                                      ),
+                                    Expanded(
+                                      child: _buildContent(
+                                        filesAsync,
+                                        viewMode,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      // "定位中"浮层：从阅读页跳转定位时，目录可能较大，
-                      // 加载+滚动定位需要一定时间，用半透明遮罩+动画提示用户。
-                      if (_locating)
-                        const Positioned.fill(child: _LocatingOverlay()),
-                    ],
+                        // "定位中"浮层：从阅读页跳转定位时，目录可能较大，
+                        // 加载+滚动定位需要一定时间，用半透明遮罩+动画提示用户。
+                        if (_locating)
+                          const Positioned.fill(child: _LocatingOverlay()),
+                      ],
+                    ),
                   ),
                 ),
                 if (selectionMode)
@@ -716,6 +722,131 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         ),
       ),
     );
+  }
+
+  /// "..." 菜单点击统一处理。
+  void _onMenuAction(_BrowseMenuAction action) {
+    switch (action) {
+      case _BrowseMenuAction.upload:
+        _pickAndUpload();
+      case _BrowseMenuAction.sort:
+        // 排序是二级菜单：从「...」菜单选中后关闭它，再独立弹出排序菜单。
+        _showSortMenu();
+      case _BrowseMenuAction.select:
+        final selectionMode = ref.read(selectionModeProvider);
+        if (selectionMode) {
+          ref.read(selectionProvider.notifier).clear();
+        } else {
+          ref.read(selectionModeProvider.notifier).enter();
+        }
+      case _BrowseMenuAction.refresh:
+        ref.read(fileListProvider.notifier).refresh();
+      case _BrowseMenuAction.toggleView:
+        final cur = ref.read(viewModeProvider);
+        ref.read(viewModeProvider.notifier).state = cur == BrowseViewMode.grid
+            ? BrowseViewMode.list
+            : BrowseViewMode.grid;
+      case _BrowseMenuAction.mkdir:
+        _mkdir();
+      case _BrowseMenuAction.trash:
+        context.push('/trash');
+    }
+  }
+
+  /// 左边缘滑动手势开始：记录起始点，判断是否在屏幕左边缘激活区。
+  ///
+  /// 说明：只有当手势从屏幕最左侧（[_kEdgeSwipeZone] px 内）启动，才
+  /// 视为"返回上一级"手势；从屏幕其他位置开始的水平滑动保持原样，
+  /// 不拦截列表的横向滚动等正常交互。
+  void _onEdgeDragStart(DragStartDetails details) {
+    final dx = details.globalPosition.dx;
+    _edgeDragStartDx = dx;
+    _edgeDragStartDy = details.globalPosition.dy;
+    _edgeDragActive = dx <= _kEdgeSwipeZone;
+  }
+
+  /// 左边缘滑动手势结束：快速右滑时返回上一级目录（或退出多选）。
+  void _onEdgeDragEnd(DragEndDetails details) {
+    final wasActive = _edgeDragActive;
+    _edgeDragActive = false;
+    final startDx = _edgeDragStartDx;
+    _edgeDragStartDx = null;
+    _edgeDragStartDy = null;
+    if (!wasActive || startDx == null) return;
+    // 仅处理向右的快速滑动，避免慢速横向拖动或向左滑动误触。
+    if (details.primaryVelocity == null ||
+        details.primaryVelocity! < _kEdgeSwipeVelocity) {
+      return;
+    }
+    // 与系统返回手势（PopScope）一致：多选中先退出多选，否则返回上级目录。
+    if (ref.read(selectionModeProvider)) {
+      ref.read(selectionProvider.notifier).clear();
+    } else {
+      final currentPath = ref.read(browsePathProvider);
+      if (currentPath != '/') {
+        ref.read(browsePathProvider.notifier).state = parentPathOf(currentPath);
+      }
+    }
+  }
+
+  /// 生成一个带图标+文字的菜单项（统一风格）。
+  PopupMenuItem<_BrowseMenuAction> _buildMenuItem({
+    required IconData icon,
+    required String label,
+    required _BrowseMenuAction value,
+    String? subtitle,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return PopupMenuItem<_BrowseMenuAction>(
+      value: value,
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: colorScheme.onSurface),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 列表滚动的搜索框可见性监听。
+  ///
+  /// 设计：仅在明显向下滚动时显示浮起搜索框，避免滚动顶端"轻微 bounce"
+  /// 造成的闪烁。`metrics.axis == Axis.vertical` 排除横向滚动工具栏
+  /// 等事件导致的误判。
+  bool _onScrollNotify(ScrollNotification notification) {
+    if (notification is! ScrollUpdateNotification) return false;
+    if (notification.metrics.axis != Axis.vertical) return false;
+    final pos = notification.metrics.pixels;
+    final delta = pos - _lastScrollOffset;
+    _lastScrollOffset = pos;
+    final shouldShow = pos > _kSearchShowThreshold;
+    if (shouldShow != _searchBarVisible) {
+      setState(() => _searchBarVisible = shouldShow);
+    } else if (delta < -120 && _searchBarVisible) {
+      // 明显向下滑回顶部时立即收起（清掉之前的展示）。
+      // delta < -120 是为了过滤掉 TouchSlop / 偶发反向抖动。
+      setState(() => _searchBarVisible = false);
+    }
+    return false;
   }
 
   Widget _buildContent(
@@ -831,12 +962,32 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     );
   }
 
-  Widget _sortMenu(ThemeData theme, SortSpec sort) {
-    return PopupMenuButton<SortSpec>(
-      tooltip: '排序',
-      position: PopupMenuPosition.under,
-      onSelected: (s) => ref.read(sortProvider.notifier).update(s),
-      itemBuilder: (context) => [
+  /// 显示排序二级菜单：锚定在「...」按钮正下方，展示当前排序 + 各升降序选项。
+  ///
+  /// 设计：浏览页头部把排序按钮收纳进「...」菜单后，「排序」子项再嵌套一个
+  /// `showMenu` 会让交互层级过深。因此改为：从「...」菜单选中「排序」后，
+  /// 关闭「...」菜单，再独立弹出本菜单；位置取「...」按钮的全局坐标，
+  /// 与「...」菜单弹出的方向一致（向下）。
+  Future<void> _showSortMenu() async {
+    final theme = Theme.of(context);
+    final sort = ref.read(sortProvider);
+    final box = _moreMenuKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    // 与浏览页右键菜单相同的处理：自定义标题栏使 Overlay 原点不在 (0,0)，
+    // 需把全局坐标转成 Overlay 局部坐标，否则菜单会偏离按钮位置。
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final local = overlay.globalToLocal(topLeft);
+    final left = local.dx;
+    final top = local.dy + box.size.height;
+    final right = overlay.size.width - (left + box.size.width);
+    final bottom = overlay.size.height - top;
+
+    final picked = await showMenu<SortSpec>(
+      context: context,
+      position: RelativeRect.fromLTRB(left, top, right, bottom),
+      items: [
         for (final field in SortField.values)
           for (final asc in [true, false])
             PopupMenuItem<SortSpec>(
@@ -860,25 +1011,10 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
               ),
             ),
       ],
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            sort.label,
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontSize: 12,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(width: 2),
-          Icon(
-            sort.ascending ? LucideIcons.arrowUp : LucideIcons.arrowDown,
-            size: 12,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ],
-      ),
     );
+    if (picked != null) {
+      ref.read(sortProvider.notifier).update(picked);
+    }
   }
 
   String _fieldLabel(SortField field) => switch (field) {
@@ -926,9 +1062,13 @@ class _ParentEntry extends StatelessWidget {
                     '..',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: isDesktopPlatform
+                        ? theme.textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w500,
+                          )
+                        : theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                   ),
                 ),
                 // 占位列，对齐普通行右侧三列（大小 / 时间 / 收藏按钮），
@@ -992,10 +1132,7 @@ class _SelectionActionBar extends StatelessWidget {
             tooltip: '取消多选',
             visualDensity: VisualDensity.compact,
           ),
-          Text(
-            '已选 $count 项',
-            style: theme.textTheme.bodySmall,
-          ),
+          Text('已选 $count 项', style: theme.textTheme.bodySmall),
           // 右侧可横向滚动区域：全选 + 5 个操作按钮。
           // 关闭按钮在左，剩余宽度可能只有 ~210px，
           // 5 个 IconButton 一起放不下，因此整体可横滑。
@@ -1010,8 +1147,7 @@ class _SelectionActionBar extends StatelessWidget {
                     onPressed: onSelectAll,
                     style: TextButton.styleFrom(
                       visualDensity: VisualDensity.compact,
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
                     ),
                     child: const Text('全选'),
                   ),
@@ -1158,13 +1294,105 @@ class _ErrorState extends StatelessWidget {
           Text(
             message,
             style: theme.textTheme.bodySmall?.copyWith(
-              fontSize: 11,
+              fontSize: 12,
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 12),
           FilledButton.tonal(onPressed: onRetry, child: const Text('重试')),
         ],
+      ),
+    );
+  }
+}
+
+/// 浮起的搜索框：默认隐藏在屏幕外（向上偏移自身高度），仅当
+/// [visible] 为 true 时滑入。它覆盖在列表之上，背景半透明 + 模糊，
+/// 配合搜索图标按钮形成 macOS Spotlight 式的"按住下拉出现搜索栏"。
+class _SlidingSearchBar extends StatelessWidget {
+  const _SlidingSearchBar({
+    required this.visible,
+    required this.controller,
+    required this.onChanged,
+  });
+
+  final bool visible;
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        // 隐藏时完全滑到顶部外；显示时归位。
+        offset: visible ? Offset.zero : const Offset(0, -1),
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 220),
+          opacity: visible ? 1 : 0,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              decoration: BoxDecoration(
+                // 半透明 + 模糊背景：让覆盖在文件卡片上仍能看清下方内容
+                // 一行（视觉上是"漂浮"在列表顶部而非遮挡）。
+                color: colorScheme.surface.withValues(alpha: 0.85),
+                border: Border(
+                  bottom: BorderSide(
+                    color: colorScheme.outline.withValues(alpha: 0.4),
+                  ),
+                ),
+              ),
+              child: SizedBox(
+                height: 36,
+                child: TextField(
+                  controller: controller,
+                  onChanged: onChanged,
+                  style: theme.textTheme.bodyMedium,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: '搜索...',
+                    hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                    prefixIcon: Icon(
+                      LucideIcons.search,
+                      size: 16,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    isDense: true,
+                    filled: true,
+                    fillColor: colorScheme.surfaceContainerHigh,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide(
+                        color: colorScheme.primary,
+                        width: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

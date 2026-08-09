@@ -42,10 +42,19 @@ final class NativePlayerController: NSObject, FlutterTexture {
   private var rateObserverToken: NSKeyValueObservation?
   private var statusObserverToken: NSKeyValueObservation?
   private var itemEndObserver: NSObjectProtocol?
+  /// 音频会话中断监听（来电/闹钟/其他 App 抢占）。
+  private var audioInterruptionObserver: NSObjectProtocol?
+  /// 当前媒体标题（锁屏/控制中心展示用）。
+  private var mediaTitle: String = ""
+  /// 当前媒体总时长（秒），用于锁屏进度展示。
+  private var mediaDuration: Double = 0
 
   private var isPlaying = false
   private var volume: Float = 1.0
   private var speed: Float = 1.0
+
+  /// 是否已注册远程控制命令（锁屏/控制中心），仅一次。
+  private var remoteCommandsRegistered = false
 
   /// 帧日志计数（节流打印用）。
   private var frameLogCount = 0
@@ -169,8 +178,9 @@ final class NativePlayerController: NSObject, FlutterTexture {
 
   // MARK: - Open
 
-  func open(url: URL, headers: [String: String]) {
-    print("Myhub NativePlayer: open url=\(url.absoluteString)")
+  func open(url: URL, title: String, headers: [String: String], isAudio: Bool = false) {
+    print("Myhub NativePlayer: open url=\(url.absoluteString) isAudio=\(isAudio)")
+    mediaTitle = title
     // 关闭旧的 item 与纹理
     removeObservers()
     teardownTexture()
@@ -181,6 +191,35 @@ final class NativePlayerController: NSObject, FlutterTexture {
     let asset = AVURLAsset(
       url: url,
       options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
+
+    // 音频文件：仅播放音频，不创建任何视频输出/纹理/AVPlayerLayer/CADisplayLink，
+    // 避免在 Flutter 端显示一个空的（默认占位）"视频画面"圆圈，也避免
+    // AVPlayer 把音频内嵌的封面图（cover art）当视频帧输出。
+    // 进度/状态事件仍正常回传 Flutter。
+    if isAudio {
+      let item = AVPlayerItem(asset: asset)
+      playerItem = item
+      let p: AVPlayer
+      if let existing = player {
+        p = existing
+        p.replaceCurrentItem(with: item)
+      } else {
+        p = AVPlayer(playerItem: item)
+        player = p
+        p.volume = volume
+      }
+      p.rate = speed
+      isPlaying = true
+      // 关键：音频模式不调用 setupTexture()，textureId 保持为 0，
+      // Flutter 侧 Texture 不会被渲染（显示黑底或 AudioCoverMode 唱片封面）。
+      addObservers()
+      addSystemObservers()
+      registerRemoteControls()
+      configureAudioSessionForPlayback()
+      emitStatus(["state": "loading"])
+      print("Myhub NativePlayer: 音频模式，跳过视频纹理/CADisplayLink")
+      return
+    }
 
     // 视频帧输出（Texture 渲染数据源）——必须在 item 创建后立即同步附加。
     // 使用 YUV（420YpCbCr8BiPlanar）格式：硬件解码器原生输出，无需转换，
@@ -239,6 +278,8 @@ final class NativePlayerController: NSObject, FlutterTexture {
     setupTexture()
     addObservers()
     addSystemObservers()
+    registerRemoteControls()
+    configureAudioSessionForPlayback()
     emitStatus(["state": "loading"])
   }
 
@@ -248,17 +289,20 @@ final class NativePlayerController: NSObject, FlutterTexture {
     player?.play()
     isPlaying = true
     emitStatus(["state": isPlaying ? "playing" : "paused"])
+    updateNowPlaying()
   }
 
   func pause() {
     player?.pause()
     isPlaying = false
     emitStatus(["state": "paused"])
+    updateNowPlaying()
   }
 
   func seek(toMs ms: Int64) {
     let target = CMTime(value: ms, timescale: 1000)
     player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    updateNowPlaying()
   }
 
   /// 系统音量滑条（MPVolumeView，隐藏实例，控制系统音量且不弹 HUD）。
@@ -308,6 +352,7 @@ final class NativePlayerController: NSObject, FlutterTexture {
     speed = Float(s)
     player?.rate = speed
     isPlaying = true
+    updateNowPlaying()
   }
 
   /// 设置亮度（同步系统亮度）。
@@ -417,6 +462,11 @@ final class NativePlayerController: NSObject, FlutterTexture {
         "percent": percent,
         "state": self.isPlaying ? "playing" : "paused",
       ])
+      // 后台播放：同步锁屏/控制中心进度条
+      if durMs > 0 {
+        self.mediaDuration = Double(durMs) / 1000.0
+        self.updateNowPlaying()
+      }
     }
 
     // 播放/暂停状态
@@ -442,6 +492,8 @@ final class NativePlayerController: NSObject, FlutterTexture {
         if self?.isPlaying == true {
           self?.player?.play()
         }
+        self?.mediaDuration = it.duration.seconds.isFinite ? it.duration.seconds : 0
+        self?.updateNowPlaying()
         self?.emitStatus(["state": "ready"])
       case .failed:
         let msg = it.error?.localizedDescription ?? "播放失败"
@@ -498,6 +550,39 @@ final class NativePlayerController: NSObject, FlutterTexture {
     // 初始上报当前亮度
     emitStatus(["systemBrightness": Double(UIScreen.main.brightness),
                 "brightness": Double(UIScreen.main.brightness)])
+
+    // 音频会话中断监听：来电/闹钟/其他 App 抢占音频。
+    // 中断结束后必须重新激活 AVAudioSession，否则后台播放会停止出声。
+    audioInterruptionObserver = NotificationCenter.default.addObserver(
+      forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+    ) { [weak self] notification in
+      guard let self,
+            let info = notification.userInfo,
+            let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: raw) else {
+        return
+      }
+      switch type {
+      case .began:
+        // 中断开始：暂停播放（后台场景必须释放音频焦点）
+        self.player?.pause()
+        self.isPlaying = false
+        self.emitStatus(["state": "paused"])
+        self.updateNowPlaying()
+      case .ended:
+        // 中断结束：若系统建议恢复则重新激活会话并继续播放
+        if let opt = info[AVAudioSessionInterruptionOptionKey] as? UInt,
+           AVAudioSession.InterruptionOptions(rawValue: opt).contains(.shouldResume) {
+          try? AVAudioSession.sharedInstance().setActive(true, options: [])
+          self.player?.play()
+          self.isPlaying = true
+          self.emitStatus(["state": "playing"])
+          self.updateNowPlaying()
+        }
+      @unknown default:
+        break
+      }
+    }
   }
 
   private func removeSystemObservers() {
@@ -507,7 +592,105 @@ final class NativePlayerController: NSObject, FlutterTexture {
       NotificationCenter.default.removeObserver(brightnessObserver)
       self.brightnessObserver = nil
     }
+    if let audioInterruptionObserver {
+      NotificationCenter.default.removeObserver(audioInterruptionObserver)
+      self.audioInterruptionObserver = nil
+    }
     lastSystemVolume = -1
+  }
+
+  // MARK: - 后台播放（Now Playing + 远程控制）
+
+  /// 激活后台播放音频会话，并启用远程控制事件接收。
+  /// 后台播放必需条件：Info.plist 声明 UIBackgroundModes=audio，
+  /// 否则 App 进入后台后系统会暂停播放。
+  private func configureAudioSessionForPlayback() {
+    do {
+      let session = AVAudioSession.sharedInstance()
+      try session.setCategory(.playback, mode: .default, options: [])
+      try session.setActive(true)
+    } catch {
+      NSLog("Myhub NativePlayer: 激活播放音频会话失败: \(error)")
+    }
+    // 启用锁屏/控制中心远程控制事件接收
+    UIApplication.shared.beginReceivingRemoteControlEvents()
+  }
+
+  /// 注册锁屏/控制中心的远程控制命令（仅一次）。
+  /// 必须注册播放/暂停/进度命令，否则控制中心和锁屏无法控制播放。
+  private func registerRemoteControls() {
+    guard !remoteCommandsRegistered else { return }
+    remoteCommandsRegistered = true
+
+    let center = MPRemoteCommandCenter.shared()
+    // 播放
+    center.playCommand.addTarget { [weak self] _ in
+      self?.player?.play()
+      self?.isPlaying = true
+      self?.emitStatus(["state": "playing"])
+      self?.updateNowPlaying()
+      return .success
+    }
+    // 暂停
+    center.pauseCommand.addTarget { [weak self] _ in
+      self?.player?.pause()
+      self?.isPlaying = false
+      self?.emitStatus(["state": "paused"])
+      self?.updateNowPlaying()
+      return .success
+    }
+    // 播放/暂停切换
+    center.togglePlayPauseCommand.addTarget { [weak self] _ in
+      guard let self else { return .commandFailed }
+      if self.isPlaying {
+        self.player?.pause()
+        self.isPlaying = false
+        self.emitStatus(["state": "paused"])
+      } else {
+        self.player?.play()
+        self.isPlaying = true
+        self.emitStatus(["state": "playing"])
+      }
+      self.updateNowPlaying()
+      return .success
+    }
+    // 进度 seek（锁屏/控制中心进度条拖动）
+    center.changePlaybackPositionCommand.isEnabled = true
+    center.changePlaybackPositionCommand.addTarget { [weak self] event in
+      guard let self,
+            let posEvent = event as? MPChangePlaybackPositionCommandEvent else {
+        return .commandFailed
+      }
+      self.player?.seek(
+        to: CMTime(seconds: posEvent.positionTime, preferredTimescale: 600),
+        toleranceBefore: .zero, toleranceAfter: .zero)
+      self.updateNowPlaying()
+      return .success
+    }
+    // 禁用默认的上一首/下一首（单媒体会话无列表）
+    center.nextTrackCommand.isEnabled = false
+    center.previousTrackCommand.isEnabled = false
+  }
+
+  /// 更新锁屏/控制中心 Now Playing 元数据（标题、时长、进度、播放速率）。
+  /// 后台播放时展示在锁屏和控制中心。
+  private func updateNowPlaying() {
+    guard let player else { return }
+    let duration = playerItem?.duration.seconds ?? 0
+    let position = player.currentTime().seconds
+    mediaDuration = duration.isFinite && duration > 0 ? duration : mediaDuration
+    var info: [String: Any] = [
+      MPMediaItemPropertyTitle: mediaTitle,
+      MPMediaItemPropertyPlaybackDuration: mediaDuration,
+      MPNowPlayingInfoPropertyElapsedPlaybackTime: position.isFinite ? position : 0,
+      MPNowPlayingInfoPropertyPlaybackRate: player.rate,
+      MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+    ]
+    // 时长已知时展示进度条
+    if mediaDuration > 0 {
+      info[MPMediaItemPropertyPlaybackDuration] = mediaDuration
+    }
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
   }
 
   // MARK: - Emit
@@ -538,5 +721,9 @@ final class NativePlayerController: NSObject, FlutterTexture {
     player = nil
     playerItem = nil
     eventSink = nil
+    // 清理锁屏/控制中心信息与远程控制
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    UIApplication.shared.endReceivingRemoteControlEvents()
+    remoteCommandsRegistered = false
   }
 }

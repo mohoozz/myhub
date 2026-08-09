@@ -196,7 +196,7 @@ class _FavoriteList extends ConsumerWidget {
                   child: Text(
                     f.mediaType == 'dir' ? '-' : formatBytes(f.size),
                     style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: 11,
+                      fontSize: 12,
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),

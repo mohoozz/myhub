@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/features/auth/providers/auth_provider.dart';
 import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 
@@ -25,6 +26,72 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  /// 弹出服务器地址配置对话框（外网 + 内网双地址），保存后自动判断内外网。
+  Future<void> _configureServer() async {
+    final config = ref.read(serverConfigProvider);
+    final wanController = TextEditingController(text: config.wanUrl);
+    final lanController = TextEditingController(text: config.lanUrl);
+    final saved = await showDialog<({String wan, String lan})>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('服务器配置'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '请输入服务器主机地址（含协议与端口），外网必填，内网可选：',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: wanController,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(
+                labelText: '外网地址',
+                hintText: 'http://example.com:8080',
+                prefixIcon: Icon(LucideIcons.server),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: lanController,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(
+                labelText: '内网地址（可选）',
+                hintText: 'http://192.168.1.100:8080',
+                prefixIcon: Icon(LucideIcons.home),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(
+              (wan: wanController.text, lan: lanController.text),
+            ),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    wanController.dispose();
+    lanController.dispose();
+    if (saved == null || saved.wan.trim().isEmpty) return;
+    await ref.read(serverConfigProvider.notifier).setUrls(
+      wanUrl: saved.wan,
+      lanUrl: saved.lan,
+    );
+    // 保存后立即自动判断内网/外网
+    await ref.read(serverConfigProvider.notifier).autoDetect();
+    if (mounted) showTopSnackBar(context, '服务器配置已更新');
   }
 
   Future<void> _login() async {
@@ -106,6 +173,60 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                       onPressed: () => setState(
                         () => _obscurePassword = !_obscurePassword,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // 服务器地址配置入口：点击修改连接的服务端 IP
+                Material(
+                  color: theme.colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    onTap: _configureServer,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            LucideIcons.server,
+                            size: 16,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  ref.watch(serverConfigProvider).activeNetwork ==
+                                          'lan'
+                                      ? '服务器（当前内网）'
+                                      : '服务器（当前外网）',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                Text(
+                                  ref.watch(apiBaseUrlProvider),
+                                  style: theme.textTheme.bodySmall,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            '修改',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),

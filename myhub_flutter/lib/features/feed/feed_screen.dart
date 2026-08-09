@@ -23,7 +23,8 @@ class FeedScreen extends StatelessWidget {
               const SizedBox(height: 12),
               Text(
                 '动态',
-                style: theme.textTheme.titleSmall?.copyWith(
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),

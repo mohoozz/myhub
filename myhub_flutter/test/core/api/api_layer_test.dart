@@ -15,7 +15,7 @@ void main() {
     test('streamUrl', () {
       // 中文与空格均应百分号编码，播放器可直接使用
       expect(
-        StreamApi.streamUrl(1, '/视频/a b.mp4'),
+        StreamApi.streamUrl(1, '/视频/a b.mp4', baseUrl: 'http://x'),
         endsWith('/api/stream/1/%E8%A7%86%E9%A2%91/a%20b.mp4'),
       );
     });
@@ -33,15 +33,20 @@ void main() {
     test('hlsPlaylistUrl / hlsSegmentUrl / subtitleUrl', () {
       final id = StreamApi.hlsSessionId(3, '/v/m.mp4');
       expect(
-        StreamApi.hlsPlaylistUrl(3, '/v/m.mp4'),
+        StreamApi.hlsPlaylistUrl(3, '/v/m.mp4', baseUrl: 'http://x'),
         endsWith('/api/stream/hls/$id/playlist.m3u8'),
       );
       expect(
-        StreamApi.hlsSegmentUrl(3, '/v/m.mp4', 'seg_00001.ts'),
+        StreamApi.hlsSegmentUrl(
+          3,
+          '/v/m.mp4',
+          'seg_00001.ts',
+          baseUrl: 'http://x',
+        ),
         endsWith('/api/stream/hls/$id/segment/seg_00001.ts'),
       );
       expect(
-        StreamApi.subtitleUrl(3, '/v/m.srt'),
+        StreamApi.subtitleUrl(3, '/v/m.srt', baseUrl: 'http://x'),
         endsWith('/api/stream/subtitle?source=3&path=%2Fv%2Fm.srt'),
       );
     });

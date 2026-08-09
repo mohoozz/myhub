@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 
 /// 纯文本查看页（与小说阅读界面区分开）。
@@ -54,7 +55,16 @@ class _PlainTextViewerPageState extends ConsumerState<PlainTextViewerPage> {
   @override
   void initState() {
     super.initState();
+    // 文本查看页为沉浸阅读：进入时隐藏迷你播放器，避免遮挡正文
+    ref.read(mediaPlayerProvider).pageOpened();
     _load();
+  }
+
+  @override
+  void dispose() {
+    // 退出查看页：媒体仍在播放时恢复迷你播放器
+    ref.read(mediaPlayerProvider).pageClosed();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -119,7 +129,7 @@ class _PlainTextViewerPageState extends ConsumerState<PlainTextViewerPage> {
               child: Text(
                 '纯文本',
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 12,
                   color: colorScheme.onSecondaryContainer,
                 ),
               ),
