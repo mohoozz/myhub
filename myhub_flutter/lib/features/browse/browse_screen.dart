@@ -629,11 +629,14 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                 // 左边缘滑动返回上一级（移动端）：包裹文件列表区域，
                 // 仅捕获"从左边缘向右的快速滑动"，不影响列表的垂直滚动
                 // 与内部横向元素（behavior: translucent 不拦截命中）。
-                GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onHorizontalDragStart: _onEdgeDragStart,
-                  onHorizontalDragEnd: _onEdgeDragEnd,
-                  child: Expanded(
+                // 注意：Expanded 必须直接作为 Column(Flex) 的子级，
+                // 不能放在 GestureDetector(Listener) 内部，否则抛
+                // "Incorrect use of ParentDataWidget" 导致文件区域塌陷为灰色空白。
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onHorizontalDragStart: _onEdgeDragStart,
+                    onHorizontalDragEnd: _onEdgeDragEnd,
                     child: Stack(
                       children: [
                         // 浮起的搜索栏：默认隐藏，用户向下滚动列表超过
@@ -908,6 +911,10 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         // 或同一个 controller attach 到两个 ScrollPosition（滚动失效）。
         final isGrid = viewMode == BrowseViewMode.grid;
         return IndexedStack(
+          // 必须 expand 填满父级（Expanded），否则内部 ListView/GridView
+          // 在 StackFit.loose 下会把 IndexedStack 高度收缩为 0，
+          // 导致文件区域只剩外层卡片背景（灰色）而无任何内容。
+          sizing: StackFit.expand,
           index: isGrid ? 0 : 1,
           children: [
             FileGridView(
