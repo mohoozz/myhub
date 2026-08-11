@@ -203,10 +203,26 @@ class NativePlayerController {
             'Authorization': 'Bearer $token',
         },
       });
-      // 恢复音量/倍速
+      // 进入播放器与系统当前音量和亮度保持一致：
+      // 不再用上次持久化的音量强制覆盖系统音量（用户可能在系统层面
+      // 改过音量，强制覆盖会导致进入时音量突然变高/变低），
+      // 改为读取系统当前值初始化状态，手势调节时基于真实系统值不会跳变。
+      try {
+        final sys =
+            await _channel.invokeMapMethod<String, dynamic>('getSystemStatus');
+        if (sys != null) {
+          final sysVol = sys['volume'];
+          if (sysVol is num) {
+            volume.value = (sysVol.toDouble() * 100).clamp(0.0, 100.0);
+          }
+          final sysBrightness = sys['brightness'];
+          if (sysBrightness is num) {
+            brightness.value = sysBrightness.toDouble().clamp(0.0, 1.0);
+          }
+        }
+      } catch (_) {}
+      // 恢复倍速
       final settings = _ref.read(playerSettingsProvider);
-      volume.value = settings.volume;
-      await setVolume(settings.volume);
       if (settings.defaultSpeed != 1.0) {
         await setSpeed(settings.defaultSpeed);
       }

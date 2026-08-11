@@ -77,6 +77,12 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       result(nil)
     case "getBrightness":
       result(NativePlayerPlugin.shared?.currentBrightness() ?? Double(UIScreen.main.brightness))
+    case "getSystemStatus":
+      // 当前系统音量和亮度（进入播放器时同步，避免音量/亮度与系统不一致）
+      result(NativePlayerPlugin.shared?.systemStatus() ?? [
+        "volume": AVAudioSession.sharedInstance().outputVolume,
+        "brightness": Double(UIScreen.main.brightness),
+      ])
     case "getTracks":
       let tracks = NativePlayerPlugin.shared?.tracks() ?? [:]
       result(tracks)

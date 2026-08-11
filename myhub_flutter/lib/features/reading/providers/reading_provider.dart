@@ -1,14 +1,49 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// "正在阅读"页视图模式。
 enum ReadingViewMode { grid, list }
 
-/// "正在阅读"页视图模式（网格/列表）。
-final readingViewModeProvider = StateProvider<ReadingViewMode>(
-  (ref) => ReadingViewMode.grid,
+/// "正在阅读"页视图模式（网格/列表），持久化到 SharedPreferences，
+/// 重启应用后沿用上次的选择（iOS / PC 通用）。
+final readingViewModeProvider =
+    NotifierProvider<ReadingViewModeNotifier, ReadingViewMode>(
+  ReadingViewModeNotifier.new,
 );
+
+class ReadingViewModeNotifier extends Notifier<ReadingViewMode> {
+  static const _kKey = 'reading.view_mode';
+
+  /// 标记用户已显式修改（防止异步恢复覆盖新值）。
+  var _dirty = false;
+
+  @override
+  ReadingViewMode build() {
+    _dirty = false;
+    _restore();
+    return ReadingViewMode.grid;
+  }
+
+  Future<void> _restore() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_dirty) return;
+    state = ReadingViewMode.values.asNameMap()[prefs.getString(_kKey)] ??
+        ReadingViewMode.grid;
+  }
+
+  /// 切换网格/列表并持久化。
+  Future<void> toggle() async {
+    _dirty = true;
+    final next = state == ReadingViewMode.grid
+        ? ReadingViewMode.list
+        : ReadingViewMode.grid;
+    state = next;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kKey, next.name);
+  }
+}
 
 /// "正在阅读"进度列表：全部条目（含已读完），按 updated_at 降序。
 ///

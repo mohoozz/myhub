@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,15 +18,14 @@ class FileGridView extends StatelessWidget {
     this.selectionMode = false,
     this.selectedPaths = const {},
     this.onToggleSelect,
-    this.favoritePaths = const {},
-    this.favoriteSourceId,
-    this.onToggleFavorite,
+    this.coverSourceId,
     this.onShowMenu,
     this.onLongPressMenu,
     this.onParentTap,
     this.highlightPath,
     this.highlightKey,
     this.onLongPress,
+    this.nameLines = 1,
     super.key,
   });
 
@@ -39,9 +39,9 @@ class FileGridView extends StatelessWidget {
   final Set<String> selectedPaths;
   final ValueChanged<FileItem>? onToggleSelect;
   final ValueChanged<FileItem>? onLongPress;
-  final Set<String> favoritePaths;
-  final int? favoriteSourceId;
-  final ValueChanged<FileItem>? onToggleFavorite;
+
+  /// 当前路径源 ID（封面缩略图加载用）。
+  final int? coverSourceId;
 
   /// 右键呼出上下文菜单（桌面端），携带点击全局坐标。
   final void Function(FileItem item, Offset position)? onShowMenu;
@@ -58,50 +58,80 @@ class FileGridView extends StatelessWidget {
   /// 高亮项的 GlobalKey（供上层滚动定位）。
   final GlobalKey? highlightKey;
 
+  /// 文件名显示行数（1~3）。多行时网格单元高度自适应，避免长文件名显示不全。
+  final int nameLines;
+
   @override
   Widget build(BuildContext context) {
-    final grid = GridView.builder(
-      controller: controller,
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 140,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.95,
-      ),
-      itemCount: items.length + (onParentTap == null ? 0 : 1),
-      itemBuilder: (context, index) {
-        if (onParentTap != null) {
-          if (index == 0) return _ParentCard(onTap: onParentTap!);
-          index--;
-        }
-        final item = items[index];
-        final highlighted = highlightPath != null && item.path == highlightPath;
-        Widget card = _FileCard(
-          item: item,
-          coverSourceId: favoriteSourceId,
-          selectionMode: selectionMode,
-          selected: selectedPaths.contains(item.path),
-          highlighted: highlighted,
-          favorited: favoritePaths.contains('$favoriteSourceId|${item.path}'),
-          onTap: () =>
-              selectionMode ? onToggleSelect?.call(item) : onOpen(item),
-          onLongPress: onLongPress == null ? null : () => onLongPress!(item),
-          onToggleFavorite: onToggleFavorite == null
-              ? null
-              : () => onToggleFavorite!(item),
-          onSecondaryTapUp: onShowMenu == null
-              ? null
-              : (d) => onShowMenu!(item, d.globalPosition),
-          onLongPressMenu: onLongPressMenu == null
-              ? null
-              : (d) => onLongPressMenu!(item, d.globalPosition),
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    // 依据实际可用宽度计算列数与单元宽度，再按名称行数推导单元高度：
+    // 保证名称多行时卡片内容完整展示，不会溢出或被截断。
+    final grid = LayoutBuilder(
+      builder: (context, constraints) {
+        const maxExtent = 140.0;
+        const spacing = 12.0;
+        const hPadding = 24.0; // EdgeInsets.all(12) 左右各 12
+        final available =
+            (constraints.maxWidth - hPadding).clamp(0.0, 1e9).toDouble();
+        final cols = ((available + spacing) / (maxExtent + spacing))
+            .floor()
+            .clamp(1, 100);
+        final cellWidth = (available - spacing * (cols - 1)) / cols;
+        // 封面最大 72×72（与 _FileCard 内 ConstrainedBox 一致）；
+        // 窄屏单列时封面随 cell 宽度放大，但不超过 72。
+        final coverHeight = math
+            .min(cellWidth - 20, 72.0)
+            .clamp(40.0, 72.0)
+            .toDouble();
+        // 名称行高：移动端 bodyMedium 较大，桌面端 bodySmall 较小；留少量缓冲。
+        final nameLineHeight = isMobile ? 21.0 : 17.5;
+        final metaHeight = isMobile ? 20.0 : 16.0;
+        final cellHeight =
+            10 + coverHeight + 10 + nameLines * nameLineHeight + 4 + metaHeight + 10;
+        return GridView.builder(
+          controller: controller,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(12),
+          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: maxExtent,
+            mainAxisSpacing: spacing,
+            crossAxisSpacing: spacing,
+            mainAxisExtent: cellHeight,
+          ),
+          itemCount: items.length + (onParentTap == null ? 0 : 1),
+          itemBuilder: (context, index) {
+            if (onParentTap != null) {
+              if (index == 0) return _ParentCard(onTap: onParentTap!);
+              index--;
+            }
+            final item = items[index];
+            final highlighted =
+                highlightPath != null && item.path == highlightPath;
+            Widget card = _FileCard(
+              item: item,
+              coverSourceId: coverSourceId,
+              selectionMode: selectionMode,
+              selected: selectedPaths.contains(item.path),
+              highlighted: highlighted,
+              nameLines: nameLines,
+              onTap: () =>
+                  selectionMode ? onToggleSelect?.call(item) : onOpen(item),
+              onLongPress: onLongPress == null
+                  ? null
+                  : () => onLongPress!(item),
+              onSecondaryTapUp: onShowMenu == null
+                  ? null
+                  : (d) => onShowMenu!(item, d.globalPosition),
+              onLongPressMenu: onLongPressMenu == null
+                  ? null
+                  : (d) => onLongPressMenu!(item, d.globalPosition),
+            );
+            if (highlighted && highlightKey != null) {
+              card = KeyedSubtree(key: highlightKey, child: card);
+            }
+            return card;
+          },
         );
-        if (highlighted && highlightKey != null) {
-          card = KeyedSubtree(key: highlightKey, child: card);
-        }
-        return card;
       },
     );
     if (onRefresh == null) return grid;
@@ -189,9 +219,8 @@ class _FileCard extends StatelessWidget {
     required this.onLongPress,
     required this.selectionMode,
     required this.selected,
-    required this.favorited,
     this.highlighted = false,
-    this.onToggleFavorite,
+    this.nameLines = 1,
     this.onSecondaryTapUp,
     this.onLongPressMenu,
   });
@@ -204,11 +233,12 @@ class _FileCard extends StatelessWidget {
   final VoidCallback? onLongPress;
   final bool selectionMode;
   final bool selected;
-  final bool favorited;
 
   /// 高亮定位提示（来自"正在阅读"页跳转）。
   final bool highlighted;
-  final VoidCallback? onToggleFavorite;
+
+  /// 文件名显示行数（1~3）。
+  final int nameLines;
   final GestureTapUpCallback? onSecondaryTapUp;
 
   /// 移动端长按（非多选模式）呼出上下文菜单，携带按下位置。
@@ -283,7 +313,7 @@ class _FileCard extends StatelessWidget {
                     const SizedBox(height: 10),
                     Text(
                       item.name,
-                      maxLines: 2,
+                      maxLines: nameLines,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
                       style: nameStyle,
@@ -306,21 +336,6 @@ class _FileCard extends StatelessWidget {
                     color: selected
                         ? colorScheme.primary
                         : colorScheme.onSurfaceVariant,
-                  ),
-                )
-              else
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: GestureDetector(
-                    onTap: onToggleFavorite,
-                    child: Icon(
-                      LucideIcons.star,
-                      size: 15,
-                      color: favorited
-                          ? colorScheme.primary
-                          : colorScheme.onSurfaceVariant,
-                    ),
                   ),
                 ),
             ],

@@ -6,6 +6,7 @@ import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/core/models/source.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
+import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
 import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
@@ -437,10 +438,8 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
             size: 16,
           ),
           color: colorScheme.primary,
-          onPressed: () => ref.read(readingViewModeProvider.notifier).state =
-              viewMode == ReadingViewMode.grid
-                  ? ReadingViewMode.list
-                  : ReadingViewMode.grid,
+          onPressed: () =>
+              ref.read(readingViewModeProvider.notifier).toggle(),
           tooltip: viewMode == ReadingViewMode.grid
               ? '当前：网格视图，点击切换为列表'
               : '当前：列表视图，点击切换为网格',
@@ -489,35 +488,10 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     required Map<int, String> sourceNameMap,
   }) {
     final selectionMode = _selectionMode;
+    final titleLines = ref.watch(fileNameLinesProvider);
     String nameFor(ReadingProgress p) => sourceNameMap[p.sourceId] ?? '';
     return viewMode == ReadingViewMode.grid
-        ? GridView.builder(
-            padding: const EdgeInsets.only(bottom: 24),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              mainAxisSpacing: 16,
-              crossAxisSpacing: 16,
-              // 高度 = 宽度 / childAspectRatio。
-              // 比例越大卡片越"扁"。iOS 窄屏单列布局下把比例调大一些，
-              // 让卡片高度更贴合封面 + 文字 + 进度条的实际内容，
-              // 避免 GridView 单元格过高导致卡片底部出现大片空白。
-              childAspectRatio: 1.05,
-            ),
-            itemCount: items.length,
-            itemBuilder: (context, index) {
-              final p = items[index];
-              return ReadingCard(
-                progress: p,
-                sourceName: nameFor(p),
-                selectionMode: selectionMode,
-                selected: _selected.contains(_key(p)),
-                onTap: () =>
-                    selectionMode ? _toggleSelect(p) : _open(context, ref, p),
-                onLongPress: () => _toggleSelect(p),
-                onShowMenu: (pos) => _showContextMenu(p, pos),
-              );
-            },
-          )
+        ? _buildGrid(items, titleLines, sourceNameMap)
         : ListView.separated(
             padding: const EdgeInsets.only(bottom: 24),
             itemCount: items.length,
@@ -527,6 +501,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
               return ReadingListTile(
                 progress: p,
                 sourceName: nameFor(p),
+                titleLines: titleLines,
                 selectionMode: selectionMode,
                 selected: _selected.contains(_key(p)),
                 onTap: () =>
@@ -536,6 +511,66 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
               );
             },
           );
+  }
+
+  /// 阅读历史网格：按标题行数动态计算单元高度（mainAxisExtent），
+  /// 保证标题多行时卡片内容完整展示，不会溢出或被截断。
+  Widget _buildGrid(
+    List<ReadingProgress> items,
+    int titleLines,
+    Map<int, String> sourceNameMap,
+  ) {
+    final selectionMode = _selectionMode;
+    String nameFor(ReadingProgress p) => sourceNameMap[p.sourceId] ?? '';
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const maxExtent = 220.0;
+        const spacing = 16.0;
+        final available = constraints.maxWidth.clamp(0.0, 1e9).toDouble();
+        final cols = ((available + spacing) / (maxExtent + spacing))
+            .floor()
+            .clamp(1, 100);
+        final cellWidth = (available - spacing * (cols - 1)) / cols;
+        // 封面 16:10，高度随列宽变化。
+        final coverHeight = cellWidth * 10 / 16;
+        // 标题 bodySmall（12px）行高约 16px；源名/进度文本 labelSmall 约 14px；
+        // 统一取偏大估算并留缓冲，保证单元格高度足够、不会溢出。
+        final titleHeight = titleLines * 17.0;
+        final metaHeight = 16.0;
+        final cellHeight =
+            coverHeight +
+            8 + // 文字区上内边距
+            titleHeight +
+            2 + metaHeight + // 源名
+            2 + metaHeight + // 进度文本
+            4 + // 文字区下内边距
+            4 + 3; // 进度条上内边距 + 高度
+        return GridView.builder(
+          padding: const EdgeInsets.only(bottom: 24),
+          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: maxExtent,
+            mainAxisSpacing: spacing,
+            crossAxisSpacing: spacing,
+            mainAxisExtent: cellHeight,
+          ),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final p = items[index];
+            return ReadingCard(
+              progress: p,
+              sourceName: nameFor(p),
+              titleLines: titleLines,
+              selectionMode: selectionMode,
+              selected: _selected.contains(_key(p)),
+              onTap: () =>
+                  selectionMode ? _toggleSelect(p) : _open(context, ref, p),
+              onLongPress: () => _toggleSelect(p),
+              onShowMenu: (pos) => _showContextMenu(p, pos),
+            );
+          },
+        );
+      },
+    );
   }
 }
 

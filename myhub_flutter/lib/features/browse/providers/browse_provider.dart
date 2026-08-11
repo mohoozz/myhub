@@ -38,10 +38,43 @@ String parentPathOf(String path) {
   return idx <= 0 ? '/' : trimmed.substring(0, idx);
 }
 
-/// 视图模式。
-final viewModeProvider = StateProvider<BrowseViewMode>(
-  (ref) => BrowseViewMode.list,
+/// 视图模式（网格/列表），持久化到 SharedPreferences，重启应用后沿用。
+final viewModeProvider =
+    NotifierProvider<BrowseViewModeNotifier, BrowseViewMode>(
+  BrowseViewModeNotifier.new,
 );
+
+class BrowseViewModeNotifier extends Notifier<BrowseViewMode> {
+  static const _kKey = 'browse.view_mode';
+
+  /// 标记用户已显式修改（防止异步恢复覆盖新值）。
+  var _dirty = false;
+
+  @override
+  BrowseViewMode build() {
+    _dirty = false;
+    _restore();
+    return BrowseViewMode.list;
+  }
+
+  Future<void> _restore() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_dirty) return;
+    state = BrowseViewMode.values.asNameMap()[prefs.getString(_kKey)] ??
+        BrowseViewMode.list;
+  }
+
+  /// 切换网格/列表并持久化。
+  Future<void> toggle() async {
+    _dirty = true;
+    final next = state == BrowseViewMode.grid
+        ? BrowseViewMode.list
+        : BrowseViewMode.grid;
+    state = next;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kKey, next.name);
+  }
+}
 
 /// 排序规则（按 路径源+目录 记忆，持久化到本地，LRU 缓存 500 条）。
 final sortProvider = NotifierProvider<SortNotifier, SortSpec>(

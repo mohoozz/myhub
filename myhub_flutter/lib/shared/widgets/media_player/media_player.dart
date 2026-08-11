@@ -360,6 +360,18 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
 
   // ---------- 键盘控制（5.5，桌面端为主） ----------
 
+  /// 播放/暂停：播放完成后 mpv 停在末尾，直接 playOrPause() 不会重播，
+  /// 需先 seek 回起点（iOS AVPlayer 模式的重播已由原生层处理）。
+  void _togglePlay() {
+    final p = _player;
+    if (p is! AvPlayerAdapter && (p.state.completed as bool)) {
+      p.seek(Duration.zero);
+      p.play();
+    } else {
+      p.playOrPause();
+    }
+  }
+
   /// ←/→：快退/快进 5s。
   void _seekBy(Duration delta) {
     final duration = _player.state.duration as Duration;
@@ -419,7 +431,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     const SingleActivator(LogicalKeyboardKey.arrowUp): () => _changeVolume(5),
     const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
         _changeVolume(-5),
-    const SingleActivator(LogicalKeyboardKey.space): () => _player.playOrPause(),
+    const SingleActivator(LogicalKeyboardKey.space): _togglePlay,
     const SingleActivator(LogicalKeyboardKey.escape): _exitAndStop,
     const SingleActivator(LogicalKeyboardKey.keyF): () {
       if (isDesktopPlatform) {

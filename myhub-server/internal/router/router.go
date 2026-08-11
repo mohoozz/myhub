@@ -41,7 +41,8 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 	sourceHandler := handler.NewSourceHandler(sourceSvc)
 
 	trashRepo := repository.NewTrashRepository(db)
-	fileSvc := service.NewFileService(cfg, sourceSvc, trashRepo)
+	progressRepo := repository.NewProgressRepository(db)
+	fileSvc := service.NewFileService(cfg, sourceSvc, trashRepo, progressRepo)
 	fileHandler := handler.NewFileHandler(fileSvc)
 
 	trashSvc := service.NewTrashService(sourceSvc, trashRepo)
@@ -62,7 +63,6 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 	comicSvc := service.NewComicService(sourceSvc, configRepo, cfg.Data.ComicCacheDir, cfg.Data.ComicCacheMaxMB)
 	comicHandler := handler.NewComicHandler(comicSvc)
 
-	progressRepo := repository.NewProgressRepository(db)
 	progressSvc := service.NewProgressService(progressRepo)
 	progressHandler := handler.NewProgressHandler(progressSvc)
 

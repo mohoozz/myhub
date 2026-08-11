@@ -17,14 +17,13 @@ class FileListView extends StatelessWidget {
     this.selectionMode = false,
     this.selectedPaths = const {},
     this.onToggleSelect,
-    this.favoritePaths = const {},
-    this.favoriteSourceId,
-    this.onToggleFavorite,
+    this.coverSourceId,
     this.onShowMenu,
     this.onLongPressMenu,
     this.highlightPath,
     this.highlightKey,
     this.onLongPress,
+    this.nameLines = 1,
     super.key,
   });
 
@@ -54,14 +53,8 @@ class FileListView extends StatelessWidget {
   /// 移动端长按（非多选模式）呼出与右键相同的上下文菜单。
   final void Function(FileItem item, Offset position)? onLongPressMenu;
 
-  /// 已收藏键集合（"sourceId|path"）。
-  final Set<String> favoritePaths;
-
-  /// 当前路径源 ID（收藏键前缀）。
-  final int? favoriteSourceId;
-
-  /// 星标点击（收藏/取消收藏）。
-  final ValueChanged<FileItem>? onToggleFavorite;
+  /// 当前路径源 ID（封面缩略图加载用）。
+  final int? coverSourceId;
 
   /// 右键呼出上下文菜单（桌面端），携带点击全局坐标。
   final void Function(FileItem item, Offset position)? onShowMenu;
@@ -71,6 +64,9 @@ class FileListView extends StatelessWidget {
 
   /// 高亮项的 GlobalKey（供上层滚动定位）。
   final GlobalKey? highlightKey;
+
+  /// 文件名显示行数（1~3）。多行时行高自动增加，避免长文件名显示不全。
+  final int nameLines;
 
   @override
   Widget build(BuildContext context) {
@@ -85,17 +81,14 @@ class FileListView extends StatelessWidget {
         final highlighted = highlightPath != null && item.path == highlightPath;
         Widget row = _FileRow(
           item: item,
-          coverSourceId: favoriteSourceId,
+          coverSourceId: coverSourceId,
           selectionMode: selectionMode,
           selected: selectedPaths.contains(item.path),
           highlighted: highlighted,
-          favorited: favoritePaths.contains('$favoriteSourceId|${item.path}'),
+          nameLines: nameLines,
           onTap: () =>
               selectionMode ? onToggleSelect?.call(item) : onOpen(item),
           onLongPress: onLongPress == null ? null : () => onLongPress!(item),
-          onToggleFavorite: onToggleFavorite == null
-              ? null
-              : () => onToggleFavorite!(item),
           onSecondaryTapUp: onShowMenu == null
               ? null
               : (d) => onShowMenu!(item, d.globalPosition),
@@ -122,9 +115,8 @@ class _FileRow extends StatelessWidget {
     required this.onLongPress,
     required this.selectionMode,
     required this.selected,
-    required this.favorited,
     this.highlighted = false,
-    this.onToggleFavorite,
+    this.nameLines = 1,
     this.onSecondaryTapUp,
     this.onLongPressMenu,
   });
@@ -137,11 +129,12 @@ class _FileRow extends StatelessWidget {
   final VoidCallback? onLongPress;
   final bool selectionMode;
   final bool selected;
-  final bool favorited;
 
   /// 高亮定位提示（来自"正在阅读"页跳转）。
   final bool highlighted;
-  final VoidCallback? onToggleFavorite;
+
+  /// 文件名显示行数（1~3）。
+  final int nameLines;
   final GestureTapUpCallback? onSecondaryTapUp;
 
   /// 移动端长按（非多选模式）呼出上下文菜单，携带按下位置。
@@ -199,7 +192,7 @@ class _FileRow extends StatelessWidget {
                 flex: 4,
                 child: Text(
                   item.name,
-                  maxLines: 1,
+                  maxLines: nameLines,
                   overflow: TextOverflow.ellipsis,
                   // 移动端放大：参考"正在阅读"列表标题（bodyMedium + w600），
                   // 使 iOS 文件名更清晰。
@@ -240,18 +233,6 @@ class _FileRow extends StatelessWidget {
                     ),
                   ),
                 ),
-              IconButton(
-                iconSize: 15,
-                visualDensity: VisualDensity.compact,
-                tooltip: favorited ? '取消收藏' : '收藏',
-                icon: Icon(
-                  LucideIcons.star,
-                  color: favorited
-                      ? colorScheme.primary
-                      : colorScheme.onSurfaceVariant,
-                ),
-                onPressed: onToggleFavorite,
-              ),
             ],
           ),
         ),

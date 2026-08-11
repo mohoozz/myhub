@@ -44,6 +44,10 @@ final class NativePlayerController: NSObject, FlutterTexture {
   private var itemEndObserver: NSObjectProtocol?
   /// 音频会话中断监听（来电/闹钟/其他 App 抢占）。
   private var audioInterruptionObserver: NSObjectProtocol?
+  /// App 进入后台监听（视频后台播放：摘除 AVPlayerLayer 退化为纯音频）。
+  private var backgroundObserver: NSObjectProtocol?
+  /// App 回到前台监听（重新挂回 AVPlayerLayer 恢复视频渲染）。
+  private var foregroundObserver: NSObjectProtocol?
   /// 当前媒体标题（锁屏/控制中心展示用）。
   private var mediaTitle: String = ""
   /// 当前媒体总时长（秒），用于锁屏进度展示。
@@ -52,6 +56,12 @@ final class NativePlayerController: NSObject, FlutterTexture {
   private var isPlaying = false
   private var volume: Float = 1.0
   private var speed: Float = 1.0
+
+  /// 是否已播放到末尾。
+  ///
+  /// AVPlayer 播放完成后 currentTime 停在末尾，直接 play() 不会重播；
+  /// 需先 seek 回起点。播放完成通知置位，play() 时消费并从头重播。
+  private var didReachEnd = false
 
   /// 是否已注册远程控制命令（锁屏/控制中心），仅一次。
   private var remoteCommandsRegistered = false
@@ -181,6 +191,8 @@ final class NativePlayerController: NSObject, FlutterTexture {
   func open(url: URL, title: String, headers: [String: String], isAudio: Bool = false) {
     print("Myhub NativePlayer: open url=\(url.absoluteString) isAudio=\(isAudio)")
     mediaTitle = title
+    // 新会话：重置播放完成标记（新媒体从头播放）
+    didReachEnd = false
     // 关闭旧的 item 与纹理
     removeObservers()
     teardownTexture()
@@ -256,23 +268,8 @@ final class NativePlayerController: NSObject, FlutterTexture {
       let layer = AVPlayerLayer(player: p)
       layer.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
       layer.isHidden = true
-      // 使用 iOS 13+ 推荐的 API 获取根视图（keyWindow 已废弃）
-      var rootLayer: CALayer?
-      for scene in UIApplication.shared.connectedScenes {
-        if let windowScene = scene as? UIWindowScene,
-           let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first,
-           let layer = window.rootViewController?.view.layer {
-          rootLayer = layer
-          break
-        }
-      }
-      if let rootLayer = rootLayer {
-        rootLayer.addSublayer(layer)
-        playerLayer = layer
-        print("Myhub NativePlayer: AVPlayerLayer 已添加（不可见，用于解锁帧输出）")
-      } else {
-        print("Myhub NativePlayer: 无法获取根视图，AVPlayerLayer 未添加")
-      }
+      playerLayer = layer
+      attachPlayerLayer()
     }
 
     setupTexture()
@@ -283,9 +280,49 @@ final class NativePlayerController: NSObject, FlutterTexture {
     emitStatus(["state": "loading"])
   }
 
+  /// 将不可见 AVPlayerLayer 附加到根视图层。
+  ///
+  /// 后台播放关键：进入后台时会摘除 layer（让 AVPlayer 退化为纯音频后台播放，
+  /// 否则 iOS 视其为"视频播放"而强制暂停），回到前台后通过此方法重新挂回，
+  /// 恢复 iOS 16+ 流式视频的帧输出。
+  private func attachPlayerLayer() {
+    guard let layer = playerLayer else { return }
+    if layer.superlayer != nil { return }
+    // 使用 iOS 13+ 推荐的 API 获取根视图（keyWindow 已废弃）
+    var rootLayer: CALayer?
+    for scene in UIApplication.shared.connectedScenes {
+      if let windowScene = scene as? UIWindowScene,
+         let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first,
+         let rl = window.rootViewController?.view.layer {
+        rootLayer = rl
+        break
+      }
+    }
+    if let rootLayer = rootLayer {
+      rootLayer.addSublayer(layer)
+      print("Myhub NativePlayer: AVPlayerLayer 已附加（不可见，用于解锁帧输出）")
+    } else {
+      print("Myhub NativePlayer: 无法获取根视图，AVPlayerLayer 未附加")
+    }
+  }
+
   // MARK: - Playback controls
 
   func play() {
+    // 播放完成后 AVPlayer 停在末尾，play() 不生效，需先 seek 回起点。
+    // seek 是异步的，在 completionHandler 中再真正播放并上报状态，
+    // 避免 seek 完成前 emitStatus 附带末尾 position 导致进度条闪烁。
+    if didReachEnd {
+      didReachEnd = false
+      player?.seek(to: .zero, completionHandler: { [weak self] _ in
+        guard let self else { return }
+        self.player?.play()
+        self.isPlaying = true
+        self.emitStatus(["state": "playing"])
+        self.updateNowPlaying()
+      })
+      return
+    }
     player?.play()
     isPlaying = true
     emitStatus(["state": isPlaying ? "playing" : "paused"])
@@ -300,6 +337,8 @@ final class NativePlayerController: NSObject, FlutterTexture {
   }
 
   func seek(toMs ms: Int64) {
+    // 用户主动 seek 退出"已播完"状态：后续 play() 直接续播
+    didReachEnd = false
     let target = CMTime(value: ms, timescale: 1000)
     player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
     updateNowPlaying()
@@ -365,6 +404,15 @@ final class NativePlayerController: NSObject, FlutterTexture {
   /// 读取当前系统亮度（0-1）。
   func currentBrightness() -> Double {
     return Double(UIScreen.main.brightness)
+  }
+
+  /// 读取当前系统音量和亮度，供进入播放器时与系统值保持一致。
+  /// 音量 0-1（Dart 侧转 0-100），亮度 0-1。
+  func systemStatus() -> [String: Any] {
+    return [
+      "volume": AVAudioSession.sharedInstance().outputVolume,
+      "brightness": Double(UIScreen.main.brightness),
+    ]
   }
 
   // MARK: - Tracks
@@ -479,6 +527,9 @@ final class NativePlayerController: NSObject, FlutterTexture {
     itemEndObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
     ) { [weak self] _ in
+      // 记录播放完成：再次 play() 时先 seek 回起点重播
+      self?.didReachEnd = true
+      self?.isPlaying = false
       self?.emitStatus(["state": "completed"])
     }
 
@@ -574,13 +625,43 @@ final class NativePlayerController: NSObject, FlutterTexture {
         if let opt = info[AVAudioSessionInterruptionOptionKey] as? UInt,
            AVAudioSession.InterruptionOptions(rawValue: opt).contains(.shouldResume) {
           try? AVAudioSession.sharedInstance().setActive(true, options: [])
-          self.player?.play()
-          self.isPlaying = true
-          self.emitStatus(["state": "playing"])
-          self.updateNowPlaying()
+          // 统一走 play()：中断期间若已播完，恢复时从头重播
+          self.play()
         }
       @unknown default:
         break
+      }
+    }
+
+    // App 前后台监听：视频后台播放支持。
+    // 后台播放视频时，AVPlayerLayer 若仍挂在视图层级中，系统会将其识别为
+    // "视频播放" 并在进入后台时强制暂停。进入后台先摘除 layer，
+    // 让 AVPlayer 退化为纯音频后台播放（配合 Info.plist UIBackgroundModes=audio）；
+    // 回到前台重新挂回 layer，恢复视频帧输出与渲染。
+    // 音频模式无 playerLayer，此逻辑自动跳过。
+    backgroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      guard let self else { return }
+      let hadLayer = self.playerLayer?.superlayer != nil
+      if hadLayer {
+        self.playerLayer?.removeFromSuperlayer()
+        print("Myhub NativePlayer: 进入后台，摘除 AVPlayerLayer（后台纯音频播放）")
+        // 摘除 layer 前后系统可能已暂停播放（rate=0）；在播状态下恢复，
+        // 保证切后台不中断。
+        if self.player?.rate == 0 {
+          self.player?.play()
+          print("Myhub NativePlayer: 后台恢复播放")
+        }
+      }
+    }
+    foregroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      guard let self else { return }
+      if self.playerLayer != nil {
+        self.attachPlayerLayer()
+        print("Myhub NativePlayer: 回到前台，重新附加 AVPlayerLayer")
       }
     }
   }
@@ -595,6 +676,14 @@ final class NativePlayerController: NSObject, FlutterTexture {
     if let audioInterruptionObserver {
       NotificationCenter.default.removeObserver(audioInterruptionObserver)
       self.audioInterruptionObserver = nil
+    }
+    if let backgroundObserver {
+      NotificationCenter.default.removeObserver(backgroundObserver)
+      self.backgroundObserver = nil
+    }
+    if let foregroundObserver {
+      NotificationCenter.default.removeObserver(foregroundObserver)
+      self.foregroundObserver = nil
     }
     lastSystemVolume = -1
   }
@@ -623,12 +712,9 @@ final class NativePlayerController: NSObject, FlutterTexture {
     remoteCommandsRegistered = true
 
     let center = MPRemoteCommandCenter.shared()
-    // 播放
+    // 播放（统一走 play()：播放完成后会先 seek 回起点重播）
     center.playCommand.addTarget { [weak self] _ in
-      self?.player?.play()
-      self?.isPlaying = true
-      self?.emitStatus(["state": "playing"])
-      self?.updateNowPlaying()
+      self?.play()
       return .success
     }
     // 暂停
@@ -639,7 +725,7 @@ final class NativePlayerController: NSObject, FlutterTexture {
       self?.updateNowPlaying()
       return .success
     }
-    // 播放/暂停切换
+    // 播放/暂停切换（非播放态统一走 play()，处理播完重播）
     center.togglePlayPauseCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
       if self.isPlaying {
@@ -647,9 +733,7 @@ final class NativePlayerController: NSObject, FlutterTexture {
         self.isPlaying = false
         self.emitStatus(["state": "paused"])
       } else {
-        self.player?.play()
-        self.isPlaying = true
-        self.emitStatus(["state": "playing"])
+        self.play()
       }
       self.updateNowPlaying()
       return .success

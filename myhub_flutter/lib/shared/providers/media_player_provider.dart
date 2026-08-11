@@ -511,8 +511,8 @@ class MediaPlayerController {
   }
 
   /// AVPlayer 模式：打开媒体并恢复进度。
-  /// NativePlayerController.play 已处理 URL 构建、鉴权头、音量/倍速恢复，
-  /// 这里只负责进度恢复。
+  /// NativePlayerController.play 已处理 URL 构建、鉴权头、倍速恢复，
+  /// 并与系统当前音量/亮度保持一致，这里只负责进度恢复。
   Future<void> _openAvPlayerWithResume() async {
     final sourceId = _sourceId;
     final file = _file;

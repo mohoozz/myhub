@@ -54,11 +54,9 @@ class PlayerOsd {
 
 /// 悬浮胶囊视图：订阅 [PlayerOsd] 并渲染反馈内容。
 ///
-/// 显示位置：屏幕**中下 1/3** 处水平居中。
-/// * 避开了顶部文件名（动态岛机型上顶栏较高，`top: 72` 仍可能重叠）；
-/// * 避开了中央播放按钮（与 OSD 同时出现时也只在调节瞬间，
-///   此时中央播放按钮已被隐藏/淡化）；
-/// * 避开底部控制栏（位于 1/3 处，距离底栏较远）。
+/// 显示位置：屏幕**正中央**。
+/// * 与中央播放/暂停按钮、锁定态锁图标位置一致，反馈信息最醒目；
+/// * 播放/暂停、音量、亮度等操作提示均显示在正中，符合用户预期。
 class PlayerOsdView extends StatelessWidget {
   const PlayerOsdView({super.key, required this.osd});
 
@@ -72,8 +70,8 @@ class PlayerOsdView extends StatelessWidget {
         if (feedback == null) return const SizedBox.shrink();
         return IgnorePointer(
           child: Align(
-            // 中下 1/3：屏幕垂直方向靠下，避免与顶栏/中央大按钮/底栏重叠。
-            alignment: const Alignment(0, 0.35),
+            // 屏幕正中央显示。
+            alignment: Alignment.center,
             child: Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: 18,

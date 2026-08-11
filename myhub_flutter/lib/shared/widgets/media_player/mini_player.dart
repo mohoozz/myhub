@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
+import 'package:myhub_flutter/shared/providers/av_player_adapter.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/media_player.dart';
 
@@ -147,6 +148,18 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
       widget.player.setVolume(0);
     } else {
       widget.player.setVolume(_volumeBeforeMute > 0 ? _volumeBeforeMute : 100);
+    }
+  }
+
+  /// 播放/暂停：播放完成后 mpv 停在末尾，直接 playOrPause() 不会重播，
+  /// 需先 seek 回起点（iOS AVPlayer 模式的重播已由原生层处理）。
+  void _togglePlay() {
+    final p = widget.player;
+    if (p is! AvPlayerAdapter && (p.state.completed as bool)) {
+      p.seek(Duration.zero);
+      p.play();
+    } else {
+      p.playOrPause();
     }
   }
 
@@ -310,7 +323,7 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
                                       clipBehavior: Clip.antiAlias,
                                       child: InkWell(
                                         customBorder: const CircleBorder(),
-                                        onTap: () => widget.player.playOrPause(),
+                                        onTap: _togglePlay,
                                         child: Padding(
                                           padding: const EdgeInsets.all(6),
                                           child: Icon(

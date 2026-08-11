@@ -19,6 +19,7 @@ class ReadingCard extends ConsumerWidget {
     this.onShowMenu,
     this.selectionMode = false,
     this.selected = false,
+    this.titleLines = 1,
   });
 
   final ReadingProgress progress;
@@ -36,6 +37,9 @@ class ReadingCard extends ConsumerWidget {
 
   /// 当前是否被选中（多选模式下生效）。
   final bool selected;
+
+  /// 标题显示行数（1~3）。
+  final int titleLines;
 
   static const _typeColors = {
     'novel': [Color(0xFF7C3AED), Color(0xFFDB2777)],
@@ -108,7 +112,7 @@ class ReadingCard extends ConsumerWidget {
                   children: [
                     Text(
                       title,
-                      maxLines: 1,
+                      maxLines: titleLines,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontWeight: FontWeight.w600,
@@ -341,6 +345,7 @@ class ReadingListTile extends ConsumerWidget {
     this.onShowMenu,
     this.selectionMode = false,
     this.selected = false,
+    this.titleLines = 1,
   });
 
   final ReadingProgress progress;
@@ -355,6 +360,9 @@ class ReadingListTile extends ConsumerWidget {
 
   final bool selectionMode;
   final bool selected;
+
+  /// 标题显示行数（1~3）。
+  final int titleLines;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -402,7 +410,7 @@ class ReadingListTile extends ConsumerWidget {
                         Flexible(
                           child: Text(
                             title,
-                            maxLines: 1,
+                            maxLines: titleLines,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodySmall?.copyWith(
                               fontWeight: FontWeight.w600,

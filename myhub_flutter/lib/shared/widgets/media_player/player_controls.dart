@@ -22,7 +22,8 @@ const Duration _kHideDelay = Duration(seconds: 3);
 /// * 底栏：播放/暂停、时间、进度条（缓冲叠加）、倍速、音量、
 ///   迷你播放、全屏；
 /// * 轻触画面切换显隐，播放中 [_kHideDelay] 无操作自动隐藏（暂停时常显），
-///   桌面端鼠标移动自动唤醒。
+///   桌面端鼠标移动自动唤醒；
+/// * 锁定态下锁图标同样按 [_kHideDelay] 自动隐藏，点击屏幕唤醒重新显示。
 class PlayerControls extends StatefulWidget {
   const PlayerControls({
     super.key,
@@ -198,9 +199,11 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   void _startHideTimer() {
     _hideTimer?.cancel();
-    if (!_playing || _locked) return; // 暂停或锁定时不自动隐藏
+    if (!_playing) return; // 暂停时不自动隐藏
+    // 锁定态同样参与自动隐藏：锁图标显示一段时间后自动隐藏，
+    // 点击屏幕（onTap 唤醒）后再次显示。
     _hideTimer = Timer(_kHideDelay, () {
-      if (mounted && _playing && !_locked) {
+      if (mounted && _playing) {
         _setVisible(false);
       }
     });
@@ -215,7 +218,9 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   void _toggleVisible() {
-    if (_locked) return; // 锁定时轻触不切换显隐（锁定态常显）
+    // 锁定态下不切换显隐（锁图标的显隐由 _wake / 自动隐藏计时控制，
+    // build 中锁定态 onTap 已改走 _wake，此处保留为防御）。
+    if (_locked) return;
     _setVisible(!_visible);
     if (_visible) {
       _startHideTimer();
@@ -232,11 +237,13 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   // ---------- 锁定 ----------
 
-  /// 长按进入锁定：常显控制栏、屏蔽手势与调节按钮，中央仅留锁图标。
+  /// 长按进入锁定：屏蔽手势与调节按钮，中央仅留锁图标。
+  /// 锁图标同样按播放状态自动隐藏（3s 无操作），点击屏幕后唤醒显示。
   void _lock() {
     _hideTimer?.cancel();
     setState(() => _locked = true);
     _setVisible(true);
+    _startHideTimer();
   }
 
   /// 点击中央锁图标解锁：恢复手势与按钮，重新开始自动隐藏计时。
@@ -249,7 +256,18 @@ class _PlayerControlsState extends State<PlayerControls> {
   // ---------- 播放动作 ----------
 
   void _togglePlay() {
-    _player.playOrPause();
+    final p = _player;
+    // media_kit（非 iOS）：播放完成后 mpv 停在末尾，playOrPause() 只切
+    // pause 属性不会重播，需先 seek 回起点。
+    // iOS AVPlayer 模式的重播已由原生层处理（didReachEnd）。
+    if (p is AvPlayerAdapter) {
+      p.playOrPause();
+    } else if (p.state.completed as bool) {
+      p.seek(Duration.zero);
+      p.play();
+    } else {
+      p.playOrPause();
+    }
     _wake();
   }
 
@@ -271,6 +289,9 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   void _toggleMute() {
     if (_volume > 0) {
+      // 记住静音前音量：否则取消静音会恢复到初始值（100）而非当前音量，
+      // 进入播放器时音量与系统一致后，静音再取消会突然跳到 100。
+      _volumeBeforeMute = _volume;
       _player.setVolume(0);
       widget.osd.show(LucideIcons.volumeX, '静音');
     } else {
@@ -424,8 +445,9 @@ class _PlayerControlsState extends State<PlayerControls> {
       child: PlayerGestureDetector(
         player: _player,
         osd: widget.osd,
-        // 轻触画面：切换控制栏显隐（锁定态由手势层屏蔽）
-        onTap: _toggleVisible,
+        // 轻触画面：切换控制栏显隐；锁定态下改为唤醒——
+        // 锁图标自动隐藏后，点击屏幕重新显示（并重置隐藏计时）。
+        onTap: _locked ? _wake : _toggleVisible,
         // 长按进入锁定
         onLongPress: _lock,
         // 锁定态屏蔽全部手势
@@ -445,8 +467,12 @@ class _PlayerControlsState extends State<PlayerControls> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // 亮度遮罩（软件调光，由 5.4 左侧竖滑调节）
-            if (_brightness < 1)
+            // 亮度遮罩（软件调光，由 5.4 左侧竖滑调节）。
+            // iOS AVPlayer 模式不渲染：亮度已直接同步系统屏幕亮度（物理
+            // 调暗），叠加遮罩会双重调暗，且进入播放器时 _brightness 与
+            // 系统亮度脱节会导致首次调节时画面突然变暗。
+            // Android/media_kit 为纯软件调光，保留遮罩。
+            if (_brightness < 1 && _player is! AvPlayerAdapter)
               IgnorePointer(
                 child: Container(
                   color: Colors.black.withValues(alpha: 1.0 - _brightness),
@@ -463,7 +489,9 @@ class _PlayerControlsState extends State<PlayerControls> {
             // 中央锁定解锁按钮：仅锁定态显示锁图标（点击解锁）。
             // 已移除中央大播放/暂停按钮（播放/暂停由底栏按钮与手势控制，
             // 避免遮挡画面中央）。
-            if (_locked) Center(child: _buildUnlockButton()),
+            // 包裹 _fade 跟随控制栏显隐：自动隐藏后点击屏幕（onTap 唤醒）
+            // 重新显示。
+            if (_locked) Center(child: _fade(_buildUnlockButton())),
             // 方向切换悬浮按钮（仅移动端）：贴屏幕左侧中部显示，
             // 跟随控制栏显隐（轻触画面/暂停时显，自动隐藏延时到时隐）。
             // SafeArea 只保留左侧 inset：iPhone 横屏时刘海/Dynamic Island
@@ -544,7 +572,8 @@ class _PlayerControlsState extends State<PlayerControls> {
   /// 仅 iOS 平台（用于 iOS 端隐藏音量按钮，仅保留手势调节）。
   bool get _isIOS => !kIsWeb && Platform.isIOS;
 
-  /// 中央锁图标按钮：锁定态常显，点击解锁。
+  /// 中央锁图标按钮：点击解锁。外层包 [_fade] 跟随控制栏显隐，
+  /// 自动隐藏后点击屏幕（onTap 唤醒）重新显示。
   Widget _buildUnlockButton() {
     return Material(
       color: Colors.black54,

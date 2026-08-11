@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
 import 'package:myhub_flutter/features/browse/providers/file_actions.dart';
 import 'package:myhub_flutter/features/browse/widgets/breadcrumb_bar.dart';
@@ -745,10 +746,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       case _BrowseMenuAction.refresh:
         ref.read(fileListProvider.notifier).refresh();
       case _BrowseMenuAction.toggleView:
-        final cur = ref.read(viewModeProvider);
-        ref.read(viewModeProvider.notifier).state = cur == BrowseViewMode.grid
-            ? BrowseViewMode.list
-            : BrowseViewMode.grid;
+        ref.read(viewModeProvider.notifier).toggle();
       case _BrowseMenuAction.mkdir:
         _mkdir();
       case _BrowseMenuAction.trash:
@@ -881,15 +879,9 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         final longPressMenu = !isDesktopPlatform && !selectionMode
             ? _showItemMenu
             : null;
-        final favoritePaths = ref.watch(favoritePathsProvider);
         final favoriteSourceId = ref.read(effectiveSourceProvider)?.id;
-        final favoriteNotifier = ref.read(favoriteListProvider.notifier);
         final highlightPath = ref.watch(highlightFileProvider);
-        void toggleFavorite(FileItem f) {
-          final sourceId = favoriteSourceId;
-          if (sourceId == null) return;
-          _run(() => favoriteNotifier.toggle(sourceId, f.path));
-        }
+        final nameLines = ref.watch(fileNameLinesProvider);
 
         // 高亮定位：目标文件出现在当前目录时，自动滚动到该文件。
         // 大目录懒加载下目标项可能尚未 build，见 _scrollToHighlight 处理。
@@ -935,12 +927,11 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                   ? (f) => selectionNotifier.enter(f.path)
                   : null,
               onLongPressMenu: longPressMenu,
-              favoritePaths: favoritePaths,
-              favoriteSourceId: favoriteSourceId,
-              onToggleFavorite: toggleFavorite,
+              coverSourceId: favoriteSourceId,
               onShowMenu: _showItemMenu,
               highlightPath: highlightPath,
               highlightKey: isGrid ? _highlightKey : null,
+              nameLines: nameLines,
             ),
             FileListView(
               items: items,
@@ -956,12 +947,11 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                   ? (f) => selectionNotifier.enter(f.path)
                   : null,
               onLongPressMenu: longPressMenu,
-              favoritePaths: favoritePaths,
-              favoriteSourceId: favoriteSourceId,
-              onToggleFavorite: toggleFavorite,
+              coverSourceId: favoriteSourceId,
               onShowMenu: _showItemMenu,
               highlightPath: highlightPath,
               highlightKey: isGrid ? null : _highlightKey,
+              nameLines: nameLines,
             ),
           ],
         );
@@ -1078,11 +1068,10 @@ class _ParentEntry extends StatelessWidget {
                           ),
                   ),
                 ),
-                // 占位列，对齐普通行右侧三列（大小 / 时间 / 收藏按钮），
+                // 占位列，对齐普通行右侧两列（大小 / 时间），
                 // 视觉上让 "返回上级" 行的右端与下方条目保持同一基准线。
                 const Expanded(flex: 2, child: SizedBox()),
                 const Expanded(flex: 2, child: SizedBox()),
-                const SizedBox(width: 40),
               ],
             ),
           ),

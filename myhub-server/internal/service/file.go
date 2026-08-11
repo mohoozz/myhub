@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"gorm.io/gorm"
 
 	"myhub-server/internal/adapter"
 	"myhub-server/internal/config"
@@ -76,14 +79,20 @@ type FileItem struct {
 
 // FileService 文件管理业务逻辑：编排适配器与回收站记录、跨源流式中转
 type FileService struct {
-	cfg       *config.Config
-	sourceSvc *SourceService
-	trashRepo *repository.TrashRepository
+	cfg          *config.Config
+	sourceSvc    *SourceService
+	trashRepo    *repository.TrashRepository
+	progressRepo *repository.ProgressRepository
 }
 
 // NewFileService 创建 FileService
-func NewFileService(cfg *config.Config, sourceSvc *SourceService, trashRepo *repository.TrashRepository) *FileService {
-	return &FileService{cfg: cfg, sourceSvc: sourceSvc, trashRepo: trashRepo}
+func NewFileService(cfg *config.Config, sourceSvc *SourceService, trashRepo *repository.TrashRepository, progressRepo *repository.ProgressRepository) *FileService {
+	return &FileService{
+		cfg:          cfg,
+		sourceSvc:    sourceSvc,
+		trashRepo:    trashRepo,
+		progressRepo: progressRepo,
+	}
 }
 
 // List 列目录，附带媒体类型识别
@@ -141,7 +150,20 @@ func (s *FileService) Rename(ctx context.Context, sourceID uint, p, newName stri
 		return err
 	}
 	dst := path.Join(path.Dir("/"+strings.TrimPrefix(p, "/")), newName)
-	return a.Move(ctx, p, dst)
+	if err := a.Move(ctx, p, dst); err != nil {
+		return err
+	}
+	// 重命名后同步阅读进度路径（含子目录），避免"正在阅读"历史失效。
+	s.updateProgressPath(ctx, sourceID, p, dst)
+	return nil
+}
+
+// updateProgressPath 文件路径变更（移动/重命名）后，同步更新阅读进度记录路径。
+// 失败仅记日志，不阻断文件操作本身。
+func (s *FileService) updateProgressPath(_ context.Context, sourceID uint, oldPath, newPath string) {
+	if _, err := s.progressRepo.UpdatePathPrefix(sourceID, oldPath, newPath); err != nil {
+		log.Printf("同步阅读进度路径失败 source=%d old=%s new=%s: %v", sourceID, oldPath, newPath, err)
+	}
 }
 
 // Upload 流式上传文件到指定目录
@@ -168,6 +190,8 @@ func (s *FileService) Move(ctx context.Context, sourceID uint, paths []string, t
 			if err := a.Move(ctx, p, dst); err != nil {
 				return err
 			}
+			// 移动后同步阅读进度路径（含子目录），避免"正在阅读"历史失效。
+			s.updateProgressPath(ctx, sourceID, p, dst)
 		}
 		return nil
 	}
@@ -254,6 +278,11 @@ func (s *FileService) Delete(ctx context.Context, sourceID uint, paths []string)
 		}
 		if err := s.trashRepo.Create(item); err != nil {
 			return fmt.Errorf("回收站记录失败: %w", err)
+		}
+		// 删除文件/目录后联动清理阅读进度（含子目录），
+		// 避免"正在阅读"仍展示已删除文件；无记录时忽略，失败不阻断文件删除。
+		if err := s.progressRepo.Delete(sourceID, p); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("删除阅读进度记录失败 source=%d path=%s: %v", sourceID, p, err)
 		}
 	}
 	return nil

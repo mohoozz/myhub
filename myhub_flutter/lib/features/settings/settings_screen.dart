@@ -458,8 +458,10 @@ class _AppearanceSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
     final mode = ref.watch(themeModeProvider);
     final notifier = ref.read(themeModeProvider.notifier);
+    final nameLines = ref.watch(fileNameLinesProvider);
     return _SectionCard(
       title: '外观',
       children: [
@@ -485,6 +487,24 @@ class _AppearanceSection extends ConsumerWidget {
           ],
           selected: {mode},
           onSelectionChanged: (s) => notifier.setMode(s.first),
+        ),
+        const Divider(height: 24),
+        // 文件名/标题显示行数：影响浏览页与阅读页的卡片、列表。
+        // 1~3 行，多行时卡片高度自适应，避免长文件名显示不全。
+        _StepperRow(
+          label: '文件名行数',
+          value: nameLines,
+          min: FileNameLinesNotifier.minLines,
+          max: FileNameLinesNotifier.maxLines,
+          suffix: '行',
+          onChanged: (v) => ref.read(fileNameLinesProvider.notifier).set(v),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '文件/标题过长时按设定行数换行显示（浏览页与阅读页的卡片、列表均生效）。',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       ],
     );

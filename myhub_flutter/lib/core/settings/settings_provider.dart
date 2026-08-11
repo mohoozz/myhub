@@ -27,6 +27,37 @@ enum PlayerOrientation {
   }
 }
 
+/// 文件名/标题显示行数（浏览页卡片与列表、阅读页卡片与列表共用）。
+///
+/// 范围 1~3，持久化到 SharedPreferences，默认 1（保持原有单行截断行为）。
+final fileNameLinesProvider = NotifierProvider<FileNameLinesNotifier, int>(
+  FileNameLinesNotifier.new,
+);
+
+class FileNameLinesNotifier extends Notifier<int> {
+  static const _kKey = 'ui.file_name_lines';
+  static const int minLines = 1;
+  static const int maxLines = 3;
+
+  @override
+  int build() {
+    _restore();
+    return 1;
+  }
+
+  Future<void> _restore() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = (prefs.getInt(_kKey) ?? 1).clamp(minLines, maxLines);
+  }
+
+  Future<void> set(int lines) async {
+    final v = lines.clamp(minLines, maxLines);
+    state = v;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kKey, v);
+  }
+}
+
 /// 播放偏好设置。
 class PlayerSettings {
   const PlayerSettings({

@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:myhub_flutter/core/api/api_exception.dart';
 import 'package:myhub_flutter/core/api/progress_api.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/data/database/app_database.dart';
@@ -85,6 +86,35 @@ class ProgressRepository {
     } catch (_) {
       // 离线：保留 deleted=true 标记，联网后由 syncPending 补删
     }
+  }
+
+  /// 删除指定路径（含子路径）的阅读记录：本地标记删除 + 后端删除（离线时保留待同步）。
+  ///
+  /// 用于浏览页删除文件/目录后联动清理"正在阅读"历史：
+  /// 服务端进度已由删除接口一并清理，此处主要负责清理本地缓存；
+  /// 后端返回 404（记录不存在）视为删除成功。
+  Future<void> deleteByPath(int sourceId, String filePath) async {
+    await _db.markProgressDeletedByPath(sourceId, filePath);
+    try {
+      await _api.delete(sourceId, filePath);
+      await _db.deleteProgressByPath(sourceId, filePath);
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) {
+        // 后端已无该记录（可能已被删除接口联动清理），直接清理本地
+        await _db.deleteProgressByPath(sourceId, filePath);
+      }
+      // 其余异常：保留 deleted=true 标记，联网后由 syncPending 补删
+    } catch (_) {
+      // 离线：保留 deleted=true 标记，联网后由 syncPending 补删
+    }
+  }
+
+  /// 文件移动/重命名后同步进度路径（含子路径）。
+  ///
+  /// 服务端路径已由移动/重命名接口同步改写，此处同步本地缓存；
+  /// 本地记录路径改写成功后无需重新上传（服务端与本地已一致）。
+  Future<void> movePath(int sourceId, String oldPath, String newPath) async {
+    await _db.updateProgressPathPrefix(sourceId, oldPath, newPath);
   }
 
   /// 查询单条进度：本地与后端取 updated_at 较新者（以最新为准）。

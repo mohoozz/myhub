@@ -101,7 +101,15 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   void _handleDoubleTap() {
     // playOrPause 异步，先读取当前状态，显示反转后的目标状态
     final willPause = _player.state.playing as bool;
-    _player.playOrPause();
+    final p = _player;
+    // 播放完成后 mpv 停在末尾，playOrPause() 不重播，需先 seek 回起点
+    // （iOS AVPlayer 模式的重播已由原生层处理）。
+    if (p is! AvPlayerAdapter && (p.state.completed as bool)) {
+      p.seek(Duration.zero);
+      p.play();
+    } else {
+      p.playOrPause();
+    }
     _osd.show(
       willPause ? LucideIcons.pause : LucideIcons.play,
       willPause ? '暂停' : '播放',
@@ -230,12 +238,13 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
-        // enabled=false（锁定态）：屏蔽所有手势，仅保留长按解锁入口交由
-        // 锁图标处理（此处不响应，避免与锁图标的点击冲突）。
+        // enabled=false（锁定态）：屏蔽 seek/音量/亮度/双击/拖拽/长按等全部
+        // 调节手势，但保留单击回调——控制栏据此"唤醒"锁图标（自动隐藏后
+        // 点击屏幕重新显示），锁图标按钮本身作为子组件优先命中，互不冲突。
         final enabled = widget.enabled;
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onTap: enabled ? widget.onTap : null,
+          onTap: widget.onTap,
           onLongPress: enabled ? widget.onLongPress : null,
           onDoubleTap: enabled ? _handleDoubleTap : null,
           onHorizontalDragStart: enabled ? _startSeek : null,

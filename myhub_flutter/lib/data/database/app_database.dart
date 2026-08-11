@@ -114,10 +114,99 @@ class AppDatabase extends _$AppDatabase {
         .go();
   }
 
+  /// 物理删除指定路径（含子路径）的本地进度记录。
+  Future<int> deleteProgressByPath(int sourceId, String filePath) async {
+    final prefix = _pathPrefix(filePath);
+    final rows = await (select(localProgress)
+          ..where((t) => t.sourceId.equals(sourceId)))
+        .get();
+    final ids = [
+      for (final r in rows)
+        if (_pathMatches(r.filePath, prefix)) r.id,
+    ];
+    if (ids.isEmpty) return 0;
+    return (delete(localProgress)..where((t) => t.id.isIn(ids))).go();
+  }
+
+  /// 标记指定路径（含子路径）的本地进度为已删除（待同步删除）。
+  Future<int> markProgressDeletedByPath(
+    int sourceId,
+    String filePath, {
+    DateTime? updatedAt,
+  }) async {
+    final prefix = _pathPrefix(filePath);
+    final rows = await (select(localProgress)
+          ..where((t) => t.sourceId.equals(sourceId) & t.deleted.equals(false)))
+        .get();
+    final ids = [
+      for (final r in rows)
+        if (_pathMatches(r.filePath, prefix)) r.id,
+    ];
+    if (ids.isEmpty) return 0;
+    return (update(localProgress)..where((t) => t.id.isIn(ids))).write(
+      LocalProgressCompanion(
+        deleted: const Value(true),
+        synced: const Value(false),
+        updatedAt: Value(updatedAt ?? DateTime.now()),
+      ),
+    );
+  }
+
   /// 标记已同步。
   Future<int> markProgressSynced(int id) {
     return (update(localProgress)..where((t) => t.id.equals(id)))
         .write(const LocalProgressCompanion(synced: Value(true)));
+  }
+
+  /// 规范化路径前缀：去掉结尾 `/`（根路径 `/` 归一为空串）。
+  String _pathPrefix(String path) =>
+      path.endsWith('/') ? path.substring(0, path.length - 1) : path;
+
+  /// 判断文件路径是否命中前缀（精确匹配或位于其子目录下）。
+  bool _pathMatches(String filePath, String prefix) =>
+      filePath == prefix || filePath.startsWith('$prefix/');
+
+  /// 文件移动/重命名后，同步改写本地进度记录路径（含子路径）。
+  ///
+  /// 目标位置若已有记录（如同名覆盖），先移除旧记录，以移动后文件的进度为准。
+  Future<int> updateProgressPathPrefix(
+    int sourceId,
+    String oldPath,
+    String newPath,
+  ) async {
+    final oldPrefix = _pathPrefix(oldPath);
+    final newPrefix = _pathPrefix(newPath);
+    if (oldPrefix.isEmpty || newPrefix.isEmpty || oldPrefix == newPrefix) {
+      return 0;
+    }
+    final rows = await (select(localProgress)
+          ..where((t) => t.sourceId.equals(sourceId)))
+        .get();
+    final targets = [
+      for (final r in rows)
+        if (_pathMatches(r.filePath, oldPrefix))
+          (
+            row: r,
+            newFilePath:
+                newPrefix + r.filePath.substring(oldPrefix.length),
+          ),
+    ];
+    if (targets.isEmpty) return 0;
+    await transaction(() async {
+      for (final t in targets) {
+        // 目标位置已有记录先删除，避免唯一键冲突
+        await (delete(localProgress)
+              ..where(
+                (t2) =>
+                    t2.sourceId.equals(sourceId) &
+                    t2.filePath.equals(t.newFilePath),
+              ))
+            .go();
+        await (update(localProgress)..where((t2) => t2.id.equals(t.row.id)))
+            .write(LocalProgressCompanion(filePath: Value(t.newFilePath)));
+      }
+    });
+    return targets.length;
   }
 
   // --- 下载任务（二期） ---
