@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/shared/providers/auth_headers_provider.dart';
+import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 
 /// 纯图片文件预览页（与漫画阅读器区分开）。
@@ -77,6 +78,11 @@ class _ImagePreviewPageState extends ConsumerState<ImagePreviewPage> {
   /// 桌面端沉浸式标题栏开关（纯黑背景，白底标题栏会突兀）。
   StateController<bool>? _immersiveTitleBar;
 
+  /// 媒体播放控制器（initState 缓存：dispose 阶段 ref 已不可用，
+  /// 直接 ref.read 会抛 StateError，导致 pageClosed 不执行、
+  /// 退出后迷你播放器无法恢复显示）。
+  late final MediaPlayerController _mediaPlayer;
+
   /// 是否可切换（列表多于 1 张）。
   bool get _canNavigate => _images.length > 1;
 
@@ -88,6 +94,9 @@ class _ImagePreviewPageState extends ConsumerState<ImagePreviewPage> {
     _current = widget.initialIndex.clamp(0, _images.length - 1);
     _controller = PageController(initialPage: _current);
     _zoom.addListener(_onZoomChanged);
+    // 沉浸式全屏预览：进入时隐藏迷你播放器，避免悬浮条遮挡图片
+    _mediaPlayer = ref.read(mediaPlayerProvider);
+    _mediaPlayer.pageOpened();
     if (isDesktopPlatform) {
       // initState 处于组件树锁定阶段，延迟到帧后修改 provider
       _immersiveTitleBar = ref.read(immersiveTitleBarProvider.notifier);
@@ -101,6 +110,8 @@ class _ImagePreviewPageState extends ConsumerState<ImagePreviewPage> {
   void dispose() {
     _zoom.dispose();
     _controller.dispose();
+    // 退出预览：媒体仍在播放时恢复迷你播放器
+    _mediaPlayer.pageClosed();
     // 退出预览，标题栏恢复主题色（dispose 处于锁定阶段，延迟到帧后）
     if (isDesktopPlatform) {
       WidgetsBinding.instance.addPostFrameCallback((_) {

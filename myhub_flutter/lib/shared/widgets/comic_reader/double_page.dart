@@ -58,7 +58,12 @@ class ComicDoublePageMode extends StatelessWidget {
     return ComicPagedViewer(
       itemCount: _groupCount,
       initialIndex: initialPage ~/ 2,
-      onIndexChanged: (group) => onPageChanged(group * 2),
+      // 末组以最后一页上报：组内第一页页码，偶数页时末组为 N-2
+      //（此时用户已看到最后一页 N-1），若不上报 N-1 则进度永远
+      // <100%，无法标记"已读完"。
+      onIndexChanged: (group) => onPageChanged(
+        group >= _groupCount - 1 ? pageCount - 1 : group * 2,
+      ),
       onToggleChrome: onToggleChrome,
       reverse: _rtl, // 日漫：从右向左翻页
       rtl: _rtl,

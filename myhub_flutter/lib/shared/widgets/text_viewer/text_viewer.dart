@@ -52,18 +52,24 @@ class _PlainTextViewerPageState extends ConsumerState<PlainTextViewerPage> {
   bool _truncated = false;
   int _size = 0;
 
+  /// 媒体播放控制器（initState 缓存：dispose 阶段 ref 已不可用，
+  /// 直接 ref.read 会抛 StateError，导致 pageClosed 不执行、
+  /// 退出后迷你播放器无法恢复显示）。
+  late final MediaPlayerController _mediaPlayer;
+
   @override
   void initState() {
     super.initState();
     // 文本查看页为沉浸阅读：进入时隐藏迷你播放器，避免遮挡正文
-    ref.read(mediaPlayerProvider).pageOpened();
+    _mediaPlayer = ref.read(mediaPlayerProvider);
+    _mediaPlayer.pageOpened();
     _load();
   }
 
   @override
   void dispose() {
     // 退出查看页：媒体仍在播放时恢复迷你播放器
-    ref.read(mediaPlayerProvider).pageClosed();
+    _mediaPlayer.pageClosed();
     super.dispose();
   }
 

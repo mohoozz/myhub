@@ -46,6 +46,10 @@ class ProgressRepository {
         cover: Value(cover ?? ''),
         progressJson: Value(progressJson ?? ''),
         percent: Value(percent ?? 0),
+        // percent 达 100% 视为读完：本地同步标记 finished，与后端
+        // 一致（后端在 percent>=100 时同样置 finished=true），离线时
+        // "正在阅读"页也能立即显示"已读完"。
+        finished: Value(percent != null && percent >= 100),
         // 重新产生进度时取消删除标记（此前可能被本地删除待同步）
         deleted: const Value(false),
         synced: const Value(false),

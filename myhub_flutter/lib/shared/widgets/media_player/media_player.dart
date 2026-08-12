@@ -109,7 +109,9 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   );
 
   /// 向下拖动进入迷你模式：位移上限（屏高比例）。
-  static const double _miniDragDyFactor = 0.45;
+  /// 0.75 ≈ 手指下滑与页面下沉接近 1:1 跟手（原 0.45 跟手偏钝：
+  /// 页面跟不上手指，视觉反馈弱，用户感知"要滑很多才有效果"）。
+  static const double _miniDragDyFactor = 0.75;
 
   /// 向下拖动进入迷你模式：缩放下限。
   static const double _miniMinScale = 0.62;
@@ -118,7 +120,9 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   static const double _miniMaxRadius = 20;
 
   /// 进入迷你模式的拖动进度阈值（超过则收起进入迷你，否则回弹）。
-  static const double _miniThreshold = 0.25;
+  /// 0.15 屏高：竖屏手机约 120~135px，轻滑即触发（原 0.25 需滑
+  /// 约 200px 以上，用户感知"下滑不灵敏"）。
+  static const double _miniThreshold = 0.15;
 
   @override
   void initState() {

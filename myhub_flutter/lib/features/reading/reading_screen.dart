@@ -7,7 +7,9 @@ import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/core/models/source.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
+import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
+import 'package:myhub_flutter/features/browse/widgets/file_dialogs.dart';
 import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
@@ -28,8 +30,8 @@ class ReadingScreen extends ConsumerStatefulWidget {
 /// PC 端右键 / 移动端长按菜单项。
 enum _ReadingMenuAction { info, locate, delete }
 
-/// 标题栏「...」菜单项：多选 / 刷新。
-enum _HeaderMenuAction { select, refresh }
+/// 标题栏「...」菜单项：多选 / 刷新 / 删除源文件。
+enum _HeaderMenuAction { select, refresh, deleteSource }
 
 class _ReadingScreenState extends ConsumerState<ReadingScreen> {
   /// 多选选中集合，key 为 "sourceId|filePath"。
@@ -127,6 +129,40 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
       }
     } catch (e) {
       if (mounted) showTopSnackBar(context, '操作失败：$e');
+    }
+    if (mounted) _clearSelection();
+  }
+
+  /// 批量删除源文件（与浏览页"删除"一致：移入回收站，可在回收站还原），
+  /// 并联动清理对应文件的本地阅读记录。阅读记录可能来自多个路径源，
+  /// 因此按 sourceId 分组逐个调用删除接口。
+  Future<void> _deleteSourceFiles() async {
+    final items = ref.read(readingListProvider).valueOrNull ?? const [];
+    final selectedItems = items
+        .where((p) => _selected.contains(_key(p)))
+        .toList(growable: false);
+    if (selectedItems.isEmpty) return;
+
+    final confirmed = await showDeleteConfirmDialog(context, selectedItems.length);
+    if (!(confirmed ?? false) || !mounted) return;
+
+    final api = ref.read(fileApiProvider);
+    final progressRepo = ref.read(progressRepositoryProvider);
+    final bySource = <int, List<String>>{};
+    for (final p in selectedItems) {
+      bySource.putIfAbsent(p.sourceId, () => []).add(p.filePath);
+    }
+    try {
+      for (final e in bySource.entries) {
+        await api.deleteFiles(e.key, e.value);
+        // 清理被删文件的本地阅读记录，避免"正在阅读"仍展示已删除文件。
+        for (final path in e.value) {
+          await progressRepo.deleteByPath(e.key, path);
+        }
+      }
+      await ref.read(readingListProvider.notifier).refresh();
+    } catch (e) {
+      if (mounted) showTopSnackBar(context, '删除失败：$e');
     }
     if (mounted) _clearSelection();
   }
@@ -374,6 +410,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
                   onSelectAll: () =>
                       _selectAll(progressAsync.valueOrNull ?? const []),
                   onDelete: _deleteSelected,
+                  onDeleteSource: _deleteSourceFiles,
                   onClose: _clearSelection,
                 ),
             ],
@@ -455,28 +492,52 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
                 _enterSelectionEmpty();
               case _HeaderMenuAction.refresh:
                 ref.read(readingListProvider.notifier).refresh();
+              case _HeaderMenuAction.deleteSource:
+                // 删除源文件需要先指定目标：进入多选模式由用户勾选，
+                // 再从底部操作栏点击"删除源文件"完成删除。
+                _enterSelectionEmpty();
+                showTopSnackBar(context, '请勾选要删除的文件，再点击底部「删除源文件」');
             }
           },
-          itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: _HeaderMenuAction.select,
-              child: ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(LucideIcons.checkSquare, size: 16),
-                title: Text('多选'),
+          itemBuilder: (context) {
+            final errorColor = Theme.of(context).colorScheme.error;
+            return [
+              const PopupMenuItem(
+                value: _HeaderMenuAction.select,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(LucideIcons.checkSquare, size: 16),
+                  title: Text('多选'),
+                ),
               ),
-            ),
-            PopupMenuItem(
-              value: _HeaderMenuAction.refresh,
-              child: ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(LucideIcons.rotateCw, size: 16),
-                title: Text('刷新'),
+              const PopupMenuItem(
+                value: _HeaderMenuAction.refresh,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(LucideIcons.rotateCw, size: 16),
+                  title: Text('刷新'),
+                ),
               ),
-            ),
-          ],
+              PopupMenuItem(
+                value: _HeaderMenuAction.deleteSource,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    LucideIcons.fileX2,
+                    size: 16,
+                    color: errorColor,
+                  ),
+                  title: Text(
+                    '删除源文件',
+                    style: TextStyle(color: errorColor),
+                  ),
+                ),
+              ),
+            ];
+          },
         ),
       ],
     );
@@ -580,17 +641,20 @@ class _SelectionActionBar extends StatelessWidget {
     required this.count,
     required this.onSelectAll,
     required this.onDelete,
+    required this.onDeleteSource,
     required this.onClose,
   });
 
   final int count;
   final VoidCallback onSelectAll;
   final VoidCallback onDelete;
+  final VoidCallback onDeleteSource;
   final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Container(
       margin: const EdgeInsets.only(top: 8, bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -598,21 +662,54 @@ class _SelectionActionBar extends StatelessWidget {
         color: theme.cardTheme.color,
         borderRadius: BorderRadius.circular(12),
       ),
+      // 按钮较多，右侧放入横向滚动区，避免窄屏被截断。
       child: Row(
         children: [
           IconButton(
             icon: const Icon(LucideIcons.x, size: 16),
             onPressed: onClose,
             tooltip: '取消多选',
+            visualDensity: VisualDensity.compact,
           ),
           Text('已选 $count 项', style: theme.textTheme.bodySmall),
-          TextButton(onPressed: onSelectAll, child: const Text('全选')),
-          const Spacer(),
-          FilledButton.tonalIcon(
-            onPressed: onDelete,
-            icon: const Icon(LucideIcons.trash2, size: 16),
-            label: const Text('删除记录'),
-            style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: onSelectAll,
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: const Text('全选'),
+                  ),
+                  const SizedBox(width: 4),
+                  FilledButton.tonalIcon(
+                    onPressed: onDelete,
+                    icon: const Icon(LucideIcons.trash2, size: 16),
+                    label: const Text('删除记录'),
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.tonalIcon(
+                    onPressed: onDeleteSource,
+                    icon: Icon(LucideIcons.fileX2, size: 16, color: colorScheme.error),
+                    label: const Text('删除源文件'),
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      foregroundColor: colorScheme.error,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                ],
+              ),
+            ),
           ),
         ],
       ),

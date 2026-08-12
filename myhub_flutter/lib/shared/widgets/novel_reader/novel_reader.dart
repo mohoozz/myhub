@@ -116,11 +116,21 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   // ---- 顶栏显隐 ----
   bool _chromeVisible = true;
 
+  /// 媒体播放控制器（initState 缓存：dispose 阶段 ref 已不可用，
+  /// 直接 ref.read 会抛 StateError，导致 pageClosed 不执行、
+  /// 退出后迷你播放器无法恢复显示）。
+  late final MediaPlayerController _mediaPlayer;
+
+  /// 进度仓库（同上：dispose 阶段退出落盘必须用缓存实例）。
+  late final ProgressRepository _progressRepo;
+
   @override
   void initState() {
     super.initState();
     // 阅读器为沉浸式页面：进入时隐藏迷你播放器，避免悬浮条遮挡正文
-    ref.read(mediaPlayerProvider).pageOpened();
+    _mediaPlayer = ref.read(mediaPlayerProvider);
+    _mediaPlayer.pageOpened();
+    _progressRepo = ref.read(progressRepositoryProvider);
     _loadChapters();
   }
 
@@ -131,7 +141,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     _saveProgress(); // 退出阅读器时同步落盘（6.4）
     _scrollFraction.dispose();
     // 退出阅读器：媒体仍在播放时恢复迷你播放器
-    ref.read(mediaPlayerProvider).pageClosed();
+    _mediaPlayer.pageClosed();
     super.dispose();
   }
 
@@ -166,7 +176,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     final scroll = isScroll ? _scrollFraction.value : 0.0;
     final percent = _progress * 100;
     try {
-      await ref.read(progressRepositoryProvider).save(
+      await _progressRepo.save(
             sourceId: widget.sourceId,
             filePath: widget.file.path,
             mediaType: 'novel',

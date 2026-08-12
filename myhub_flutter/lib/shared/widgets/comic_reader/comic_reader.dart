@@ -112,11 +112,21 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
   /// 当前生效的阅读模式（保存进度时决定是否附带条漫页内偏移）。
   ComicViewMode? _lastMode;
 
+  /// 媒体播放控制器（initState 缓存：dispose 阶段 ref 已不可用，
+  /// 直接 ref.read 会抛 StateError，导致 pageClosed 不执行、
+  /// 退出后迷你播放器无法恢复显示）。
+  late final MediaPlayerController _mediaPlayer;
+
+  /// 进度仓库（同上：dispose 阶段退出落盘必须用缓存实例）。
+  late final ProgressRepository _progressRepo;
+
   @override
   void initState() {
     super.initState();
     // 阅读器为沉浸式页面：进入时隐藏迷你播放器，避免悬浮条遮挡画面
-    ref.read(mediaPlayerProvider).pageOpened();
+    _mediaPlayer = ref.read(mediaPlayerProvider);
+    _mediaPlayer.pageOpened();
+    _progressRepo = ref.read(progressRepositoryProvider);
     if (isDesktopPlatform) {
       // initState 处于组件树锁定阶段，延迟到帧后修改 provider
       _immersiveTitleBar = ref.read(immersiveTitleBarProvider.notifier);
@@ -140,7 +150,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     }
     unawaited(_saveProgress()); // 退出阅读器时补报页码进度（7.4）
     // 退出阅读器：媒体仍在播放时恢复迷你播放器
-    ref.read(mediaPlayerProvider).pageClosed();
+    _mediaPlayer.pageClosed();
     super.dispose();
   }
 
@@ -198,7 +208,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     // 其他模式仅保存页码
     final webtoon = _lastMode == ComicViewMode.webtoon;
     try {
-      await ref.read(progressRepositoryProvider).save(
+      await _progressRepo.save(
             sourceId: widget.sourceId,
             filePath: widget.file.path,
             mediaType: 'comic',

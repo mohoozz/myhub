@@ -220,13 +220,21 @@ class _ComicWebtoonModeState extends ConsumerState<ComicWebtoonMode> {
   /// 按当前滚动位置（视口上部 [_anchorRatio] 处为锚点，减少页边界
   /// 抖动）依据累计页高定位页码与页内偏移并上报。
   void _reportPage() {
-    final anchor = _controller.offset +
-        _controller.position.viewportDimension * _anchorRatio;
-    final page = _pageAtOffset(anchor);
+    final position = _controller.position;
+    final anchor =
+        _controller.offset + position.viewportDimension * _anchorRatio;
+    // 滚动到底：最后一张图底部已完整看到，强制落在最后一页并置
+    // 页内偏移为 1.0，保证百分比可达 100% 并标记"已读完"
+    //（否则最后一张图较矮时页码停在 N-2，进度永远 <100%）。
+    final atEnd = position.maxScrollExtent > 0 &&
+        _controller.offset >= position.maxScrollExtent - 1;
+    final page = atEnd ? widget.pageCount - 1 : _pageAtOffset(anchor);
     final height = _heightOf(page);
-    final pageOffset = height > 0
-        ? ((anchor - _offsetOfPage(page)) / height).clamp(0.0, 1.0)
-        : 0.0;
+    final pageOffset = atEnd
+        ? 1.0
+        : height > 0
+            ? ((anchor - _offsetOfPage(page)) / height).clamp(0.0, 1.0)
+            : 0.0;
     widget.onPageOffset?.call(pageOffset);
     if (page != _reportedPage) {
       _reportedPage = page;
