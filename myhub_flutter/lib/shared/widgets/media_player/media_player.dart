@@ -9,6 +9,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
+import 'package:myhub_flutter/shared/providers/av_player_adapter.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/audio_cover_mode.dart';

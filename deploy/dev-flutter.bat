@@ -2,7 +2,7 @@
 REM dev-flutter.bat - clean, fetch deps and run Flutter Windows desktop
 REM Usage: double-click, or run "dev-flutter.bat" in terminal
 
-cd /d "%~dp0myhub_flutter"
+cd /d "%~dp0..\myhub_flutter"
 
 echo ==^> flutter clean
 call flutter clean || exit /b 1

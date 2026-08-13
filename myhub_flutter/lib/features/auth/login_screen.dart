@@ -31,59 +31,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   /// 弹出服务器地址配置对话框（外网 + 内网双地址），保存后自动判断内外网。
   Future<void> _configureServer() async {
     final config = ref.read(serverConfigProvider);
-    final wanController = TextEditingController(text: config.wanUrl);
-    final lanController = TextEditingController(text: config.lanUrl);
     final saved = await showDialog<({String wan, String lan})>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('服务器配置'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '请输入服务器主机地址（含协议与端口），外网必填，内网可选：',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: wanController,
-              autofocus: true,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(
-                labelText: '外网地址',
-                hintText: 'http://example.com:8080',
-                prefixIcon: Icon(LucideIcons.server),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: lanController,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(
-                labelText: '内网地址（可选）',
-                hintText: 'http://192.168.1.100:8080',
-                prefixIcon: Icon(LucideIcons.home),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(
-              (wan: wanController.text, lan: lanController.text),
-            ),
-            child: const Text('保存'),
-          ),
-        ],
+      // 对话框作为独立 StatefulWidget 持有自己的 TextEditingController：
+      // 若在 showDialog 返回后立刻 dispose 局部控制器，退场动画期间的
+      // TextField 仍会引用已释放的 controller，触发
+      // "TextEditingController used after being disposed"。
+      builder: (_) => _ServerConfigDialog(
+        wanUrl: config.wanUrl,
+        lanUrl: config.lanUrl,
       ),
     );
-    wanController.dispose();
-    lanController.dispose();
     if (saved == null || saved.wan.trim().isEmpty) return;
     await ref.read(serverConfigProvider.notifier).setUrls(
       wanUrl: saved.wan,
@@ -248,6 +206,89 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 服务器地址配置对话框：自身持有 [TextEditingController]，生命周期与
+/// 对话框路由绑定（State 存活到退场动画结束），避免退场期间使用已
+/// dispose 的 controller。
+class _ServerConfigDialog extends StatefulWidget {
+  const _ServerConfigDialog({required this.wanUrl, required this.lanUrl});
+
+  final String wanUrl;
+  final String lanUrl;
+
+  @override
+  State<_ServerConfigDialog> createState() => _ServerConfigDialogState();
+}
+
+class _ServerConfigDialogState extends State<_ServerConfigDialog> {
+  late final TextEditingController _wanController = TextEditingController(
+    text: widget.wanUrl,
+  );
+  late final TextEditingController _lanController = TextEditingController(
+    text: widget.lanUrl,
+  );
+
+  @override
+  void dispose() {
+    _wanController.dispose();
+    _lanController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    Navigator.of(context).pop(
+      (wan: _wanController.text, lan: _lanController.text),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('服务器配置'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '请输入服务器主机地址（含协议与端口），外网必填，内网可选：',
+            style: TextStyle(fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _wanController,
+            autofocus: true,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: '外网地址',
+              hintText: 'http://example.com:8080',
+              prefixIcon: Icon(LucideIcons.server),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _lanController,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: '内网地址（可选）',
+              hintText: 'http://192.168.1.100:8080',
+              prefixIcon: Icon(LucideIcons.home),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _save,
+          child: const Text('保存'),
+        ),
+      ],
     );
   }
 }
