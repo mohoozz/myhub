@@ -1,0 +1,20 @@
+[project]
+name = "myhub-feed"
+version = "0.1.0"
+description = "MyHub 动态抓取服务：B站/YouTube/抖音订阅抓取，HTTP API 供 myhub-server 调用"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.28",
+    "sqlmodel>=0.0.22",
+    "pydantic-settings>=2.5",
+    "playwright>=1.50",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
