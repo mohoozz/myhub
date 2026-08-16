@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -56,10 +57,10 @@ type ComicService struct {
 // NewComicService 创建 ComicService
 func NewComicService(sourceSvc *SourceService, configRepo *repository.ConfigRepository, cacheDir string, cacheMaxMB int) *ComicService {
 	return &ComicService{
-		sourceSvc:      sourceSvc,
-		configRepo:     configRepo,
-		cacheDir:       cacheDir,
-		cacheMaxBytes:  int64(cacheMaxMB) << 20,
+		sourceSvc:     sourceSvc,
+		configRepo:    configRepo,
+		cacheDir:      cacheDir,
+		cacheMaxBytes: int64(cacheMaxMB) << 20,
 	}
 }
 
@@ -395,13 +396,41 @@ func (s *ComicService) Page(ctx context.Context, sourceID uint, p string, n int)
 	}
 }
 
-// epubImagePages EPUB 图集页列表：spine 顺序中的图片条目；无 spine
-// 图片时回退 manifest 图片自然排序。
+// epubImagePages EPUB 图集页列表：按 spine 顺序提取图片，支持两类结构：
+//  1. spine 直接引用图片条目（纯图册 EPUB）
+//  2. spine 引用 XHTML 页面时解析页面内 <img> 引用（"一页一图"型漫画，
+//     图片文件名与阅读顺序无关，必须依赖 spine/XHTML 引用顺序）
+//
+// 无 spine 或 spine 中无图片时回退 manifest 图片自然排序。
 func epubImagePages(e *parser.EPUB) []ComicPage {
 	var pages []ComicPage
+	seen := make(map[string]bool, 16)
 	for _, idref := range e.Spine {
-		if it, ok := e.Manifest[idref]; ok && strings.HasPrefix(it.MediaType, "image/") {
-			pages = append(pages, ComicPage{Index: len(pages), Name: it.Href})
+		it, ok := e.Manifest[idref]
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(it.MediaType, "image/") {
+			if !seen[it.Href] {
+				seen[it.Href] = true
+				pages = append(pages, ComicPage{Index: len(pages), Name: it.Href})
+			}
+			continue
+		}
+		if it.MediaType != "application/xhtml+xml" && it.MediaType != "text/html" {
+			continue
+		}
+		// XHTML 页面：提取其引用的图片，保持 spine 阅读顺序
+		data, err := e.ReadByHref(it.Href)
+		if err != nil {
+			continue
+		}
+		for _, src := range parser.ExtractPageImages(data) {
+			href := parser.ResolveHref(path.Dir(it.Href), src)
+			if !seen[href] {
+				seen[href] = true
+				pages = append(pages, ComicPage{Index: len(pages), Name: href})
+			}
 		}
 	}
 	if len(pages) > 0 {

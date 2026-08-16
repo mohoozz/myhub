@@ -87,6 +87,12 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
   int _pageCount = 1;
   double _scrollFraction = 0;
 
+  /// 滚动模式下当前阅读章节（随滚动实时更新，用于精确保存进度）。
+  int _scrollChapter = 0;
+
+  /// 滚动模式下当前章节内的滚动比例（0.0~1.0）。
+  double _scrollChapterFraction = 0;
+
   /// 翻页/滚动/切章后防抖保存：阅读中持续落盘（对齐漫画 1s 防抖），
   /// 关窗/强杀等未走 dispose 的场景也不丢进度。
   Timer? _saveDebounce;
@@ -149,11 +155,11 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
   Future<void> _saveProgress() async {
     if (!_started || _isComic || _toc.isEmpty) return;
     final isScroll = _mode == ReaderMode.scroll;
-    // 滚动模式按滚动比例折算章节
-    final chapter =
-        isScroll ? (_scrollFraction * (_toc.length - 1)).round() : _chapter;
+    // 滚动模式记录真实当前章节 + 章节内比例（精确恢复，
+    // 不能用全书比例近似，否则恢复时会错位到错误章节）
+    final chapter = isScroll ? _scrollChapter : _chapter;
     final page = isScroll ? 0 : _pageInChapter;
-    final scroll = isScroll ? _scrollFraction : 0.0;
+    final scroll = isScroll ? _scrollChapterFraction : 0.0;
     final percent = _progress * 100;
     try {
       await _progressRepo.save(
@@ -207,24 +213,28 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
             ? (decoded['scroll'] as num).toDouble()
             : null;
 
-        // 滚动模式：优先恢复全书滚动比例（含无分章单章"全文"场景）。
-        // 兼容旧进度：仅 chapter > 0 时跳到对应章节。
+        // 滚动模式：先跳转到上次阅读章节（中心锚点落在正确章节），
+        // 再按章节内比例定位。关键：必须先跳章节，否则初始窗口只加载
+        // 前几章，按全书比例定位会错位到错误位置（历史记录跳转失效根因）。
         if (_mode == ReaderMode.scroll) {
-          if (scroll != null) {
-            setState(() {
-              _started = true;
-              _scrollFraction = scroll.clamp(0.0, 1.0);
-              _pageInChapter = 0;
-            });
-            // epub_scroll_mode 通过 didUpdateWidget 消费 _scrollFraction 定位
-            return;
-          }
           if (chapter > 0 && chapter < _toc.length) {
             setState(() {
               _started = true;
               _chapter = chapter;
             });
             _ensureAround(chapter);
+          }
+          if (scroll != null) {
+            setState(() {
+              _started = true;
+              _scrollChapter = chapter.clamp(0, _toc.length - 1);
+              _scrollChapterFraction = scroll.clamp(0.0, 1.0);
+              // 底栏全书进度：(章节 + 章节内比例) / 总章节数
+              _scrollFraction =
+                  ((_scrollChapter + _scrollChapterFraction) / _toc.length)
+                      .clamp(0.0, 1.0);
+              _pageInChapter = 0;
+            });
           }
           return;
         }
@@ -256,7 +266,7 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
     }
   }
 
-  /// 图集型 EPUB 转交漫画阅读器（替换当前路由，返回时直接退出）。
+  /// 图集型 EPUB（漫画）自动转交漫画阅读器（替换当前路由，返回时直接退出）。
   void _openInComicReader() {
     Navigator.of(context, rootNavigator: true).pushReplacement(
       MaterialPageRoute<void>(
@@ -301,6 +311,11 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
         _toc = toc;
         _loading = false;
       });
+      // 图集型 EPUB（漫画）直接转交漫画阅读器，无需停留提示页
+      if (_isComic) {
+        _openInComicReader();
+        return;
+      }
       unawaited(_restoreProgress()); // 恢复上次阅读进度（6.4）
     } catch (e) {
       if (!mounted) return;
@@ -555,40 +570,6 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
         onRetry: _loadMeta,
       );
     }
-    // 图集型 EPUB → 漫画阅读器（第 7 章）
-    if (_isComic) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(LucideIcons.images, size: 44, color: _style.subtle),
-              const SizedBox(height: 16),
-              Text(
-                '该 EPUB 为图集/漫画',
-                style: TextStyle(
-                  color: _style.foreground,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '请使用漫画阅读器获得更佳体验',
-                style: TextStyle(color: _style.subtle, fontSize: 12),
-              ),
-              const SizedBox(height: 20),
-              FilledButton.icon(
-                onPressed: _openInComicReader,
-                icon: const Icon(LucideIcons.bookOpen, size: 16),
-                label: const Text('在漫画阅读器中打开'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
     if (_toc.isEmpty) {
       return ReaderErrorView(
         message: 'EPUB 缺少目录',
@@ -603,7 +584,10 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
     if (_mode == ReaderMode.scroll) {
       return SafeArea(
         child: EpubScrollMode(
-          key: ValueKey('epub-scroll-${widget.file.path}'),
+          // 章节级 key：切章/恢复章节时重建组件，中心锚点与滚动窗口
+          // 以新章节重新初始化（固定 key 会导致 initialChapter 变化时
+          // 内部 _first/_last 不同步，历史记录跳转失效）。
+          key: ValueKey('epub-scroll-$_chapter'),
           initialChapter: _chapter,
           totalChapters: _toc.length,
           chapterTitle: _chapterTitle,
@@ -611,13 +595,18 @@ class _EpubReaderPageState extends ConsumerState<EpubReaderPage> {
           ensureChapter: _ensureChapter,
           style: _style,
           imageBuilder: _buildImage,
-          // 恢复进度：_scrollFraction > 0 时定位到上次滚动位置
-          initialFraction: _scrollFraction > 0 ? _scrollFraction : null,
+          // 恢复进度：_scrollChapterFraction 为章节内比例，配合章节跳转精确定位
+          initialFraction:
+              _scrollChapterFraction > 0 ? _scrollChapterFraction : null,
           onToggleChrome: () =>
               setState(() => _chromeVisible = !_chromeVisible),
           onProgress: (f) {
             setState(() => _scrollFraction = f);
             _scheduleSave();
+          },
+          onChapter: (index, fraction) {
+            _scrollChapter = index;
+            _scrollChapterFraction = fraction;
           },
         ),
       );

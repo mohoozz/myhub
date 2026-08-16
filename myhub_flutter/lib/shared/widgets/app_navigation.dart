@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/core/theme/theme_mode_provider.dart';
 import 'package:myhub_flutter/shared/widgets/avatar_button.dart';
+import 'package:myhub_flutter/shared/widgets/media_player/mini_player.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 
 /// Adaptive navigation shell around the [StatefulNavigationShell].
@@ -85,23 +86,42 @@ class _CompactShell extends StatelessWidget {
       // 避免顶栏占位造成阅读区上方留白。
       body: SafeArea(child: shell),
       bottomNavigationBar: Material(
-        // 顶部 1px 分隔线，把菜单栏和内容区"切开"，
-        // 避免和上面的浅色背景融为一体。
-        color: colorScheme.surface,
+        // 移动端底部一体化：QQ 音乐风格的"播放+菜单栏"组合。
+        // 整体 surface 色 + 顶部上圆 16 圆角（让 mini 上方与菜单栏贴合）：
+        //   ┌─────────────────────────┐  ← 顶部圆角 16
+        //   │   MiniPlayer (播放器)    │  ← 封面顶部 8px 突出于 mini 上边界
+        //   │   ─────────────────────  │
+        //   │   NavigationBar (菜单)   │  ← 4 个 Tab
+        //   └─────────────────────────┘  ← 底部齐平（贴系统安全区）
+        // 外层 Material 用 nav 同色（亮 #FFFFFF / 暗 #0A0A0A），与 mini
+        // 内部的 barColor 完全对齐，保证组合体一色。
+        // 不在外层加 shape/clip：让 mini 封面顶部溢出不被外层圆角裁剪。
+        // mini 主体顶部 16 圆角由 mini 内部 ClipRRect（仅裁主体）实现——
+        // 这样封面可以自然溢出，mini 主体仍与上方内容区分隔（圆角）。
+        color: colorScheme.brightness == Brightness.dark
+            ? const Color(0xFF0A0A0A) // AppColors.navBackgroundDark
+            : Colors.white, // AppColors.navBackgroundLight / cardLight
+        clipBehavior: Clip.none,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Divider(
-              height: 1,
-              thickness: 1,
-              color: colorScheme.outline,
-            ),
+            // mini 播放器（QQ 音乐风格）：
+            //   - 不可见时 SizedBox.shrink() 自动 0 高度，nav 自动上移；
+            //   - 可见时封面顶部 8px 突出于 mini 上边界，下方紧贴
+            //     NavigationBar；底部 2px 进度条作为与 nav 的分隔依据。
+            const MiniPlayer(),
             NavigationBarTheme(
               // 1. 选中态图标/文字统一用品牌蓝（亮/暗主题都用 colorScheme.primary）
               // 2. indicator 透明 + 关闭 overlay，去掉点击时的矩形高亮和选中胶囊
               // 3. labelBehavior=alwaysHide：不显示任何文字，避免选中项"被弹起"的视觉跳跃
+              // 4. backgroundColor 与外层 Material 同色（亮 #FFFFFF / 暗 #0A0A0A），
+              //    让 mini 与 nav 共色——QQ 音乐"一体的播放器+菜单栏"观感。
+              //    注意：app_theme 的全局 NavigationBarThemeData 设的是
+              //    navBackgroundLight/Dark，但这里覆盖并确保亮度匹配。
               data: NavigationBarThemeData(
-                backgroundColor: colorScheme.surface,
+                backgroundColor: colorScheme.brightness == Brightness.dark
+                    ? const Color(0xFF0A0A0A)
+                    : Colors.white,
                 surfaceTintColor: Colors.transparent,
                 indicatorColor: Colors.transparent,
                 indicatorShape: const RoundedRectangleBorder(),

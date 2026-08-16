@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -72,6 +73,8 @@ func (h *StreamHandler) Dispatch(c *gin.Context) {
 		h.handleHLS(c, remainder)
 	case "subtitle":
 		h.handleSubtitle(c)
+	case "probe":
+		h.handleProbe(c)
 	default:
 		sourceID, err := strconv.ParseUint(seg, 10, 64)
 		if err != nil || sourceID == 0 {
@@ -82,12 +85,30 @@ func (h *StreamHandler) Dispatch(c *gin.Context) {
 	}
 }
 
+// handleProbe GET /api/stream/probe?source=&path=（探测视频编码）
+// 返回 {"codec": "hevc"}，供客户端在播放前决定硬解/软解，避免黑屏兜底。
+func (h *StreamHandler) handleProbe(c *gin.Context) {
+	sourceID, ok := parseSourceID(c, c.Query("source"))
+	if !ok {
+		return
+	}
+	p := c.Query("path")
+	if p == "" {
+		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "缺少 path 参数")
+		return
+	}
+	codec := h.streamSvc.ProbeCodec(c.Request.Context(), sourceID, p)
+	log.Printf("[probe] sourceID=%d path=%s codec=%q", sourceID, p, codec)
+	Success(c, gin.H{"codec": codec})
+}
+
 // handleRaw 原始流：解析 Range 头，返回 200 全量或 206 部分内容
 func (h *StreamHandler) handleRaw(c *gin.Context, sourceID uint, p string) {
 	ctx := c.Request.Context()
 
 	fi, err := h.streamSvc.Stat(ctx, sourceID, p)
 	if mapStreamError(c, err) {
+		log.Printf("[stream] Stat failed sourceID=%d path=%s err=%v", sourceID, p, err)
 		return
 	}
 	if fi.IsDir {
@@ -97,14 +118,21 @@ func (h *StreamHandler) handleRaw(c *gin.Context, sourceID uint, p string) {
 
 	start, end, err := service.ParseRange(c.GetHeader("Range"), fi.Size)
 	if err != nil {
+		log.Printf("[stream] invalid Range sourceID=%d path=%s range=%q size=%d err=%v", sourceID, p, c.GetHeader("Range"), fi.Size, err)
 		c.Header("Content-Range", fmt.Sprintf("bytes */%d", fi.Size))
 		Fail(c, http.StatusRequestedRangeNotSatisfiable, http.StatusRequestedRangeNotSatisfiable, "无效的 Range")
 		return
 	}
 	length := end - start + 1
+	status := http.StatusOK
+	if c.GetHeader("Range") != "" {
+		status = http.StatusPartialContent
+	}
+	log.Printf("[stream] raw sourceID=%d path=%s size=%d range=%q start=%d end=%d length=%d contentType=%s status=%d", sourceID, p, fi.Size, c.GetHeader("Range"), start, end, length, service.StreamContentType(fi.Name), status)
 
 	rc, err := h.streamSvc.Open(ctx, sourceID, p, start, length)
 	if mapStreamError(c, err) {
+		log.Printf("[stream] Open failed sourceID=%d path=%s err=%v", sourceID, p, err)
 		return
 	}
 	defer rc.Close()
@@ -118,7 +146,8 @@ func (h *StreamHandler) handleRaw(c *gin.Context, sourceID uint, p string) {
 	} else {
 		c.Status(http.StatusOK)
 	}
-	_, _ = io.CopyN(c.Writer, rc, length)
+	n, copyErr := io.CopyN(c.Writer, rc, length)
+	log.Printf("[stream] raw sent sourceID=%d path=%s bytes=%d err=%v", sourceID, p, n, copyErr)
 }
 
 // handleHLS 分发 HLS 播放列表与分片请求
@@ -128,6 +157,7 @@ func (h *StreamHandler) handleHLS(c *gin.Context, remainder string) {
 	if mapStreamError(c, err) {
 		return
 	}
+	log.Printf("[HLS] 请求 sourceID=%d path=%s resource=%q", sourceID, p, file)
 
 	sess, err := h.streamSvc.EnsureHLSSession(c.Request.Context(), sourceID, p)
 	if mapStreamError(c, err) {
@@ -138,8 +168,10 @@ func (h *StreamHandler) handleHLS(c *gin.Context, remainder string) {
 	switch {
 	case file == "playlist.m3u8":
 		if err := h.streamSvc.WaitPlaylist(c.Request.Context(), sess); mapStreamError(c, err) {
+			log.Printf("[HLS] 等待播放列表失败 sourceID=%d err=%v", sourceID, err)
 			return
 		}
+		log.Printf("[HLS] 返回播放列表 sourceID=%d path=%s", sourceID, p)
 		c.Header("Content-Type", "application/vnd.apple.mpegurl")
 		c.File(sess.PlaylistPath())
 
@@ -147,6 +179,7 @@ func (h *StreamHandler) handleHLS(c *gin.Context, remainder string) {
 		name := strings.TrimPrefix(file, "segment/")
 		segPath, err := h.streamSvc.WaitSegment(c.Request.Context(), sess, name)
 		if err != nil {
+			log.Printf("[HLS] 分片不存在 sourceID=%d seg=%s err=%v", sourceID, name, err)
 			Fail(c, http.StatusNotFound, http.StatusNotFound, "分片不存在")
 			return
 		}

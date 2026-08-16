@@ -126,21 +126,26 @@ class AppScrollBehavior extends MaterialScrollBehavior {
 
 /// 在页面内容之上叠加迷你播放器（Overlay 宿主）。
 ///
-/// Stack 位于 Navigator 之外：Tab 切换页面存活（IndexedStack），
-/// 全屏播放页走独立路由 push，返回后迷你播放器仍在。
-/// 窄屏布局下抬升到底部导航栏（NavigationBar 高 80 + 系统安全区）之上。
+/// * 桌面端（>=600px）：Stack 浮于内容底部，侧边栏旁的悬浮 mini；
+/// * 移动端（<600px）：mini 由 [_CompactShell] 嵌入 Scaffold.bottomNavigationBar
+///   内与导航栏一体呈现，Stack 仅作为内容宿主（不挂 mini）。
+///   移动端无需在此抬升 bottom，因为底部导航栏已自带位置，mini 与 nav 同处
+///   一个容器内视觉贴合。
 Widget _withMiniPlayer(BuildContext context, Widget? child) {
   final compact = MediaQuery.sizeOf(context).width < 600;
-  final bottom =
-      compact ? 80 + MediaQuery.viewPaddingOf(context).bottom : 0.0;
+  if (compact) {
+    // 移动端：mini 在 shell 内部与底部导航栏一体组装；此处仅返回 child。
+    return child ?? const SizedBox.shrink();
+  }
+  // 桌面端：悬浮 mini（保持与原有"灵动岛"风格兼容）
   return Stack(
     children: [
       child ?? const SizedBox.shrink(),
-      Positioned(
+      const Positioned(
         left: 0,
         right: 0,
-        bottom: bottom,
-        child: const MiniPlayer(),
+        bottom: 0,
+        child: MiniPlayer(),
       ),
     ],
   );

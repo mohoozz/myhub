@@ -19,11 +19,11 @@ import 'package:myhub_flutter/features/browse/widgets/move_target_picker.dart';
 import 'package:myhub_flutter/features/browse/widgets/upload_sheet.dart';
 import 'package:myhub_flutter/features/favorites/providers/favorite_provider.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
+import 'package:myhub_flutter/shared/utils/open_media.dart';
 import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_reader.dart';
 import 'package:myhub_flutter/shared/widgets/image_preview/image_preview.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/media_player.dart';
-import 'package:myhub_flutter/shared/widgets/novel_reader/epub_reader.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/novel_reader.dart';
 import 'package:myhub_flutter/shared/widgets/source_selector.dart';
 import 'package:myhub_flutter/shared/widgets/text_viewer/text_viewer.dart';
@@ -212,7 +212,13 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       final source = ref.read(effectiveSourceProvider);
       if (source == null) return;
       if (item.name.toLowerCase().endsWith('.epub')) {
-        EpubReaderPage.open(context, sourceId: source.id, file: item);
+        // 路由前先检测图集型（漫画），避免闪现 EPUB 阅读器再跳转
+        if (_opening) return; // 防重复点击
+        _opening = true;
+        unawaited(
+          openEpubFile(context, ref, sourceId: source.id, file: item)
+              .whenComplete(() => _opening = false),
+        );
       } else {
         PlainTextViewerPage.open(context, sourceId: source.id, file: item);
       }
@@ -395,35 +401,12 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     final isFav =
         sourceId != null &&
         ref.read(favoritePathsProvider).contains('$sourceId|${item.path}');
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    // 桌面端自定义标题栏使 Overlay 原点不在全局 (0,0)，需把鼠标全局坐标
-    // 转成 Overlay 局部坐标，否则菜单会偏离鼠标位置。
-    final local = overlay == null ? position : overlay.globalToLocal(position);
-    final left = local.dx;
-    final top = local.dy;
-    final right = overlay == null ? 0.0 : overlay.size.width - left;
-    final bottom = overlay == null ? 0.0 : overlay.size.height - top;
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(left, top, right, bottom),
-      items: [
-        _menuItem('open', LucideIcons.squareArrowOutUpRight, '打开'),
-        // txt 文件额外提供"以小说阅读器打开"：记录章节/页内阅读进度
-        if (item.isNovel &&
-            !item.name.toLowerCase().endsWith('.epub') &&
-            !item.isDir)
-          _menuItem('openAsNovel', LucideIcons.bookOpen, '以小说阅读器打开'),
-        if (!item.isDir && sourceId != null)
-          _menuItem('favorite', LucideIcons.star, isFav ? '取消收藏' : '收藏'),
-        const PopupMenuDivider(),
-        _menuItem('rename', LucideIcons.pencil, '重命名'),
-        _menuItem('move', LucideIcons.folderInput, '移动到…'),
-        _menuItem('copy', LucideIcons.copy, '复制到…'),
-        const PopupMenuDivider(),
-        _menuItem('delete', LucideIcons.trash2, '删除', destructive: true),
-      ],
-    );
+    // 移动端菜单项较多，用 showMenu 弹出的浮层在窄屏上高度不够，
+    // 末尾的「删除」会被顶出屏幕外不可见。移动端改用可滚动的底部抽屉，
+    // 桌面端保持右键锚定的 showMenu。
+    final String? action = isDesktopPlatform
+        ? await _showItemMenuDesktop(item, sourceId, isFav, position)
+        : await _showItemMenuMobile(item, sourceId, isFav);
     if (action == null || !mounted) return;
     switch (action) {
       case 'open':
@@ -483,6 +466,133 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
           Text(label, style: TextStyle(color: color)),
         ],
       ),
+    );
+  }
+
+  /// 桌面端右键菜单：锚定在鼠标位置弹出 showMenu。
+  Future<String?> _showItemMenuDesktop(
+    FileItem item,
+    int? sourceId,
+    bool isFav,
+    Offset position,
+  ) {
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    // 桌面端自定义标题栏使 Overlay 原点不在全局 (0,0)，需把鼠标全局坐标
+    // 转成 Overlay 局部坐标，否则菜单会偏离鼠标位置。
+    final local = overlay == null ? position : overlay.globalToLocal(position);
+    final left = local.dx;
+    final top = local.dy;
+    final right = overlay == null ? 0.0 : overlay.size.width - left;
+    final bottom = overlay == null ? 0.0 : overlay.size.height - top;
+    return showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(left, top, right, bottom),
+      items: [
+        _menuItem('open', LucideIcons.squareArrowOutUpRight, '打开'),
+        // txt 文件额外提供"以小说阅读器打开"：记录章节/页内阅读进度
+        if (item.isNovel &&
+            !item.name.toLowerCase().endsWith('.epub') &&
+            !item.isDir)
+          _menuItem('openAsNovel', LucideIcons.bookOpen, '以小说阅读器打开'),
+        if (!item.isDir && sourceId != null)
+          _menuItem('favorite', LucideIcons.star, isFav ? '取消收藏' : '收藏'),
+        const PopupMenuDivider(),
+        _menuItem('rename', LucideIcons.pencil, '重命名'),
+        _menuItem('move', LucideIcons.folderInput, '移动到…'),
+        _menuItem('copy', LucideIcons.copy, '复制到…'),
+        const PopupMenuDivider(),
+        _menuItem('delete', LucideIcons.trash2, '删除', destructive: true),
+      ],
+    );
+  }
+
+  /// 移动端长按 / 「...」按钮菜单：底部抽屉，内容可滚动，
+  /// 保证「删除」等末尾项不会因菜单过长被顶出屏幕。
+  Future<String?> _showItemMenuMobile(
+    FileItem item,
+    int? sourceId,
+    bool isFav,
+  ) {
+    return showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _sheetTile(
+                  sheetContext,
+                  LucideIcons.squareArrowOutUpRight,
+                  '打开',
+                  () => Navigator.of(sheetContext).pop('open'),
+                ),
+                if (item.isNovel &&
+                    !item.name.toLowerCase().endsWith('.epub') &&
+                    !item.isDir)
+                  _sheetTile(
+                    sheetContext,
+                    LucideIcons.bookOpen,
+                    '以小说阅读器打开',
+                    () => Navigator.of(sheetContext).pop('openAsNovel'),
+                  ),
+                if (!item.isDir && sourceId != null)
+                  _sheetTile(
+                    sheetContext,
+                    LucideIcons.star,
+                    isFav ? '取消收藏' : '收藏',
+                    () => Navigator.of(sheetContext).pop('favorite'),
+                  ),
+                _sheetTile(
+                  sheetContext,
+                  LucideIcons.pencil,
+                  '重命名',
+                  () => Navigator.of(sheetContext).pop('rename'),
+                ),
+                _sheetTile(
+                  sheetContext,
+                  LucideIcons.folderInput,
+                  '移动到…',
+                  () => Navigator.of(sheetContext).pop('move'),
+                ),
+                _sheetTile(
+                  sheetContext,
+                  LucideIcons.copy,
+                  '复制到…',
+                  () => Navigator.of(sheetContext).pop('copy'),
+                ),
+                _sheetTile(
+                  sheetContext,
+                  LucideIcons.trash2,
+                  '删除',
+                  destructive: true,
+                  () => Navigator.of(sheetContext).pop('delete'),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 移动端底部抽屉菜单项（与桌面端 _menuItem 风格一致的列表项）。
+  Widget _sheetTile(
+    BuildContext context,
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    bool destructive = false,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final color = destructive ? colorScheme.error : colorScheme.onSurface;
+    return ListTile(
+      leading: Icon(icon, size: 20, color: color),
+      title: Text(label, style: TextStyle(color: color)),
+      onTap: onTap,
     );
   }
 
@@ -1129,9 +1239,9 @@ class _SelectionActionBar extends StatelessWidget {
             visualDensity: VisualDensity.compact,
           ),
           Text('已选 $count 项', style: theme.textTheme.bodySmall),
-          // 右侧可横向滚动区域：全选 + 5 个操作按钮。
-          // 关闭按钮在左，剩余宽度可能只有 ~210px，
-          // 5 个 IconButton 一起放不下，因此整体可横滑。
+          // 右侧可横向滚动区域：全选 + 移动/复制/重命名/收藏。
+          // 「删除」单独固定在最右侧，避免窄屏上被挤进滚动区、
+          // 需横向滑动才能看到。
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -1172,21 +1282,22 @@ class _SelectionActionBar extends StatelessWidget {
                     tooltip: '收藏',
                     visualDensity: VisualDensity.compact,
                   ),
-                  IconButton(
-                    icon: Icon(
-                      LucideIcons.trash2,
-                      size: 16,
-                      color: colorScheme.error,
-                    ),
-                    onPressed: onDelete,
-                    tooltip: '删除',
-                    visualDensity: VisualDensity.compact,
-                  ),
                   // 尾部留白，避免最后一个按钮紧贴边缘。
                   const SizedBox(width: 4),
                 ],
               ),
             ),
+          ),
+          // 固定在最右侧的「删除」按钮：始终可见，不会被横向滚动截断。
+          IconButton(
+            icon: Icon(
+              LucideIcons.trash2,
+              size: 16,
+              color: colorScheme.error,
+            ),
+            onPressed: onDelete,
+            tooltip: '删除',
+            visualDensity: VisualDensity.compact,
           ),
         ],
       ),

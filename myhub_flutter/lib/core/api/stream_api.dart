@@ -36,6 +36,12 @@ abstract final class StreamApi {
     return '$baseUrl/api/stream/subtitle?source=$sourceId&path=${Uri.encodeComponent(path)}';
   }
 
+  /// 视频编码探测地址（返回 {"codec": "hevc"}，播放前决定硬解/软解）。
+  static String probeUrl(int sourceId, String path,
+      {required String baseUrl}) {
+    return '$baseUrl/api/stream/probe?source=$sourceId&path=${Uri.encodeComponent(path)}';
+  }
+
   /// 计算 HLS 会话 ID：base64url("sourceId|path")，去掉 padding。
   static String hlsSessionId(int sourceId, String path) {
     return base64UrlEncode(utf8.encode('$sourceId|$path'))

@@ -16,6 +16,8 @@ import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/utils/open_media.dart';
 import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/reading_card.dart';
+import 'package:myhub_flutter/shared/widgets/window_title_bar.dart'
+    show isDesktopPlatform;
 
 /// "正在阅读"首页：全部阅读进度卡片（含已读完），支持网格/列表视图；
 /// 点击续读，长按或"多选"按钮进入多选模式后可批量删除阅读记录；
@@ -30,8 +32,8 @@ class ReadingScreen extends ConsumerStatefulWidget {
 /// PC 端右键 / 移动端长按菜单项。
 enum _ReadingMenuAction { info, locate, delete }
 
-/// 标题栏「...」菜单项：多选 / 刷新 / 删除源文件。
-enum _HeaderMenuAction { select, refresh, deleteSource }
+/// 标题栏「...」菜单项：多选 / 刷新。
+enum _HeaderMenuAction { toggleView, select, refresh }
 
 class _ReadingScreenState extends ConsumerState<ReadingScreen> {
   /// 多选选中集合，key 为 "sourceId|filePath"。
@@ -169,6 +171,29 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
 
   /// PC 端右键 / 移动端长按：在对应位置弹出上下文菜单（信息/定位/删除）。
   Future<void> _showContextMenu(ReadingProgress p, Offset position) async {
+    // 桌面端：锚定在鼠标位置的 showMenu 浮层。
+    // 移动端：改为底部抽屉，避免菜单项过多时末尾项被顶出屏幕外不可见。
+    final _ReadingMenuAction? action = isDesktopPlatform
+        ? await _showContextMenuDesktop(p, position)
+        : await _showContextMenuMobile(p);
+    if (!mounted) return;
+    switch (action) {
+      case _ReadingMenuAction.info:
+        await _showFileInfo(p);
+      case _ReadingMenuAction.locate:
+        _locateInBrowser(p);
+      case _ReadingMenuAction.delete:
+        await _confirmAndDeleteOne(p);
+      case null:
+        break;
+    }
+  }
+
+  /// 桌面端右键菜单：锚定在鼠标位置弹出 showMenu。
+  Future<_ReadingMenuAction?> _showContextMenuDesktop(
+    ReadingProgress p,
+    Offset position,
+  ) {
     final overlay =
         Overlay.of(context).context.findRenderObject() as RenderBox?;
     // 桌面端自定义标题栏使 Overlay 原点不在全局 (0,0)，需把鼠标全局坐标
@@ -179,7 +204,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     final top = local.dy;
     final right = overlay == null ? 0.0 : overlay.size.width - left;
     final bottom = overlay == null ? 0.0 : overlay.size.height - top;
-    final action = await showMenu<_ReadingMenuAction>(
+    return showMenu<_ReadingMenuAction>(
       context: context,
       position: RelativeRect.fromLTRB(left, top, right, bottom),
       items: const [
@@ -212,17 +237,65 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
         ),
       ],
     );
-    if (!mounted) return;
-    switch (action) {
-      case _ReadingMenuAction.info:
-        await _showFileInfo(p);
-      case _ReadingMenuAction.locate:
-        _locateInBrowser(p);
-      case _ReadingMenuAction.delete:
-        await _confirmAndDeleteOne(p);
-      case null:
-        break;
-    }
+  }
+
+  /// 移动端长按菜单：底部抽屉，内容可滚动，所有项都能触达。
+  Future<_ReadingMenuAction?> _showContextMenuMobile(ReadingProgress p) {
+    return showModalBottomSheet<_ReadingMenuAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _sheetMenuTile(
+                  sheetContext,
+                  LucideIcons.info,
+                  '文件信息',
+                  () => Navigator.of(sheetContext)
+                      .pop(_ReadingMenuAction.info),
+                ),
+                _sheetMenuTile(
+                  sheetContext,
+                  LucideIcons.locateFixed,
+                  '定位到源路径位置',
+                  () => Navigator.of(sheetContext)
+                      .pop(_ReadingMenuAction.locate),
+                ),
+                _sheetMenuTile(
+                  sheetContext,
+                  LucideIcons.trash2,
+                  '删除阅读记录',
+                  destructive: true,
+                  () => Navigator.of(sheetContext)
+                      .pop(_ReadingMenuAction.delete),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 移动端底部抽屉菜单项（与浏览页 _sheetTile 风格保持一致）。
+  Widget _sheetMenuTile(
+    BuildContext context,
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    bool destructive = false,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final color = destructive ? colorScheme.error : colorScheme.onSurface;
+    return ListTile(
+      leading: Icon(icon, size: 20, color: color),
+      title: Text(label, style: TextStyle(color: color)),
+      onTap: onTap,
+    );
   }
 
   /// 展示文件属性：路径源名称、文件路径、名称、大小、修改时间、媒体类型、阅读进度。
@@ -465,43 +538,41 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
           ),
         ),
         const Spacer(),
-        // 视图切换：列表 / 卡片两种模式用同一个按钮交替切换，
-        // 图标和 tooltip 跟随当前模式动态变化。
-        IconButton(
-          icon: Icon(
-            viewMode == ReadingViewMode.grid
-                ? LucideIcons.layoutGrid
-                : LucideIcons.list,
-            size: 16,
-          ),
-          color: colorScheme.primary,
-          onPressed: () =>
-              ref.read(readingViewModeProvider.notifier).toggle(),
-          tooltip: viewMode == ReadingViewMode.grid
-              ? '当前：网格视图，点击切换为列表'
-              : '当前：列表视图，点击切换为网格',
-          visualDensity: VisualDensity.compact,
-        ),
-        // 多选 + 刷新收纳到「...」菜单中，避免占用标题栏过多横向空间。
+        // 视图切换 + 多选 + 刷新收纳到「...」菜单中，
+        // 避免标题栏横向空间被挤占。
         PopupMenuButton<_HeaderMenuAction>(
           icon: const Icon(LucideIcons.ellipsis, size: 16),
           tooltip: '更多',
           onSelected: (action) {
             switch (action) {
+              case _HeaderMenuAction.toggleView:
+                ref.read(readingViewModeProvider.notifier).toggle();
               case _HeaderMenuAction.select:
                 _enterSelectionEmpty();
               case _HeaderMenuAction.refresh:
                 ref.read(readingListProvider.notifier).refresh();
-              case _HeaderMenuAction.deleteSource:
-                // 删除源文件需要先指定目标：进入多选模式由用户勾选，
-                // 再从底部操作栏点击"删除源文件"完成删除。
-                _enterSelectionEmpty();
-                showTopSnackBar(context, '请勾选要删除的文件，再点击底部「删除源文件」');
             }
           },
           itemBuilder: (context) {
-            final errorColor = Theme.of(context).colorScheme.error;
             return [
+              // 视图切换：菜单顶部，图标与文案跟随当前模式动态变化。
+              PopupMenuItem(
+                value: _HeaderMenuAction.toggleView,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    viewMode == ReadingViewMode.grid
+                        ? LucideIcons.list
+                        : LucideIcons.layoutGrid,
+                    size: 16,
+                  ),
+                  title: Text(
+                    viewMode == ReadingViewMode.grid ? '切换为列表' : '切换为网格',
+                  ),
+                ),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: _HeaderMenuAction.select,
                 child: ListTile(
@@ -520,22 +591,6 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
                   title: Text('刷新'),
                 ),
               ),
-              PopupMenuItem(
-                value: _HeaderMenuAction.deleteSource,
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    LucideIcons.fileX2,
-                    size: 16,
-                    color: errorColor,
-                  ),
-                  title: Text(
-                    '删除源文件',
-                    style: TextStyle(color: errorColor),
-                  ),
-                ),
-              ),
             ];
           },
         ),
@@ -551,6 +606,11 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     final selectionMode = _selectionMode;
     final titleLines = ref.watch(fileNameLinesProvider);
     String nameFor(ReadingProgress p) => sourceNameMap[p.sourceId] ?? '';
+    // 多行显示文件名（标题）时，隐藏 sourceName 行：
+    // 标题已占多行后，源名行会和文件名视觉冲突且挤占卡片高度，
+    // 列表/网格两种视图统一按此规则。
+    String visibleName(ReadingProgress p) =>
+        titleLines > 1 ? '' : nameFor(p);
     return viewMode == ReadingViewMode.grid
         ? _buildGrid(items, titleLines, sourceNameMap)
         : ListView.separated(
@@ -561,7 +621,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
               final p = items[index];
               return ReadingListTile(
                 progress: p,
-                sourceName: nameFor(p),
+                sourceName: visibleName(p),
                 titleLines: titleLines,
                 selectionMode: selectionMode,
                 selected: _selected.contains(_key(p)),
@@ -574,8 +634,11 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
           );
   }
 
-  /// 阅读历史网格：按标题行数动态计算单元高度（mainAxisExtent），
-  /// 保证标题多行时卡片内容完整展示，不会溢出或被截断。
+  /// 阅读历史网格：横向 QQ 音乐卡片（左侧文字 + 右侧圆形封面）。
+  ///
+  /// * 卡片比例：cellHeight = cellWidth * 0.78（横向 QQ 风，类似 16:10 转 5:4），
+  ///   高度足够容纳圆形封面溢出 + 多行标题 + 进度条。
+  /// * 标题行数：1~3 行自适应，2/3 行时隐藏源名（避免纵向拥挤）。
   Widget _buildGrid(
     List<ReadingProgress> items,
     int titleLines,
@@ -585,27 +648,24 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     String nameFor(ReadingProgress p) => sourceNameMap[p.sourceId] ?? '';
     return LayoutBuilder(
       builder: (context, constraints) {
-        const maxExtent = 220.0;
+        const maxExtent = 320.0;
         const spacing = 16.0;
         final available = constraints.maxWidth.clamp(0.0, 1e9).toDouble();
+        // 列数：ceil 保证 cellWidth ≤ maxExtent。
         final cols = ((available + spacing) / (maxExtent + spacing))
-            .floor()
+            .ceil()
             .clamp(1, 100);
         final cellWidth = (available - spacing * (cols - 1)) / cols;
-        // 封面 16:10，高度随列宽变化。
-        final coverHeight = cellWidth * 10 / 16;
-        // 标题 bodySmall（12px）行高约 16px；源名/进度文本 labelSmall 约 14px；
-        // 统一取偏大估算并留缓冲，保证单元格高度足够、不会溢出。
-        final titleHeight = titleLines * 17.0;
-        final metaHeight = 16.0;
-        final cellHeight =
-            coverHeight +
-            8 + // 文字区上内边距
-            titleHeight +
-            2 + metaHeight + // 源名
-            2 + metaHeight + // 进度文本
-            4 + // 文字区下内边距
-            4 + 3; // 进度条上内边距 + 高度
+        // 横向卡片：cellHeight ≈ cellWidth * 0.78（约 5:4 比例），
+        // 足够容纳：
+        //   - 顶部类型图标 + 标题（最多 3 行）
+        //   - 源名（仅 1 行标题时）
+        //   - 进度信息
+        //   - 进度条
+        //   - 右侧圆形封面（d = cardHeight * 0.78，向右下溢出 15%）
+        // 标题 2/3 行时整体高度不变（cellHeight 已预留圆形封面空间，
+        // 多出的文字由 Spacer 吸收）。
+        final cellHeight = cellWidth * 0.78;
         return GridView.builder(
           padding: const EdgeInsets.only(bottom: 24),
           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
@@ -619,7 +679,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
             final p = items[index];
             return ReadingCard(
               progress: p,
-              sourceName: nameFor(p),
+              sourceName: titleLines > 1 ? '' : nameFor(p),
               titleLines: titleLines,
               selectionMode: selectionMode,
               selected: _selected.contains(_key(p)),
@@ -672,6 +732,9 @@ class _SelectionActionBar extends StatelessWidget {
             visualDensity: VisualDensity.compact,
           ),
           Text('已选 $count 项', style: theme.textTheme.bodySmall),
+          // 中间可横向滚动区域：全选 + 删除记录。
+          // 「删除源文件」单独固定在最右侧，避免「FilledButton.tonalIcon +
+          // 长文案」的总宽度撑爆窄屏而被截断。
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -696,20 +759,23 @@ class _SelectionActionBar extends StatelessWidget {
                       visualDensity: VisualDensity.compact,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton.tonalIcon(
-                    onPressed: onDeleteSource,
-                    icon: Icon(LucideIcons.fileX2, size: 16, color: colorScheme.error),
-                    label: const Text('删除源文件'),
-                    style: FilledButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      foregroundColor: colorScheme.error,
-                    ),
-                  ),
                   const SizedBox(width: 4),
                 ],
               ),
             ),
+          ),
+          // 固定在最右侧的「删除源文件」按钮：始终可见。
+          // 用 IconButton + Tooltip 缩小宽度，避免与「删除记录」文案叠加
+          // 导致窄屏上被裁切。
+          IconButton(
+            icon: Icon(
+              LucideIcons.fileX2,
+              size: 16,
+              color: colorScheme.error,
+            ),
+            onPressed: onDeleteSource,
+            tooltip: '删除源文件',
+            visualDensity: VisualDensity.compact,
           ),
         ],
       ),

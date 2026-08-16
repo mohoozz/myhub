@@ -57,6 +57,10 @@ class AvPlayerAdapter {
   /// 渲染用 texture id（原生 AVPlayer 视频帧）。
   ValueNotifier<int> get textureId => _native.textureId;
 
+  /// 视频真实宽高（原生从 CVPixelBuffer 提取），用于按比例渲染。
+  ValueNotifier<int> get videoWidth => _native.videoWidth;
+  ValueNotifier<int> get videoHeight => _native.videoHeight;
+
   /// 系统亮度（0-1），与系统亮度双向同步。
   ValueNotifier<double> get brightness => _native.brightness;
 

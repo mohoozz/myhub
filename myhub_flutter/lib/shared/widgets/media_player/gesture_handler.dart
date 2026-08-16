@@ -25,6 +25,9 @@ class PlayerGestureDetector extends StatefulWidget {
     this.onTap,
     this.onInteraction,
     this.onBrightnessChanged,
+    this.onVolumeChanged,
+    this.currentVolume,
+    this.currentBrightness,
     this.onMiniDrag,
     this.onMiniDragEnd,
     this.onLongPress,
@@ -54,6 +57,18 @@ class PlayerGestureDetector extends StatefulWidget {
 
   /// 亮度变化（0.0 ~ 1.0，软件调光遮罩由外部渲染）。
   final ValueChanged<double>? onBrightnessChanged;
+
+  /// 音量变化（0 ~ 100）。软解模式下由外部同步系统音量；
+  /// 为 null 时直接调用播放器 setVolume（硬解/非 iOS）。
+  final ValueChanged<double>? onVolumeChanged;
+
+  /// 当前音量（0 ~ 100），软解模式下为系统音量（用于竖滑起点）。
+  /// 为 null 时从播放器 state 读取。
+  final double? currentVolume;
+
+  /// 当前亮度（0 ~ 1），软解模式下为系统亮度（用于竖滑起点）。
+  /// 为 null 时从播放器/AvPlayerAdapter 读取或默认 1.0。
+  final double? currentBrightness;
 
   /// 中间区域向下拖动进入迷你模式：拖动进度 0~1（向下位移 / 屏高）。
   /// 为 null（桌面端）时中间区域不识别拖拽，保持无手势语义。
@@ -99,8 +114,7 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
   // ---------- 双击播放/暂停 ----------
 
   void _handleDoubleTap() {
-    // playOrPause 异步，先读取当前状态，显示反转后的目标状态
-    final willPause = _player.state.playing as bool;
+    final playing = _player.state.playing as bool;
     final p = _player;
     // 播放完成后 mpv 停在末尾，playOrPause() 不重播，需先 seek 回起点
     // （iOS AVPlayer 模式的重播已由原生层处理）。
@@ -110,9 +124,11 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
     } else {
       p.playOrPause();
     }
+    // 图标与底部按钮双击后保持一致：双击会切换到 !playing，
+    // 底部按钮显示 `(_playing) ? pause : play`，即 `(!playing) ? pause : play`。
     _osd.show(
-      willPause ? LucideIcons.pause : LucideIcons.play,
-      willPause ? '暂停' : '播放',
+      !playing ? LucideIcons.pause : LucideIcons.play,
+      playing ? '暂停' : '播放',
     );
     widget.onInteraction?.call();
   }
@@ -167,14 +183,20 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
     _miniDragFraction = 0;
     if (d.localPosition.dx >= width * 2 / 3) {
       _vMode = _VerticalMode.volume;
-      _vStartValue = _player.state.volume as double;
+      // 软解模式下音量走系统，用外部传入的当前系统音量作为起点
+      _vStartValue = widget.currentVolume ?? _player.state.volume as double;
     } else if (d.localPosition.dx <= width / 3) {
       _vMode = _VerticalMode.brightness;
-      // iOS AVPlayer 模式：从系统亮度初始化，避免第一次调节跳变
-      final player = widget.player;
-      if (player is AvPlayerAdapter) {
-        _brightness =
-            player.brightness.value.clamp(0.0, 1.0).toDouble();
+      // 从外部传入的当前亮度初始化（iOS AVPlayer/软解走系统亮度），
+      // 避免第一次调节跳变。
+      final cb = widget.currentBrightness;
+      if (cb != null) {
+        _brightness = cb.clamp(0.0, 1.0);
+      } else {
+        final player = widget.player;
+        if (player is AvPlayerAdapter) {
+          _brightness = player.brightness.value.clamp(0.0, 1.0).toDouble();
+        }
       }
       _vStartValue = _brightness;
     } else if (widget.onMiniDrag != null) {
@@ -192,7 +214,12 @@ class _PlayerGestureDetectorState extends State<PlayerGestureDetector> {
     switch (_vMode) {
       case _VerticalMode.volume:
         final v = (_vStartValue + delta * 100).clamp(0.0, 100.0);
-        _player.setVolume(v);
+        final onVolume = widget.onVolumeChanged;
+        if (onVolume != null) {
+          onVolume(v);
+        } else {
+          _player.setVolume(v);
+        }
         _osd.showHold(_volumeIcon(v), '${v.round()}%');
       case _VerticalMode.brightness:
         final b = (_vStartValue + delta).clamp(0.0, 1.0);

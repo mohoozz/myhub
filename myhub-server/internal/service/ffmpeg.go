@@ -29,6 +29,48 @@ func ffmpegBinary() (string, error) {
 	return p, nil
 }
 
+// probeVideoCodec 用 ffprobe 探测主视频流编码名（如 "hevc"、"h264"）。
+// 探测失败返回空字符串（调用方按"未知"处理，走保守路径）。
+func probeVideoCodec(ctx context.Context, source *model.Source, p string) string {
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return ""
+	}
+	inputArgs, err := ffmpegInputArgs(source, p)
+	if err != nil {
+		return ""
+	}
+	// 探测选项必须在 -i 之前（-analyzeduration/-probesize 是输入侧选项）。
+	// moov atom 在文件末尾的 MP4（压制组常见）默认探测窗口不足，ffprobe
+	// 读不到 moov 就探测不到视频流，返回空。这里给 3s / 10MB 足够覆盖
+	// 末尾 moov（约 9.9MB）。
+	probeOpts := []string{
+		"-analyzeduration", "3000000",
+		"-probesize", "10485760",
+	}
+	args := make([]string, 0, len(inputArgs)+len(probeOpts)+8)
+	// 在 -i 之前插入探测选项
+	for _, a := range inputArgs {
+		if a == "-i" {
+			args = append(args, probeOpts...)
+		}
+		args = append(args, a)
+	}
+	args = append(args,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=codec_name",
+		"-of", "csv=p=0",
+	)
+	cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cmdCtx, ffprobe, args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // ffmpegInputArgs 构造 ffmpeg 输入参数（含 -i）。
 // 本地源直接用文件绝对路径；WebDAV 源用 URL + Basic 认证头。
 func ffmpegInputArgs(source *model.Source, p string) ([]string, error) {

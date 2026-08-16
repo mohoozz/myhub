@@ -41,21 +41,41 @@ class MediaPlayerPage extends ConsumerStatefulWidget {
   final FileItem file;
 
   /// 以独立全屏路由打开播放器（不随 Tab 切换销毁）。
+  ///
+  /// 使用淡入过渡（FadeTransition）而非 iOS 默认的模态滑动：
+  /// 模态滑动会让页面从底部弹起，过渡期间顶栏短暂停在屏幕中间，
+  /// 观感割裂。淡入让页面原地出现、标题栏始终在顶部，打开即显示。
   static Future<void> open(
     BuildContext context, {
     required int sourceId,
     required FileItem file,
   }) {
     return Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => MediaPlayerPage(sourceId: sourceId, file: file),
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 200),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
+        pageBuilder: (_, __, ___) =>
+            MediaPlayerPage(sourceId: sourceId, file: file),
+        transitionsBuilder: (_, animation, __, child) {
+          // 淡入期间垫一层不透明黑色背景：否则页面随 opacity 一起淡入，
+          // 早期阶段背景透明、露出下层页面，观感割裂。
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              const ColoredBox(color: Colors.black),
+              FadeTransition(opacity: animation, child: child),
+            ],
+          );
+        },
       ),
     );
   }
 
-  /// 智能打开媒体：迷你条在播时直接切换会话（保持迷你模式，不进全屏页），
-  /// 否则 push 全屏播放页。
+  /// 智能打开媒体：
+  /// * 迷你条在播时：
+  ///   - 点击的是**当前正在播放的同一文件** → 切换到完整播放模式（push 全屏页）；
+  ///   - 点击的是**其他文件** → 直接切换会话（保持迷你模式，不进全屏页）；
+  /// * 迷你条未在播 → push 全屏播放页。
   static Future<void> openOrMini(
     BuildContext context,
     WidgetRef ref, {
@@ -64,6 +84,12 @@ class MediaPlayerPage extends ConsumerStatefulWidget {
   }) {
     final controller = ref.read(mediaPlayerProvider);
     if (controller.miniVisible.value && controller.hasMedia) {
+      final sameFile = controller.sourceId == sourceId &&
+          controller.file?.path == file.path;
+      if (sameFile) {
+        // 同一文件：从 mini 模式切回完整播放模式（push 全屏页，复用会话）
+        return open(context, sourceId: sourceId, file: file);
+      }
       controller.play(sourceId, file);
       return Future.value();
     }
@@ -78,7 +104,11 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     with SingleTickerProviderStateMixin {
   late final MediaPlayerController _controller;
   /// 当前播放器（media_kit Player 或 AvPlayerAdapter，iOS 用 AVPlayer）。
-  late final dynamic _player;
+  ///
+  /// 用 getter 动态读取：iOS 上 AVPlayer 硬解失败后会切到 media_kit 软解，
+  /// _controller.player 会从 AvPlayerAdapter 变成 media_kit Player，
+  /// 若缓存旧引用则 seek/play/volume 等会发到已销毁的播放器上（无响应）。
+  dynamic get _player => _controller.player!;
 
   /// 沉浸式标题栏开关（缓存 notifier，dispose 后 ref 不可再用）。
   late final StateController<bool> _immersiveTitleBar;
@@ -132,13 +162,13 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     _controller.pageOpened();
     // 同步建立/复用会话，随后即可取到 Player
     _controller.play(widget.sourceId, widget.file);
-    _player = _controller.player!;
     // buffering 流在 media_kit 和 AvPlayerAdapter 上都有
     final bufferingStream = _player.stream.buffering as Stream<bool>;
     _bufferingSub = bufferingStream.listen((b) {
       if (!mounted) return;
       setState(() => _buffering = b);
     });
+    _bufferingPlayer = _player;
     // 读取用户方向偏好（持久化：上次竖屏/横屏/水平仪自动）。
     // 注意：PlayerSettings 异步从 SharedPreferences 恢复，首次 build() 返回默认
     // portrait；故先取默认值，再用 ref.listen 在异步恢复完成后同步一次。
@@ -165,6 +195,26 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
       });
     }
   }
+
+  @override
+  void didUpdateWidget(covariant MediaPlayerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // iOS 上 AVPlayer 硬解失败会切到 media_kit 软解，controller.player
+    // 引用变化（旧订阅的 buffering 流失效）。这里重新订阅新播放器的流，
+    // 否则缓冲指示器不会更新。
+    final newPlayer = _controller.player;
+    if (newPlayer != null && newPlayer != _bufferingPlayer) {
+      unawaited(_bufferingSub?.cancel());
+      _bufferingSub = (newPlayer.stream.buffering as Stream<bool>).listen((b) {
+        if (!mounted) return;
+        setState(() => _buffering = b);
+      });
+      _bufferingPlayer = newPlayer;
+    }
+  }
+
+  /// 当前 buffering 订阅对应的播放器引用（用于 didUpdateWidget 判断是否重建）。
+  dynamic _bufferingPlayer;
 
   @override
   void dispose() {
@@ -505,72 +555,68 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                 if (isVideo) ...[
                                   if (_controller.useAvPlayer &&
                                       _controller.textureId != null)
-                                    ValueListenableBuilder<int>(
-                                      valueListenable: _controller.textureId!,
-                                      builder: (context, texId, _) {
+                                    AnimatedBuilder(
+                                      animation: Listenable.merge([
+                                        _controller.textureId!,
+                                        if (_controller.videoWidth != null)
+                                          _controller.videoWidth!,
+                                        if (_controller.videoHeight != null)
+                                          _controller.videoHeight!,
+                                      ]),
+                                      builder: (context, _) {
+                                        final texId = _controller.textureId!.value;
                                         if (texId <= 0) {
                                           return const ColoredBox(
                                             color: Colors.black,
                                             child: SizedBox.expand(),
                                           );
                                         }
-                                        // Texture 总是拉伸填满父容器，无法
-                                        // 直接按视频比例显示。视频原始比例
-                                        // 为 16:9（1920x1080）。按容器宽高
-                                        // 选择「宽度优先」或「高度优先」：
-                                        //   - 竖屏容器（w/h < 16/9）：宽度填满，
-                                        //     视频高度按 16:9 计算，上下留黑边
-                                        //   - 横屏容器（w/h >= 16/9）：高度填满，
-                                        //     视频宽度按 16:9 计算，左右留黑边
+                                        // Texture 总是拉伸填满父容器，无法直接按
+                                        // 视频比例显示。用原生上报的真实宽高比渲染：
+                                        //   - 已知宽高：按真实比例，保持等比缩放 + 黑边；
+                                        //   - 尚未上报（首帧前）：回退 16:9 占位。
                                         return LayoutBuilder(
                                           builder: (context, constraints) {
                                             final w = constraints.maxWidth;
                                             final h = constraints.maxHeight;
-                                            final videoH = w * 9 / 16;
-                                            if (videoH <= h) {
-                                              // 竖屏：宽度填满，按 16:9 计算高度
-                                              return Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  const ColoredBox(
-                                                    color: Colors.black,
-                                                  ),
-                                                  Positioned(
-                                                    top: (h - videoH) / 2,
-                                                    left: 0,
-                                                    right: 0,
-                                                    height: videoH,
-                                                    child: Texture(
-                                                      textureId: texId,
-                                                      filterQuality:
-                                                          FilterQuality.medium,
-                                                    ),
-                                                  ),
-                                                ],
-                                              );
+                                            final vw =
+                                                _controller.videoWidth?.value ?? 0;
+                                            final vh =
+                                                _controller.videoHeight?.value ?? 0;
+                                            // 真实宽高比（未上报则用 16:9）
+                                            final aspect = (vw > 0 && vh > 0)
+                                                ? vw / vh
+                                                : 16 / 9;
+                                            // 容器宽高比
+                                            final containerAspect = w / h;
+                                            double videoW;
+                                            double videoH;
+                                            if (containerAspect > aspect) {
+                                              // 容器更宽：高度填满，按比例算宽度，左右留黑边
+                                              videoH = h;
+                                              videoW = h * aspect;
                                             } else {
-                                              // 横屏：高度填满，按 16:9 计算宽度
-                                              final videoW = h * 16 / 9;
-                                              return Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  const ColoredBox(
-                                                    color: Colors.black,
-                                                  ),
-                                                  Positioned(
-                                                    top: 0,
-                                                    bottom: 0,
-                                                    left: (w - videoW) / 2,
-                                                    width: videoW,
-                                                    child: Texture(
-                                                      textureId: texId,
-                                                      filterQuality:
-                                                          FilterQuality.medium,
-                                                    ),
-                                                  ),
-                                                ],
-                                              );
+                                              // 容器更窄/相等：宽度填满，按比例算高度，上下留黑边
+                                              videoW = w;
+                                              videoH = w / aspect;
                                             }
+                                            return Stack(
+                                              fit: StackFit.expand,
+                                              children: [
+                                                const ColoredBox(color: Colors.black),
+                                                Positioned(
+                                                  top: (h - videoH) / 2,
+                                                  left: (w - videoW) / 2,
+                                                  width: videoW,
+                                                  height: videoH,
+                                                  child: Texture(
+                                                    textureId: texId,
+                                                    filterQuality:
+                                                        FilterQuality.medium,
+                                                  ),
+                                                ),
+                                              ],
+                                            );
                                           },
                                         );
                                       },
@@ -598,6 +644,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                 if (!hasError)
                                   PlayerControls(
                                     player: _player,
+                                    controller: _controller,
                                     title: widget.file.name,
                                     osd: _osd,
                                     loading: loading,

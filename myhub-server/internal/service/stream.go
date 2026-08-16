@@ -134,6 +134,17 @@ func (s *StreamService) Stat(ctx context.Context, sourceID uint, p string) (*ada
 	return a.Stat(ctx, p)
 }
 
+// ProbeCodec 探测视频主流的编码名（如 "hevc"、"h264"、"vp9"）。
+// 客户端据此在播放前决定直连硬解还是转码/软解，避免"黑屏有声"再兜底。
+// 探测失败返回空字符串（客户端按"未知"处理，走既有兜底路径）。
+func (s *StreamService) ProbeCodec(ctx context.Context, sourceID uint, p string) string {
+	_, source, err := s.sourceSvc.GetAdapter(sourceID)
+	if err != nil {
+		return ""
+	}
+	return probeVideoCodec(ctx, source, p)
+}
+
 // Open 打开文件流（支持 Range）
 func (s *StreamService) Open(ctx context.Context, sourceID uint, p string, offset, length int64) (io.ReadCloser, error) {
 	a, _, err := s.sourceSvc.GetAdapter(sourceID)

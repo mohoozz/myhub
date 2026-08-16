@@ -104,7 +104,14 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
 
   /// 恢复进度时的目标滚动比例：仅用于首帧定位（传给 scroll_mode 的
   /// `initialFraction`），恢复完成后置空，不随滚动变化。
+  /// 滚动模式语义为「章节内比例」（0.0~1.0），配合章节跳转精确定位。
   double? _restoreFraction;
+
+  /// 滚动模式下当前阅读章节（随滚动实时更新，用于精确保存进度）。
+  int _scrollChapter = 0;
+
+  /// 滚动模式下当前章节内的滚动比例（0.0~1.0）。
+  double _scrollChapterFraction = 0;
 
   /// 翻页/滚动/切章后防抖保存：阅读中持续落盘（对齐漫画 1s 防抖），
   /// 关窗/强杀等未走 dispose 的场景也不丢进度。
@@ -168,12 +175,11 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   Future<void> _saveProgress() async {
     if (_chapters.isEmpty) return;
     final isScroll = _mode == ReaderMode.scroll;
-    // 滚动模式按滚动比例折算章节
-    final chapter = isScroll
-        ? (_scrollFraction.value * (_chapters.length - 1)).round()
-        : _chapter;
+    // 滚动模式记录真实当前章节 + 章节内比例（精确恢复，
+    // 不能用全书比例近似，否则恢复时会错位到错误章节）
+    final chapter = isScroll ? _scrollChapter : _chapter;
     final page = isScroll ? 0 : _pageInChapter;
-    final scroll = isScroll ? _scrollFraction.value : 0.0;
+    final scroll = isScroll ? _scrollChapterFraction : 0.0;
     final percent = _progress * 100;
     try {
       await _progressRepo.save(
@@ -226,25 +232,27 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
             ? (decoded['scroll'] as num).toDouble()
             : null;
 
-        // 滚动模式：优先恢复全书滚动比例（含无分章单章"全文"场景，
-        // chapter 恒 0、page 不更新，只能靠 scroll 定位）。
-        // 兼容旧进度：仅 chapter > 0 时跳到对应章节。
+        // 滚动模式：先跳转到上次阅读章节（中心锚点落在正确章节），
+        // 再按章节内比例定位。旧进度（无 scroll 字段）仅跳章节。
+        // 关键：必须先跳章节，否则初始窗口只加载前几章，按全书比例
+        // 定位会错位到错误位置（历史记录"需要先跳章节"的根因）。
         if (_mode == ReaderMode.scroll) {
-          if (scroll != null) {
-            final f = scroll.clamp(0.0, 1.0);
-            _scrollFraction.value = f;
-            _restoreFraction = f;
-            _pageInChapter = 0;
-            // 仅恢复进度时触发一次 rebuild，让 scroll_mode 通过 didUpdateWidget
-            // 消费 _restoreFraction 定位滚动位置（滚动中不再触发 rebuild）。
-            setState(() {});
-            return;
-          }
           if (chapter > 0 && chapter < _chapters.length) {
             _pendingRestore = true;
             _goToChapter(chapter);
             _pendingRestore = false;
           }
+          if (scroll != null) {
+            final f = scroll.clamp(0.0, 1.0);
+            _scrollChapter = chapter.clamp(0, _chapters.length - 1);
+            _scrollChapterFraction = f;
+            // 底栏全书进度：(章节 + 章节内比例) / 总章节数
+            _scrollFraction.value =
+                ((_scrollChapter + f) / _chapters.length).clamp(0.0, 1.0);
+            _restoreFraction = f; // 章节内比例
+            _pageInChapter = 0;
+          }
+          setState(() {});
           return;
         }
 
@@ -530,14 +538,17 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     if (_mode == ReaderMode.scroll) {
       return SafeArea(
         child: ReaderScrollMode(
-          key: ValueKey('scroll-${widget.file.path}'),
+          // 章节级 key：切章/恢复章节时重建组件，中心锚点与滚动窗口
+          // 以新章节重新初始化（固定 key 会导致 initialChapter 变化时
+          // 内部 _first/_last 不同步，历史记录跳转失效）。
+          key: ValueKey('scroll-$_chapter'),
           initialChapter: _chapter,
           totalChapters: _chapters.length,
           chapterTitle: _chapterTitle,
           contentOf: (i) => _contentCache[i],
           ensureChapter: _ensureChapter,
           style: _style,
-          // 恢复进度：_restoreFraction != null 时定位到上次滚动位置
+          // 恢复进度：_restoreFraction 为章节内比例（配合章节跳转精确定位）
           initialFraction: _restoreFraction,
           onToggleChrome: () =>
               setState(() => _chromeVisible = !_chromeVisible),
@@ -547,6 +558,10 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
             _scrollFraction.value = f;
             _restoreFraction = null;
             _scheduleSave();
+          },
+          onChapter: (index, fraction) {
+            _scrollChapter = index;
+            _scrollChapterFraction = fraction;
           },
         ),
       );

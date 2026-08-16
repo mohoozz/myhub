@@ -104,8 +104,11 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         result(0)
       }
     case "dispose":
+      // 仅销毁播放器资源（player/item/texture/observer），但保留 shared 单例
+      // 与其 volumeView：系统音量/亮度控制是全局能力，与 AVPlayer 实例无关。
+      // 软解兜底切换时会 dispose AVPlayer，若把 shared 置 nil，后续 setVolume
+      // 因 shared==nil 静默跳过，导致"调节音量无反应、系统音量不同步"。
       NativePlayerPlugin.shared?.dispose()
-      NativePlayerPlugin.shared = nil
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
@@ -123,6 +126,8 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     // Flutter 侧显式告知原生是否为音频文件：音频不创建视频输出/纹理，
     // 避免 Flutter 端 Texture 显示一个空圆圈占位。
     let isAudio = (args["isAudio"] as? Bool) ?? false
+    // 已知真实总时长（毫秒）：直链阶段拿到，切 HLS 后用于修正时长显示。
+    let knownDurationMs = (args["knownDurationMs"] as? NSNumber)?.int64Value ?? 0
     // 关键：texture 注册延迟到真正播放时（open），此时引擎渲染上下文已就绪，
     // registrar.textures() 返回的 relay 的 delegate 才有效，register 返回 >=1。
     let registry = registrar?.textures()
@@ -134,12 +139,19 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       if registry != nil {
         controller.refreshTextureRegistry(registry!)
       }
+      // dispose() 会清空 controller 的 eventSink（见 NativePlayerController.dispose
+      // 中 eventSink = nil）。单例复用场景（如软解切换 dispose 后再 open 音频）
+      // 必须重新绑定事件流，否则原生 emitStatus 的 ready/playing 发不到 Flutter，
+      // Dart 侧 loading 永不消除，UI 一直显示加载中。
+      controller.attach(eventSink: eventSink)
     } else {
       controller = NativePlayerController(
         eventSink: eventSink, textureRegistry: registry)
       NativePlayerPlugin.shared = controller
     }
-    controller.open(url: url, title: title, headers: headers, isAudio: isAudio)
+    controller.open(
+      url: url, title: title, headers: headers, isAudio: isAudio,
+      knownDurationMs: knownDurationMs)
     result(nil)
   }
 

@@ -21,6 +21,7 @@ class EpubScrollMode extends StatefulWidget {
     this.initialFraction,
     this.onToggleChrome,
     this.onProgress,
+    this.onChapter,
   });
 
   /// 初始章节（列表中心锚点）。
@@ -54,6 +55,11 @@ class EpubScrollMode extends StatefulWidget {
   /// 滚动进度回调（0.0 ~ 1.0，TODO 6.4）。
   final ValueChanged<double>? onProgress;
 
+  /// 当前章节回调（章节索引 + 章节内滚动比例 0.0~1.0）。
+  ///
+  /// 滚动模式为连续流，需上报真实当前章节以便精确保存/恢复阅读进度。
+  final void Function(int index, double fraction)? onChapter;
+
   @override
   State<EpubScrollMode> createState() => _EpubScrollModeState();
 }
@@ -64,6 +70,11 @@ class _EpubScrollModeState extends State<EpubScrollMode> {
 
   final ScrollController _controller = ScrollController();
   final UniqueKey _centerKey = UniqueKey();
+
+  /// 各章节 widget 的 GlobalKey（用于计算当前章节与章节内滚动比例）。
+  final Map<int, GlobalKey> _keys = {};
+
+  GlobalKey _keyFor(int index) => _keys.putIfAbsent(index, GlobalKey.new);
 
   /// 最近一次滚动的时刻。滑动刚结束后的一小段时间内，轻点屏幕用于"暂停"滚动，
   /// 不应触发顶/底栏显隐切换（避免误触菜单）。
@@ -111,27 +122,52 @@ class _EpubScrollModeState extends State<EpubScrollMode> {
     super.dispose();
   }
 
-  /// 按 [widget.initialFraction] 定位滚动位置。
+  /// 按 [widget.initialFraction]（中心章节内的比例 0.0~1.0）定位滚动位置。
   ///
-  /// 不做无限递归重试（避免每帧堆积 post-frame callback 导致界面卡死）；
-  /// 仅尝试一次：若内容尚未布局（extent <= 0，章节异步加载中）则本次放弃，
-  /// 由 [didUpdateWidget] 在内容加载完成触发 rebuild 时再次调用本方法重试，
-  /// 直至定位成功（[_restored]），解决"历史记录不生效、总是从头开始"。
+  /// 中心章节（[widget.initialChapter]）顶部即滚动坐标原点 0，故定位到
+  /// 中心章节内的 `f * 章节高度` 处即可精确恢复到上次阅读位置。
   void _restoreFraction() {
     final f = widget.initialFraction;
     if (f == null || f <= 0) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_controller.hasClients || _restored) return;
-      final pos = _controller.position;
-      final extent = pos.maxScrollExtent - pos.minScrollExtent;
-      if (extent <= 0) return; // 内容未就绪，等下次 rebuild 再试
+      // 中心章节内容未就绪（仍是 loading 占位）时高度不准确，等下次 rebuild
+      if (widget.contentOf(widget.initialChapter) == null) return;
+      final box = _keyFor(widget.initialChapter).currentContext
+          ?.findRenderObject() as RenderBox?;
+      final h = box?.size.height ?? 0;
+      if (h <= 0) return; // 内容未布局，等下次 rebuild 再试
       _restoring = true;
-      _controller.jumpTo(
-        pos.minScrollExtent + extent * f.clamp(0.0, 1.0),
-      );
+      _controller.jumpTo(h * f.clamp(0.0, 1.0));
       _restoring = false;
       _restored = true;
     });
+  }
+
+  /// 计算滚动坐标 [target]（相对中心章节顶部 0）所在的章节与章节内比例。
+  ({int index, double fraction}) _chapterAt(double target) {
+    final viewportBox =
+        _controller.position.context.storageContext.findRenderObject()
+            as RenderBox?;
+    final offset = _controller.offset;
+    var bestIndex = widget.initialChapter;
+    var bestFraction = 0.0;
+    for (var i = _first; i <= _last; i++) {
+      final ctx = _keyFor(i).currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+      final top = viewportBox == null
+          ? offset
+          : box.localToGlobal(Offset.zero, ancestor: viewportBox).dy + offset;
+      final h = box.size.height;
+      if (target >= top && target < top + h) {
+        bestIndex = i;
+        bestFraction = ((target - top) / h).clamp(0.0, 1.0);
+        break;
+      }
+    }
+    return (index: bestIndex, fraction: bestFraction);
   }
 
   /// 内容就绪后主动扩展窗口：前后边缘章节已加载则逐章延伸。
@@ -169,8 +205,12 @@ class _EpubScrollModeState extends State<EpubScrollMode> {
       _restored = true;
     }
     if (extent > 0) {
+      // 屏幕中心点所在章节 + 章节内比例（精确恢复进度用）
+      final cp = _chapterAt(pos.pixels + pos.viewportDimension / 2);
+      widget.onChapter?.call(cp.index, cp.fraction);
+      // 底栏全书进度：按 (章节 + 章节内比例) / 总章节数 折算
       widget.onProgress?.call(
-        ((pos.pixels - pos.minScrollExtent) / extent).clamp(0.0, 1.0),
+        ((cp.index + cp.fraction) / widget.totalChapters).clamp(0.0, 1.0),
       );
     }
     // 向前：滑到顶部附近，预加载上一章（窗口扩展由 _syncWindow 处理）
@@ -238,6 +278,7 @@ class _EpubScrollModeState extends State<EpubScrollMode> {
     final atoms = widget.contentOf(index);
     final style = widget.style;
     return Padding(
+      key: _keyFor(index),
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

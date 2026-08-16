@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -64,30 +63,40 @@ class FileGridView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-    // 依据实际可用宽度计算列数与单元宽度，再按名称行数推导单元高度：
-    // 保证名称多行时卡片内容完整展示，不会溢出或被截断。
+    // 依据实际可用宽度计算列数与单元宽度，按 QQ 音乐红框风格的横向卡片布局：
+    // ┌──────────────────────────┐
+    // │  文件名 1~3行   ┌──┐  │
+    // │  作者/说明      │封│  │  ← 圆形封面在右侧
+    // │  size           └──┘  │
+    // └──────────────────────────┘
+    // 颜色块为卡片底色（按文件类型取明亮渐变色），文字白色。
     final grid = LayoutBuilder(
       builder: (context, constraints) {
-        const maxExtent = 140.0;
+        const maxExtent = 140.0;       // iOS Files 风格格子最大宽度
         const spacing = 12.0;
-        const hPadding = 24.0; // EdgeInsets.all(12) 左右各 12
-        final available =
-            (constraints.maxWidth - hPadding).clamp(0.0, 1e9).toDouble();
-        final cols = ((available + spacing) / (maxExtent + spacing))
-            .floor()
-            .clamp(1, 100);
-        final cellWidth = (available - spacing * (cols - 1)) / cols;
-        // 封面最大 72×72（与 _FileCard 内 ConstrainedBox 一致）；
-        // 窄屏单列时封面随 cell 宽度放大，但不超过 72。
-        final coverHeight = math
-            .min(cellWidth - 20, 72.0)
-            .clamp(40.0, 72.0)
-            .toDouble();
-        // 名称行高：移动端 bodyMedium 较大，桌面端 bodySmall 较小；留少量缓冲。
-        final nameLineHeight = isMobile ? 21.0 : 17.5;
-        final metaHeight = isMobile ? 20.0 : 16.0;
-        final cellHeight =
-            10 + coverHeight + 10 + nameLines * nameLineHeight + 4 + metaHeight + 10;
+        // const hPadding = 24.0; // EdgeInsets.all(12) 左右各 12
+        // 列数现在不再用于计算 cellWidth——iOS Files 风格格子固定
+        // maxExtent = 140px，配合 SliverGridDelegateWithMaxCrossAxisExtent
+        // 让 Flutter 自动按列布局。
+        // 名称行高：移动端 bodyMedium 较大，桌面端 bodySmall 较小。
+        final nameLineHeight = isMobile ? 17.0 : 14.0;
+        // 副标题行高（11px labelSmall）。
+        final metaLineHeight = isMobile ? 14.0 : 12.0;
+        // iOS Files 风格 cell 高度：
+        //   * 顶部 padding 8
+        //   * 封面 56
+        //   * 间距 8
+        //   * 标题 1~3 行
+        //   * 间距 2
+        //   * 副标题 1 行
+        //   * 底部 padding 8
+        final cellHeight = 8 +
+            56 +                 // 封面固定 56 高
+            8 +
+            nameLines * nameLineHeight +
+            2 +
+            metaLineHeight +
+            8;
         return GridView.builder(
           controller: controller,
           physics: const AlwaysScrollableScrollPhysics(),
@@ -125,6 +134,10 @@ class FileGridView extends StatelessWidget {
               onLongPressMenu: onLongPressMenu == null
                   ? null
                   : (d) => onLongPressMenu!(item, d.globalPosition),
+              // 移动端 "..." 菜单按钮：复用 onShowMenu（同一上下文菜单）
+              onShowRowMenu: onShowMenu == null
+                  ? null
+                  : (pos) => onShowMenu!(item, pos),
             );
             if (highlighted && highlightKey != null) {
               card = KeyedSubtree(key: highlightKey, child: card);
@@ -223,6 +236,7 @@ class _FileCard extends StatelessWidget {
     this.nameLines = 1,
     this.onSecondaryTapUp,
     this.onLongPressMenu,
+    this.onShowRowMenu,
   });
 
   final FileItem item;
@@ -244,34 +258,29 @@ class _FileCard extends StatelessWidget {
   /// 移动端长按（非多选模式）呼出上下文菜单，携带按下位置。
   final GestureLongPressStartCallback? onLongPressMenu;
 
+  /// 移动端 "..." 按钮点击：直接调用 onShowMenu(item, position)，
+  /// 位置由按钮自身的全局坐标给出。
+  final void Function(Offset globalPosition)? onShowRowMenu;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    // 移动端字号放大：参考"正在阅读"卡片标题（bodyMedium + w600）与
-    // 说明文字，iOS 窄屏下文件名/说明不再显得偏小。桌面端保持原样。
     final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-    // 文件名：移动端用正文大号 + 加粗；桌面端保持 bodySmall + 高亮加粗。
-    final nameStyle = isMobile
-        ? theme.textTheme.bodyMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: highlighted ? colorScheme.primary : null,
-          )
-        : theme.textTheme.bodySmall?.copyWith(
-            color: highlighted ? colorScheme.primary : null,
-            fontWeight: highlighted ? FontWeight.w600 : null,
-          );
-    // 二级说明文字（文件夹/大小）：移动端用 bodySmall(13px)，桌面端 12px。
-    final metaStyle = isMobile
-        ? theme.textTheme.bodySmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          )
-        : theme.textTheme.bodySmall?.copyWith(
-            fontSize: 12,
-            color: colorScheme.onSurfaceVariant,
-          );
-    // 外层处理移动端长按弹菜单：该手势仅在桌面端长按（进入多选）为空时注册，
-    // 与内层 InkWell 的长按手势互斥，不会同时响应。
+
+    // iOS Files 风格卡片：
+    //   ┌────────────────┐
+    //   │     ┌──┐         │
+    //   │     │封│         │
+    //   │     │面│         │
+    //   │     └──┘         │
+    //   │  标题（居中）     │
+    //   │  副标题           │
+    //   │       ⋮            │ ← "..." 仅移动端可见
+    //   └────────────────┘
+    // 整张卡片：浅灰背景（surfaceContainerHigh）+ 大封面图标居中。
+    final subtitle = _subtitleText();
+
     return GestureDetector(
       onLongPressStart: onLongPressMenu,
       child: InkWell(
@@ -280,56 +289,113 @@ class _FileCard extends StatelessWidget {
         onSecondaryTapUp: onSecondaryTapUp,
         borderRadius: BorderRadius.circular(12),
         child: Container(
-          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: theme.cardTheme.color,
+            color: theme.cardTheme.color ??
+                colorScheme.surfaceContainerHigh,
             borderRadius: BorderRadius.circular(12),
             border: highlighted
                 ? Border.all(color: colorScheme.primary, width: 1.6)
                 : selected
-                ? Border.all(color: colorScheme.primary, width: 1.5)
-                : null,
+                    ? Border.all(color: colorScheme.primary, width: 1.5)
+                    : null,
           ),
           child: Stack(
             children: [
+              // 主体：封面 + 标题 + 副标题（垂直居中）
               Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 72),
-                          child: AspectRatio(
-                            aspectRatio: 1,
-                            child: FileCover(
-                              item: item,
-                              sourceId: coverSourceId,
-                            ),
-                          ),
+                child: Padding(
+                  // 顶部预留 8 让封面"上方留白"——iOS Files 中图标与卡片边
+                  // 距都比较大，让卡片看起来舒展。
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // 大封面/类型图标：固定 56x56 圆角方块（iOS Files 比例）
+                      SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: FileCover(
+                          item: item,
+                          sourceId: coverSourceId,
+                          iconSize: 32,
+                          borderRadius: 12,
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      item.name,
-                      maxLines: nameLines,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: nameStyle,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      item.isDir ? '文件夹' : formatBytes(item.size),
-                      style: metaStyle,
-                    ),
-                  ],
+                      const SizedBox(height: 8),
+                      // 标题（加粗、居中、1~3 行省略）
+                      Text(
+                        item.name,
+                        maxLines: nameLines,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: isMobile
+                            ? theme.textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color:
+                                    highlighted ? colorScheme.primary : null,
+                              )
+                            : theme.textTheme.bodySmall?.copyWith(
+                                color:
+                                    highlighted ? colorScheme.primary : null,
+                                fontWeight:
+                                    highlighted ? FontWeight.w600 : null,
+                              ),
+                      ),
+                      if (subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant.withValues(
+                              alpha: 0.7,
+                            ),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
               ),
+              // 移动端右下角 "..."：与 iOS Files 风格一致
+              if (!selectionMode && isMobile)
+                Positioned(
+                  right: 4,
+                  bottom: 4,
+                  child: Builder(
+                    builder: (innerContext) {
+                      // 用 InkResponse 让点击直接弹菜单，避免遮挡卡片点击。
+                      return InkResponse(
+                        onTap: () {
+                          final box =
+                              innerContext.findRenderObject() as RenderBox?;
+                          final pos = box != null
+                              ? box.localToGlobal(
+                                  Offset(box.size.width / 2,
+                                      box.size.height / 2),
+                                )
+                              : Offset.zero;
+                          onShowRowMenu?.call(pos);
+                        },
+                        radius: 18,
+                        child: const Padding(
+                          padding: EdgeInsets.all(6),
+                          child:
+                              Icon(LucideIcons.ellipsis, size: 16),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              // 多选模式：右上角勾选环
               if (selectionMode)
                 Positioned(
-                  top: 0,
-                  right: 0,
+                  top: 6,
+                  right: 6,
                   child: Icon(
                     selected ? LucideIcons.circleCheck : LucideIcons.circle,
                     size: 18,
@@ -343,5 +409,11 @@ class _FileCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 副标题（iOS Files 风格）：目录显示"目录"，文件显示格式字节数。
+  String _subtitleText() {
+    if (item.isDir) return '目录';
+    return formatBytes(item.size);
   }
 }

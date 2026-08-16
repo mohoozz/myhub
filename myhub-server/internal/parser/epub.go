@@ -2,6 +2,7 @@ package parser
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -15,15 +16,15 @@ import (
 
 // EPUB 相关错误
 var (
-	ErrNotEPUB       = errors.New("不是有效的 EPUB 文件")
-	ErrItemNotFound  = errors.New("EPUB 条目不存在")
-	ErrNoTOC         = errors.New("EPUB 缺少目录")
+	ErrNotEPUB      = errors.New("不是有效的 EPUB 文件")
+	ErrItemNotFound = errors.New("EPUB 条目不存在")
+	ErrNoTOC        = errors.New("EPUB 缺少目录")
 )
 
 // ManifestItem OPF manifest 条目
 type ManifestItem struct {
 	ID         string `json:"id"`
-	Href       string `json:"href"`       // 已解析为 zip 内完整路径
+	Href       string `json:"href"` // 已解析为 zip 内完整路径
 	MediaType  string `json:"media_type"`
 	Properties string `json:"properties"`
 }
@@ -43,7 +44,7 @@ type EPUB struct {
 	Manifest map[string]ManifestItem
 	Spine    []string // idref 阅读顺序
 	TOC      []TOCItem
-	IsComic  bool // 图集型（漫画）判定：图片占比 ≥ 90%
+	IsComic  bool // 图集型（漫画）判定：图片占比 ≥ 90%，或一页一图型（页面以图为主）
 }
 
 // OPF XML 结构
@@ -137,7 +138,19 @@ func OpenEPUB(ra io.ReaderAt, size int64) (*EPUB, error) {
 	// 目录：优先 EPUB3 nav，其次 NCX
 	e.TOC = e.parseTOC(files, opfDir, pkg.Spine.TOC)
 
-	// 图集型判定：图片条目占比 ≥ 90%
+	e.detectComic(files)
+
+	return e, nil
+}
+
+// detectComic 图集型（漫画）判定，满足任一条件即为漫画：
+//  1. manifest 中图片条目占比 ≥ 90%，或纯图册（无 XHTML 文档条目）
+//  2. "一页一图"型：spine 页面绝大多数内嵌图片且几乎没有文字
+//     （如 Kindle Comic Converter 生成的日漫 EPUB：每个 XHTML 恰好一张图）
+//
+// 仅当图片条目数接近文档数时（疑似漫画）才做内容级扫描，避免
+// 每次打开小说都逐个解析章节页面。
+func (e *EPUB) detectComic(files map[string]*zip.File) {
 	images, docs := 0, 0
 	for _, it := range e.Manifest {
 		if strings.HasPrefix(it.MediaType, "image/") {
@@ -146,10 +159,98 @@ func OpenEPUB(ra io.ReaderAt, size int64) (*EPUB, error) {
 			docs++
 		}
 	}
-	e.IsComic = images > 0 && docs > 0 && float64(images)/float64(images+docs) >= 0.9 ||
-		images > 0 && docs == 0
+	if images > 0 && docs > 0 && float64(images)/float64(images+docs) >= 0.9 ||
+		images > 0 && docs == 0 {
+		e.IsComic = true
+		return
+	}
+	// 图片占比不足以判定：仅当图片量接近页数时才值得扫描页面内容
+	if docs == 0 || images < int(float64(docs)*0.3) {
+		return
+	}
+	pages, pagesWithImg, textChars := 0, 0, 0
+	for i, idref := range e.Spine {
+		if i >= 1000 { // 防御：漫画页数上限
+			break
+		}
+		it, ok := e.Manifest[idref]
+		if !ok || (it.MediaType != "application/xhtml+xml" && it.MediaType != "text/html") {
+			continue
+		}
+		pages++
+		data, err := e.readItemLimit(it.Href, 256<<10)
+		if err != nil {
+			continue
+		}
+		imgs, chars := analyzeXHTML(data)
+		if imgs > 0 {
+			pagesWithImg++
+		}
+		textChars += chars
+	}
+	// 绝大多数页面含图且平均每页可见文字 < 300 字符 → 页面主体为图
+	if pages > 0 && float64(pagesWithImg)/float64(pages) >= 0.8 && textChars < pages*300 {
+		e.IsComic = true
+	}
+}
 
-	return e, nil
+// readItemLimit 读取 zip 内文件内容，限制最大读取量（用于漫画判定扫描）
+func (e *EPUB) readItemLimit(href string, limit int64) ([]byte, error) {
+	for _, f := range e.zr.File {
+		if f.Name == href {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			return io.ReadAll(io.LimitReader(rc, limit))
+		}
+	}
+	return nil, ErrItemNotFound
+}
+
+// analyzeXHTML 扫描单个 XHTML 页面：统计内嵌图片数与可见文字量。
+// 使用 html tokenizer 避免误计 <script>/<style> 内容，且不受标签大小写影响。
+func analyzeXHTML(data []byte) (imgCount, textChars int) {
+	z := html.NewTokenizer(bytes.NewReader(data))
+	skip := 0 // 当前处于 script/style 的嵌套深度
+	for {
+		tt := z.Next()
+		switch tt {
+		case html.ErrorToken:
+			return
+		case html.StartTagToken:
+			name, _ := z.TagName()
+			sn := string(name)
+			if sn == "img" {
+				imgCount++
+			}
+			if sn == "script" || sn == "style" {
+				skip++
+			}
+		case html.SelfClosingTagToken:
+			// XHTML 自闭合标签（<img .../>）在 tokenizer 中单独输出
+			name, _ := z.TagName()
+			if string(name) == "img" {
+				imgCount++
+			}
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			sn := string(name)
+			if (sn == "script" || sn == "style") && skip > 0 {
+				skip--
+			}
+		case html.TextToken:
+			if skip > 0 {
+				continue
+			}
+			for _, b := range bytes.TrimSpace(z.Text()) {
+				if b != ' ' && b != '\t' && b != '\n' && b != '\r' && b != '\u00a0' {
+					textChars++
+				}
+			}
+		}
+	}
 }
 
 // readOPFPath 读取 META-INF/container.xml 获取 OPF 文件路径
@@ -171,6 +272,41 @@ func resolveHref(baseDir, href string) string {
 		href = href[:i]
 	}
 	return path.Clean(path.Join(baseDir, href))
+}
+
+// ResolveHref 导出版：将相对 href（如 XHTML 内 img src）解析为 zip 内完整路径
+func ResolveHref(baseDir, href string) string {
+	return resolveHref(baseDir, href)
+}
+
+// ExtractPageImages 从 XHTML 页面内容中提取全部 <img src> 引用（原样，未解析相对路径）。
+// 用于"一页一图"型漫画按 spine 顺序还原阅读顺序。
+func ExtractPageImages(data []byte) []string {
+	z := html.NewTokenizer(bytes.NewReader(data))
+	var refs []string
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			return refs
+		}
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			continue
+		}
+		name, _ := z.TagName()
+		if string(name) != "img" {
+			continue
+		}
+		for {
+			k, v, more := z.TagAttr()
+			if string(k) == "src" && strings.TrimSpace(string(v)) != "" {
+				refs = append(refs, string(v))
+				break
+			}
+			if !more {
+				break
+			}
+		}
+	}
 }
 
 // parseTOC 解析目录：优先 EPUB3 nav 文档，fallback NCX

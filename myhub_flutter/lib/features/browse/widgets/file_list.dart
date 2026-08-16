@@ -7,7 +7,17 @@ import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_cover.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 
-/// 文件列表视图。
+/// 文件列表视图（iOS Files 风格）。
+///
+/// 每行结构：
+/// ┌────────────────────────────────────────────┐
+/// │ ┌──┐                                       │
+/// │ │封│  标题（一行加粗省略）                  │
+/// │ │面│  TXT · 4 KB · 2026/8/9                │
+/// │ └──┘                                       ⋮│
+/// └────────────────────────────────────────────┘
+/// * 移动端：去掉"修改时间"列 + 右下"..."菜单按钮（移动端通过长按弹菜单）
+/// * 桌面端：标题右侧 8 字符宽大小列，便于快速扫读
 class FileListView extends StatelessWidget {
   const FileListView({
     required this.items,
@@ -28,36 +38,22 @@ class FileListView extends StatelessWidget {
   });
 
   final List<FileItem> items;
-
-  /// 滚动控制器（用于大目录下高亮定位时先按索引估算滚动位置）。
   final ScrollController? controller;
-
-  /// 点击条目：目录进入，文件打开（由上层决定行为）。
   final ValueChanged<FileItem> onOpen;
-
-  /// 下拉刷新回调（为空则不可下拉）。
   final Future<void> Function()? onRefresh;
-
-  /// 多选模式。
   final bool selectionMode;
-
-  /// 已选中路径集合。
   final Set<String> selectedPaths;
-
-  /// 切换选中（点击或长按）。
   final ValueChanged<FileItem>? onToggleSelect;
-
-  /// 长按（桌面端非多选时进入多选；多选时切换选中；移动端非多选为 null）。
   final ValueChanged<FileItem>? onLongPress;
-
-  /// 移动端长按（非多选模式）呼出与右键相同的上下文菜单。
-  final void Function(FileItem item, Offset position)? onLongPressMenu;
 
   /// 当前路径源 ID（封面缩略图加载用）。
   final int? coverSourceId;
 
   /// 右键呼出上下文菜单（桌面端），携带点击全局坐标。
   final void Function(FileItem item, Offset position)? onShowMenu;
+
+  /// 移动端长按（非多选模式）呼出与右键相同的上下文菜单。
+  final void Function(FileItem item, Offset position)? onLongPressMenu;
 
   /// 高亮定位文件路径：匹配项显示高亮边框。
   final String? highlightPath;
@@ -74,11 +70,13 @@ class FileListView extends StatelessWidget {
       controller: controller,
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: items.length,
+      // 行间细线分隔（iOS Files 风格）：从图标后面开始到 "..." 按钮前结束。
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, indent: 54, endIndent: 56),
+          const Divider(height: 1, indent: 60, endIndent: 56),
       itemBuilder: (context, index) {
         final item = items[index];
-        final highlighted = highlightPath != null && item.path == highlightPath;
+        final highlighted =
+            highlightPath != null && item.path == highlightPath;
         Widget row = _FileRow(
           item: item,
           coverSourceId: coverSourceId,
@@ -95,6 +93,10 @@ class FileListView extends StatelessWidget {
           onLongPressMenu: onLongPressMenu == null
               ? null
               : (d) => onLongPressMenu!(item, d.globalPosition),
+          // 移动端 "..." 菜单按钮回调：复用 onShowMenu（同一上下文菜单），
+          // 位置由按钮自身给出（与右键位置一致）。
+          onShowRowMenu:
+              onShowMenu == null ? null : (pos) => onShowMenu!(item, pos),
         );
         if (highlighted && highlightKey != null) {
           row = KeyedSubtree(key: highlightKey, child: row);
@@ -119,35 +121,42 @@ class _FileRow extends StatelessWidget {
     this.nameLines = 1,
     this.onSecondaryTapUp,
     this.onLongPressMenu,
+    this.onShowRowMenu,
   });
 
   final FileItem item;
-
-  /// 当前路径源 ID（封面缩略图加载用）。
   final int? coverSourceId;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
   final bool selectionMode;
   final bool selected;
-
-  /// 高亮定位提示（来自"正在阅读"页跳转）。
   final bool highlighted;
-
-  /// 文件名显示行数（1~3）。
   final int nameLines;
   final GestureTapUpCallback? onSecondaryTapUp;
-
-  /// 移动端长按（非多选模式）呼出上下文菜单，携带按下位置。
   final GestureLongPressStartCallback? onLongPressMenu;
+
+  /// 移动端 "..." 按钮点击回调：调用外层 onShowMenu(item, position)，
+  /// 位置由按钮自身全局坐标给出。仅在非多选模式下注册。
+  final void Function(Offset globalPosition)? onShowRowMenu;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    // 移动端列表不显示"修改时间"列，窄屏下信息更聚焦。
     final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-    // 外层处理移动端长按弹菜单：该手势仅在桌面端长按（进入多选）为空时注册，
-    // 与内层 InkWell 的长按手势互斥，不会同时响应。
+
+    // 第二行副标题（iOS Files 风格）：类型 · 大小 · 修改时间
+    // 移动端：不显示"修改时间"，留"类型 · 大小"。
+    final typeLabel = _typeLabel(item);
+    final sizeLabel = item.isDir ? '-' : formatBytes(item.size);
+    final subtitle = isMobile
+        ? [typeLabel, sizeLabel]
+            .where((s) => s.isNotEmpty && s != '-')
+            .join(' · ')
+        : [typeLabel, sizeLabel, formatModTime(item.modTime)]
+            .where((s) => s.isNotEmpty && s != '-')
+            .join(' · ');
+
     return GestureDetector(
       onLongPressStart: onLongPressMenu,
       child: InkWell(
@@ -177,59 +186,79 @@ class _FileRow extends StatelessWidget {
                         : colorScheme.onSurfaceVariant,
                   ),
                 ),
+              // 左侧文件封面/类型图标：36x36（iOS Files 行高图标尺寸）
               SizedBox(
-                width: 32,
-                height: 32,
+                width: 36,
+                height: 36,
                 child: FileCover(
                   item: item,
                   sourceId: coverSourceId,
-                  iconSize: 20,
-                  borderRadius: 6,
+                  iconSize: 22,
+                  borderRadius: 7,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
+              // 中间：标题 + 副标题（双行，参考 iOS Files）
               Expanded(
-                flex: 4,
-                child: Text(
-                  item.name,
-                  maxLines: nameLines,
-                  overflow: TextOverflow.ellipsis,
-                  // 移动端放大：参考"正在阅读"列表标题（bodyMedium + w600），
-                  // 使 iOS 文件名更清晰。
-                  style: isMobile
-                      ? theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: highlighted ? colorScheme.primary : null,
-                        )
-                      : theme.textTheme.bodySmall?.copyWith(
-                          color: highlighted ? colorScheme.primary : null,
-                          fontWeight: highlighted ? FontWeight.w600 : null,
-                        ),
-                ),
-              ),
-              Expanded(
-                flex: 2,
-                child: Text(
-                  item.isDir ? '-' : formatBytes(item.size),
-                  style: isMobile
-                      ? theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        )
-                      : theme.textTheme.bodySmall?.copyWith(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      item.name,
+                      maxLines: nameLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: isMobile
+                          ? theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  highlighted ? colorScheme.primary : null,
+                            )
+                          : theme.textTheme.bodySmall?.copyWith(
+                              color:
+                                  highlighted ? colorScheme.primary : null,
+                              fontWeight:
+                                  highlighted ? FontWeight.w600 : null,
+                            ),
+                    ),
+                    if (subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
                           fontSize: 12,
-                          color: colorScheme.onSurfaceVariant,
+                          color:
+                                colorScheme.onSurfaceVariant.withValues(
+                              alpha: 0.75,
+                            ),
                         ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              // 修改时间列：仅桌面端显示（宽屏信息完整，窄屏去掉避免挤压）
-              if (isMobile == false)
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    formatModTime(item.modTime),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: 12,
-                      color: colorScheme.onSurfaceVariant,
+              // 右侧 "..." 按钮：移动端可见（与 iOS Files 一致），
+              // 桌面端省略（右键可触菜单）。
+              if (!selectionMode && onShowRowMenu != null && isMobile)
+                Builder(
+                  builder: (innerContext) => InkResponse(
+                    onTap: () {
+                      // 弹上下文菜单：让菜单在按钮附近弹出。
+                      final box =
+                          innerContext.findRenderObject() as RenderBox?;
+                      final pos = box != null
+                          ? box.localToGlobal(
+                              Offset(box.size.width / 2, box.size.height),
+                            )
+                          : Offset.zero;
+                      onShowRowMenu!(pos);
+                    },
+                    radius: 18,
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(LucideIcons.ellipsis, size: 18),
                     ),
                   ),
                 ),
@@ -238,5 +267,16 @@ class _FileRow extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 文件类型短标签（用于副标题）。
+  String _typeLabel(FileItem item) {
+    if (item.isDir) return '目录';
+    if (item.isImage) return '图片';
+    if (item.isVideo) return '视频';
+    if (item.isAudio) return '音频';
+    if (item.isNovel) return '小说';
+    if (item.isComic) return '漫画';
+    return '文件';
   }
 }

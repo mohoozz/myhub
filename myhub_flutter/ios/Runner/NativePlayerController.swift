@@ -69,6 +69,19 @@ final class NativePlayerController: NSObject, FlutterTexture {
   /// 帧日志计数（节流打印用）。
   private var frameLogCount = 0
 
+  /// 是否已产出过至少一帧视频（用于"有声音无画面"检测）。
+  private var hasProducedFrame = false
+  /// 进入播放（time>0 且 rate>0）后无帧累计时长（秒）。
+  private var noFrameDuration: Double = 0
+  /// 是否已上报过"无视频帧"事件（每个会话仅一次，避免重复触发切 HLS）。
+  private var didReportNoFrame = false
+  /// 是否已上报过视频真实宽高（每个会话一次，用于客户端按比例渲染）。
+  private var didReportSize = false
+
+  /// 已知真实总时长（秒），来自 Flutter（直链阶段探测）。
+  /// HLS 实时转码下 seekable 范围渐进增长，用它修正总时长显示。
+  private var knownDurationSeconds: Double = 0
+
   // MARK: - Lifecycle
 
   init(eventSink: FlutterEventSink?, textureRegistry: FlutterTextureRegistry?) {
@@ -145,18 +158,41 @@ final class NativePlayerController: NSObject, FlutterTexture {
   @objc private func renderFrame() {
     guard let output = videoOutput, let player = player else { return }
     let time = player.currentTime()
+    let hasNew = output.hasNewPixelBuffer(forItemTime: time)
     if frameLogCount <= 3 {
       frameLogCount += 1
-      let hasNew = output.hasNewPixelBuffer(forItemTime: time)
       print("Myhub NativePlayer: renderFrame count=" + String(frameLogCount)
           + " time=" + String(format: "%.2f", time.seconds)
           + " hasNew=" + String(hasNew))
     }
-    guard output.hasNewPixelBuffer(forItemTime: time) else { return }
+    guard hasNew else {
+      // 无新帧：累加检测「有声音无画面」（视频轨静默失效，如 HEVC 无法硬解）。
+      // 仅在真正播放中（time 前进且 rate>0）累计，超阈值则上报让 Flutter 切 HLS。
+      if !hasProducedFrame && !didReportNoFrame && player.rate > 0 && time.seconds > 0 {
+        noFrameDuration += 1.0 / 60.0 // 近似：CADisplayLink 60fps，每次约 1/60s
+        if noFrameDuration >= 3.0 {
+          didReportNoFrame = true
+          print("Myhub NativePlayer: 检测到持续无视频帧（疑似无法解码），上报 noVideoFrame")
+          emitStatus(["noVideoFrame": true])
+        }
+      }
+      return
+    }
     if let buf = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) {
       pixelBufferLock.lock()
       currentPixelBuffer = buf
       pixelBufferLock.unlock()
+      hasProducedFrame = true
+      // 首次拿到有效帧时上报视频真实宽高（用于客户端按比例渲染，
+      // 避免竖屏/4:3 等非 16:9 视频被拉伸变形）。
+      if !didReportSize {
+        let w = CVPixelBufferGetWidth(buf)
+        let h = CVPixelBufferGetHeight(buf)
+        if w > 0 && h > 0 {
+          didReportSize = true
+          emitStatus(["videoWidth": w, "videoHeight": h])
+        }
+      }
       if textureId != 0 {
         textureRegistry?.textureFrameAvailable(textureId)
       }
@@ -188,11 +224,22 @@ final class NativePlayerController: NSObject, FlutterTexture {
 
   // MARK: - Open
 
-  func open(url: URL, title: String, headers: [String: String], isAudio: Bool = false) {
-    print("Myhub NativePlayer: open url=\(url.absoluteString) isAudio=\(isAudio)")
+  func open(
+    url: URL, title: String, headers: [String: String], isAudio: Bool = false,
+    knownDurationMs: Int64 = 0
+  ) {
+    print("Myhub NativePlayer: open url=\(url.absoluteString) isAudio=\(isAudio) "
+        + "knownDurationMs=\(knownDurationMs)")
     mediaTitle = title
+    // 已知真实总时长（秒），来自 Flutter 直链阶段探测
+    knownDurationSeconds = Double(knownDurationMs) / 1000.0
     // 新会话：重置播放完成标记（新媒体从头播放）
     didReachEnd = false
+    // 重置无帧检测状态（新会话重新判定）
+    hasProducedFrame = false
+    noFrameDuration = 0
+    didReportNoFrame = false
+    didReportSize = false
     // 关闭旧的 item 与纹理
     removeObservers()
     teardownTexture()
@@ -222,13 +269,18 @@ final class NativePlayerController: NSObject, FlutterTexture {
       }
       p.rate = speed
       isPlaying = true
+      print("Myhub NativePlayer: audio open set rate=\(speed) isPlaying=true")
       // 关键：音频模式不调用 setupTexture()，textureId 保持为 0，
       // Flutter 侧 Texture 不会被渲染（显示黑底或 AudioCoverMode 唱片封面）。
       addObservers()
       addSystemObservers()
       registerRemoteControls()
       configureAudioSessionForPlayback()
-      emitStatus(["state": "loading"])
+      // 避免事件顺序竞态：open() 中 rateObserver（.new 选项）注册时会立即
+      // 回调一次 playing（rate 已设为 speed），若此处再发 loading，Dart 侧
+      // 会收到 playing → loading，loading 可能覆盖刚清除的加载态导致 UI
+      // 一直显示加载中。改为按实际播放意图上报。
+      emitStatus(["state": isPlaying ? "playing" : "loading"])
       print("Myhub NativePlayer: 音频模式，跳过视频纹理/CADisplayLink")
       return
     }
@@ -260,6 +312,7 @@ final class NativePlayerController: NSObject, FlutterTexture {
     }
     p.rate = speed
     isPlaying = true
+    print("Myhub NativePlayer: video open set rate=\(speed) isPlaying=true")
 
     // 关键修复：iOS 16+ 流式视频的 AVPlayerItemVideoOutput 需要 AVPlayerLayer
     // 来触发帧输出（参考 Flutter video_player 的做法）。创建一个 1x1 不可见
@@ -277,7 +330,9 @@ final class NativePlayerController: NSObject, FlutterTexture {
     addSystemObservers()
     registerRemoteControls()
     configureAudioSessionForPlayback()
-    emitStatus(["state": "loading"])
+    // 与音频分支同理：rateObserver 注册时已立即回调一次 playing，
+    // 此处再发 loading 会产生 playing → loading 事件顺序竞态。
+    emitStatus(["state": isPlaying ? "playing" : "loading"])
   }
 
   /// 将不可见 AVPlayerLayer 附加到根视图层。
@@ -325,6 +380,7 @@ final class NativePlayerController: NSObject, FlutterTexture {
     }
     player?.play()
     isPlaying = true
+    print("Myhub NativePlayer: play() called didReachEnd=\(didReachEnd) rate=\(player?.rate ?? 0)")
     emitStatus(["state": isPlaying ? "playing" : "paused"])
     updateNowPlaying()
   }
@@ -340,7 +396,11 @@ final class NativePlayerController: NSObject, FlutterTexture {
     // 用户主动 seek 退出"已播完"状态：后续 play() 直接续播
     didReachEnd = false
     let target = CMTime(value: ms, timescale: 1000)
-    player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    let dur = playerItem.map { totalDurationSeconds($0) } ?? 0
+    print("Myhub NativePlayer: seek to \(ms)ms durationKnown=\(dur)s playerExists=\(player != nil)")
+    player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: { finished in
+      print("Myhub NativePlayer: seek completion finished=\(finished) currentTime=\(self.player?.currentTime().seconds ?? 0)")
+    })
     updateNowPlaying()
   }
 
@@ -370,21 +430,36 @@ final class NativePlayerController: NSObject, FlutterTexture {
 
   /// 通过 MPVolumeView 控制系统音量（不弹 HUD）。
   private func setSystemVolume(_ value: Double) {
-    if volumeView == nil {
-      // 屏幕外位置 + 极小 alpha；先 addSubview 再隐藏由内部处理
-      let view = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
-      view.showsRouteButton = false
-      view.alpha = 0.01
-      volumeView = view
-      // 必须添加到 window（不能是 rootViewController.view），系统才接管音量显示
-      if let window = UIApplication.shared.windows.first {
-        window.addSubview(view)
-      }
+    ensureVolumeView()
+    // MPVolumeView 内部的 UISlider 是异步创建的（首次 addSubview 后
+    // 才懒加载），首次调用时可能拿不到 slider。这里递归重试：
+    // 若 slider 未就绪则下一帧再试，最多若干次，避免"调节音量无反应"。
+    applySystemVolume(value, retriesLeft: 10)
+  }
+
+  /// 确保 volumeView 已创建并添加到 window。
+  private func ensureVolumeView() {
+    guard volumeView == nil else { return }
+    let view = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+    view.showsRouteButton = false
+    view.alpha = 0.01
+    volumeView = view
+    // 必须添加到 window（不能是 rootViewController.view），系统才接管音量显示
+    if let window = UIApplication.shared.windows.first {
+      window.addSubview(view)
     }
-    guard let slider = volumeView?.subviews.compactMap({ $0 as? UISlider }).first else {
+  }
+
+  /// 实际写系统音量；slider 未就绪时延迟重试。
+  private func applySystemVolume(_ value: Double, retriesLeft: Int) {
+    if let slider = volumeView?.subviews.compactMap({ $0 as? UISlider }).first {
+      slider.value = Float(value)
       return
     }
-    slider.value = Float(value)
+    guard retriesLeft > 0 else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+      self?.applySystemVolume(value, retriesLeft: retriesLeft - 1)
+    }
   }
 
   func setSpeed(_ s: Double) {
@@ -490,6 +565,39 @@ final class NativePlayerController: NSObject, FlutterTexture {
     return opt.displayName
   }
 
+  /// 获取媒体总时长（秒）。
+  ///
+  /// 优先级：
+  ///  1. Flutter 传入的已知真实时长（直链阶段探测，最准确）；
+  ///  2. `item.duration`（VOD 直链时有效）；
+  ///  3. `seekableTimeRanges` 兜底（HLS 实时转码时渐进增长，偏小）。
+  ///
+  /// HLS 流在加载早期 `item.duration` 为 indefinite（seconds 无穷），
+  /// 且实时转码下 seekable 范围只覆盖已转码部分，两者都会导致时长
+  /// 偏小或为 0；优先用已知时长避免进度条显示错误、无法 seek。
+  private func totalDurationSeconds(_ item: AVPlayerItem) -> Double {
+    // 已知时长优先（来自 Flutter 直链阶段，最准确）
+    if knownDurationSeconds > 0 {
+      return knownDurationSeconds
+    }
+    let d = item.duration
+    if d.seconds.isFinite && d.seconds > 0 {
+      return d.seconds
+    }
+    // HLS 兜底：seekableTimeRanges 的累计时长
+    let ranges = item.seekableTimeRanges
+    guard !ranges.isEmpty else { return 0 }
+    var total: Double = 0
+    for r in ranges {
+      if let range = r as? CMTimeRange {
+        let start = range.start.seconds.isFinite ? range.start.seconds : 0
+        let end = range.end.seconds.isFinite ? range.end.seconds : start
+        total = max(total, end)
+      }
+    }
+    return total
+  }
+
   // MARK: - Observers
 
   private func addObservers() {
@@ -500,8 +608,8 @@ final class NativePlayerController: NSObject, FlutterTexture {
       forInterval: CMTime(value: 500, timescale: 1000), queue: .main
     ) { [weak self] time in
       guard let self, let item = self.playerItem else { return }
-      let dur = item.duration
-      let durMs = dur.seconds.isFinite ? Int64(dur.seconds * 1000) : 0
+      let durSec = self.totalDurationSeconds(item)
+      let durMs = Int64(durSec * 1000)
       let posMs = Int64(time.seconds * 1000)
       let percent = durMs > 0 ? min(100.0, Double(posMs) / Double(durMs) * 100) : 0
       self.emitStatus([
@@ -520,6 +628,7 @@ final class NativePlayerController: NSObject, FlutterTexture {
     // 播放/暂停状态
     rateObserverToken = player.observe(\.rate, options: [.new]) { [weak self] p, _ in
       self?.isPlaying = p.rate != 0
+      print("Myhub NativePlayer: rate changed to \(p.rate) isPlaying=\(self?.isPlaying ?? false)")
       self?.emitStatus(["state": self?.isPlaying == true ? "playing" : "paused"])
     }
 
@@ -543,7 +652,9 @@ final class NativePlayerController: NSObject, FlutterTexture {
         if self?.isPlaying == true {
           self?.player?.play()
         }
-        self?.mediaDuration = it.duration.seconds.isFinite ? it.duration.seconds : 0
+        if let self {
+          self.mediaDuration = self.totalDurationSeconds(it)
+        }
         self?.updateNowPlaying()
         self?.emitStatus(["state": "ready"])
       case .failed:
@@ -647,9 +758,12 @@ final class NativePlayerController: NSObject, FlutterTexture {
       if hadLayer {
         self.playerLayer?.removeFromSuperlayer()
         print("Myhub NativePlayer: 进入后台，摘除 AVPlayerLayer（后台纯音频播放）")
-        // 摘除 layer 前后系统可能已暂停播放（rate=0）；在播状态下恢复，
-        // 保证切后台不中断。
-        if self.player?.rate == 0 {
+        // 摘除 layer 后系统可能已把 rate 清零（强制暂停）。但必须用
+        // isPlaying（记录"用户意图是否在播"）而非 rate（反映"实际是否在播"）
+        // 判断是否恢复：用户主动暂停时 isPlaying=false、rate=0，此时若按
+        // rate==0 恢复，会把"已暂停的视频"误恢复成播放（切后台后异常播放
+        // 一会儿）。只有用户意图仍在播（isPlaying=true）却被系统暂停时才恢复。
+        if self.isPlaying && self.player?.rate == 0 {
           self.player?.play()
           print("Myhub NativePlayer: 后台恢复播放")
         }
@@ -760,9 +874,9 @@ final class NativePlayerController: NSObject, FlutterTexture {
   /// 后台播放时展示在锁屏和控制中心。
   private func updateNowPlaying() {
     guard let player else { return }
-    let duration = playerItem?.duration.seconds ?? 0
+    let duration = playerItem.map { totalDurationSeconds($0) } ?? 0
     let position = player.currentTime().seconds
-    mediaDuration = duration.isFinite && duration > 0 ? duration : mediaDuration
+    mediaDuration = duration > 0 ? duration : mediaDuration
     var info: [String: Any] = [
       MPMediaItemPropertyTitle: mediaTitle,
       MPMediaItemPropertyPlaybackDuration: mediaDuration,
@@ -788,8 +902,11 @@ final class NativePlayerController: NSObject, FlutterTexture {
       merged["positionMs"] = pos.isFinite ? Int64(pos * 1000) : 0
     }
     if merged["durationMs"] == nil {
-      let dur = playerItem?.duration.seconds ?? 0
-      merged["durationMs"] = dur.isFinite ? Int64(dur * 1000) : 0
+      let dur = playerItem.map { totalDurationSeconds($0) } ?? 0
+      merged["durationMs"] = Int64(dur * 1000)
+    }
+    if let st = merged["state"] as? String {
+      print("Myhub NativePlayer: emitStatus state=\(st) pos=\(merged["positionMs"] ?? "-") dur=\(merged["durationMs"] ?? "-") rate=\(player?.rate ?? 0)")
     }
     eventSink?(merged)
   }
@@ -799,8 +916,10 @@ final class NativePlayerController: NSObject, FlutterTexture {
     teardownTexture()
     playerLayer?.removeFromSuperlayer()
     playerLayer = nil
-    volumeView?.removeFromSuperview()
-    volumeView = nil
+    // 注意：不销毁 volumeView。它是系统音量控制（MPVolumeView），
+    // 与 AVPlayer 实例无关；软解兜底切换时会 dispose AVPlayer 但
+    // 仍需通过 volumeView 控制系统音量。若此处销毁，下次 setVolume
+    // 需重建 MPVolumeView 且其 UISlider 异步创建，导致首次调节无反应。
     player?.pause()
     player = nil
     playerItem = nil

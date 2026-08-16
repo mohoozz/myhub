@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
 import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/features/auth/providers/auth_provider.dart';
+import 'package:myhub_flutter/features/auth/providers/login_credentials_provider.dart';
 import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 
 /// Login page: logo title + credentials form.
@@ -20,6 +21,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
   bool _obscurePassword = true;
+  bool _rememberPassword = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreCredentials();
+  }
+
+  /// 读取上次记住的登录凭证，回填到输入框并恢复「记住密码」勾选状态。
+  Future<void> _restoreCredentials() async {
+    final credentials = ref.read(loginCredentialsProvider);
+    if (credentials.username.isEmpty) return;
+    _usernameController.text = credentials.username;
+    if (credentials.remember) {
+      _passwordController.text = credentials.password;
+      setState(() => _rememberPassword = true);
+    }
+  }
 
   @override
   void dispose() {
@@ -63,6 +82,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     setState(() => _loading = true);
     try {
       await ref.read(authProvider).login(username, password);
+      // 记住登录凭证：勾选则记住密码，否则仅记用户名
+      await ref.read(loginCredentialsProvider.notifier).save(
+            username: username,
+            password: password,
+            remember: _rememberPassword,
+          );
       // 无需手动跳转：路由守卫监听到状态变化后自动重定向
     } on ApiException catch (e) {
       _showError(e.message);
@@ -135,7 +160,28 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 4),
+                // 记住密码：勾选后持久化用户名与密码，下次登录自动回填
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: CheckboxListTile(
+                    value: _rememberPassword,
+                    onChanged: (value) {
+                      setState(() => _rememberPassword = value ?? false);
+                      ref
+                          .read(loginCredentialsProvider.notifier)
+                          .setRemember(value ?? false);
+                    },
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(
+                      '记住密码',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
                 // 服务器地址配置入口：点击修改连接的服务端 IP
                 Material(
                   color: theme.colorScheme.surfaceContainerLow,

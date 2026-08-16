@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:myhub_flutter/core/api/comic_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_reader.dart';
 import 'package:myhub_flutter/shared/widgets/image_preview/image_preview.dart';
@@ -8,6 +9,34 @@ import 'package:myhub_flutter/shared/widgets/media_player/media_player.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/epub_reader.dart';
 import 'package:myhub_flutter/shared/widgets/novel_reader/novel_reader.dart';
 import 'package:myhub_flutter/shared/widgets/text_viewer/text_viewer.dart';
+
+/// 打开 EPUB 文件：先在路由层检测是否为图集型（漫画），再决定进入
+/// EPUB 阅读器还是漫画阅读器，避免先闪现 EPUB 阅读器再跳转的白屏问题。
+///
+/// 返回的 Future 在阅读器页面关闭后完成，调用方可据此刷新列表。
+Future<void> openEpubFile(
+  BuildContext context,
+  WidgetRef ref, {
+  required int sourceId,
+  required FileItem file,
+}) async {
+  // 先经漫画识别接口判定（对 EPUB 做图集型判定；远程源按块 Range
+  // 缓存读取，仅下载所需字节块，比 epub/meta 整包加载更轻量）
+  bool isComic;
+  try {
+    final res = await ref.read(comicApiProvider).detect(sourceId, file.path);
+    isComic = res['is_comic'] == true;
+  } catch (_) {
+    // 检测失败：按普通 EPUB 打开（EpubReaderPage 内部仍会兜底判定）
+    isComic = false;
+  }
+  if (!context.mounted) return;
+  if (isComic) {
+    await ComicReaderPage.open(context, sourceId: sourceId, file: file);
+  } else {
+    await EpubReaderPage.open(context, sourceId: sourceId, file: file);
+  }
+}
 
 /// 按媒体类型打开对应播放器/阅读器（收藏页、正在阅读页共用）：
 ///
@@ -44,7 +73,7 @@ Future<void> openMediaItem(
   }
   if (mediaType == 'novel') {
     if (filePath.toLowerCase().endsWith('.epub')) {
-      await EpubReaderPage.open(context, sourceId: sourceId, file: file);
+      await openEpubFile(context, ref, sourceId: sourceId, file: file);
     } else if (novelReader) {
       // 以小说阅读器打开：记录章节/页内阅读进度
       await NovelReaderPage.open(context, sourceId: sourceId, file: file);

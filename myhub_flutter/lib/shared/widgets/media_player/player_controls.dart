@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/shared/providers/av_player_adapter.dart';
+import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/gesture_handler.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
@@ -28,6 +29,7 @@ class PlayerControls extends StatefulWidget {
   const PlayerControls({
     super.key,
     required this.player,
+    required this.controller,
     required this.title,
     required this.onBack,
     required this.osd,
@@ -44,6 +46,9 @@ class PlayerControls extends StatefulWidget {
 
   /// 已打开媒体的播放器（media_kit Player 或 AvPlayerAdapter）。
   final dynamic player;
+
+  /// 播放器控制器（用于软解模式下音量/亮度走系统）。
+  final MediaPlayerController controller;
 
   /// 顶栏显示的文件名。
   final String title;
@@ -123,21 +128,65 @@ class _PlayerControlsState extends State<PlayerControls> {
   @override
   void initState() {
     super.initState();
-    // 初始值取当前状态，后续由流驱动
+    _syncFromState();
+    _subscribe();
+    _startHideTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant PlayerControls oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // iOS 上 AVPlayer 硬解失败会切到 media_kit 软解，widget.player 引用变化。
+    // 此时需重新订阅新播放器的流，否则 playing/position 等状态停留在旧流，
+    // 导致暂停/播放图标反、进度不更新等问题。
+    if (oldWidget.player != widget.player) {
+      for (final sub in _subs) {
+        unawaited(sub.cancel());
+      }
+      _subs.clear();
+      _subscribe();
+      // 订阅后延迟同步状态：media_kit Player 的 open 是异步的，切换瞬间
+      // state.playing 可能还是默认 false，而 stream.playing 是 broadcast
+      // 流不会重放已发过的事件，导致 _playing 停在错误值（图标反）。
+      // 分两档延迟读 state：下一帧 + 500ms，覆盖 open 完成的不同时序。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _player == widget.player) {
+          _syncFromState();
+        }
+      });
+      Future<void>.delayed(const Duration(milliseconds: 500), () {
+        if (mounted && _player == widget.player) {
+          _syncFromState();
+        }
+      });
+    }
+  }
+
+  /// 从当前播放器状态同步初始值（避免流首次事件前显示默认值）。
+  void _syncFromState() {
     final state = _player.state;
     _playing = state.playing as bool;
     _position = state.position as Duration;
     _duration = state.duration as Duration;
     _buffered = state.buffer as Duration;
     _rate = state.rate as double;
-    _volume = state.volume as double;
+    // 软解模式下音量走系统，显示系统音量而非 mpv 内部音量（锁定 100）
+    _volume = widget.controller.isSoftDecode
+        ? widget.controller.systemVolume.value
+        : state.volume as double;
     _subTracks = _realSubTracks((state.tracks as Tracks).subtitle);
     _currentSub = (state.track as Track).subtitle;
+    debugPrint('[controls] _syncFromState: playing=$_playing '
+        'player=${_player.runtimeType}');
+  }
 
+  /// 订阅当前播放器的状态流。
+  void _subscribe() {
     final stream = _player.stream;
     _subs.addAll([
       (stream.playing as Stream<bool>).listen((v) {
         if (!mounted) return;
+        debugPrint('[controls] playing 流事件: v=$v player=${_player.runtimeType}');
         setState(() => _playing = v);
         if (!v) {
           _setVisible(true); // 暂停时常显
@@ -164,6 +213,8 @@ class _PlayerControlsState extends State<PlayerControls> {
       }),
       (stream.volume as Stream<double>).listen((v) {
         if (!mounted) return;
+        // 软解模式下音量走系统，忽略 mpv 内部音量（锁定 100）
+        if (widget.controller.isSoftDecode) return;
         setState(() => _volume = v);
       }),
       (stream.tracks as Stream<Tracks>).listen((t) {
@@ -175,7 +226,10 @@ class _PlayerControlsState extends State<PlayerControls> {
         setState(() => _currentSub = t.subtitle);
       }),
     ]);
-    _startHideTimer();
+    // 软解模式：音量跟随系统音量变化（addListener 返回 void，不能放 _subs）
+    if (widget.controller.isSoftDecode) {
+      widget.controller.systemVolume.addListener(_onSystemVolumeChanged);
+    }
   }
 
   /// 过滤 media_kit 附加的 auto/no 伪轨，只留真实字幕轨。
@@ -192,6 +246,8 @@ class _PlayerControlsState extends State<PlayerControls> {
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
+    // 软解模式下移除系统音量监听（避免泄漏）
+    widget.controller.systemVolume.removeListener(_onSystemVolumeChanged);
     super.dispose();
   }
 
@@ -276,12 +332,14 @@ class _PlayerControlsState extends State<PlayerControls> {
       _dragPosition = null;
       _position = d;
     });
+    debugPrint('[controls] _seekTo: target=${d.inMilliseconds}ms '
+        'duration=${_duration.inMilliseconds}ms player=${_player.runtimeType}');
     _player.seek(d);
     _wake();
   }
 
   void _setVolume(double v) {
-    _player.setVolume(v);
+    _applyVolume(v);
     if (v > 0) _volumeBeforeMute = v;
     widget.osd.show(_volumeIconFor(v), '${v.round()}%');
     _wake();
@@ -292,14 +350,35 @@ class _PlayerControlsState extends State<PlayerControls> {
       // 记住静音前音量：否则取消静音会恢复到初始值（100）而非当前音量，
       // 进入播放器时音量与系统一致后，静音再取消会突然跳到 100。
       _volumeBeforeMute = _volume;
-      _player.setVolume(0);
+      _applyVolume(0);
       widget.osd.show(LucideIcons.volumeX, '静音');
     } else {
       final v = _volumeBeforeMute > 0 ? _volumeBeforeMute : 100.0;
-      _player.setVolume(v);
+      _applyVolume(v);
       widget.osd.show(_volumeIconFor(v), '${v.round()}%');
     }
     _wake();
+  }
+
+  /// 统一音量设置：软解模式下走系统音量（mpv 音量已锁定 100），
+  /// 否则走播放器自身音量（AVPlayer 适配器内部已同步系统）。
+  void _applyVolume(double v) {
+    if (widget.controller.isSoftDecode) {
+      // 软解：系统音量为唯一真源，mpv 音量保持 100 不衰减
+      debugPrint('[controls] _applyVolume: 软解走系统音量 v=$v');
+      unawaited(widget.controller.setSystemVolume(v));
+      setState(() => _volume = v);
+    } else {
+      debugPrint('[controls] _applyVolume: 走播放器音量 v=$v '
+          'player=${_player.runtimeType}');
+      _player.setVolume(v);
+    }
+  }
+
+  /// 软解模式下系统音量变化（含音量键/控制中心）同步到 UI。
+  void _onSystemVolumeChanged() {
+    if (!mounted) return;
+    setState(() => _volume = widget.controller.systemVolume.value);
   }
 
   static IconData _volumeIconFor(double v) {
@@ -456,23 +535,36 @@ class _PlayerControlsState extends State<PlayerControls> {
         onInteraction: _wake,
         onBrightnessChanged: (b) {
           setState(() => _brightness = b);
-          // iOS AVPlayer 模式：亮度同步到系统亮度（双向同步）
+          // iOS：亮度同步到系统亮度（AVPlayer 与软解都走系统，双向同步）
           final p = _player;
           if (p is AvPlayerAdapter) {
             p.setBrightness(b);
+          } else if (widget.controller.isSoftDecode) {
+            unawaited(widget.controller.setSystemBrightness(b));
           }
         },
+        // 软解模式下音量走系统；非软解（AVPlayer 已内部同步系统）走播放器自身
+        onVolumeChanged: widget.controller.isSoftDecode ? _applyVolume : null,
+        // 软解模式下竖滑起点用系统音量（mpv 音量已锁定 100）
+        currentVolume:
+            widget.controller.isSoftDecode ? _volume : null,
+        // 软解模式下亮度走系统，竖滑起点用系统亮度
+        currentBrightness: widget.controller.isSoftDecode
+            ? widget.controller.systemBrightness.value
+            : null,
         onMiniDrag: widget.onMiniDrag,
         onMiniDragEnd: widget.onMiniDragEnd,
         child: Stack(
           fit: StackFit.expand,
           children: [
             // 亮度遮罩（软件调光，由 5.4 左侧竖滑调节）。
-            // iOS AVPlayer 模式不渲染：亮度已直接同步系统屏幕亮度（物理
-            // 调暗），叠加遮罩会双重调暗，且进入播放器时 _brightness 与
-            // 系统亮度脱节会导致首次调节时画面突然变暗。
-            // Android/media_kit 为纯软件调光，保留遮罩。
-            if (_brightness < 1 && _player is! AvPlayerAdapter)
+            // iOS（AVPlayer 与软解）模式不渲染：亮度已直接同步系统屏幕
+            // 亮度（物理调暗），叠加遮罩会双重调暗，且进入播放器时
+            // _brightness 与系统亮度脱节会导致首次调节时画面突然变暗。
+            // Android/桌面 media_kit 为纯软件调光，保留遮罩。
+            if (_brightness < 1 &&
+                _player is! AvPlayerAdapter &&
+                !widget.controller.isSoftDecode)
               IgnorePointer(
                 child: Container(
                   color: Colors.black.withValues(alpha: 1.0 - _brightness),

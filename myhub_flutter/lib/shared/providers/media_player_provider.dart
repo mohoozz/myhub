@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:myhub_flutter/core/api/dio_client.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/api/stream_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
@@ -75,6 +76,10 @@ class MediaPlayerController {
   /// 诊断日志文件 IOSink（懒加载，首次写日志时打开）。
   IOSink? _diagSink;
 
+  /// 诊断日志写入串行队列：避免并发 _diagLog 同时触发 _openDiagSink，
+  /// 导致同一文件被打开多个 IOSink 而报 "StreamSink is bound to a stream"。
+  Future<void> _diagQueue = Future.value();
+
   /// 音量持久化的防抖计时器。
   Timer? _volumeSaveTimer;
 
@@ -85,6 +90,10 @@ class MediaPlayerController {
 
   /// 直链/HLS 是否已互换兜底过一次。
   bool _swapped = false;
+
+  /// iOS 软解兜底标记：AVPlayer 硬解失败（无视频帧）后，
+  /// 切到 media_kit 软解（hwdec=no）播放，避免服务端转码。
+  bool _softDecode = false;
 
   /// 是否成功进入过播放（区分加载失败与播放中故障）。
   bool _everPlayed = false;
@@ -122,6 +131,11 @@ class MediaPlayerController {
   /// AVPlayer 渲染 texture id（仅 iOS 使用 AVPlayer 时有效）。
   ValueNotifier<int>? get textureId => _avPlayer?.textureId;
 
+  /// 视频真实宽高（仅 iOS AVPlayer 模式有效；软解/其他平台由
+  /// media_kit 的 VideoController 自动按比例渲染，无需此项）。
+  ValueNotifier<int>? get videoWidth => _avPlayer?.videoWidth;
+  ValueNotifier<int>? get videoHeight => _avPlayer?.videoHeight;
+
   /// 是否使用 AVPlayer（iOS 平台）。
   bool get useAvPlayer => _avPlayer != null;
 
@@ -130,6 +144,30 @@ class MediaPlayerController {
 
   /// 是否有已加载的媒体会话。
   bool get hasMedia => (_player != null || _avPlayer != null) && _file != null;
+
+  /// 是否处于 iOS 软解兜底模式（media_kit 软解）。
+  ///
+  /// 软解模式下音量/亮度应走系统（mpv 音量锁定 100，避免双重衰减），
+  /// UI 据此决定音量/亮度操作是否同步系统。
+  bool get isSoftDecode => _softDecode;
+
+  /// 系统音量（0-100），软解模式下 UI 应显示/调节此值而非 mpv 内部音量。
+  ValueNotifier<double> get systemVolume =>
+      _ref.read(nativePlayerProvider).volume;
+
+  /// 系统亮度（0-1），软解模式下 UI 应显示/调节此值。
+  ValueNotifier<double> get systemBrightness =>
+      _ref.read(nativePlayerProvider).brightness;
+
+  /// 设置系统音量（0-100）。
+  Future<void> setSystemVolume(double v) {
+    debugPrint('[player] setSystemVolume: v=$v softDecode=$_softDecode');
+    return _ref.read(nativePlayerProvider).setVolume(v);
+  }
+
+  /// 设置系统亮度（0-1）。
+  Future<void> setSystemBrightness(double b) =>
+      _ref.read(nativePlayerProvider).setBrightness(b);
 
   // ---------- 页面生命周期 ----------
 
@@ -217,6 +255,7 @@ class MediaPlayerController {
     _file = file;
     _useHls = _initialUseHls(file.name);
     _swapped = false;
+    _softDecode = false;
     _everPlayed = false;
     _subsLoaded = false;
     _pendingResume = null;
@@ -229,12 +268,21 @@ class MediaPlayerController {
     if (Platform.isIOS) {
       // iOS：使用 AVPlayer 适配器，解决 media_kit 在 iOS 上 120fps 视频卡顿
       // （vo=libmpv 不支持 vf 滤镜/display-sync/decoder framedrop）。
+      // 硬解失败（无视频帧，如 HEVC L6.2）时，通过 onNoVideoFrame 回调
+      // 切到 media_kit 软解（见 _switchToSoftDecode）。
       _avPlayer = AvPlayerAdapter(_ref.read(nativePlayerProvider));
       _avPlayer!.startListening();
       _videoController = null;
       _listenAvPlayer();
-      _ref.read(nativePlayerProvider).play(sourceId, file);
+      final native = _ref.read(nativePlayerProvider);
+      native.onNoVideoFrame = _onAvNoVideoFrame;
+      native.play(sourceId, file);
       unawaited(_openAvPlayerWithResume());
+      // 视频文件：并行探测编码，HEVC 等无法硬解的直接切软解，
+      // 比「黑屏 3 秒后无帧检测兜底」快得多，避免长时间黑屏。
+      if (file.isVideo) {
+        unawaited(_probeAndMaybeSoftDecode(sourceId, file));
+      }
     } else {
       _avPlayer = null;
       _player = _createPlayer(file.name);
@@ -268,12 +316,13 @@ class MediaPlayerController {
       unawaited(sub.cancel());
     }
     _subs.clear();
-    // 移除 AVPlayer 的 ValueNotifier 监听
+    // 移除 AVPlayer 的 ValueNotifier 监听与无帧回调
     if (_avPlayer != null) {
       final native = _ref.read(nativePlayerProvider);
       native.loading.removeListener(_onAvLoading);
       native.error.removeListener(_onAvError);
       native.isVideoMode.removeListener(_onAvVideoMode);
+      native.onNoVideoFrame = null;
     }
     final p = _player;
     final av = _avPlayer;
@@ -426,6 +475,43 @@ class MediaPlayerController {
     return player;
   }
 
+  /// 创建软解播放器（iOS 专用）：AVPlayer 硬解失败时兜底。
+  ///
+  /// 复用 [_createPlayer] 的完整配置（网络预读、MP4 moov 索引、seek 缓存、
+  /// 缓冲策略等），仅在最后把 hwdec 覆盖为 'no' 强制软件解码，
+  /// 像 nPlayer 一样本地软解超出硬解能力的视频（如 HEVC Level 6.2）。
+  ///
+  /// 注意：hwdec 仍需在 VideoController 创建时显式传 'no'（默认 auto
+  /// 会覆盖），见 _switchToSoftDecode。
+  static Player _createSoftPlayer(String title) {
+    final player = _createPlayer(title);
+    final platform = player.platform;
+    if (platform is NativePlayer && Platform.isIOS) {
+      // 关键：禁用硬件解码，强制软件解码。
+      platform.setProperty('hwdec', 'no');
+      // 清除硬解路径为 120fps 视频加的 fps=60 滤镜：
+      // 软解 HEVC 时该滤镜会在 seek 后强制插帧/丢帧，破坏时间戳，
+      // 导致 seek 后画面与目标时间/音频错位。软解兜底不追求高帧率
+      // 平滑，清除滤镜保证 seek 正确性。
+      platform.setProperty('vf', '');
+      // 软解 HEVC 高规格视频 CPU 压力大，丢弃解码器来不及处理的帧，
+      // 避免音频时钟追赶导致周期性定格（与硬解路径 framedrop 策略一致）。
+      platform.setProperty('framedrop', 'decoder+insert');
+      // 恢复 MP4 完整探测以支持精确 seek：
+      // 该视频 moov atom 在文件末尾（约 9.9MB），_createPlayer 为了顺序
+      // 播放流畅设了 demuxer-lavf-probe-info=no + analyzeduration=0 +
+      // probesize=32KB，代价是 mpv 不读取末尾 moov → seek 索引缺失 →
+      // 跳转位置不准。软解兜底场景用户需要 seek，这里恢复默认完整探测：
+      //   - probe-info=auto：让 mpv 按需 seek 读取末尾 moov 构建索引；
+      //   - probesize 足够大（64MB）覆盖 9.9MB 的 moov；
+      //   - analyzeduration 设 30s（单位是秒）给 lavf 充足探测时间。
+      platform.setProperty('demuxer-lavf-probe-info', 'auto');
+      platform.setProperty('demuxer-lavf-analyzeduration', '30');
+      platform.setProperty('demuxer-lavf-probesize', '67108864');
+    }
+    return player;
+  }
+
   void _listen() {
     final player = _player!;
     _subs.addAll([
@@ -441,8 +527,16 @@ class MediaPlayerController {
           // 进入缓冲：立即输出一次 demuxer 缓存详情
           unawaited(_diagLog('[buffering] 触发缓冲暂停'));
           unawaited(_diagSnapshot('buffering-start'));
+          // 缓冲期间显示加载中（与 AVPlayer 路径 native.loading=true 行为一致）。
+          loading.value = true;
         } else {
           unawaited(_diagLog('[buffering] 缓冲恢复'));
+          // 缓冲恢复：mpv 缓冲期间 playing 属性保持 true，恢复后 playing 流
+          // 不会再触发，必须在这里主动清除 loading，否则 UI 一直显示加载中。
+          // 仅当已进入播放状态（_everPlayed）才清除，避免首帧前误撤加载遮罩。
+          if (_everPlayed) {
+            loading.value = false;
+          }
         }
       }),
     ]);
@@ -489,6 +583,116 @@ class MediaPlayerController {
   void _onAvVideoMode() {
     final native = _ref.read(nativePlayerProvider);
     isVideoMode.value = native.isVideoMode.value;
+  }
+
+  /// AVPlayer 无视频帧兜底：切到 media_kit 软解。
+  ///
+  /// 触发场景：iOS AVPlayer 对无法硬解的视频（如 HEVC Level 6.2）
+  /// 静默丢弃视频轨（有声音无画面），原生层检测到持续无帧后上报。
+  /// 这里切换到软解播放器（hwdec=no），像 nPlayer 一样本地软解。
+  void _onAvNoVideoFrame() {
+    if (_softDecode) return; // 已切软解，避免重复触发
+    _softDecode = true;
+    debugPrint('[player] AVPlayer 硬解失败，切换 media_kit 软解');
+    unawaited(_switchToSoftDecode());
+  }
+
+  /// 播放前探测编码：HEVC 等 iOS 无法硬解的编码直接切软解。
+  ///
+  /// 在 AVPlayer 开始播放的同时并行探测（服务端 ffprobe，约几百 ms），
+  /// 探测到无法硬解的编码后立即切软解，避免「黑屏 3 秒后无帧检测兜底」
+  /// 的长时间黑屏。探测失败/非 HEVC 则保持 AVPlayer（无帧检测仍兜底）。
+  Future<void> _probeAndMaybeSoftDecode(int sourceId, FileItem file) async {
+    try {
+      final dio = _ref.read(dioProvider);
+      // dioProvider 的 baseUrl 是 /api 前缀，这里用相对路径即可。
+      final resp = await dio.get<Map<String, dynamic>>(
+        '/stream/probe?source=$sourceId&path=${Uri.encodeComponent(file.path)}',
+      );
+      // 服务端统一响应结构为 {code, data, message}，真实数据在 data 字段。
+      final data = resp.data?['data'] as Map<String, dynamic>?;
+      final codec = (data?['codec'] as String?)?.toLowerCase() ?? '';
+      debugPrint('[player] 探测编码: codec=$codec resp=${resp.data}');
+      // 会话已切换或已切软解：放弃本次探测结果
+      if (!hasMedia || _file?.path != file.path || _softDecode) return;
+      if (codec == 'hevc' || codec == 'h265' || codec == 'x265') {
+        _softDecode = true;
+        debugPrint('[player] 探测到 HEVC，提前切换 media_kit 软解');
+        unawaited(_switchToSoftDecode());
+      }
+    } catch (e) {
+      // 探测失败（网络/无 ffprobe 等）：保持 AVPlayer，靠无帧检测兜底
+      debugPrint('[player] 编码探测失败，保持 AVPlayer: $e');
+    }
+  }
+
+  /// 从 AVPlayer 切换到 media_kit 软解播放器（iOS）。
+  ///
+  /// 拆掉 AVPlayer 会话，创建软解 Player 并用直链打开（软解无需 HLS 转码），
+  /// 同时恢复进度。保留当前媒体与播放位置。
+  Future<void> _switchToSoftDecode() async {
+    final sourceId = _sourceId;
+    final file = _file;
+    if (sourceId == null || file == null) return;
+
+    // 记录当前播放位置，切软解后恢复
+    final native = _ref.read(nativePlayerProvider);
+    final curPos = native.state.value?.positionMs ?? 0;
+    // curPos 仅在该媒体确实播放起来（≥恢复阈值 3s）时才可信：
+    //  - 探测 HEVC 提前切换：AVPlayer 刚 open（pos≈0，且 play() 已清空
+    //    旧会话残留的 state），应恢复历史进度而不是 0/残留位置；
+    //  - 无帧检测切换：已播放一段时间（pos 有效），才用当前播放位置续播。
+    final resume = curPos >= (_resumeMinSec * 1000)
+        ? Duration(milliseconds: curPos)
+        : await _fetchResumePosition(sourceId, file.path);
+    debugPrint('[player] _switchToSoftDecode: curPos=$curPos '
+        'resume=${resume?.inMilliseconds}');
+
+    // 拆除 AVPlayer
+    for (final sub in _subs) {
+      unawaited(sub.cancel());
+    }
+    _subs.clear();
+    final av = _avPlayer;
+    if (av != null) {
+      native.loading.removeListener(_onAvLoading);
+      native.error.removeListener(_onAvError);
+      native.isVideoMode.removeListener(_onAvVideoMode);
+      native.onNoVideoFrame = null;
+      av.stopListening();
+      await native.stop();
+      await av.dispose();
+    }
+    _avPlayer = null;
+
+    // 通知 UI 重建：渲染方式从 AVPlayer 的 Texture 切到 media_kit 的 Video。
+    sessionVersion.value++;
+    loading.value = true;
+
+    // 创建软解 Player 并用直链打开
+    _player = _createSoftPlayer(file.name);
+    if (isVideoMode.value) {
+      // 关键：VideoControllerConfiguration 的 hwdec 默认是 auto，
+      // 不显式指定会被覆盖回 auto 导致软解失效。这里必须 hwdec: 'no'。
+      _videoController = VideoController(
+        _player!,
+        configuration: const VideoControllerConfiguration(
+          hwdec: 'no',
+          vo: 'libmpv',
+        ),
+      );
+    } else {
+      _videoController = null;
+    }
+    _useHls = false; // 软解直连，不走 HLS
+    _everPlayed = false;
+    _listen();
+    // 软解模式音量统一走系统：mpv 音量锁定 100 不做衰减，
+    // 否则 mpv 内部音量 × 系统音量会双重衰减，且与系统音量脱节。
+    // （iOS 上 mpv 用 audiounit 输出，系统音量即为最终音量。）
+    unawaited(_player!.setVolume(100));
+    _pendingResume = resume;
+    await _open();
   }
 
   /// AVPlayer 模式的进度上报。
@@ -556,7 +760,7 @@ class MediaPlayerController {
         (_) => unawaited(_diagSnapshot('periodic')),
       );
     } else {
-      // 暂停：停止节流并即时上报一次
+      // 暂停/缓冲：停止进度上报与诊断
       _reportTimer?.cancel();
       _reportTimer = null;
       _diagTimer?.cancel();
@@ -564,6 +768,10 @@ class MediaPlayerController {
       if (_everPlayed) {
         unawaited(_report());
       }
+      // 不在这里设置 loading=true：
+      //  - 主动暂停（playing=false 且未缓冲）应显示暂停状态，而非加载遮罩；
+      //  - 缓冲加载由 stream.buffering 监听管理（b=true → loading=true），
+      //    缓冲结束恢复播放时 playing=true 会清除 loading，闭环完整。
     }
   }
 
@@ -573,17 +781,22 @@ class MediaPlayerController {
   ///
   /// 日志文件路径：应用文档目录/player_diag.log
   /// 每次 新播放会话 写入分隔线，便于区分多次播放。
-  Future<void> _diagLog(String line) async {
+  Future<void> _diagLog(String line) {
     final ts = DateTime.now().toIso8601String().substring(11, 23); // HH:mm:ss.SSS
     final formatted = '[$ts] $line';
     debugPrint('[player]$line');
-    try {
-      _diagSink ??= await _openDiagSink();
-      _diagSink!.writeln(formatted);
-      await _diagSink!.flush();
-    } catch (e) {
-      debugPrint('[player] 诊断日志写入失败: $e');
-    }
+    // 串行写入：所有 _diagLog 按调用顺序排队执行，避免并发打开多个 IOSink
+    // 写同一文件（"StreamSink is bound to a stream"）。
+    _diagQueue = _diagQueue.then((_) async {
+      try {
+        _diagSink ??= await _openDiagSink();
+        _diagSink!.writeln(formatted);
+        await _diagSink!.flush();
+      } catch (e) {
+        debugPrint('[player] 诊断日志写入失败: $e');
+      }
+    });
+    return _diagQueue;
   }
 
   /// 懒加载打开诊断日志文件 IOSink。
@@ -768,10 +981,11 @@ class MediaPlayerController {
     if (hasRealVideo && _videoController == null) {
       // 初始误判为音频：补建视频输出（必须带硬解配置，否则默认 hwdec=auto
       // 会覆盖掉 Player 上设置的 videotoolbox，导致 iOS 走软解卡顿）。
+      // 软解兜底模式下则用 hwdec=no，避免覆盖软解。
       _videoController = VideoController(
         _player!,
-        configuration: const VideoControllerConfiguration(
-          hwdec: 'videotoolbox-copy',
+        configuration: VideoControllerConfiguration(
+          hwdec: _softDecode ? 'no' : 'videotoolbox-copy',
           vo: 'libmpv',
         ),
       );
@@ -823,6 +1037,10 @@ class MediaPlayerController {
       final url = _useHls
           ? StreamApi.hlsPlaylistUrl(sourceId, file.path, baseUrl: baseUrl)
           : StreamApi.streamUrl(sourceId, file.path, baseUrl: baseUrl);
+      // 恢复进度：优先用 Media.start 让 mpv 打开时直接定位到目标位置
+      // （比 open 后再 seek 更可靠：软解 HEVC 大文件 moov 在末尾，
+      //  open 后立即 seek 常被 mpv 丢弃，表现为从头播放）。
+      final resume = _pendingResume;
       await player.open(
         Media(
           url,
@@ -830,6 +1048,7 @@ class MediaPlayerController {
             if (token != null && token.isNotEmpty)
               'Authorization': 'Bearer $token',
           },
+          start: resume,
         ),
         play: true,
       );
@@ -843,13 +1062,10 @@ class MediaPlayerController {
       if ((player.state.volume - settings.volume).abs() > 0.5) {
         unawaited(player.setVolume(settings.volume));
       }
-      // 恢复上次播放位置：open 返回 ≠ 文件加载完成，
-      // 此时 seek 会被 mpv 丢弃（表现为从头播放），需等 demuxer 就绪后再 seek。
-      // 注意 _pendingResume 在 seek 真正执行时才清除，
-      // 保证直链/HLS 兜底互换重新 open 后仍能恢复。
-      final resume = _pendingResume;
+      // 进度恢复已通过 Media.start 在 open 时指定（见上方），
+      // 这里无需再 seek。清除 _pendingResume 避免下次 open 重复。
       if (resume != null) {
-        unawaited(_seekWhenReady(player, resume));
+        _pendingResume = null;
       }
       // 外挂字幕自动检测加载（仅一次；失败不影响播放）
       if (!_subsLoaded) {
@@ -858,26 +1074,6 @@ class MediaPlayerController {
       }
     } catch (e) {
       _onError('$e');
-    }
-  }
-
-  /// 等待 demuxer 就绪（duration 非零）后 seek 到恢复位置。
-  ///
-  /// media_kit 的 open 仅等待命令下发，网络流加载完成前 mpv 尚无时长，
-  /// 期间下达的 seek 会被丢弃；超时或会话切换则静默放弃（从头播放）。
-  Future<void> _seekWhenReady(Player player, Duration target) async {
-    try {
-      if (player.state.duration <= Duration.zero) {
-        await player.stream.duration
-            .firstWhere((d) => d > Duration.zero)
-            .timeout(const Duration(seconds: 20));
-      }
-      if (!identical(_player, player)) return; // 会话已切换
-      if (_pendingResume == null) return; // 已被其他路径消费
-      _pendingResume = null;
-      await player.seek(target);
-    } catch (_) {
-      // 超时 / Player 已销毁：放弃恢复
     }
   }
 

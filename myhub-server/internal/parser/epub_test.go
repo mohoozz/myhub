@@ -172,6 +172,63 @@ func TestOpenEPUB_ComicDetection(t *testing.T) {
 	}
 }
 
+func TestOpenEPUB_ComicDetection_OneImgPerPage(t *testing.T) {
+	// "一页一图"型漫画（Kmoe/KCC 日漫常见结构）：每个 XHTML 恰好一张图、无正文
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	files := map[string]string{
+		"META-INF/container.xml": `<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf"/></rootfiles>
+</container>`,
+		"content.opf": `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="i1" href="1.jpg" media-type="image/jpeg"/>
+    <item id="i2" href="2.jpg" media-type="image/jpeg"/>
+  </manifest>
+  <spine><itemref idref="p1"/><itemref idref="p2"/></spine>
+</package>`,
+		"nav.xhtml": `<html xmlns="http://www.w3.org/1999/xhtml"><body><nav><ol>
+<li><a href="p1.xhtml">1</a></li><li><a href="p2.xhtml">2</a></li></ol></nav></body></html>`,
+		"p1.xhtml": `<html xmlns="http://www.w3.org/1999/xhtml"><body><center><div><img src="1.jpg" class="singlePage"/></div></center></body></html>`,
+		"p2.xhtml": `<html xmlns="http://www.w3.org/1999/xhtml"><body><center><div><img src="2.jpg" class="singlePage"/></div></center></body></html>`,
+	}
+	for name, content := range files {
+		w, _ := zw.Create(name)
+		_, _ = w.Write([]byte(content))
+	}
+	// 伪图片字节
+	for _, n := range []string{"1.jpg", "2.jpg"} {
+		w, _ := zw.Create(n)
+		_, _ = w.Write([]byte{0xFF, 0xD8, 0xFF, 0xD9})
+	}
+	_ = zw.Close()
+
+	e, err := OpenEPUB(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !e.IsComic {
+		t.Error("一页一图型 EPUB（无正文文字）应判为图集型")
+	}
+}
+
+func TestOpenEPUB_NotComic_IllustratedNovel(t *testing.T) {
+	// 带少量插图的文字小说：图片条目少，不应触发内容级扫描，也绝不能误判为漫画
+	data := buildTestEPUB(t)
+	e, err := OpenEPUB(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.IsComic {
+		t.Error("带插图的文字型 EPUB 不应判为图集型")
+	}
+}
+
 func TestOpenEPUB_Invalid(t *testing.T) {
 	if _, err := OpenEPUB(bytes.NewReader([]byte("not a zip")), 9); err != ErrNotEPUB {
 		t.Errorf("非 zip 应返回 ErrNotEPUB，得到: %v", err)

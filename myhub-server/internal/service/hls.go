@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,7 +116,7 @@ func (s *StreamService) EnsureHLSSession(ctx context.Context, sourceID uint, p s
 		Path:     p,
 	}
 	sess.touch()
-	if err := s.startFFmpeg(sess, source); err != nil {
+	if err := s.startFFmpeg(ctx, sess, source); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -125,7 +126,7 @@ func (s *StreamService) EnsureHLSSession(ctx context.Context, sourceID uint, p s
 }
 
 // startFFmpeg 启动转码进程：优先 -c copy 仅转封装
-func (s *StreamService) startFFmpeg(sess *HLSSession, source *model.Source) error {
+func (s *StreamService) startFFmpeg(ctx context.Context, sess *HLSSession, source *model.Source) error {
 	ffmpeg, err := ffmpegBinary()
 	if err != nil {
 		return err
@@ -138,19 +139,40 @@ func (s *StreamService) startFFmpeg(sess *HLSSession, source *model.Source) erro
 	if err != nil {
 		return err
 	}
-	if sess.encodeMode {
-		// 降码重编码兜底
+	// 判断是否需要重编码：
+	//  1. encodeMode 已置位（前次 -c copy 失败）→ 重编码兜底；
+	//  2. 主视频流为 HEVC/H.265 → 设备（尤其 iOS AVPlayer）可能无法硬解，
+	//     -c copy 转封装后仍是 HEVC，照样黑屏有声；必须强制重编码为 H.264。
+	// 重编码优先保持视频编码转换，音频尽量复制以降低开销。
+	needEncode := sess.encodeMode
+	if !needEncode {
+		codec := probeVideoCodec(ctx, source, sess.Path)
+		codec = strings.ToLower(codec)
+		log.Printf("[HLS] 探测编码 sourceID=%d path=%s codec=%q", sess.SourceID, sess.Path, codec)
+		if codec == "hevc" || codec == "h265" || codec == "x265" {
+			needEncode = true
+			sess.encodeMode = true // 避免后续再次探测
+		}
+	}
+	if needEncode {
+		// 降码重编码：视频强制 H.264，音频尝试复制（HEVC 常见配 AAC，可直接复制）
+		log.Printf("[HLS] 转码策略=重编码(libx264) sourceID=%d path=%s", sess.SourceID, sess.Path)
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
 			"-c:a", "aac", "-b:a", "128k")
 	} else {
+		log.Printf("[HLS] 转码策略=转封装(-c copy) sourceID=%d path=%s", sess.SourceID, sess.Path)
 		args = append(args, "-c", "copy")
 	}
 	// 分片写入 segment/ 子目录，播放列表内引用 "segment/xxx.ts"，
-	// 与路由 /api/stream/hls/:id/segment/:n.ts 的相对解析一致
+	// 与路由 /api/stream/hls/:id/segment/:n.ts 的相对解析一致。
+	// -hls_base_url 让 m3u8 里的分片引用带上 "segment/" 前缀，
+	// 否则 ffmpeg 默认只写文件名（seg_00000.ts），AVPlayer 按相对路径
+	// 解析成 /api/stream/hls/:id/seg_00000.ts（缺 segment/），路由不匹配返回 400。
 	args = append(args,
 		"-hls_time", fmt.Sprintf("%d", hlsSegmentTime),
 		"-hls_list_size", "0",
 		"-hls_segment_filename", filepath.Join(sess.Dir, "segment", "seg_%05d.ts"),
+		"-hls_base_url", "segment/",
 		"-loglevel", "error", "-y",
 		filepath.Join(sess.Dir, "playlist.m3u8"),
 	)
@@ -166,10 +188,15 @@ func (s *StreamService) startFFmpeg(sess *HLSSession, source *model.Source) erro
 	sess.mu.Unlock()
 
 	go func() {
-		_ = cmd.Wait()
+		err := cmd.Wait()
 		sess.mu.Lock()
 		sess.exited = true
 		sess.mu.Unlock()
+		if err != nil {
+			log.Printf("[HLS] ffmpeg 退出异常 sourceID=%d path=%s err=%v", sess.SourceID, sess.Path, err)
+		} else {
+			log.Printf("[HLS] ffmpeg 正常结束 sourceID=%d path=%s", sess.SourceID, sess.Path)
+		}
 	}()
 	return nil
 }
@@ -199,7 +226,7 @@ func (s *StreamService) WaitPlaylist(ctx context.Context, sess *HLSSession) erro
 				sess.mu.Lock()
 				sess.encodeMode = true
 				sess.mu.Unlock()
-				if err := s.startFFmpeg(sess, source); err != nil {
+				if err := s.startFFmpeg(ctx, sess, source); err != nil {
 					return err
 				}
 				deadline = time.Now().Add(hlsWaitPlaylist)
