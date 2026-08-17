@@ -30,7 +30,7 @@ class ReadingScreen extends ConsumerStatefulWidget {
 }
 
 /// PC 端右键 / 移动端长按菜单项。
-enum _ReadingMenuAction { info, locate, delete }
+enum _ReadingMenuAction { info, locate, delete, deleteSource }
 
 /// 标题栏「...」菜单项：多选 / 刷新。
 enum _HeaderMenuAction { toggleView, select, refresh }
@@ -184,6 +184,8 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
         _locateInBrowser(p);
       case _ReadingMenuAction.delete:
         await _confirmAndDeleteOne(p);
+      case _ReadingMenuAction.deleteSource:
+        await _confirmAndDeleteSource(p);
       case null:
         break;
     }
@@ -235,6 +237,15 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
             title: Text('删除阅读记录'),
           ),
         ),
+        PopupMenuItem(
+          value: _ReadingMenuAction.deleteSource,
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(LucideIcons.fileX2, size: 16),
+            title: Text('删除源文件'),
+          ),
+        ),
       ],
     );
   }
@@ -271,6 +282,14 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
                   destructive: true,
                   () => Navigator.of(sheetContext)
                       .pop(_ReadingMenuAction.delete),
+                ),
+                _sheetMenuTile(
+                  sheetContext,
+                  LucideIcons.fileX2,
+                  '删除源文件',
+                  destructive: true,
+                  () => Navigator.of(sheetContext)
+                      .pop(_ReadingMenuAction.deleteSource),
                 ),
                 const SizedBox(height: 8),
               ],
@@ -402,6 +421,25 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
           .delete(p.sourceId, p.filePath);
     } catch (e) {
       if (mounted) showTopSnackBar(context, '操作失败：$e');
+    }
+  }
+
+  /// 单条删除源文件：移入回收站并联动清理本地阅读记录。
+  ///
+  /// 与 [_deleteSourceFiles] 逻辑一致，仅作用于当前条目；
+  /// 复用 showDeleteConfirmDialog，让单/多选文案风格保持一致。
+  Future<void> _confirmAndDeleteSource(ReadingProgress p) async {
+    final confirmed = await showDeleteConfirmDialog(context, 1);
+    if (!(confirmed ?? false) || !mounted) return;
+    final api = ref.read(fileApiProvider);
+    final progressRepo = ref.read(progressRepositoryProvider);
+    try {
+      await api.deleteFiles(p.sourceId, [p.filePath]);
+      // 清理被删文件的本地阅读记录，避免「正在阅读」仍展示已删除文件。
+      await progressRepo.deleteByPath(p.sourceId, p.filePath);
+      await ref.read(readingListProvider.notifier).refresh();
+    } catch (e) {
+      if (mounted) showTopSnackBar(context, '删除失败：$e');
     }
   }
 
@@ -722,7 +760,9 @@ class _SelectionActionBar extends StatelessWidget {
         color: theme.cardTheme.color,
         borderRadius: BorderRadius.circular(12),
       ),
-      // 按钮较多，右侧放入横向滚动区，避免窄屏被截断。
+      // 布局：左 = 取消 + 已选数 + 全选；右 = 两个删除 IconButton。
+      // 两个删除按钮（删除阅读记录 / 删除源文件）样式完全统一，都是
+      // IconButton + Tooltip，并在窄屏下固定在最右侧、不会被滚动截断。
       child: Row(
         children: [
           IconButton(
@@ -732,9 +772,7 @@ class _SelectionActionBar extends StatelessWidget {
             visualDensity: VisualDensity.compact,
           ),
           Text('已选 $count 项', style: theme.textTheme.bodySmall),
-          // 中间可横向滚动区域：全选 + 删除记录。
-          // 「删除源文件」单独固定在最右侧，避免「FilledButton.tonalIcon +
-          // 长文案」的总宽度撑爆窄屏而被截断。
+          // 中间可横向滚动区域：仅放「全选」，宽度不够时可横向滚动。
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -750,23 +788,25 @@ class _SelectionActionBar extends StatelessWidget {
                     ),
                     child: const Text('全选'),
                   ),
-                  const SizedBox(width: 4),
-                  FilledButton.tonalIcon(
-                    onPressed: onDelete,
-                    icon: const Icon(LucideIcons.trash2, size: 16),
-                    label: const Text('删除记录'),
-                    style: FilledButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
+                  // 尾部留白，避免紧贴右侧的删除按钮。
                   const SizedBox(width: 4),
                 ],
               ),
             ),
           ),
-          // 固定在最右侧的「删除源文件」按钮：始终可见。
-          // 用 IconButton + Tooltip 缩小宽度，避免与「删除记录」文案叠加
-          // 导致窄屏上被裁切。
+          // 固定在最右侧的两个删除按钮：样式统一（IconButton + Tooltip），
+          // 通过图标（trash2 / fileX2）和 tooltip 文案区分语义，
+          // 即使在移动端窄屏也始终可见，不存在被截断的问题。
+          IconButton(
+            icon: Icon(
+              LucideIcons.trash2,
+              size: 16,
+              color: colorScheme.error,
+            ),
+            onPressed: onDelete,
+            tooltip: '删除阅读记录',
+            visualDensity: VisualDensity.compact,
+          ),
           IconButton(
             icon: Icon(
               LucideIcons.fileX2,

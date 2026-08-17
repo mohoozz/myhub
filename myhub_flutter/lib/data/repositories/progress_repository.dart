@@ -127,16 +127,22 @@ class ProgressRepository {
   /// 由 [syncPending] 统一补传。网络失败时静默返回本地记录。
   ///
   /// 本地已删除待同步的记录视为不存在（返回 null）。
+  ///
+  /// 后端列表中不存在该记录时：本地已同步（synced=true）的缓存说明
+  /// 已被其他设备删除，清理本地并视为不存在；本地未同步的离线新增
+  /// 记录仍返回，供离线续读。
   Future<LocalProgressData?> get(int sourceId, String filePath) async {
     final local = await _db.getProgress(sourceId, filePath);
     if (local != null && local.deleted) return null;
     try {
       final items = await _api.list();
+      var found = false;
       for (final e in items) {
         if (e is! Map<String, dynamic>) continue;
         if (e['source_id'] != sourceId || e['file_path'] != filePath) {
           continue;
         }
+        found = true;
         final remote = ReadingProgress.fromJson(e);
         final remoteAt = remote.updatedAt;
         if (local == null ||
@@ -146,6 +152,11 @@ class ProgressRepository {
           return _db.getProgress(sourceId, filePath);
         }
         return local;
+      }
+      if (!found && local != null && local.synced) {
+        // 后端已无该记录：清理本地旧缓存，避免继续阅读复活已删除记录
+        await _db.deleteProgress(sourceId, filePath);
+        return null;
       }
     } catch (_) {
       // 网络不可用：仅用本地缓存
@@ -157,6 +168,9 @@ class ProgressRepository {
   ///
   /// 后端较新的记录回写本地缓存；仅在本地存在的未同步记录保留展示。
   /// 本地已删除待同步的记录不展示、不被后端复活。
+  ///
+  /// 本地已同步（synced=true）但后端已不存在的记录，说明已被其他设备
+  /// 删除：清理本地缓存、不再展示，避免已删除记录跨设备"复活"。
   Future<List<ReadingProgress>> listMerged() async {
     final local = await _db.allProgress();
     final deletedKeys = {
@@ -167,10 +181,12 @@ class ProgressRepository {
     };
     try {
       final items = await _api.list();
+      final remoteKeys = <String>{};
       for (final e in items) {
         if (e is! Map<String, dynamic>) continue;
         final remote = ReadingProgress.fromJson(e);
         final k = _key(remote.sourceId, remote.filePath);
+        remoteKeys.add(k);
         if (deletedKeys.contains(k)) continue;
         final existing = merged[k];
         final remoteAt = remote.updatedAt;
@@ -181,6 +197,15 @@ class ProgressRepository {
           merged[k] = remote;
           await _applyRemote(remote);
         }
+      }
+      // 清理"已被其他设备删除"的本地已同步缓存（仅在后端列表成功
+      // 拉取后执行；离线时跳过，保留本地缓存展示）。
+      for (final p in local) {
+        if (!p.synced) continue;
+        final k = _key(p.sourceId, p.filePath);
+        if (remoteKeys.contains(k)) continue;
+        merged.remove(k);
+        await _db.deleteProgress(p.sourceId, p.filePath);
       }
     } catch (_) {
       // 网络不可用：仅展示本地缓存
@@ -206,6 +231,14 @@ class ProgressRepository {
       }
     } catch (_) {
       return;
+    }
+    // 兜底清理：本地已同步（synced=true）但后端已不存在的记录，
+    // 说明已被其他设备删除，清理本地缓存避免"复活"。
+    final syncedLocal = await _db.allProgress();
+    for (final p in syncedLocal) {
+      if (!p.synced) continue;
+      if (remote.containsKey(_key(p.sourceId, p.filePath))) continue;
+      await _db.deleteProgress(p.sourceId, p.filePath);
     }
     for (final p in unsynced) {
       if (p.deleted) {
