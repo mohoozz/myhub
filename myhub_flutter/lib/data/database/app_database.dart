@@ -74,6 +74,17 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// 监听指定路径源的进度变化（浏览页进度圆环展示用）。
+  ///
+  /// 返回的流在本地进度表发生任何写入（播放器上报/阅读器保存/
+  /// 远端合并回写）时自动推送最新数据，UI 据此实时刷新进度圆环。
+  Stream<List<LocalProgressData>> watchProgressBySource(int sourceId) {
+    return (select(localProgress)
+          ..where((t) => t.sourceId.equals(sourceId))
+          ..where((t) => t.deleted.equals(false)))
+        .watch();
+  }
+
   /// 本地已删除待同步的记录（离线删除后联网时据此补删后端）。
   Future<List<LocalProgressData>> deletedProgress() {
     return (select(localProgress)..where((t) => t.deleted.equals(true)))

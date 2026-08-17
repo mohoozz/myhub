@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_cover.dart';
+import 'package:myhub_flutter/features/browse/widgets/file_status_indicator.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 
 /// 文件网格视图。
@@ -25,6 +26,7 @@ class FileGridView extends StatelessWidget {
     this.highlightKey,
     this.onLongPress,
     this.nameLines = 1,
+    this.progressByPath = const {},
     super.key,
   });
 
@@ -59,6 +61,9 @@ class FileGridView extends StatelessWidget {
 
   /// 文件名显示行数（1~3）。多行时网格单元高度自适应，避免长文件名显示不全。
   final int nameLines;
+
+  /// 文件路径 -> 阅读进度百分比（null 值表示无历史记录）。
+  final Map<String, double?> progressByPath;
 
   @override
   Widget build(BuildContext context) {
@@ -123,6 +128,7 @@ class FileGridView extends StatelessWidget {
               selected: selectedPaths.contains(item.path),
               highlighted: highlighted,
               nameLines: nameLines,
+              progressPercent: progressByPath[item.path],
               onTap: () =>
                   selectionMode ? onToggleSelect?.call(item) : onOpen(item),
               onLongPress: onLongPress == null
@@ -134,10 +140,6 @@ class FileGridView extends StatelessWidget {
               onLongPressMenu: onLongPressMenu == null
                   ? null
                   : (d) => onLongPressMenu!(item, d.globalPosition),
-              // 移动端 "..." 菜单按钮：复用 onShowMenu（同一上下文菜单）
-              onShowRowMenu: onShowMenu == null
-                  ? null
-                  : (pos) => onShowMenu!(item, pos),
             );
             if (highlighted && highlightKey != null) {
               card = KeyedSubtree(key: highlightKey, child: card);
@@ -234,9 +236,9 @@ class _FileCard extends StatelessWidget {
     required this.selected,
     this.highlighted = false,
     this.nameLines = 1,
+    this.progressPercent,
     this.onSecondaryTapUp,
     this.onLongPressMenu,
-    this.onShowRowMenu,
   });
 
   final FileItem item;
@@ -253,14 +255,13 @@ class _FileCard extends StatelessWidget {
 
   /// 文件名显示行数（1~3）。
   final int nameLines;
+
+  /// 该文件的阅读进度百分比（null = 无历史）。
+  final double? progressPercent;
   final GestureTapUpCallback? onSecondaryTapUp;
 
   /// 移动端长按（非多选模式）呼出上下文菜单，携带按下位置。
   final GestureLongPressStartCallback? onLongPressMenu;
-
-  /// 移动端 "..." 按钮点击：直接调用 onShowMenu(item, position)，
-  /// 位置由按钮自身的全局坐标给出。
-  final void Function(Offset globalPosition)? onShowRowMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -324,12 +325,12 @@ class _FileCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       // 标题（加粗、居中、1~3 行省略）
-                      Text(
-                        item.name,
+                      PlayingFileTitle(
+                        text: item.name,
+                        itemPath: item.path,
+                        sourceId: coverSourceId,
                         maxLines: nameLines,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: isMobile
+                        baseStyle: isMobile
                             ? theme.textTheme.bodySmall?.copyWith(
                                 fontWeight: FontWeight.w600,
                                 color:
@@ -361,34 +362,17 @@ class _FileCard extends StatelessWidget {
                   ),
                 ),
               ),
-              // 移动端右下角 "..."：与 iOS Files 风格一致
-              if (!selectionMode && isMobile)
+              // 右上角状态指示：正在播放动画 / 阅读进度圆环。
+              // 多选模式下隐藏（右上角由勾选图标占用）。
+              if (!selectionMode)
                 Positioned(
-                  right: 4,
-                  bottom: 4,
-                  child: Builder(
-                    builder: (innerContext) {
-                      // 用 InkResponse 让点击直接弹菜单，避免遮挡卡片点击。
-                      return InkResponse(
-                        onTap: () {
-                          final box =
-                              innerContext.findRenderObject() as RenderBox?;
-                          final pos = box != null
-                              ? box.localToGlobal(
-                                  Offset(box.size.width / 2,
-                                      box.size.height / 2),
-                                )
-                              : Offset.zero;
-                          onShowRowMenu?.call(pos);
-                        },
-                        radius: 18,
-                        child: const Padding(
-                          padding: EdgeInsets.all(6),
-                          child:
-                              Icon(LucideIcons.ellipsis, size: 16),
-                        ),
-                      );
-                    },
+                  top: 8,
+                  right: 8,
+                  child: FileStatusIndicator(
+                    item: item,
+                    sourceId: coverSourceId,
+                    progressPercent: progressPercent,
+                    size: 16,
                   ),
                 ),
               // 多选模式：右上角勾选环

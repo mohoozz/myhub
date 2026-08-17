@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_cover.dart';
+import 'package:myhub_flutter/features/browse/widgets/file_status_indicator.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 
 /// 文件列表视图（iOS Files 风格）。
@@ -14,9 +15,10 @@ import 'package:myhub_flutter/shared/utils/format.dart';
 /// │ ┌──┐                                       │
 /// │ │封│  标题（一行加粗省略）                  │
 /// │ │面│  TXT · 4 KB · 2026/8/9                │
-/// │ └──┘                                       ⋮│
+/// │ └──┘                                       ◔│
 /// └────────────────────────────────────────────┘
-/// * 移动端：去掉"修改时间"列 + 右下"..."菜单按钮（移动端通过长按弹菜单）
+/// * 行尾状态指示：正在播放 → 三竖条动画；有阅读历史 → 饼状进度圆环
+/// * 移动端：去掉"修改时间"列；长按可弹出上下文菜单
 /// * 桌面端：标题右侧 8 字符宽大小列，便于快速扫读
 class FileListView extends StatelessWidget {
   const FileListView({
@@ -34,6 +36,7 @@ class FileListView extends StatelessWidget {
     this.highlightKey,
     this.onLongPress,
     this.nameLines = 1,
+    this.progressByPath = const {},
     super.key,
   });
 
@@ -64,15 +67,18 @@ class FileListView extends StatelessWidget {
   /// 文件名显示行数（1~3）。多行时行高自动增加，避免长文件名显示不全。
   final int nameLines;
 
+  /// 文件路径 -> 阅读进度百分比（null 值表示无历史记录）。
+  final Map<String, double?> progressByPath;
+
   @override
   Widget build(BuildContext context) {
     final list = ListView.separated(
       controller: controller,
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: items.length,
-      // 行间细线分隔（iOS Files 风格）：从图标后面开始到 "..." 按钮前结束。
+      // 行间细线分隔（iOS Files 风格）：从图标后面开始到行尾留白前结束。
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, indent: 60, endIndent: 56),
+          const Divider(height: 1, indent: 60, endIndent: 16),
       itemBuilder: (context, index) {
         final item = items[index];
         final highlighted =
@@ -84,6 +90,7 @@ class FileListView extends StatelessWidget {
           selected: selectedPaths.contains(item.path),
           highlighted: highlighted,
           nameLines: nameLines,
+          progressPercent: progressByPath[item.path],
           onTap: () =>
               selectionMode ? onToggleSelect?.call(item) : onOpen(item),
           onLongPress: onLongPress == null ? null : () => onLongPress!(item),
@@ -93,10 +100,6 @@ class FileListView extends StatelessWidget {
           onLongPressMenu: onLongPressMenu == null
               ? null
               : (d) => onLongPressMenu!(item, d.globalPosition),
-          // 移动端 "..." 菜单按钮回调：复用 onShowMenu（同一上下文菜单），
-          // 位置由按钮自身给出（与右键位置一致）。
-          onShowRowMenu:
-              onShowMenu == null ? null : (pos) => onShowMenu!(item, pos),
         );
         if (highlighted && highlightKey != null) {
           row = KeyedSubtree(key: highlightKey, child: row);
@@ -119,9 +122,9 @@ class _FileRow extends StatelessWidget {
     required this.selected,
     this.highlighted = false,
     this.nameLines = 1,
+    this.progressPercent,
     this.onSecondaryTapUp,
     this.onLongPressMenu,
-    this.onShowRowMenu,
   });
 
   final FileItem item;
@@ -132,12 +135,11 @@ class _FileRow extends StatelessWidget {
   final bool selected;
   final bool highlighted;
   final int nameLines;
+
+  /// 该文件的阅读进度百分比（null = 无历史）。
+  final double? progressPercent;
   final GestureTapUpCallback? onSecondaryTapUp;
   final GestureLongPressStartCallback? onLongPressMenu;
-
-  /// 移动端 "..." 按钮点击回调：调用外层 onShowMenu(item, position)，
-  /// 位置由按钮自身全局坐标给出。仅在非多选模式下注册。
-  final void Function(Offset globalPosition)? onShowRowMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -204,11 +206,12 @@ class _FileRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      item.name,
+                    PlayingFileTitle(
+                      text: item.name,
+                      itemPath: item.path,
+                      sourceId: coverSourceId,
                       maxLines: nameLines,
-                      overflow: TextOverflow.ellipsis,
-                      style: isMobile
+                      baseStyle: isMobile
                           ? theme.textTheme.bodyMedium?.copyWith(
                               fontWeight: FontWeight.w600,
                               color:
@@ -239,28 +242,14 @@ class _FileRow extends StatelessWidget {
                   ],
                 ),
               ),
-              // 右侧 "..." 按钮：移动端可见（与 iOS Files 一致），
-              // 桌面端省略（右键可触菜单）。
-              if (!selectionMode && onShowRowMenu != null && isMobile)
-                Builder(
-                  builder: (innerContext) => InkResponse(
-                    onTap: () {
-                      // 弹上下文菜单：让菜单在按钮附近弹出。
-                      final box =
-                          innerContext.findRenderObject() as RenderBox?;
-                      final pos = box != null
-                          ? box.localToGlobal(
-                              Offset(box.size.width / 2, box.size.height),
-                            )
-                          : Offset.zero;
-                      onShowRowMenu!(pos);
-                    },
-                    radius: 18,
-                    child: const Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Icon(LucideIcons.ellipsis, size: 18),
-                    ),
-                  ),
+              // 右侧状态指示：正在播放动画 / 阅读进度圆环。
+              // 多选模式下隐藏（该位置由勾选图标承担视觉重心）。
+              if (!selectionMode)
+                FileStatusIndicator(
+                  item: item,
+                  sourceId: coverSourceId,
+                  progressPercent: progressPercent,
+                  size: 16,
                 ),
             ],
           ),

@@ -11,18 +11,18 @@ import 'package:myhub_flutter/shared/providers/av_player_adapter.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/media_player.dart';
 
-/// 迷你播放器（TODO 5.7，QQ 音乐风格）。
+/// 迷你播放器（QQ 音乐风格，与 iOS 端同款）。
 ///
 /// 播放会话由全局 [mediaPlayerProvider] 持有，视图层：
 /// * 移动端：嵌入底部导航栏上方（_CompactShell.bottomNavigationBar），
-///   与导航栏视觉一体，导航栏高度保持 52，mini 叠加在上方不占额外空间；
-/// * 桌面端：仍以悬浮 Stack 呈现（_withMiniPlayer），保留侧边栏旁的悬浮感。
+///   与导航栏视觉一体（同色共形），导航栏高度保持 52；
+/// * 桌面端：以悬浮 Stack 呈现（_withMiniPlayer），居中浮于内容之上，
+///   加 iOS 风格阴影 / 圆角 / 描边。
 ///
 /// 点击封面/标题区展开全屏播放器（复用同一会话）。
-/// 关闭按钮停止播放并移除；向下拖拽关闭。
+/// 关闭按钮停止播放并移除；移动端向下拖拽可关闭。
 ///
-/// 注意：此处无 Navigator/Overlay 祖先——不能用 Tooltip；
-/// 音量滑杆为自绘 [_VolumeSlider]（Material Slider 需要 Overlay）。
+/// 注意：此处无 Navigator/Overlay 祖先——不能用 Tooltip。
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({super.key});
 
@@ -97,10 +97,6 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
   bool _playing = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
-  double _volume = 100;
-
-  /// 静音前的音量记忆（取消静音时恢复）。
-  double _volumeBeforeMute = 100;
 
   /// 入场动画：底部滑入 + 淡入 + 轻微放大（进入迷你模式的过渡）。
   late final AnimationController _enterCtrl = AnimationController(
@@ -119,7 +115,6 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
     _playing = player.state.playing as bool;
     _position = player.state.position as Duration;
     _duration = player.state.duration as Duration;
-    _volume = player.state.volume as double;
     _subs.addAll([
       (player.stream.playing as Stream<bool>).listen((v) {
         if (mounted) setState(() => _playing = v);
@@ -129,9 +124,6 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
       }),
       (player.stream.duration as Stream<Duration>).listen((v) {
         if (mounted) setState(() => _duration = v);
-      }),
-      (player.stream.volume as Stream<double>).listen((v) {
-        if (mounted) setState(() => _volume = v);
       }),
     ]);
     _enterCtrl.forward();
@@ -144,17 +136,6 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
     }
     _enterCtrl.dispose();
     super.dispose();
-  }
-
-  /// 音量图标：静音切换（记住静音前音量）。
-  void _toggleMute() {
-    final v = widget.player.state.volume as double;
-    if (v > 0) {
-      _volumeBeforeMute = v;
-      widget.player.setVolume(0);
-    } else {
-      widget.player.setVolume(_volumeBeforeMute > 0 ? _volumeBeforeMute : 100);
-    }
   }
 
   /// 播放/暂停：播放完成后 mpv 停在末尾，直接 playOrPause() 不会重播，
@@ -213,29 +194,12 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
         opacity: _enter,
         child: ScaleTransition(
           scale: Tween<double>(begin: 0.92, end: 1).animate(_enter),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // mini 主体（不含进度条）：顶部 0 padding 让封面溢出可见。
-              _buildBar(context, colorScheme, file, parsed),
-              // 进度条放底部（紧贴 NavigationBar 上方）：
-              // 原计划放顶部 2px，但放顶部会遮挡封面溢出——封面顶部
-              // 突出于 mini 上边界是核心视觉，进度条必须让步。改到 mini
-              // 底部（与 nav 顶部分隔线位置一致），仍是 2px 细条且作为
-              // mini 与 nav 的唯一视觉分隔依据。
-              SizedBox(
-                height: 2,
-                child: Stack(
-                  children: [
-                    Container(color: colorScheme.outline.withValues(alpha: 0.25)),
-                    FractionallySizedBox(
-                      widthFactor: progress.toDouble(),
-                      child: Container(color: colorScheme.primary),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          child: _buildBar(
+            context: context,
+            colorScheme: colorScheme,
+            file: file,
+            parsed: parsed,
+            progress: progress,
           ),
         ),
       ),
@@ -244,294 +208,256 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
 
   /// mini 主体：封面 + 标题/副标题 + 操作按钮。
   ///
-  /// 移动端（compact=true）：QQ 音乐样式 — 48 圆角封面 + 双行标题
-  /// + 收藏/播放/列表三个图标按钮。
-  /// 桌面端（compact=false）：保留旧版宽胶囊布局（视频小窗 + 滑杆 + 关闭），
-  /// 桌面端无 NavigationBar，不需要与底部菜单栏融合。
-  Widget _buildBar(
-    BuildContext context,
-    ColorScheme colorScheme,
-    FileItem file,
-    ({String title, String? sub}) parsed,
-  ) {
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    if (compact) {
-      return _buildCompactBar(context, colorScheme, file, parsed);
-    }
-    return _buildDesktopBar(context, colorScheme, file, parsed);
+  /// 统一采用 QQ 音乐风格（iOS 端同款）：
+  ///
+  /// * **移动端**（compact=true）：与底部 NavigationBar 同色、共形，浮在 nav 上方，
+  ///   无底部 margin，整体贴合屏幕边缘；
+  /// * **桌面端**（compact=false）：浮于内容之上、独立卡片，添加 iOS 风格阴影与底部
+  ///   margin，居中显示（默认宽度 360-460），让 mini 像 iOS 上灵动岛那样悬浮。
+  ///
+  /// 视觉要素两种模式共用：
+  /// * 封面超出 mini 上边界（移动 8 / 桌面 12 像素），形成封面"浮"在上方的 QQ 音乐观感；
+  /// * 双行文字（标题 + 副标题，单行省略）；
+  /// * 右侧操作图标（心形 / 播放-暂停 / 关闭）；
+  /// * 底部 2px 细进度条（位于 mini 内部，跟随卡片圆角）。
+  Widget _buildBar({
+    required BuildContext context,
+    required ColorScheme colorScheme,
+    required FileItem file,
+    required ({String title, String? sub}) parsed,
+    required double progress,
+  }) {
+    return _buildMusicStyleBar(
+      context: context,
+      colorScheme: colorScheme,
+      file: file,
+      parsed: parsed,
+      progress: progress,
+      compact: MediaQuery.sizeOf(context).width < 600,
+    );
   }
 
-  /// QQ 音乐风格 mini：贴底菜单栏上方，整体与 nav 同色、共形。
+  /// QQ 音乐风格 mini（与 iOS 端同款）。
   ///
-  /// 视觉：
-  /// * 高度 56（封面 40 + 上下内边距 8）；
-  /// * 左侧 48×48 圆角封面（视频显示视频帧，音频显示类型图标）；
-  /// * 中间双行：标题（13px 加粗）+ 副标题（11px 次色，单行省略）；
-  /// * 右侧三按钮（24px）：心形（占位，当前未做收藏）、播放/暂停、
-  ///   列表（占位，可后续接入播放列表）；
-  /// * 顶部 2px 细进度条已在 build 中统一绘制。
-  Widget _buildCompactBar(
-    BuildContext context,
-    ColorScheme colorScheme,
-    FileItem file,
-    ({String title, String? sub}) parsed,
-  ) {
-    // mini 背景与 nav 共色（与 NavigationBar / Card 区分）：
-    //   * 亮色：白底 #FFFFFF（navBackgroundLight / cardLight 同色）
-    //   * 暗色：近黑 #0A0A0A（navBackgroundDark，比 card 更黑一档）
-    // colorScheme.surface 在亮色是 #EEF4FB（蓝灰），与 nav 的 #FFFFFF
-    // 不同——若用 surface，mini 与 nav 之间会出现明显色缝，破坏"一体的
-    // 播放器+菜单栏"观感。直接按 brightness 取 nav 同色硬编码：
+  /// 移动端（[compact]=true）紧密贴合底部 NavigationBar，与 nav 视觉一体；
+  /// 桌面端（[compact]=false）浮于底部居中，加 iOS 风格阴影 + 圆角 + 边距。
+  ///
+  /// 视觉参数：
+  /// * 桌面端 cover 56×56 → 64×64（适合更大屏幕）；
+  /// * 桌面端溢出量 8 → 12（更明显的"封面浮在上"观感）；
+  /// * 桌面端字号 13/11 → 14/12（避免在宽面板里显得偏小）。
+  Widget _buildMusicStyleBar({
+    required BuildContext context,
+    required ColorScheme colorScheme,
+    required FileItem file,
+    required ({String title, String? sub}) parsed,
+    required double progress,
+    required bool compact,
+  }) {
     final isDark = colorScheme.brightness == Brightness.dark;
     final barColor = isDark
         ? const Color(0xFF0A0A0A) // AppColors.navBackgroundDark
         : Colors.white; // AppColors.cardLight / navBackgroundLight
-    return Material(
-      // 与底部导航栏共用 surface 背景色：
-      // QQ 音乐样式让 mini 与 nav 视觉一体（同一色块），仅底部 2px 进度条
-      // 作为分隔依据（顶部进度条改到底部，避免遮挡封面顶部溢出）。
+
+    // 卡片主体（不再包含封面）：
+    // 封面必须放在卡片的 ClipRRect **之外**，否则顶部溢出会被裁掉。
+    // 因此把封面抽到外层 Stack 的兄弟节点，与卡片并列存在。
+    //
+    // 内容列 + 底部进度条，按顶部 16 圆角裁剪（桌面端外层由 chrome 的 20 圆
+    // 角覆盖，正好压住底部圆角，让进度条贴合卡片曲线）。
+    final Widget card = Material(
       color: barColor,
       elevation: 0,
-      // mini 上方圆角由下方 Stack 内层的 ClipRRect 处理（仅裁主体内容，
-      // 不裁封面）。封面通过 Transform.translate 向上溢出 8px 自然呈现。
-      child: Dismissible(
-        key: widget.key!,
-        direction: DismissDirection.down, // 拖拽到底部关闭
-        onDismissed: (_) => widget.controller.stop(),
-        child: Stack(
-          clipBehavior: Clip.none, // 允许封面溢出不被裁剪
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(16),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // 底层：mini 主体内容（标题/按钮）按顶部 16 圆角裁剪
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(16),
-              ),
-              child: Padding(
-                // 顶部留 4 让封面整体仍居中：
-                // 封面 56x56 向上溢出 8px，主体从封面中心下方开始布局；
-                // mini 主体内容（标题+按钮）实际 Row 高度 ≈ 44，
-                // 顶部 4 + 主体 44 + 底部 6 = 54 → 与封面 56 + 8 溢出 接近。
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    // 占位：用与封面等宽的空白让标题区水平对齐。
-                    // 封面实际渲染在 Stack 顶层（不受 Padding 影响）。
-                    SizedBox(width: _CoverArt._coverSize),
-                    const SizedBox(width: 10),
-                    // 中间：标题 + 副标题
-                    Expanded(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: widget.onExpand,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              parsed.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: colorScheme.onSurface,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                height: 1.2,
-                              ),
-                            ),
-                            if (parsed.sub != null && parsed.sub!.isNotEmpty) ...[
-                              const SizedBox(height: 2),
-                              Text(
-                                parsed.sub!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: colorScheme.onSurfaceVariant,
-                                  fontSize: 11,
-                                  height: 1.2,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    // 右侧操作按钮（心形 / 播放-暂停 / 关闭）
-                    _MiniIconButton(
-                      icon: LucideIcons.heart,
-                      size: 22,
-                      color: colorScheme.onSurfaceVariant,
-                      onTap: () {
-                        // 收藏入口预留：mini 上快速收藏当前播放项
-                      },
-                    ),
-                    _MiniIconButton(
-                      icon: _playing ? LucideIcons.pause : LucideIcons.play,
-                      size: 28,
-                      color: colorScheme.onSurface,
-                      onTap: _togglePlay,
-                    ),
-                    _MiniIconButton(
-                      icon: LucideIcons.x,
-                      size: 22,
-                      color: colorScheme.onSurfaceVariant,
-                      // 关闭 mini：停止播放并销毁会话
-                      onTap: widget.controller.stop,
-                    ),
-                  ],
-                ),
-              ),
+            _buildMusicContent(
+              context: context,
+              colorScheme: colorScheme,
+              file: file,
+              parsed: parsed,
+              compact: compact,
             ),
-            // 顶层：封面（不受裁剪，自然溢出 mini 上边界 8px）
-            Positioned(
-              left: 8,
-              top: -_CoverArt._topOverflow, // 向上溢出
-              child: _CoverArt(
-                controller: widget.controller,
-                file: file,
-                onTap: widget.onExpand,
+            // 底部进度条（位于卡片内部）—— 跟随桌面端 chrome 的圆角，
+            // 移动端紧贴 nav 之上，与原行为一致。
+            SizedBox(
+              height: 2,
+              child: Stack(
+                children: [
+                  Container(
+                    color: colorScheme.outline.withValues(alpha: 0.25),
+                  ),
+                  FractionallySizedBox(
+                    widthFactor: progress.toDouble(),
+                    child: Container(color: colorScheme.primary),
+                  ),
+                ],
               ),
             ),
           ],
         ),
       ),
     );
-  }
 
-  /// 桌面端 mini：原宽胶囊布局（视频小窗 + 音量滑杆 + 关闭）。
-  ///
-  /// 桌面端是侧边栏，不需要与底部菜单栏融合，保留桌面端的"灵动岛"风格
-  /// （细边框 + 圆角 16），避免影响 PC 端用户既有使用习惯。
-  Widget _buildDesktopBar(
-    BuildContext context,
-    ColorScheme colorScheme,
-    FileItem file,
-    ({String title, String? sub}) parsed,
-  ) {
-    // 桌面端继续使用 surfaceContainerHigh + 灰边框（灵动岛风格）
-    final pillShape = RoundedRectangleBorder(
-      borderRadius: BorderRadius.all(Radius.circular(16)),
-      side: const BorderSide(
-        color: Color(0xFF9E9E9E), // Material grey 500
-        width: 1,
+    // 封面节点（外层 Stack 的兄弟），允许其溢出 chrome / 卡片裁剪框。
+    final Widget cover = Positioned(
+      left: compact ? 8 : 14,
+      top: -_MusicCoverArt._topOverflowFor(compact),
+      child: _MusicCoverArt(
+        controller: widget.controller,
+        file: file,
+        compact: compact,
+        onTap: widget.onExpand,
       ),
     );
+
+    if (compact) {
+      // 移动端：外层 Stack 包住 Dismissible(card) + 浮动封面。
+      return Dismissible(
+        key: widget.key!,
+        direction: DismissDirection.down, // 拖拽到底部关闭
+        onDismissed: (_) => widget.controller.stop(),
+        child: Stack(
+          clipBehavior: Clip.none, // 封面溢出不被外层裁剪
+          children: [card, cover],
+        ),
+      );
+    }
+
+    // 桌面端：iOS 风格悬浮卡，居中放置，距底部 20px；圆角 20 + 柔和阴影。
+    // 关键：封面必须作为 chrome 的兄弟节点（而非 child），否则 chrome 内
+    // 的 ClipRRect 会把凸出的封面顶部裁掉——这就是"完全不凸出"的原因。
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: Material(
-            color: colorScheme.surfaceContainerHigh,
-            elevation: 0,
-            shape: pillShape,
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: widget.onExpand,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // 窄屏省略音量滑杆，仅保留音量/静音图标
-                  final showVolumeSlider = constraints.maxWidth >= 420;
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        child: Row(
-                          children: [
-                            _VideoThumb(
-                              controller: widget.controller,
-                              colorScheme: colorScheme,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                file.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: colorScheme.onSurface,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Material(
-                              color: colorScheme.primary,
-                              shape: const CircleBorder(),
-                              clipBehavior: Clip.antiAlias,
-                              child: InkWell(
-                                customBorder: const CircleBorder(),
-                                onTap: _togglePlay,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(6),
-                                  child: Icon(
-                                    _playing
-                                        ? LucideIcons.pause
-                                        : LucideIcons.play,
-                                    size: 16,
-                                    color: colorScheme.onPrimary,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 2),
-                            _PillIconButton(
-                              icon: _volume <= 0
-                                  ? LucideIcons.volumeX
-                                  : _volume < 50
-                                      ? LucideIcons.volume1
-                                      : LucideIcons.volume2,
-                              color: colorScheme.onSurfaceVariant,
-                              onTap: _toggleMute,
-                            ),
-                            if (showVolumeSlider)
-                              SizedBox(
-                                width: 80,
-                                height: 24,
-                                child: _VolumeSlider(
-                                  value: (_volume / 100).clamp(0.0, 1.0),
-                                  color: colorScheme.primary,
-                                  trackColor: colorScheme.outlineVariant,
-                                  onChanged: (v) =>
-                                      widget.player.setVolume(v * 100),
-                                ),
-                              ),
-                            _PillIconButton(
-                              icon: LucideIcons.x,
-                              color: colorScheme.onSurfaceVariant,
-                              onTap: widget.controller.stop,
-                            ),
-                          ],
-                        ),
-                      ),
-                      // 桌面端进度条放底部（与原行为一致）
-                      LinearProgressIndicator(
-                        value: _duration > Duration.zero
-                            ? (_position.inMilliseconds /
-                                    _duration.inMilliseconds)
-                                .clamp(0.0, 1.0)
-                            : 0.0,
-                        minHeight: 2,
-                        backgroundColor: Colors.transparent,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          colorScheme.primary,
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
+          constraints: const BoxConstraints(
+            minWidth: 360,
+            maxWidth: 460,
+          ),
+          child: Stack(
+            clipBehavior: Clip.none, // 允许封面溢出 chrome 顶部不被裁剪
+            children: [
+              _DesktopMiniChrome(child: card),
+              cover,
+            ],
           ),
         ),
       ),
     );
+  }
+
+  /// mini 主体内容（封面右侧的双行 + 操作按钮）。
+  ///
+  /// 桌面端额外显示文件时长 / 进度数字，并加入"上一首"按钮占位。
+  Widget _buildMusicContent({
+    required BuildContext context,
+    required ColorScheme colorScheme,
+    required FileItem file,
+    required ({String title, String? sub}) parsed,
+    required bool compact,
+  }) {
+    // 字号 / 内边距在桌面端稍微放大（与较大的 cover 视觉权重匹配）。
+    final titleSize = compact ? 13.0 : 14.0;
+    final subSize = compact ? 11.0 : 12.0;
+    // 桌面端：cover 72 上溢 18，封面在 mini 内高度为 54，需要更大的
+    // verticalPad 让标题双行有足够空间、不会与 cover 上下边界挤在一起。
+    final verticalPad = compact ? 4.0 : 10.0;
+    final bottomPad = compact ? 6.0 : 10.0;
+    final rowGap = compact ? 8.0 : 12.0;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        // 左内边距需要避让 cover 实际尺寸 + 间距。
+        // 注意封面实际 left 偏移 14，标题左缘还需再留 gap 才能与封面右沿
+        // 拉开距离（桌面端 cover 72 + 22 = 94，封面右沿 14+72=86，净间距 8px）。
+        (compact ? _MusicCoverArt.coverSizeFor(true) : _MusicCoverArt.coverSizeFor(false)) +
+            (compact ? 10 : 22),
+        verticalPad,
+        compact ? 8 : 10,
+        bottomPad,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // 中间：标题 + 副标题
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onExpand,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    parsed.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontSize: titleSize,
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
+                    ),
+                  ),
+                  if (parsed.sub != null && parsed.sub!.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      parsed.sub!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colorScheme.onSurfaceVariant,
+                        fontSize: subSize,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          SizedBox(width: rowGap),
+          // 右侧操作按钮
+          ..._buildMusicControls(colorScheme, compact: compact),
+        ],
+      ),
+    );
+  }
+
+  /// 右侧图标按钮组。
+  ///
+  /// 移动端：心形 / 播放-暂停 / 关闭（共 3 个）。
+  /// 桌面端：心形 / 播放-暂停 / 关闭（共 3 个，与移动端一致 — 上一首由
+  /// 全屏播放页提供，mini 仅承载最高频的"播放控制"避免按钮过密）。
+  List<Widget> _buildMusicControls(ColorScheme colorScheme, {required bool compact}) {
+    return [
+      _MiniIconButton(
+        icon: LucideIcons.heart,
+        size: compact ? 22 : 24,
+        color: colorScheme.onSurfaceVariant,
+        onTap: () {
+          // 收藏入口预留：mini 上快速收藏当前播放项
+        },
+      ),
+      _MiniIconButton(
+        icon: _playing ? LucideIcons.pause : LucideIcons.play,
+        size: compact ? 28 : 30,
+        color: colorScheme.onSurface,
+        onTap: _togglePlay,
+      ),
+      _MiniIconButton(
+        icon: LucideIcons.x,
+        size: compact ? 22 : 24,
+        color: colorScheme.onSurfaceVariant,
+        onTap: widget.controller.stop,
+      ),
+    ];
   }
 }
 
@@ -542,40 +468,49 @@ class _MiniPlayerBarState extends State<_MiniPlayerBar>
 /// 点击展开全屏播放器。
 ///
 /// "突出"实现：mini 主体用 Stack 包装，封面在顶层用 [Positioned] 顶部
-/// 偏移 `_topOverflow`（**8px**），让封面顶部显著突出于 mini 上边界，
-/// 形成"封面浮在 mini 上方"的 QQ 音乐观感。Stack 的 [clipBehavior=none]
-/// 保证封面不被外层裁剪。
-///
-/// 注：尺寸 [_coverSize]（56）大于文字双行高度（≈26px），封面整体
-/// 居中靠底部对齐，与 mini 主体底部齐平。
-class _CoverArt extends StatelessWidget {
-  const _CoverArt({
+/// 偏移 [_topOverflow]（移动 8 / 桌面 12 像素），让封面顶部显著突出于 mini
+/// 上边界，形成"封面浮在 mini 上方"的 QQ 音乐观感。Stack 的 [clipBehavior=none]
+/// 保证封面不被外层裁剪。桌面端额外加一圈阴影让封面"上浮感"更强。
+class _MusicCoverArt extends StatelessWidget {
+  const _MusicCoverArt({
     required this.controller,
     required this.file,
     required this.onTap,
+    required this.compact,
   });
-
-  /// 封面尺寸（QQ 音乐感：略大，比文字双行高约 30px）。
-  static const double _coverSize = 56;
-
-  /// 封面顶部溢出量（mini 上边界之上的像素数）。8px 明显可见。
-  static const double _topOverflow = 8;
 
   final MediaPlayerController controller;
   final FileItem file;
   final VoidCallback onTap;
+  final bool compact;
+
+  /// 平台自适应封面尺寸。
+  ///
+  /// 移动端 56（与原 QQ 音乐一致），桌面端 64（搭配顶部溢出 9，使封面
+  /// 高度 ≈ 卡片内净高 — 让封面下沿正好贴在进度条上方，标题文字双行
+  /// 被封面"包"在视觉中心，避免封面落到卡片外）。
+  /// 计算：Card 内净高 ≈ verticalPad 10 + titleRow 38 + bottomPad 10 = 58，
+  /// cover 64 - topOverflow 9 = 55 ≈ 58，留 3px 余量让封面干净落入卡内。
+  static double coverSizeFor(bool compact) => compact ? 56 : 64;
+
+  /// 平台自适应顶部溢出量：桌面端 ~1/7 封面高（64 的 1/7 ≈ 9），让
+  /// 封面顶部以"轻浮"姿态突出于 mini 上边界——略凸但不喧宾夺主，
+  /// 既保留 QQ 音乐/iOS Now Playing 观感，又给标题区留出充足视觉空间。
+  static double _topOverflowFor(bool compact) => compact ? 8 : 9;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    return GestureDetector(
+    final size = coverSizeFor(compact);
+    // 桌面端：封面外加一圈柔和阴影，增强"上浮"质感（iOS 卡片感）。
+    final cover = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(compact ? 8 : 12),
         child: SizedBox(
-          width: _coverSize,
-          height: _coverSize,
+          width: size,
+          height: size,
           child: ValueListenableBuilder<bool>(
             valueListenable: controller.isVideoMode,
             builder: (context, isVideo, _) {
@@ -610,9 +545,9 @@ class _CoverArt extends StatelessWidget {
                 return FileCover(
                   item: file,
                   sourceId: controller.sourceId,
-                  iconSize: 26,
+                  iconSize: compact ? 26 : 32,
                   fit: BoxFit.cover,
-                  borderRadius: 8,
+                  borderRadius: compact ? 8 : 12,
                 );
               }
               return Container(
@@ -620,13 +555,79 @@ class _CoverArt extends StatelessWidget {
                 alignment: Alignment.center,
                 child: Icon(
                   file.isAudio ? LucideIcons.music : LucideIcons.film,
-                  size: 26,
+                  size: compact ? 26 : 32,
                   color: colorScheme.primary,
                 ),
               );
             },
           ),
         ),
+      ),
+    );
+
+    if (compact) return cover;
+
+    // 桌面端：封面外加一圈柔和阴影，与下方卡片的阴影形成两层深度。
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: colorScheme.brightness == Brightness.dark ? 0.55 : 0.22,
+            ),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: cover,
+    );
+  }
+}
+
+/// 桌面端 mini 的 iOS 风格外壳：圆角 20 + 柔和阴影 + 1px 细边框。
+///
+/// 桌面端 mini 是浮于内容之上的"独立卡"，需要明显投影与轻微描边
+/// 才能从深色 / 蓝色背景中跳出来（与 Material You / iOS Now Playing
+/// 卡片观感一致）。
+class _DesktopMiniChrome extends StatelessWidget {
+  const _DesktopMiniChrome({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDark = colorScheme.brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        // 桌面端阴影：iOS 风格柔和多层阴影 + 微弱描边。
+        // 亮色下阴影更淡，用细灰边增加可识别度；
+        // 暗色下阴影更深，无须描边（背景已深）。
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.55 : 0.14),
+            blurRadius: 32,
+            offset: const Offset(0, 12),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.06)
+              : Colors.black.withValues(alpha: 0.06),
+          width: 1,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: child,
       ),
     );
   }
@@ -661,195 +662,4 @@ class _MiniIconButton extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 桌面端使用的视频缩略图（保留原 64×36 视频小窗）。
-class _VideoThumb extends StatelessWidget {
-  const _VideoThumb({
-    required this.controller,
-    required this.colorScheme,
-  });
-
-  final MediaPlayerController controller;
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: controller.isVideoMode,
-      builder: (context, isVideo, _) {
-        if (!isVideo) {
-          return Icon(
-            LucideIcons.music,
-            size: 18,
-            color: colorScheme.onSurfaceVariant,
-          );
-        }
-        if (controller.useAvPlayer) {
-          final texId = controller.textureId;
-          if (texId == null || texId.value <= 0) {
-            return Container(
-              width: 64,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Icon(Icons.movie,
-                  size: 18, color: Colors.white54),
-            );
-          }
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: SizedBox(
-              width: 64,
-              height: 36,
-              child: ValueListenableBuilder<int>(
-                valueListenable: texId,
-                builder: (context, id, _) => Texture(
-                  textureId: id,
-                  filterQuality: FilterQuality.low,
-                ),
-              ),
-            ),
-          );
-        }
-        final videoController = controller.videoController;
-        if (videoController != null) {
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: SizedBox(
-              width: 64,
-              height: 36,
-              child: Video(
-                controller: videoController,
-                controls: null,
-                fit: BoxFit.cover,
-                fill: Colors.black,
-              ),
-            ),
-          );
-        }
-        return Icon(
-          LucideIcons.music,
-          size: 18,
-          color: colorScheme.onSurfaceVariant,
-        );
-      },
-    );
-  }
-}
-
-/// 桌面端胶囊内的小型图标按钮（保留兼容）。
-class _PillIconButton extends StatelessWidget {
-  const _PillIconButton({
-    required this.icon,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkResponse(
-      onTap: onTap,
-      radius: 18,
-      child: Padding(
-        padding: const EdgeInsets.all(6),
-        child: Icon(icon, size: 18, color: color),
-      ),
-    );
-  }
-}
-
-/// 自绘细音量滑杆：桌面端 mini 保留。
-///
-/// 迷你条在 Navigator 之上无 Overlay 祖先，Material Slider 不可用，
-/// 且原生滑杆手柄过大、在胶囊内突兀，故定制。
-class _VolumeSlider extends StatelessWidget {
-  const _VolumeSlider({
-    required this.value,
-    required this.color,
-    required this.trackColor,
-    required this.onChanged,
-  });
-
-  final double value;
-  final Color color;
-  final Color trackColor;
-  final ValueChanged<double> onChanged;
-
-  void _update(Offset localPosition, double width) {
-    onChanged((localPosition.dx / width).clamp(0.0, 1.0));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapDown: (d) => _update(d.localPosition, width),
-          onHorizontalDragUpdate: (d) => _update(d.localPosition, width),
-          child: CustomPaint(
-            painter: _VolumeSliderPainter(
-              value: value,
-              color: color,
-              trackColor: trackColor,
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _VolumeSliderPainter extends CustomPainter {
-  const _VolumeSliderPainter({
-    required this.value,
-    required this.color,
-    required this.trackColor,
-  });
-
-  final double value;
-  final Color color;
-  final Color trackColor;
-
-  static const double _trackHeight = 2.5;
-  static const double _thumbRadius = 4.5;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cy = size.height / 2;
-    final thumbX = (size.width * value).clamp(_thumbRadius, size.width);
-    final trackPaint = Paint()..color = trackColor;
-    final activePaint = Paint()..color = color;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(0, cy - _trackHeight / 2, size.width, _trackHeight),
-        const Radius.circular(_trackHeight / 2),
-      ),
-      trackPaint,
-    );
-    if (thumbX > 0) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(0, cy - _trackHeight / 2, thumbX, _trackHeight),
-          const Radius.circular(_trackHeight / 2),
-        ),
-        activePaint,
-      );
-    }
-    canvas.drawCircle(Offset(thumbX, cy), _thumbRadius, activePaint);
-  }
-
-  @override
-  bool shouldRepaint(_VolumeSliderPainter oldDelegate) =>
-      value != oldDelegate.value ||
-      color != oldDelegate.color ||
-      trackColor != oldDelegate.trackColor;
 }

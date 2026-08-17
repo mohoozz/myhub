@@ -8,7 +8,10 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
+import 'package:myhub_flutter/data/repositories/progress_repository.dart';
+import 'package:myhub_flutter/features/browse/providers/browse_progress.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
 import 'package:myhub_flutter/features/browse/providers/file_actions.dart';
 import 'package:myhub_flutter/features/browse/widgets/breadcrumb_bar.dart';
@@ -111,6 +114,23 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   /// 触发返回上一级的水平滑动速度阈值（px/s，正值向右）。
   /// 要求快速右滑，避免慢速横向拖动误触返回。
   static const double _kEdgeSwipeVelocity = 300;
+
+  @override
+  void initState() {
+    super.initState();
+    // 打开浏览页时把远端阅读进度合并回本地缓存（本地 drift 为进度圆环
+    // 的实时数据源），保证其他设备上的阅读记录也能在浏览页显示进度。
+    // 失败静默：离线时用本地缓存即可。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        ref
+            .read(progressRepositoryProvider)
+            .listMerged()
+            .catchError((_) => <ReadingProgress>[]),
+      );
+    });
+  }
 
   @override
   void dispose() {
@@ -992,6 +1012,13 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         final favoriteSourceId = ref.read(effectiveSourceProvider)?.id;
         final highlightPath = ref.watch(highlightFileProvider);
         final nameLines = ref.watch(fileNameLinesProvider);
+        // 当前路径源下各文件的阅读进度（本地库实时流），
+        // 用于行尾/卡片角上的进度圆环展示。
+        final progressByPath = ref.watch(browseProgressProvider).valueOrNull;
+        final progressPercent = <String, double?>{
+          for (final f in items)
+            f.path: progressByPath?[f.path]?.percent,
+        };
 
         // 高亮定位：目标文件出现在当前目录时，自动滚动到该文件。
         // 大目录懒加载下目标项可能尚未 build，见 _scrollToHighlight 处理。
@@ -1042,6 +1069,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
               highlightPath: highlightPath,
               highlightKey: isGrid ? _highlightKey : null,
               nameLines: nameLines,
+              progressByPath: progressPercent,
             ),
             FileListView(
               items: items,
@@ -1062,6 +1090,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
               highlightPath: highlightPath,
               highlightKey: isGrid ? null : _highlightKey,
               nameLines: nameLines,
+              progressByPath: progressPercent,
             ),
           ],
         );
@@ -1186,7 +1215,7 @@ class _ParentEntry extends StatelessWidget {
             ),
           ),
           // 与文件行的分割线保持一致的缩进
-          const Divider(height: 1, indent: 54, endIndent: 56),
+          const Divider(height: 1, indent: 54, endIndent: 16),
         ],
       ),
     );

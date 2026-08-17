@@ -118,6 +118,9 @@ class MediaPlayerController {
   /// 迷你播放器可见性（全屏页打开时强制隐藏）。
   final ValueNotifier<bool> miniVisible = ValueNotifier(false);
 
+  /// 是否正在播放（供浏览页文件条目显示"正在播放"动画）。
+  final ValueNotifier<bool> playing = ValueNotifier(false);
+
   /// 会话版本：每次切换媒体自增。
   /// 迷你条据此重建（file/player 非可监听对象，切换会话后
   /// 不重建会残留旧会话的画面与标题）。
@@ -264,6 +267,7 @@ class MediaPlayerController {
     error.value = null;
     isVideoMode.value = _guessIsVideo(file);
     sessionVersion.value++; // 通知迷你条等 UI 重建订阅
+    playing.value = false;
 
     if (Platform.isIOS) {
       // iOS：使用 AVPlayer 适配器，解决 media_kit 在 iOS 上 120fps 视频卡顿
@@ -332,6 +336,7 @@ class MediaPlayerController {
     _sourceId = null;
     _file = null;
     _pendingResume = null;
+    playing.value = false;
     if (av != null) {
       av.stopListening();
       await _ref.read(nativePlayerProvider).stop();
@@ -352,6 +357,7 @@ class MediaPlayerController {
     isVideoMode.dispose();
     miniVisible.dispose();
     sessionVersion.dispose();
+    playing.dispose();
   }
 
   // ---------- 内部：Player 创建与状态监听 ----------
@@ -559,6 +565,10 @@ class MediaPlayerController {
         unawaited(_reportAv(completed: true));
       }
     }));
+    // 播放/暂停状态（浏览页条目动画指示用）
+    _subs.add(av.stream.playing.listen((v) {
+      playing.value = v;
+    }));
   }
 
   void _onAvLoading() {
@@ -742,6 +752,7 @@ class MediaPlayerController {
 
   void _onPlaying(bool v) {
     debugPrint('[player] _onPlaying=$v everPlayed=$_everPlayed');
+    playing.value = v;
     if (v) {
       _everPlayed = true;
       loading.value = false;
