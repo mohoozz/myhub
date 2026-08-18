@@ -7,6 +7,7 @@ import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/core/models/source.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
+import 'package:myhub_flutter/core/theme/app_theme.dart' show AppTheme;
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_dialogs.dart';
@@ -208,45 +209,50 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     final bottom = overlay == null ? 0.0 : overlay.size.height - top;
     return showMenu<_ReadingMenuAction>(
       context: context,
+      popUpAnimationStyle: AppTheme.menuPopUpAnimation,
       position: RelativeRect.fromLTRB(left, top, right, bottom),
-      items: const [
-        PopupMenuItem(
-          value: _ReadingMenuAction.info,
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(LucideIcons.info, size: 16),
-            title: Text('文件信息'),
-          ),
+      items: [
+        _menuItem(_ReadingMenuAction.info, LucideIcons.info, '文件信息'),
+        _menuItem(
+          _ReadingMenuAction.locate,
+          LucideIcons.locateFixed,
+          '定位到源路径位置',
         ),
-        PopupMenuItem(
-          value: _ReadingMenuAction.locate,
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(LucideIcons.locateFixed, size: 16),
-            title: Text('定位到源路径位置'),
-          ),
+        _menuItem(
+          _ReadingMenuAction.delete,
+          LucideIcons.trash2,
+          '删除阅读记录',
+          destructive: true,
         ),
-        PopupMenuItem(
-          value: _ReadingMenuAction.delete,
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(LucideIcons.trash2, size: 16),
-            title: Text('删除阅读记录'),
-          ),
-        ),
-        PopupMenuItem(
-          value: _ReadingMenuAction.deleteSource,
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(LucideIcons.fileX2, size: 16),
-            title: Text('删除源文件'),
-          ),
+        _menuItem(
+          _ReadingMenuAction.deleteSource,
+          LucideIcons.fileX2,
+          '删除源文件',
+          destructive: true,
         ),
       ],
+    );
+  }
+
+  /// 桌面端菜单项：与浏览页右键菜单同一视觉（图标 16 + 10 间距 + 文字），
+  /// 删除类条目用 error 色强调。
+  PopupMenuItem<_ReadingMenuAction> _menuItem(
+    _ReadingMenuAction value,
+    IconData icon,
+    String label, {
+    bool destructive = false,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final color = destructive ? colorScheme.error : colorScheme.onSurface;
+    return PopupMenuItem<_ReadingMenuAction>(
+      value: value,
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 10),
+          Text(label, style: TextStyle(color: color)),
+        ],
+      ),
     );
   }
 
@@ -375,7 +381,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
                   _InfoRow(
                     label: '阅读进度',
                     value: p.finished
-                        ? '已读完'
+                        ? finishedLabel(p.mediaType)
                         : '${p.percent.toStringAsFixed(0)}%',
                   ),
                   _InfoRow(label: '记录时间', value: formatModTime(p.updatedAt)),
@@ -462,6 +468,12 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     ref.read(highlightFileProvider.notifier).state = p.filePath;
     final shell = StatefulNavigationShell.of(context);
     shell.goBranch(AppBranches.browse, initialLocation: false);
+  }
+
+  /// 跳转到收藏页（收藏分支不占主导航分页，入口仅此星号按钮）。
+  void _openFavorites() {
+    final shell = StatefulNavigationShell.of(context);
+    shell.goBranch(AppBranches.favorites, initialLocation: false);
   }
 
   @override
@@ -576,11 +588,19 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
           ),
         ),
         const Spacer(),
+        // 收藏入口：星号按钮跳转收藏页（PC / iOS 移动端共用）。
+        IconButton(
+          icon: const Icon(LucideIcons.star, size: 16),
+          onPressed: _openFavorites,
+          tooltip: '我的收藏',
+          visualDensity: VisualDensity.compact,
+        ),
         // 视图切换 + 多选 + 刷新收纳到「...」菜单中，
         // 避免标题栏横向空间被挤占。
         PopupMenuButton<_HeaderMenuAction>(
           icon: const Icon(LucideIcons.ellipsis, size: 16),
           tooltip: '更多',
+          popUpAnimationStyle: AppTheme.menuPopUpAnimation,
           onSelected: (action) {
             switch (action) {
               case _HeaderMenuAction.toggleView:
@@ -596,37 +616,38 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
               // 视图切换：菜单顶部，图标与文案跟随当前模式动态变化。
               PopupMenuItem(
                 value: _HeaderMenuAction.toggleView,
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    viewMode == ReadingViewMode.grid
-                        ? LucideIcons.list
-                        : LucideIcons.layoutGrid,
-                    size: 16,
-                  ),
-                  title: Text(
-                    viewMode == ReadingViewMode.grid ? '切换为列表' : '切换为网格',
-                  ),
+                child: Row(
+                  children: [
+                    Icon(
+                      viewMode == ReadingViewMode.grid
+                          ? LucideIcons.list
+                          : LucideIcons.layoutGrid,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(viewMode == ReadingViewMode.grid ? '切换为列表' : '切换为网格'),
+                  ],
                 ),
               ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: _HeaderMenuAction.select,
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(LucideIcons.checkSquare, size: 16),
-                  title: Text('多选'),
+                child: Row(
+                  children: [
+                    Icon(LucideIcons.checkSquare, size: 16),
+                    SizedBox(width: 10),
+                    Text('多选'),
+                  ],
                 ),
               ),
               const PopupMenuItem(
                 value: _HeaderMenuAction.refresh,
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(LucideIcons.rotateCw, size: 16),
-                  title: Text('刷新'),
+                child: Row(
+                  children: [
+                    Icon(LucideIcons.rotateCw, size: 16),
+                    SizedBox(width: 10),
+                    Text('刷新'),
+                  ],
                 ),
               ),
             ];

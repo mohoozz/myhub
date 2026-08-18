@@ -31,6 +31,14 @@ String formatRelativeTime(DateTime? time) {
   return DateFormat('yyyy-MM-dd').format(local);
 }
 
+/// 已完成文案：按媒体类型区分——音频=已听完，视频/漫画/小说=已看完，
+/// 其余类型默认=已读完。
+String finishedLabel(String mediaType) => switch (mediaType) {
+      'audio' => '已听完',
+      'video' || 'comic' || 'novel' => '已看完',
+      _ => '已读完',
+    };
+
 /// 播放时长格式化：mm:ss（超过 1 小时为 h:mm:ss）。
 String formatPlaybackTime(Duration d) {
   final total = d.inSeconds;

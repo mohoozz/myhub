@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/comic_api.dart';
 import 'package:myhub_flutter/core/models/comic.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
+import 'package:myhub_flutter/core/theme/app_theme.dart' show AppTheme;
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
@@ -576,6 +577,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
               // 顶栏集中次要控件的设计）。
               PopupMenuButton<ComicViewMode>(
                 tooltip: '阅读模式',
+                popUpAnimationStyle: AppTheme.menuPopUpAnimation,
                 icon: Icon(
                   switch (mode) {
                     ComicViewMode.single => LucideIcons.fileImage,

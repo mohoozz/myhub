@@ -219,7 +219,8 @@ class ReadingCard extends ConsumerWidget {
                         // 进度信息（百分比 + 相对时间）
                         Text(
                           progress.finished
-                              ? '已读完 · ${formatRelativeTime(progress.updatedAt)}'
+                              ? '${finishedLabel(progress.mediaType)} · '
+                                    '${formatRelativeTime(progress.updatedAt)}'
                               : '${progress.percent.toStringAsFixed(0)}% · '
                                     '${formatRelativeTime(progress.updatedAt)}',
                           maxLines: 1,
@@ -254,12 +255,12 @@ class ReadingCard extends ConsumerWidget {
                       right: 8,
                       child: ReadingSelectBadge(selected: selected),
                     )
-                  // 非多选模式：把"已读完"徽标移到右上角
+                  // 非多选模式：把"已完成"徽标移到右上角
                   else if (progress.finished)
-                    const Positioned(
+                    Positioned(
                       top: 8,
                       right: 8,
-                      child: _FinishedBadge(),
+                      child: _FinishedBadge(label: finishedLabel(progress.mediaType)),
                     )
                   // 非多选模式：类型徽标放右上角
                   else
@@ -300,9 +301,11 @@ class ReadingCard extends ConsumerWidget {
       };
 }
 
-/// 已读完徽标（叠加在封面右下角）。
+/// 已完成徽标（叠加在封面右下角）：文案按媒体类型区分（已看完/已听完/已读完）。
 class _FinishedBadge extends StatelessWidget {
-  const _FinishedBadge();
+  const _FinishedBadge({required this.label});
+
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -312,13 +315,13 @@ class _FinishedBadge extends StatelessWidget {
         color: Colors.black.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: const Row(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(LucideIcons.checkCheck, size: 11, color: Colors.white),
-          SizedBox(width: 3),
+          const Icon(LucideIcons.checkCheck, size: 11, color: Colors.white),
+          const SizedBox(width: 3),
           Text(
-            '已读完',
+            label,
             style: TextStyle(
               color: Colors.white,
               fontSize: 12,
@@ -598,7 +601,7 @@ class ReadingListTile extends ConsumerWidget {
                         const SizedBox(width: 8),
                         Text(
                           progress.finished
-                              ? '已读完'
+                              ? finishedLabel(progress.mediaType)
                               : '${progress.percent.toStringAsFixed(0)}%',
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: progress.finished

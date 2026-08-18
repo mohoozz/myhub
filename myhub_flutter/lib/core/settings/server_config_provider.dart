@@ -172,3 +172,15 @@ class ServerConfigNotifier extends Notifier<ServerConfig> {
 
 /// 当前生效的服务端主机地址（供 URL 拼接与 Dio baseUrl 使用）。
 final apiBaseUrlProvider = Provider<String>((ref) => ref.watch(serverConfigProvider).baseUrl);
+
+/// 启动引导：恢复服务器配置并完成内网/外网探测。
+///
+/// 探测在首帧渲染后进行（不再阻塞 `runApp`），期间 `MyhubApp` 显示启动
+/// loading 页（BootSplash），完成后放行主界面，保证首页首次请求即使用
+/// 正确的基础地址。
+final bootProvider = FutureProvider<void>((ref) async {
+  ref.keepAlive();
+  final server = ref.read(serverConfigProvider.notifier);
+  await server.ensureRestored();
+  await server.autoDetect();
+});

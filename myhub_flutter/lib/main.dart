@@ -6,8 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:myhub_flutter/app.dart';
-import 'package:myhub_flutter/core/api/connectivity_probe.dart';
-import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/shared/utils/window_bounds.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,8 +14,8 @@ import 'package:window_manager/window_manager.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  // 启动时自动判断内网/外网：读取已保存的内网地址，优先探测内网，内网不可用则退回外网。
-  await _detectServerNetwork();
+  // 服务器内网/外网探测改在首帧后进行（bootProvider），启动期间由
+  // BootSplash 显示 loading，避免 iOS 首次打开长时间停留在白屏。
   if (isDesktopPlatform) {
     // Hide the native title bar; WindowTitleBar draws the custom one.
     await windowManager.ensureInitialized();
@@ -39,22 +37,4 @@ Future<void> main() async {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
   runApp(const ProviderScope(child: MyhubApp()));
-}
-
-/// 启动时自动判断内网/外网：
-/// 读取已保存的外网/内网地址，内网可用则优先用内网（'lan'），否则用外网（'wan'）。
-/// 结果写入 SharedPreferences，`serverConfigProvider` 恢复时据此设置当前生效网络。
-Future<void> _detectServerNetwork() async {
-  final prefs = await SharedPreferences.getInstance();
-  final lan = prefs.getString(ServerConfigNotifier.kLanUrlKey)?.trim() ?? '';
-  if (lan.isEmpty) {
-    await prefs.setString(ServerConfigNotifier.kActiveNetworkKey, 'wan');
-    return;
-  }
-  // 优先内网：内网可连用内网，否则退回外网
-  final lanOk = await probeServer(lan) == null;
-  await prefs.setString(
-    ServerConfigNotifier.kActiveNetworkKey,
-    lanOk ? 'lan' : 'wan',
-  );
 }

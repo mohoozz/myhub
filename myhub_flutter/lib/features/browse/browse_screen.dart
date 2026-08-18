@@ -10,6 +10,7 @@ import 'package:myhub_flutter/core/api/api_exception.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
+import 'package:myhub_flutter/core/theme/app_theme.dart' show AppTheme;
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_progress.dart';
 import 'package:myhub_flutter/features/browse/providers/browse_provider.dart';
@@ -52,7 +53,8 @@ class BrowseScreen extends ConsumerStatefulWidget {
   ConsumerState<BrowseScreen> createState() => _BrowseScreenState();
 }
 
-class _BrowseScreenState extends ConsumerState<BrowseScreen> {
+class _BrowseScreenState extends ConsumerState<BrowseScreen>
+    with TickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
 
   /// 正在打开阅读器：防止网络慢时频繁点击产生并发打开。
@@ -96,28 +98,54 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   /// 触发浮起的滚动阈值：避免在顶部轻微 bounce 触发。
   static const double _kSearchShowThreshold = 80;
 
-  /// 左边缘滑动手势：起始点全局 x 坐标（用于判断是否从左边缘开始）。
-  double? _edgeDragStartDx;
-
-  /// 左边缘滑动手势：起始点全局 y 坐标（保留以便将来扩展）。
-  double? _edgeDragStartDy;
-
-  /// 左边缘滑动手势：当前手势是否从左边缘激活。
+  /// 左边缘交互式返回：手势是否处于激活状态。
   ///
-  /// 仅当手势在屏幕最左 ~[_kEdgeSwipeZone] px 内启动时置为 true，
-  /// 否则视为普通横向滑动（如横向滚动的列表/未来横向元素），不触发返回。
-  bool _edgeDragActive = false;
+  /// 仅当手势在屏幕最左 ~[_kEdgeSwipeZone] px 内启动、且当前有可返回的
+  /// 层级（子目录 / 多选模式）时激活；否则视为普通横向滑动（如横向滚动
+  /// 的列表），不触发返回。
+  bool _edgeBackActive = false;
 
   /// 左边缘滑动激活区宽度（屏幕左边缘起，px）。
   static const double _kEdgeSwipeZone = 30;
 
-  /// 触发返回上一级的水平滑动速度阈值（px/s，正值向右）。
-  /// 要求快速右滑，避免慢速横向拖动误触返回。
-  static const double _kEdgeSwipeVelocity = 300;
+  /// 松手时判定"完成返回"的水平滑动速度阈值（px/s，正值向右）。
+  static const double _kEdgeSwipeCommitVelocity = 320;
+
+  /// 松手时判定"完成返回"的拖动进度阈值（0~1）。
+  static const double _kEdgeSwipeCommitRatio = 0.35;
+
+  /// 交互式返回动画控制器：value ∈ [0,1]。
+  /// 0 = 未拖动（当前目录界面在原位），1 = 当前界面完全滑出、上一级
+  /// 内容完全露出。拖动中直接赋值跟手；松手后 animateTo 0（回弹）或
+  /// 1（完成返回，动画结束后真正切换目录）。
+  late final AnimationController _edgeBackController;
+
+  /// 交互式返回预览：露出的上一级目录文件列表快照（来自缓存）。
+  /// 多选模式下"滑出"的是退出多选，预览为当前目录列表（无勾选态）。
+  /// null 表示无缓存（预览层仅显示卡片底色）。
+  List<FileItem>? _backPreviewItems;
+
+  /// 交互式返回预览是否为"退出多选"场景（区别于"返回上级目录"）。
+  bool _backPreviewExitSelection = false;
+
+  /// 预览层滚动控制器（常驻；随预览层挂载/卸载自动 attach/detach）。
+  final ScrollController _previewScrollController = ScrollController();
+
+  /// 各目录的滚动位置记忆（path -> 滚动 offset）：进入子目录前记录
+  /// 当前位置，返回该目录时恢复，让浏览位置前后接续。
+  final Map<String, double> _scrollOffsetsByPath = {};
+
+  /// 滑动区域的当前宽度（LayoutBuilder 中记录，用于把拖动像素换算为进度）。
+  double _swipeAreaWidth = 1;
 
   @override
   void initState() {
     super.initState();
+    _edgeBackController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+      value: 0,
+    );
     // 打开浏览页时把远端阅读进度合并回本地缓存（本地 drift 为进度圆环
     // 的实时数据源），保证其他设备上的阅读记录也能在浏览页显示进度。
     // 失败静默：离线时用本地缓存即可。
@@ -134,6 +162,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
 
   @override
   void dispose() {
+    _edgeBackController.dispose();
+    _previewScrollController.dispose();
     _searchController.dispose();
     _gridScrollController.dispose();
     _listScrollController.dispose();
@@ -236,8 +266,12 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         if (_opening) return; // 防重复点击
         _opening = true;
         unawaited(
-          openEpubFile(context, ref, sourceId: source.id, file: item)
-              .whenComplete(() => _opening = false),
+          openEpubFile(
+            context,
+            ref,
+            sourceId: source.id,
+            file: item,
+          ).whenComplete(() => _opening = false),
         );
       } else {
         PlainTextViewerPage.open(context, sourceId: source.id, file: item);
@@ -507,6 +541,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     final bottom = overlay == null ? 0.0 : overlay.size.height - top;
     return showMenu<String>(
       context: context,
+      popUpAnimationStyle: AppTheme.menuPopUpAnimation,
       position: RelativeRect.fromLTRB(left, top, right, bottom),
       items: [
         _menuItem('open', LucideIcons.squareArrowOutUpRight, '打开'),
@@ -631,6 +666,10 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     // 保证从"正在阅读"页跳转定位时总能自动滚动到目标文件。
     ref.listen(browsePathProvider, (prev, next) {
       if (prev != next) {
+        // 记录离开目录的滚动位置；恢复目标目录离开前的位置
+        // （未访问过的目录回顶部），返回时接续浏览。
+        if (prev != null) _rememberScrollOffset(prev);
+        _restoreScrollOffset(next);
         _scrolledHighlight = null;
         _scrollRetries = 0;
         // 进入新目录时清空多选状态：旧目录的 selectedPaths 是相对路径，
@@ -690,7 +729,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                       icon: const Icon(LucideIcons.ellipsisVertical, size: 16),
                       tooltip: '更多',
                       position: PopupMenuPosition.under,
-                      onSelected: (action) => _onMenuAction(action),
+                      popUpAnimationStyle: AppTheme.menuPopUpAnimation,
+                      onSelected: _onMenuAction,
                       itemBuilder: (context) => [
                         _buildMenuItem(
                           icon: LucideIcons.upload,
@@ -757,9 +797,11 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                     ),
                   ),
                 if (isDesktopPlatform) const SizedBox(height: 8),
-                // 左边缘滑动返回上一级（移动端）：包裹文件列表区域，
-                // 仅捕获"从左边缘向右的快速滑动"，不影响列表的垂直滚动
-                // 与内部横向元素（behavior: translucent 不拦截命中）。
+                // 左边缘交互式滑动返回上一级（iOS 返回手势风格）：
+                // 手指从屏幕左边缘向右拖动时，当前目录界面跟手滑出，
+                // 被划过的区域显示上一级目录内容（缓存快照 + 视差动画）。
+                // behavior: translucent 保证不影响列表的垂直滚动与内部
+                // 横向元素的正常命中。
                 // 注意：Expanded 必须直接作为 Column(Flex) 的子级，
                 // 不能放在 GestureDetector(Listener) 内部，否则抛
                 // "Incorrect use of ParentDataWidget" 导致文件区域塌陷为灰色空白。
@@ -767,71 +809,132 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                   child: GestureDetector(
                     behavior: HitTestBehavior.translucent,
                     onHorizontalDragStart: _onEdgeDragStart,
+                    onHorizontalDragUpdate: _onEdgeDragUpdate,
                     onHorizontalDragEnd: _onEdgeDragEnd,
-                    child: Stack(
-                      children: [
-                        // 浮起的搜索栏：默认隐藏，用户向下滚动列表超过
-                        // [_kSearchShowThreshold] 时滑入，回到顶部时滑出。
-                        // 直接放在 Stack 顶而非 Column，是因为它要覆盖在
-                        // 列表上方而不是挤掉列表的空间。
-                        Positioned(
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          child: _SlidingSearchBar(
-                            visible: _searchBarVisible,
-                            controller: _searchController,
-                            onChanged: (v) =>
-                                ref.read(searchQueryProvider.notifier).state =
-                                    v,
-                          ),
-                        ),
-                        Positioned.fill(
-                          child: DropTarget(
-                            onDragDone: (details) => _dropUpload(
-                              details.files.map((f) => f.path).toList(),
-                            ),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: theme.cardTheme.color,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              clipBehavior: Clip.antiAlias,
-                              child: NotificationListener<ScrollNotification>(
-                                onNotification: _onScrollNotify,
-                                child: Column(
-                                  children: [
-                                    // 非根目录时提供 ".." 返回上级
-                                    // 网格模式下 ".." 以卡片形式插入网格首位（见 FileGridView）
-                                    if (path != '/' &&
-                                        viewMode == BrowseViewMode.list)
-                                      _ParentEntry(
-                                        onTap: () =>
-                                            ref
-                                                .read(
-                                                  browsePathProvider.notifier,
-                                                )
-                                                .state = parentPathOf(
-                                              path,
-                                            ),
-                                      ),
-                                    Expanded(
-                                      child: _buildContent(
-                                        filesAsync,
-                                        viewMode,
-                                      ),
-                                    ),
-                                  ],
+                    onHorizontalDragCancel: _onEdgeDragCancel,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        // 滑动区域宽度：拖动像素 → [0,1] 进度换算用
+                        _swipeAreaWidth = constraints.maxWidth;
+                        final width = constraints.maxWidth;
+                        return Stack(
+                          children: [
+                            // 底层：上一级目录预览（iOS 返回手势式视差
+                            // 滑入）。仅在拖动/回弹动画进行中挂载，
+                            // 平时零开销。
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: AnimatedBuilder(
+                                  animation: _edgeBackController,
+                                  builder: (context, _) {
+                                    final t = _edgeBackController.value;
+                                    if (t <= 0.001) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    // 视差：预览层从左侧 30% 处
+                                    // 随滑出进度逐渐滑到原位
+                                    return Transform.translate(
+                                      offset: Offset(-width * 0.3 * (1 - t), 0),
+                                      child: _buildEdgeBackPreview(),
+                                    );
+                                  },
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        // "定位中"浮层：从阅读页跳转定位时，目录可能较大，
-                        // 加载+滚动定位需要一定时间，用半透明遮罩+动画提示用户。
-                        if (_locating)
-                          const Positioned.fill(child: _LocatingOverlay()),
-                      ],
+                            // 上层：当前目录界面，跟手向右滑出。
+                            // child（文件区 Stack）只 build 一次，
+                            // 拖动期间每帧仅更新 Transform，不重建列表。
+                            AnimatedBuilder(
+                              animation: _edgeBackController,
+                              child: Stack(
+                                children: [
+                                  // 浮起的搜索栏：默认隐藏，用户向下滚动列表超过
+                                  // [_kSearchShowThreshold] 时滑入，回到顶部时滑出。
+                                  // 直接放在 Stack 顶而非 Column，是因为它要覆盖在
+                                  // 列表上方而不是挤掉列表的空间。
+                                  Positioned(
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    child: _SlidingSearchBar(
+                                      visible: _searchBarVisible,
+                                      controller: _searchController,
+                                      onChanged: (v) =>
+                                          ref
+                                                  .read(
+                                                    searchQueryProvider
+                                                        .notifier,
+                                                  )
+                                                  .state =
+                                              v,
+                                    ),
+                                  ),
+                                  Positioned.fill(
+                                    child: DropTarget(
+                                      onDragDone: (details) => _dropUpload(
+                                        details.files
+                                            .map((f) => f.path)
+                                            .toList(),
+                                      ),
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: theme.cardTheme.color,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        clipBehavior: Clip.antiAlias,
+                                        child: NotificationListener<ScrollNotification>(
+                                          onNotification: _onScrollNotify,
+                                          child: Column(
+                                            children: [
+                                              // 非根目录时提供 ".." 返回上级
+                                              // 网格模式下 ".." 以卡片形式插入网格首位（见 FileGridView）
+                                              if (path != '/' &&
+                                                  viewMode ==
+                                                      BrowseViewMode.list)
+                                                _ParentEntry(
+                                                  onTap: () =>
+                                                      ref
+                                                          .read(
+                                                            browsePathProvider
+                                                                .notifier,
+                                                          )
+                                                          .state = parentPathOf(
+                                                        path,
+                                                      ),
+                                                ),
+                                              Expanded(
+                                                child: _buildContent(
+                                                  filesAsync,
+                                                  viewMode,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  // "定位中"浮层：从阅读页跳转定位时，目录可能较大，
+                                  // 加载+滚动定位需要一定时间，用半透明遮罩+动画提示用户。
+                                  if (_locating)
+                                    const Positioned.fill(
+                                      child: _LocatingOverlay(),
+                                    ),
+                                ],
+                              ),
+                              builder: (context, child) => Transform.translate(
+                                offset: Offset(
+                                  width * _edgeBackController.value,
+                                  0,
+                                ),
+                                child: child,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -884,40 +987,205 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     }
   }
 
-  /// 左边缘滑动手势开始：记录起始点，判断是否在屏幕左边缘激活区。
-  ///
-  /// 说明：只有当手势从屏幕最左侧（[_kEdgeSwipeZone] px 内）启动，才
-  /// 视为"返回上一级"手势；从屏幕其他位置开始的水平滑动保持原样，
-  /// 不拦截列表的横向滚动等正常交互。
+  /// 左边缘交互式返回手势开始：起点在屏幕左边缘激活区内、且存在可
+  /// 返回的层级（子目录 / 多选）时激活，并准备好预览层（上一级目录
+  /// 缓存快照 / 当前目录无多选态）。
   void _onEdgeDragStart(DragStartDetails details) {
-    final dx = details.globalPosition.dx;
-    _edgeDragStartDx = dx;
-    _edgeDragStartDy = details.globalPosition.dy;
-    _edgeDragActive = dx <= _kEdgeSwipeZone;
-  }
-
-  /// 左边缘滑动手势结束：快速右滑时返回上一级目录（或退出多选）。
-  void _onEdgeDragEnd(DragEndDetails details) {
-    final wasActive = _edgeDragActive;
-    _edgeDragActive = false;
-    final startDx = _edgeDragStartDx;
-    _edgeDragStartDx = null;
-    _edgeDragStartDy = null;
-    if (!wasActive || startDx == null) return;
-    // 仅处理向右的快速滑动，避免慢速横向拖动或向左滑动误触。
-    if (details.primaryVelocity == null ||
-        details.primaryVelocity! < _kEdgeSwipeVelocity) {
+    final selectionMode = ref.read(selectionModeProvider);
+    final path = ref.read(browsePathProvider);
+    final active =
+        details.globalPosition.dx <= _kEdgeSwipeZone &&
+        (selectionMode || path != '/');
+    if (!active) {
+      _edgeBackActive = false;
       return;
     }
-    // 与系统返回手势（PopScope）一致：多选中先退出多选，否则返回上级目录。
+    if (_edgeBackController.isAnimating) _edgeBackController.stop();
+    _edgeBackActive = true;
+    _backPreviewExitSelection = selectionMode;
+    if (selectionMode) {
+      // 退出多选：预览 = 当前目录列表（无勾选状态）
+      _backPreviewItems =
+          ref.read(visibleFilesProvider).valueOrNull ?? const <FileItem>[];
+    } else {
+      // 返回上级：预览 = 父目录的缓存快照（null → 仅显示卡片底色）
+      final source = ref.read(effectiveSourceProvider);
+      final parent = parentPathOf(path);
+      _backPreviewItems = source == null
+          ? null
+          : ref.read(directoryCacheProvider)['${source.id}|$parent'];
+    }
+    // 预览列表滚动到该目录上次浏览的位置（与主列表恢复行为一致，
+    // 保证松手完成返回时预览与主界面无缝衔接）。
+    final previewPath = selectionMode ? path : parentPathOf(path);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_edgeBackActive) return;
+      if (!_previewScrollController.hasClients) return;
+      final recorded = _scrollOffsetsByPath[previewPath] ?? 0;
+      final pos = _previewScrollController.position;
+      pos.jumpTo(recorded.clamp(0.0, pos.maxScrollExtent));
+    });
+    // 重建预览层（新快照）；t 仍为 0，预览保持隐藏。
+    setState(() {});
+  }
+
+  /// 左边缘交互式返回拖动中：当前目录界面跟手向右滑出。
+  void _onEdgeDragUpdate(DragUpdateDetails details) {
+    if (!_edgeBackActive) return;
+    final width = _swipeAreaWidth;
+    if (width <= 0) return;
+    _edgeBackController.value =
+        (_edgeBackController.value + details.primaryDelta! / width).clamp(
+          0.0,
+          1.0,
+        );
+  }
+
+  /// 左边缘交互式返回松手：按滑动速度/拖动进度判定完成返回或回弹。
+  Future<void> _onEdgeDragEnd(DragEndDetails details) async {
+    if (!_edgeBackActive) return;
+    _edgeBackActive = false;
+    final velocity = details.primaryVelocity ?? 0;
+    final shouldCommit =
+        velocity > _kEdgeSwipeCommitVelocity ||
+        _edgeBackController.value >= _kEdgeSwipeCommitRatio;
+    if (shouldCommit) {
+      // 完成：当前界面滑出屏幕，动画结束后真正切换目录/退出多选。
+      await _edgeBackController.animateTo(
+        1,
+        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 200),
+      );
+      if (!mounted) return;
+      _commitEdgeBack();
+    } else {
+      // 回弹：未达阈值，当前界面滑回原位，预览随之滑出。
+      await _edgeBackController.animateTo(
+        0,
+        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 220),
+      );
+    }
+  }
+
+  /// 手势被打断（如来电、系统手势接管）：回弹复位。
+  void _onEdgeDragCancel() {
+    if (!_edgeBackActive) return;
+    _edgeBackActive = false;
+    _edgeBackController.animateTo(
+      0,
+      curve: Curves.easeOutCubic,
+      duration: const Duration(milliseconds: 220),
+    );
+  }
+
+  /// 完成返回：滑出动画结束后真正切换状态。
+  ///
+  /// 此刻上一级目录的列表已通过 FileListNotifier 的缓存优先策略同步
+  /// 就位，把滑出进度重置为 0 后界面内容不变、位置无缝衔接。
+  void _commitEdgeBack() {
     if (ref.read(selectionModeProvider)) {
       ref.read(selectionProvider.notifier).clear();
     } else {
       final currentPath = ref.read(browsePathProvider);
       if (currentPath != '/') {
+        _searchController.clear();
+        ref.read(searchQueryProvider.notifier).state = '';
         ref.read(browsePathProvider.notifier).state = parentPathOf(currentPath);
       }
     }
+    _edgeBackController.value = 0;
+    _backPreviewItems = null;
+  }
+
+  /// 构建左边缘滑动返回时露出的"上一级目录"预览层（只读，不可交互）。
+  ///
+  /// * 返回上级：渲染父目录的缓存快照，与滑动完成后主界面显示的内容
+  ///   一致，保证动画收尾无缝；
+  /// * 退出多选：渲染当前目录列表（无勾选状态）。
+  Widget _buildEdgeBackPreview() {
+    final theme = Theme.of(context);
+    final sourceId = ref.read(effectiveSourceProvider)?.id;
+    final viewMode = ref.read(viewModeProvider);
+    final nameLines = ref.read(fileNameLinesProvider);
+    final progressRaw = ref.watch(browseProgressProvider).valueOrNull;
+    final progressPercent = progressRaw == null
+        ? const <String, double?>{}
+        : <String, double?>{
+            for (final e in progressRaw.entries) e.key: e.value.percent,
+          };
+    final items = _backPreviewItems;
+    final currentPath = ref.read(browsePathProvider);
+    final previewPath = _backPreviewExitSelection
+        ? currentPath
+        : parentPathOf(currentPath);
+
+    Widget body;
+    if (items == null) {
+      // 父目录无缓存（如冷启动直达子目录）：仅显示卡片底色
+      body = const SizedBox.expand();
+    } else if (items.isEmpty) {
+      body = const _EmptyState();
+    } else {
+      final isGrid = viewMode == BrowseViewMode.grid;
+      body = Column(
+        children: [
+          // 列表模式下与主界面一致：非根目录顶部渲染 ".." 条目
+          if (!isGrid && previewPath != '/') _ParentEntry(onTap: _noop),
+          Expanded(
+            child: isGrid
+                ? FileGridView(
+                    items: items,
+                    controller: _previewScrollController,
+                    onOpen: (_) {},
+                    onParentTap: previewPath == '/' ? null : _noop,
+                    coverSourceId: sourceId,
+                    nameLines: nameLines,
+                    progressByPath: progressPercent,
+                  )
+                : FileListView(
+                    items: items,
+                    controller: _previewScrollController,
+                    onOpen: (_) {},
+                    coverSourceId: sourceId,
+                    nameLines: nameLines,
+                    progressByPath: progressPercent,
+                  ),
+          ),
+        ],
+      );
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardTheme.color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: body,
+    );
+  }
+
+  static void _noop() {}
+
+  /// 记录目录 [path] 的当前滚动位置（离开目录前调用）。
+  void _rememberScrollOffset(String path) {
+    final controller = _activeScrollController;
+    if (controller.hasClients) {
+      _scrollOffsetsByPath[path] = controller.offset;
+    }
+  }
+
+  /// 恢复目录 [path] 的滚动位置（进入目录后下一帧调用）。
+  /// 未访问过的目录回到顶部；clamp 防止列表变短后越界。
+  void _restoreScrollOffset(String path) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = _activeScrollController;
+      if (!controller.hasClients) return;
+      final target = _scrollOffsetsByPath[path] ?? 0;
+      final pos = controller.position;
+      pos.jumpTo(target.clamp(0.0, pos.maxScrollExtent));
+    });
   }
 
   /// 生成一个带图标+文字的菜单项（统一风格）。
@@ -1016,8 +1284,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         // 用于行尾/卡片角上的进度圆环展示。
         final progressByPath = ref.watch(browseProgressProvider).valueOrNull;
         final progressPercent = <String, double?>{
-          for (final f in items)
-            f.path: progressByPath?[f.path]?.percent,
+          for (final f in items) f.path: progressByPath?[f.path]?.percent,
         };
 
         // 高亮定位：目标文件出现在当前目录时，自动滚动到该文件。
@@ -1122,6 +1389,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
 
     final picked = await showMenu<SortSpec>(
       context: context,
+      popUpAnimationStyle: AppTheme.menuPopUpAnimation,
       position: RelativeRect.fromLTRB(left, top, right, bottom),
       items: [
         for (final field in SortField.values)
@@ -1141,7 +1409,6 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
                   const SizedBox(width: 8),
                   Text(
                     '${_fieldLabel(field)}${asc ? '（升序）' : '（降序）'}',
-                    style: theme.textTheme.bodySmall,
                   ),
                 ],
               ),
@@ -1149,7 +1416,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       ],
     );
     if (picked != null) {
-      ref.read(sortProvider.notifier).update(picked);
+      unawaited(ref.read(sortProvider.notifier).update(picked));
     }
   }
 
@@ -1169,54 +1436,58 @@ class _ParentEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
-              children: [
-                // 与 _FileRow 中 SizedBox(32, 32) 保持一致，保证行高与图标
-                // 水平基线对齐。
-                SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: Center(
-                    child: Icon(
-                      LucideIcons.folderUp,
-                      size: 20,
-                      color: theme.colorScheme.primary,
+    // 局部 Material：ink 悬停高亮绘制在本行表面，不被外层卡片容器遮挡。
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  // 与 _FileRow 中 SizedBox(32, 32) 保持一致，保证行高与图标
+                  // 水平基线对齐。
+                  SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: Center(
+                      child: Icon(
+                        LucideIcons.folderUp,
+                        size: 20,
+                        color: theme.colorScheme.primary,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  flex: 4,
-                  child: Text(
-                    '..',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: isDesktopPlatform
-                        ? theme.textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w500,
-                          )
-                        : theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 4,
+                    child: Text(
+                      '..',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: isDesktopPlatform
+                          ? theme.textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w500,
+                            )
+                          : theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                    ),
                   ),
-                ),
-                // 占位列，对齐普通行右侧两列（大小 / 时间），
-                // 视觉上让 "返回上级" 行的右端与下方条目保持同一基准线。
-                const Expanded(flex: 2, child: SizedBox()),
-                const Expanded(flex: 2, child: SizedBox()),
-              ],
+                  // 占位列，对齐普通行右侧两列（大小 / 时间），
+                  // 视觉上让 "返回上级" 行的右端与下方条目保持同一基准线。
+                  const Expanded(flex: 2, child: SizedBox()),
+                  const Expanded(flex: 2, child: SizedBox()),
+                ],
+              ),
             ),
-          ),
-          // 与文件行的分割线保持一致的缩进
-          const Divider(height: 1, indent: 54, endIndent: 16),
-        ],
+            // 与文件行的分割线保持一致的缩进
+            const Divider(height: 1, indent: 54, endIndent: 16),
+          ],
+        ),
       ),
     );
   }
@@ -1319,11 +1590,7 @@ class _SelectionActionBar extends StatelessWidget {
           ),
           // 固定在最右侧的「删除」按钮：始终可见，不会被横向滚动截断。
           IconButton(
-            icon: Icon(
-              LucideIcons.trash2,
-              size: 16,
-              color: colorScheme.error,
-            ),
+            icon: Icon(LucideIcons.trash2, size: 16, color: colorScheme.error),
             onPressed: onDelete,
             tooltip: '删除',
             visualDensity: VisualDensity.compact,

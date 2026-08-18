@@ -81,8 +81,7 @@ class FileListView extends StatelessWidget {
           const Divider(height: 1, indent: 60, endIndent: 16),
       itemBuilder: (context, index) {
         final item = items[index];
-        final highlighted =
-            highlightPath != null && item.path == highlightPath;
+        final highlighted = highlightPath != null && item.path == highlightPath;
         Widget row = _FileRow(
           item: item,
           coverSourceId: coverSourceId,
@@ -152,106 +151,112 @@ class _FileRow extends StatelessWidget {
     final typeLabel = _typeLabel(item);
     final sizeLabel = item.isDir ? '-' : formatBytes(item.size);
     final subtitle = isMobile
-        ? [typeLabel, sizeLabel]
-            .where((s) => s.isNotEmpty && s != '-')
-            .join(' · ')
-        : [typeLabel, sizeLabel, formatModTime(item.modTime)]
-            .where((s) => s.isNotEmpty && s != '-')
-            .join(' · ');
+        ? [
+            typeLabel,
+            sizeLabel,
+          ].where((s) => s.isNotEmpty && s != '-').join(' · ')
+        : [
+            typeLabel,
+            sizeLabel,
+            formatModTime(item.modTime),
+          ].where((s) => s.isNotEmpty && s != '-').join(' · ');
 
     return GestureDetector(
       onLongPressStart: onLongPressMenu,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        onSecondaryTapUp: onSecondaryTapUp,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: selected
-                ? colorScheme.primary.withValues(alpha: 0.08)
-                : null,
-            border: highlighted
-                ? Border.all(color: colorScheme.primary, width: 1.6)
-                : null,
-          ),
-          child: Row(
-            children: [
-              if (selectionMode)
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: Icon(
-                    selected ? LucideIcons.circleCheck : LucideIcons.circle,
-                    size: 18,
-                    color: selected
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
+      // 行级 Material：ink（悬停高亮/水波纹）绘制在行自身表面，
+      // 不再被浏览页外层卡片容器（不透明背景 + 裁剪）遮挡，
+      // 与「正在阅读」列表的悬停效果保持一致。
+      child: Material(
+        color: selected
+            ? colorScheme.primary.withValues(alpha: 0.08)
+            : Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          onSecondaryTapUp: onSecondaryTapUp,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              border: highlighted
+                  ? Border.all(color: colorScheme.primary, width: 1.6)
+                  : null,
+            ),
+            child: Row(
+              children: [
+                if (selectionMode)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: Icon(
+                      selected ? LucideIcons.circleCheck : LucideIcons.circle,
+                      size: 18,
+                      color: selected
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                // 左侧文件封面/类型图标：36x36（iOS Files 行高图标尺寸）
+                SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: FileCover(
+                    item: item,
+                    sourceId: coverSourceId,
+                    iconSize: 22,
+                    borderRadius: 7,
                   ),
                 ),
-              // 左侧文件封面/类型图标：36x36（iOS Files 行高图标尺寸）
-              SizedBox(
-                width: 36,
-                height: 36,
-                child: FileCover(
-                  item: item,
-                  sourceId: coverSourceId,
-                  iconSize: 22,
-                  borderRadius: 7,
-                ),
-              ),
-              const SizedBox(width: 14),
-              // 中间：标题 + 副标题（双行，参考 iOS Files）
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    PlayingFileTitle(
-                      text: item.name,
-                      itemPath: item.path,
-                      sourceId: coverSourceId,
-                      maxLines: nameLines,
-                      baseStyle: isMobile
-                          ? theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color:
-                                  highlighted ? colorScheme.primary : null,
-                            )
-                          : theme.textTheme.bodySmall?.copyWith(
-                              color:
-                                  highlighted ? colorScheme.primary : null,
-                              fontWeight:
-                                  highlighted ? FontWeight.w600 : null,
-                            ),
-                    ),
-                    if (subtitle.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontSize: 12,
-                          color:
-                                colorScheme.onSurfaceVariant.withValues(
+                const SizedBox(width: 14),
+                // 中间：标题 + 副标题（双行，参考 iOS Files）
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      PlayingFileTitle(
+                        text: item.name,
+                        itemPath: item.path,
+                        sourceId: coverSourceId,
+                        maxLines: nameLines,
+                        baseStyle: isMobile
+                            ? theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: highlighted ? colorScheme.primary : null,
+                              )
+                            : theme.textTheme.bodySmall?.copyWith(
+                                color: highlighted ? colorScheme.primary : null,
+                                fontWeight: highlighted
+                                    ? FontWeight.w600
+                                    : null,
+                              ),
+                      ),
+                      if (subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant.withValues(
                               alpha: 0.75,
                             ),
+                          ),
                         ),
-                      ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              // 右侧状态指示：正在播放动画 / 阅读进度圆环。
-              // 多选模式下隐藏（该位置由勾选图标承担视觉重心）。
-              if (!selectionMode)
-                FileStatusIndicator(
-                  item: item,
-                  sourceId: coverSourceId,
-                  progressPercent: progressPercent,
-                  size: 16,
-                ),
-            ],
+                // 右侧状态指示：正在播放动画 / 阅读进度圆环。
+                // 多选模式下隐藏（该位置由勾选图标承担视觉重心）。
+                if (!selectionMode)
+                  FileStatusIndicator(
+                    item: item,
+                    sourceId: coverSourceId,
+                    progressPercent: progressPercent,
+                    size: 16,
+                  ),
+              ],
+            ),
           ),
         ),
       ),

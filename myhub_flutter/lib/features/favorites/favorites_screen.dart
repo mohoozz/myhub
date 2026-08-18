@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/models/favorite.dart';
+import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/features/favorites/providers/favorite_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/utils/open_media.dart';
@@ -34,6 +36,16 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
             children: [
               Row(
                 children: [
+                  // 返回按钮：收藏页不占主导航分页（入口在「正在阅读」页
+                  // 的星号按钮），此处提供明确的返回路径。
+                  IconButton(
+                    icon: const Icon(LucideIcons.arrowLeft, size: 18),
+                    onPressed: () => StatefulNavigationShell.of(context)
+                        .goBranch(AppBranches.reading, initialLocation: false),
+                    tooltip: '返回',
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  const SizedBox(width: 4),
                   Text(
                     '我的收藏',
                     style: theme.textTheme.titleMedium?.copyWith(

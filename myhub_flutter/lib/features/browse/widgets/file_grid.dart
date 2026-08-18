@@ -77,7 +77,7 @@ class FileGridView extends StatelessWidget {
     // 颜色块为卡片底色（按文件类型取明亮渐变色），文字白色。
     final grid = LayoutBuilder(
       builder: (context, constraints) {
-        const maxExtent = 140.0;       // iOS Files 风格格子最大宽度
+        const maxExtent = 140.0; // iOS Files 风格格子最大宽度
         const spacing = 12.0;
         // const hPadding = 24.0; // EdgeInsets.all(12) 左右各 12
         // 列数现在不再用于计算 cellWidth——iOS Files 风格格子固定
@@ -95,8 +95,9 @@ class FileGridView extends StatelessWidget {
         //   * 间距 2
         //   * 副标题 1 行
         //   * 底部 padding 8
-        final cellHeight = 8 +
-            56 +                 // 封面固定 56 高
+        final cellHeight =
+            8 +
+            56 + // 封面固定 56 高
             8 +
             nameLines * nameLineHeight +
             2 +
@@ -164,61 +165,62 @@ class _ParentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-    return InkWell(
-      onTap: onTap,
+    // 局部 Material：ink 悬停高亮绘制在卡片自身表面，不被外层容器遮挡。
+    return Material(
+      color: theme.cardTheme.color,
       borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: theme.cardTheme.color,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Expanded(
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 72),
-                    child: AspectRatio(
-                      aspectRatio: 1,
-                      child: Center(
-                        child: Icon(
-                          LucideIcons.folderUp,
-                          size: 36,
-                          color: theme.colorScheme.primary,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 72),
+                      child: AspectRatio(
+                        aspectRatio: 1,
+                        child: Center(
+                          child: Icon(
+                            LucideIcons.folderUp,
+                            size: 36,
+                            color: theme.colorScheme.primary,
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '..',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: isMobile
-                    ? theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      )
-                    : theme.textTheme.bodySmall,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '返回上级',
-                style: isMobile
-                    ? theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      )
-                    : theme.textTheme.bodySmall?.copyWith(
-                        fontSize: 12,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-              ),
-            ],
+                const SizedBox(height: 10),
+                Text(
+                  '..',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: isMobile
+                      ? theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        )
+                      : theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '返回上级',
+                  style: isMobile
+                      ? theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        )
+                      : theme.textTheme.bodySmall?.copyWith(
+                          fontSize: 12,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -284,111 +286,119 @@ class _FileCard extends StatelessWidget {
 
     return GestureDetector(
       onLongPressStart: onLongPressMenu,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        onSecondaryTapUp: onSecondaryTapUp,
+      // 卡片级 Material：ink（悬停高亮/水波纹）绘制在卡片自身表面，
+      // 不再被浏览页外层卡片容器遮挡，与「正在阅读」的悬停效果一致。
+      child: Material(
+        color: theme.cardTheme.color ?? colorScheme.surfaceContainerHigh,
         borderRadius: BorderRadius.circular(12),
-        child: Container(
-          decoration: BoxDecoration(
-            color: theme.cardTheme.color ??
-                colorScheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(12),
-            border: highlighted
-                ? Border.all(color: colorScheme.primary, width: 1.6)
-                : selected
-                    ? Border.all(color: colorScheme.primary, width: 1.5)
-                    : null,
-          ),
-          child: Stack(
-            children: [
-              // 主体：封面 + 标题 + 副标题（垂直居中）
-              Center(
-                child: Padding(
-                  // 顶部预留 8 让封面"上方留白"——iOS Files 中图标与卡片边
-                  // 距都比较大，让卡片看起来舒展。
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // 大封面/类型图标：固定 56x56 圆角方块（iOS Files 比例）
-                      SizedBox(
-                        width: 56,
-                        height: 56,
-                        child: FileCover(
-                          item: item,
-                          sourceId: coverSourceId,
-                          iconSize: 32,
-                          borderRadius: 12,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // 标题（加粗、居中、1~3 行省略）
-                      PlayingFileTitle(
-                        text: item.name,
-                        itemPath: item.path,
-                        sourceId: coverSourceId,
-                        maxLines: nameLines,
-                        baseStyle: isMobile
-                            ? theme.textTheme.bodySmall?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color:
-                                    highlighted ? colorScheme.primary : null,
-                              )
-                            : theme.textTheme.bodySmall?.copyWith(
-                                color:
-                                    highlighted ? colorScheme.primary : null,
-                                fontWeight:
-                                    highlighted ? FontWeight.w600 : null,
-                              ),
-                      ),
-                      if (subtitle.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant.withValues(
-                              alpha: 0.7,
-                            ),
-                            fontSize: 11,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          onSecondaryTapUp: onSecondaryTapUp,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: highlighted
+                  ? Border.all(color: colorScheme.primary, width: 1.6)
+                  : selected
+                  ? Border.all(color: colorScheme.primary, width: 1.5)
+                  : null,
+            ),
+            child: Stack(
+              children: [
+                // 主体：封面 + 标题 + 副标题（垂直居中）
+                Center(
+                  child: Padding(
+                    // 顶部预留 8 让封面"上方留白"——iOS Files 中图标与卡片边
+                    // 距都比较大，让卡片看起来舒展。
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // 大封面/类型图标：固定 56x56 圆角方块（iOS Files 比例）
+                        SizedBox(
+                          width: 56,
+                          height: 56,
+                          child: FileCover(
+                            item: item,
+                            sourceId: coverSourceId,
+                            iconSize: 32,
+                            borderRadius: 12,
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        // 标题（加粗、居中、1~3 行省略）
+                        PlayingFileTitle(
+                          text: item.name,
+                          itemPath: item.path,
+                          sourceId: coverSourceId,
+                          maxLines: nameLines,
+                          baseStyle: isMobile
+                              ? theme.textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: highlighted
+                                      ? colorScheme.primary
+                                      : null,
+                                )
+                              : theme.textTheme.bodySmall?.copyWith(
+                                  color: highlighted
+                                      ? colorScheme.primary
+                                      : null,
+                                  fontWeight: highlighted
+                                      ? FontWeight.w600
+                                      : null,
+                                ),
+                        ),
+                        if (subtitle.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant.withValues(
+                                alpha: 0.7,
+                              ),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-              // 右上角状态指示：正在播放动画 / 阅读进度圆环。
-              // 多选模式下隐藏（右上角由勾选图标占用）。
-              if (!selectionMode)
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: FileStatusIndicator(
-                    item: item,
-                    sourceId: coverSourceId,
-                    progressPercent: progressPercent,
-                    size: 16,
+                // 右上角状态指示：正在播放动画 / 阅读进度圆环。
+                // 多选模式下隐藏（右上角由勾选图标占用）。
+                if (!selectionMode)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: FileStatusIndicator(
+                      item: item,
+                      sourceId: coverSourceId,
+                      progressPercent: progressPercent,
+                      size: 16,
+                    ),
                   ),
-                ),
-              // 多选模式：右上角勾选环
-              if (selectionMode)
-                Positioned(
-                  top: 6,
-                  right: 6,
-                  child: Icon(
-                    selected ? LucideIcons.circleCheck : LucideIcons.circle,
-                    size: 18,
-                    color: selected
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
+                // 多选模式：右上角勾选环
+                if (selectionMode)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Icon(
+                      selected ? LucideIcons.circleCheck : LucideIcons.circle,
+                      size: 18,
+                      color: selected
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

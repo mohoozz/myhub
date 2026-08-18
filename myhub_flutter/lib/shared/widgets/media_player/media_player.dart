@@ -7,12 +7,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/shared/providers/av_player_adapter.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/audio_cover_mode.dart';
+import 'package:myhub_flutter/shared/widgets/media_player/next_media_tip.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/orientation_watcher.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_controls.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/player_osd.dart';
@@ -120,6 +122,13 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
 
   bool _buffering = false;
 
+  /// 当前展示的文件（TODO 5.8：连续播放切换后更新，初始为 widget.file；
+  /// 页面标题、音频封面等随之刷新）。
+  late FileItem _current;
+
+  /// 播完待确认的下一个推荐（null = 不显示提示条；TODO 5.8）。
+  FileItem? _nextUp;
+
   /// 桌面端系统全屏状态（驱动控制栏全屏按钮图标）。
   bool _fullscreen = false;
 
@@ -159,7 +168,11 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
   void initState() {
     super.initState();
     _controller = ref.read(mediaPlayerProvider);
+    _current = widget.file;
     _controller.pageOpened();
+    // 连续播放推荐（5.8）：播完触发查询、重新播放时收起提示条
+    _controller.completedCount.addListener(_onPlaybackCompleted);
+    _controller.playing.addListener(_onPlayingResumed);
     // 同步建立/复用会话，随后即可取到 Player
     _controller.play(widget.sourceId, widget.file);
     // buffering 流在 media_kit 和 AvPlayerAdapter 上都有
@@ -241,6 +254,8 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
       });
     }
     _controller.isVideoMode.removeListener(_applyOrientationLock);
+    _controller.completedCount.removeListener(_onPlaybackCompleted);
+    _controller.playing.removeListener(_onPlayingResumed);
     _orientationWatcher.tiltListenable.removeListener(_onTiltChanged);
     unawaited(_orientationWatcher.stop());
     unawaited(_bufferingSub?.cancel());
@@ -362,6 +377,43 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
     if (mounted) {
       setState(() => _fullscreen = target);
     }
+  }
+
+  // ---------- 连续播放推荐（5.8） ----------
+
+  /// 播放完成：查询同目录同类型文件的下一个，找到则弹出底部提示条。
+  Future<void> _onPlaybackCompleted() async {
+    if (!mounted) return;
+    final current = _controller.file;
+    final sourceId = _controller.sourceId;
+    if (current == null || sourceId == null) return;
+    final next = await findNextMediaItem(
+      fileApi: ref.read(fileApiProvider),
+      sourceId: sourceId,
+      current: current,
+    );
+    if (!mounted) return;
+    // 查询期间会话已切换（用户点了其他文件）：放弃本次结果
+    if (!identical(_controller.file, current)) return;
+    if (next == null) return;
+    setState(() => _nextUp = next);
+  }
+
+  /// 重新开始播放（播完后点重播/播放下一个）：收起"下一个"提示条。
+  void _onPlayingResumed() {
+    if (_nextUp == null) return;
+    if (!_controller.playing.value) return;
+    if (!mounted) return;
+    setState(() => _nextUp = null);
+  }
+
+  /// 点击提示条：立即播放推荐的下一个文件（页内切换会话）。
+  void _playNextUp(FileItem next) {
+    setState(() {
+      _nextUp = null;
+      _current = next;
+    });
+    _controller.play(widget.sourceId, next);
   }
 
   // ---------- 退出 / 迷你模式 ----------
@@ -637,7 +689,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                   AudioCoverMode(
                                     player: _player,
                                     sourceId: widget.sourceId,
-                                    file: widget.file,
+                                    file: _current,
                                   ),
                                 // 自定义控制栏 Overlay（错误态不挂载，
                                 // 错误视图自带返回按钮）
@@ -645,7 +697,7 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                   PlayerControls(
                                     player: _player,
                                     controller: _controller,
-                                    title: widget.file.name,
+                                    title: _current.name,
                                     osd: _osd,
                                     loading: loading,
                                     buffering: _buffering,
@@ -689,6 +741,18 @@ class _MediaPlayerPageState extends ConsumerState<MediaPlayerPage>
                                         ),
                                       ),
                                     ),
+                                  ),
+                                // 连续播放推荐提示条（5.8）：点击空白关闭、
+                                // 点击条身/播放按钮立即播放下一个
+                                if (_nextUp != null && !hasError)
+                                  NextMediaTip(
+                                    file: _nextUp!,
+                                    onPlay: () => _playNextUp(_nextUp!),
+                                    onDismiss: () {
+                                      if (mounted) {
+                                        setState(() => _nextUp = null);
+                                      }
+                                    },
                                   ),
                                 if (loading && !hasError) const _LoadingView(),
                                 if (hasError) ...[

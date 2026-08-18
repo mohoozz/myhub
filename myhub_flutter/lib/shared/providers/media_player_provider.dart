@@ -126,6 +126,11 @@ class MediaPlayerController {
   /// 不重建会残留旧会话的画面与标题）。
   final ValueNotifier<int> sessionVersion = ValueNotifier(0);
 
+  /// 播放完成计数：每次播放到末尾自增（TODO 5.8）。
+  /// 连续播放推荐据此触发查询下一个文件（media_kit 与 AVPlayer
+  /// 两条完成路径都会自增）。
+  final ValueNotifier<int> completedCount = ValueNotifier(0);
+
   /// 当前播放器实例（iOS 为 AvPlayerAdapter，其他平台为 media_kit Player）。
   /// 类型为 dynamic，因为 UI 组件需要兼容两种播放器。
   dynamic get player => _avPlayer ?? _player;
@@ -357,6 +362,7 @@ class MediaPlayerController {
     isVideoMode.dispose();
     miniVisible.dispose();
     sessionVersion.dispose();
+    completedCount.dispose();
     playing.dispose();
   }
 
@@ -563,6 +569,7 @@ class MediaPlayerController {
       if (completed) {
         _reportTimer?.cancel();
         unawaited(_reportAv(completed: true));
+        completedCount.value++;
       }
     }));
     // 播放/暂停状态（浏览页条目动画指示用）
@@ -980,6 +987,7 @@ class MediaPlayerController {
     _reportTimer = null;
     // 播完：percent 100（后端自动标记已完成，下次从头播放）
     unawaited(_report(completed: true));
+    completedCount.value++;
   }
 
   /// 视频/音频模式自动切换：带 albumart/image 标记的轨道是音频内嵌封面。

@@ -11,6 +11,19 @@ abstract final class AppTheme {
   static const double _inputRadius = 8;
   static const double _progressHeight = 4;
 
+  /// 菜单弹出动画：默认 300ms 线性曲线（linear），展开生硬。
+  /// 改为 easeOutCubic（先快后缓的柔和展开，与 App 其余 220ms 系
+  /// 过渡节奏一致），收起反向加快，干脆利落。
+  ///
+  /// 注：当前 Flutter 版本的 [PopupMenuThemeData] 不支持动画字段，
+  /// 因此由各 `showMenu` / `PopupMenuButton` 调用点显式引用本常量。
+  static const AnimationStyle menuPopUpAnimation = AnimationStyle(
+    duration: Duration(milliseconds: 260),
+    reverseDuration: Duration(milliseconds: 120),
+    curve: Curves.easeOutCubic,
+    reverseCurve: Curves.easeIn,
+  );
+
   /// [dynamicScheme]：Android 12+ Material You 动态取色（可选，缺省用品牌色）。
   static ThemeData light({ColorScheme? dynamicScheme}) {
     final colorScheme = (dynamicScheme ??
@@ -139,6 +152,21 @@ abstract final class AppTheme {
         ),
         showDragHandle: false, // 各 sheet 自行决定
         dragHandleColor: dividerColor,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        // 菜单浮层与卡片同一设计语言：12px 圆角 + cardColor 背景。
+        // 暗色无阴影、以 1px 分隔线描边（与 dialog / bottomSheet 策略
+        // 一致），亮色保留柔和投影。
+        color: cardColor,
+        elevation: isDark ? 0 : 6,
+        shadowColor: isDark ? Colors.transparent : null,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(_cardRadius),
+          side: isDark ? BorderSide(color: dividerColor) : BorderSide.none,
+        ),
+        // 菜单上下留 6px 内边距，让 stadium 高亮块与圆角边缘距离更匀称。
+        menuPadding: const EdgeInsets.symmetric(vertical: 6),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(

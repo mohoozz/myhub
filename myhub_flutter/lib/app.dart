@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/core/theme/app_theme.dart';
 import 'package:myhub_flutter/core/theme/theme_mode_provider.dart';
 import 'package:myhub_flutter/shared/providers/progress_sync_provider.dart';
+import 'package:myhub_flutter/shared/widgets/boot_splash.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/mini_player.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 
@@ -46,7 +48,12 @@ class MyhubApp extends ConsumerWidget {
               ThemeMode.system =>
                 MediaQuery.platformBrightnessOf(context) == Brightness.dark,
             };
-            final body = _buildBody(context, child);
+            // 启动探测（bootProvider）完成前显示引导页，避免主界面在
+            // 内网/外网未定时用错误地址发请求；探测失败也放行（已退回外网）。
+            final boot = ref.watch(bootProvider);
+            final booted = boot.hasValue || boot.hasError;
+            final body =
+                booted ? _buildBody(context, child) : const BootSplash();
             if (isDesktopPlatform) return body;
             return AnnotatedRegion<SystemUiOverlayStyle>(
               value: SystemUiOverlayStyle(

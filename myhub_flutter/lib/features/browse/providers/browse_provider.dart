@@ -176,13 +176,28 @@ final highlightFileProvider = StateProvider<String?>((ref) => null);
 /// 当前目录搜索关键字（前端过滤）。
 final searchQueryProvider = StateProvider<String>((ref) => '');
 
+/// 目录列表快照缓存（key: `sourceId|path`，上限 [_kMaxCachedDirs] 条，FIFO 淘汰）。
+///
+/// 用途：
+/// 1. 浏览页左边缘滑动返回时，预览层直接渲染上一级目录的缓存内容，
+///    拖动过程中无需等待网络请求；
+/// 2. 返回上级目录时立即显示缓存数据（stale-while-revalidate），
+///    避免"返回瞬间闪 loading"破坏滑动返回动画的连续性。
+final directoryCacheProvider =
+    StateProvider<Map<String, List<FileItem>>>((ref) => {});
+
 /// 当前目录文件列表。
 final fileListProvider =
     AsyncNotifierProvider<FileListNotifier, List<FileItem>>(
-  FileListNotifier.new,
-);
+      FileListNotifier.new,
+    );
 
 class FileListNotifier extends AsyncNotifier<List<FileItem>> {
+  /// 缓存目录数量上限。
+  static const _kMaxCachedDirs = 24;
+
+  static String _cacheKey(int sourceId, String path) => '$sourceId|$path';
+
   @override
   Future<List<FileItem>> build() {
     final source = ref.watch(effectiveSourceProvider);
@@ -190,14 +205,53 @@ class FileListNotifier extends AsyncNotifier<List<FileItem>> {
     if (source == null) {
       return Future.value(const []);
     }
+    final cached = ref.read(directoryCacheProvider)[_cacheKey(
+      source.id,
+      path,
+    )];
+    if (cached != null) {
+      // 命中缓存：先同步显示缓存内容（返回上级时不闪 loading），
+      // 再后台静默刷新，成功后更新列表与缓存；失败保留缓存不打扰用户。
+      state = AsyncValue.data(cached);
+      _refreshInBackground(source.id, path);
+      return Future.value(cached);
+    }
     return _fetch(source.id, path);
   }
 
   Future<List<FileItem>> _fetch(int sourceId, String path) async {
     final raw = await ref.read(fileApiProvider).listFiles(sourceId, path);
-    return raw
+    final items = raw
         .map((e) => FileItem.fromJson(e as Map<String, dynamic>))
         .toList();
+    _writeCache(_cacheKey(sourceId, path), items);
+    return items;
+  }
+
+  /// 后台刷新（缓存命中后的静默更新）：仅在目录未变时回写 state，
+  /// 避免与快速目录切换竞态。
+  Future<void> _refreshInBackground(int sourceId, String path) async {
+    try {
+      final items = await _fetch(sourceId, path);
+      if (ref.read(effectiveSourceProvider)?.id == sourceId &&
+          ref.read(browsePathProvider) == path) {
+        state = AsyncValue.data(items);
+      }
+    } catch (_) {
+      // 静默失败：继续展示缓存内容
+    }
+  }
+
+  void _writeCache(String key, List<FileItem> items) {
+    final cache = {...ref.read(directoryCacheProvider)};
+    // 先移除再插入：让 Map 迭代序 = 最近访问序，FIFO 淘汰更精准
+    cache
+      ..remove(key)
+      ..[key] = items;
+    while (cache.length > _kMaxCachedDirs) {
+      cache.remove(cache.keys.first);
+    }
+    ref.read(directoryCacheProvider.notifier).state = cache;
   }
 
   /// 下拉刷新。
