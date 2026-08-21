@@ -16,5 +16,8 @@ func All() []interface{} {
 		&WatchLater{},
 		&FeedFetchLog{},
 		&AppConfig{},
+		&Bookmark{},
+		&BrowserHistory{},
+		&BrowserShortcut{},
 	}
 }

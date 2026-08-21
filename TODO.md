@@ -2,7 +2,7 @@
 
 > 依据《flutter/需求分析文档.md》v2.0 拆解，按功能模块组织，勾选即完成。
 > **架构**：后端 Go Gin + 前端 Flutter（全栈重写，不复用旧代码）
-> 里程碑：M0 全栈骨架 → M1 文件管理 → M2 媒体播放 → M3 阅读器 → M4 多端打磨 v1.0 → M5 动态+离线 v1.1
+> 里程碑：M0 全栈骨架 → M1 文件管理 → M2 媒体播放 → M3 阅读器 → M4 多端打磨 v1.0 → M5 动态+离线 v1.1 → M6 内置浏览器 v1.2
 
 ---
 
@@ -690,6 +690,92 @@
 
 ---
 
+## 13. Flutter 前端 - 浏览器模块（F-601 ~ F-605，M6）
+
+> PC（Windows）+ iOS 双端内置浏览器页签，基于 `flutter_inappwebview`（Windows → WebView2，iOS → WKWebView）。
+> 仅 PC / iOS 平台显示"浏览器"页签，其余平台隐藏。
+
+### 13.1 后端数据模型与 API
+
+- [x] `model/browser.go`：Bookmark（id, title, url 唯一键, favicon, created_at）
+- [x] `model/browser.go`：BrowserHistory（id, title, url, favicon, visited_at 索引）
+- [x] `model/browser.go`：BrowserShortcut（id, title, url 唯一键, sort_order）
+- [x] `GET/POST/DELETE /api/browser/bookmarks`：书签 CRUD（url 唯一，重复添加幂等）
+- [x] `GET /api/browser/history?cursor=&limit=`：历史分页（visited_at 降序，按日分组由前端处理）
+- [x] `POST /api/browser/history`：访问记录上报（前端节流批量上报）
+- [x] `DELETE /api/browser/history`：清空历史（`?id=` 单条删除）
+- [x] `GET/POST/PUT/DELETE /api/browser/shortcuts`：起始页快捷入口 CRUD + 排序
+- [x] Handler/Service/Repository 层：`browser.go`
+
+### 13.2 页签与导航接入
+
+- [x] `features/browser/browser_screen.dart`：浏览器页主界面（顶栏 + WebView 区）
+- [x] 路由新增 `/browser` 分支（`AppBranches.browser`）
+- [x] PC 侧边栏新增"浏览器"项（`globe` 图标，浏览之后）
+- [x] iOS 底部 Tab 新增"浏览器"项（浏览之后，共 5 Tab）
+- [x] PC 快捷键更新：Ctrl+1..5 切换主 Tab（浏览器占一个键位）
+- [x] 非 PC / iOS 平台隐藏页签（WebView 不可用时降级）
+
+### 13.3 网页浏览核心（F-601）
+
+- [ ] `features/browser/widgets/browser_view.dart`：InAppWebView 封装
+  - 平台初始化：Windows（WebView2 userDataFolder、Runtime 缺失检测并引导安装）、iOS（WKWebView 配置）
+  - 标签页 keepAlive：后台标签保持会话不销毁
+- [ ] `features/browser/widgets/address_bar.dart`：地址栏
+  - URL 智能识别：合法 URL 直接导航，非 URL 输入走默认搜索引擎
+  - 显示当前页域名 + 安全图标（HTTPS 锁 / 警示）
+  - 聚焦全选编辑、Enter 提交、Esc 取消恢复
+- [ ] 导航控制：后退 / 前进 / 刷新 / 停止（按历史栈状态禁用）
+- [ ] 加载进度条：地址栏下方 2px 蓝色进度条
+- [ ] 页面标题 + favicon 显示
+- [ ] 错误页：加载失败 / SSL 错误提示 + 重试按钮
+- [ ] `target=_blank` / `window.open` → 新标签页打开
+- [ ] iOS 侧滑返回上一页（历史栈空则退出页签，与系统返回手势协调）
+- [ ] 键盘快捷键（PC）：`Ctrl+T` 新标签、`Ctrl+W` 关标签、`Ctrl+L` 聚焦地址栏、`Ctrl+R` 刷新、`Alt+←/→` 后退/前进
+- [ ] 下载链接拦截：一期引导系统浏览器打开（不做下载管理）
+- [ ] 历史自动记录：页面加载完成节流上报（无痕标签跳过）
+
+### 13.4 多标签页管理（F-601）
+
+- [ ] PC 端 `features/browser/widgets/tab_strip.dart`：Chrome 风格标签栏
+  - 标签项：favicon / 加载转圈 + 标题 + 关闭按钮
+  - 新建（+）/ 关闭 / 切换，中键关闭
+- [ ] iOS 端标签管理页：卡片网格（域名 / 标题），Safari 风格
+  - 底部工具栏：标签数切换、新建、无痕开关
+- [ ] 标签会话 Riverpod 全局持有（`browserProvider`），切页签不销毁
+- [ ] 右键 / 长按标签：关闭其他、关闭全部
+
+### 13.5 起始页与快捷入口（F-602）
+
+- [ ] `features/browser/widgets/start_page.dart`：新标签页
+  - 默认搜索引擎大搜索框
+  - 常用站点快捷入口网格（favicon + 标题）
+- [ ] 快捷入口管理：空位"+"添加（标题 + URL 对话框）、编辑、删除、拖拽排序
+- [ ] 快捷入口经 `/api/browser/shortcuts` 持久化（跨端同步）
+- [ ] 首次启动预置默认入口
+
+### 13.6 书签与历史（F-603）
+
+- [ ] 地址栏星标：一键收藏 / 取消（已收藏高亮）
+- [ ] 书签管理页：列表 + 搜索 + 编辑（标题/URL）+ 删除
+- [ ] 历史管理页：按日分组、搜索、单条删除、清空
+- [ ] 无痕模式：不记录历史（iOS 标签管理页开关 / PC 菜单入口）
+
+### 13.7 与 myhub 内容联动（F-604，二期）
+
+- [ ] 菜单"收录到稍后观看"：当前页标题 + URL → `/api/feed/watch-later`（依赖 M5 动态模块）
+- [ ] UA 切换：菜单"桌面版/移动版"（会话级）+ 设置页默认 UA
+- [ ] 动态模块"跳转原站"改走内置浏览器（M5 落地后）
+
+### 13.8 浏览器设置（F-605）
+
+- [ ] 设置页新增"浏览器"分组（经 `/api/config` 持久化）：
+  - 默认搜索引擎（Google / Bing / 百度 / 自定义 URL 模板）
+  - 默认 UA（跟随平台 / 桌面 / 移动）
+- [ ] 清除浏览数据：缓存 / Cookie / 历史（WebView API + 后端历史清空）
+
+---
+
 ## 体验优化、bug修复
 ---
 
@@ -729,4 +815,5 @@
 - [x] ios端，浏览界面在点击长按某一项文件时候，也没有对应的选中效果
 - [x] ios端，正在阅读和浏览界面右上角的 ... 按钮，点击后的菜单栏，动画效果和项目不太配，美化一下（例如菜单栏改成圆角、显示动画美化等等）。PC端同样也美化下，包括 ...按钮，右键菜单。
 - [x] ios端，第一次打开，会在白屏界面停留一段时间，看上去是在等待判断内网还是外网，优化下这里等待的白屏，有一个loading动画
-- [ ] 加一个内置的浏览器
+- [ ] 视频播放增加一个纯音频播放模式
+- [ ] 加一个内置的浏览器（需求已拆解至第 13 章浏览器模块，F-601~F-605）

@@ -69,6 +69,10 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 	configSvc := service.NewConfigService(configRepo)
 	configHandler := handler.NewConfigHandler(configSvc)
 
+	browserRepo := repository.NewBrowserRepository(db)
+	browserSvc := service.NewBrowserService(browserRepo)
+	browserHandler := handler.NewBrowserHandler(browserSvc)
+
 	// 健康检查
 	r.GET("/api/health", handler.Health)
 
@@ -161,6 +165,24 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 		// 系统配置
 		api.GET("/config", configHandler.GetAll)
 		api.PUT("/config", configHandler.BatchUpdate)
+
+		// 浏览器（书签/历史/起始页快捷入口）
+		browser := api.Group("/browser")
+		{
+			browser.GET("/bookmarks", browserHandler.ListBookmarks)
+			browser.POST("/bookmarks", browserHandler.AddBookmark)
+			browser.DELETE("/bookmarks", browserHandler.RemoveBookmark)
+
+			browser.GET("/history", browserHandler.ListHistory)
+			browser.POST("/history", browserHandler.ReportHistory)
+			browser.DELETE("/history", browserHandler.DeleteHistory)
+
+			browser.GET("/shortcuts", browserHandler.ListShortcuts)
+			browser.POST("/shortcuts", browserHandler.AddShortcut)
+			browser.PUT("/shortcuts", browserHandler.UpdateShortcut)
+			browser.PUT("/shortcuts/order", browserHandler.ReorderShortcuts)
+			browser.DELETE("/shortcuts", browserHandler.RemoveShortcut)
+		}
 	}
 
 	// 内部路由组：供 OpenClaw 等内部服务回传，Token 校验中间件

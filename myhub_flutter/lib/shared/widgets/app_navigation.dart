@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/router/app_router.dart';
 import 'package:myhub_flutter/core/theme/theme_mode_provider.dart';
+import 'package:myhub_flutter/core/utils/browser_support.dart';
 import 'package:myhub_flutter/shared/widgets/avatar_button.dart';
 import 'package:myhub_flutter/shared/widgets/media_player/mini_player.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
@@ -34,7 +35,8 @@ class AppNavigation extends StatelessWidget {
         return _RailShell(shell: shell, onSelect: _goBranch);
       },
     );
-    // 桌面端全局快捷键：Ctrl+1..4 切换主 Tab（与侧边栏顺序一致）
+    // 桌面端全局快捷键：Ctrl+1..5 切换主 Tab（与侧边栏顺序一致）。
+    // Ctrl+4（浏览器）仅在 WebView 可用平台（Windows）绑定。
     if (isDesktopPlatform) {
       child = CallbackShortcuts(
         bindings: {
@@ -44,7 +46,10 @@ class AppNavigation extends StatelessWidget {
               () => _goBranch(AppBranches.feed),
           const SingleActivator(LogicalKeyboardKey.digit3, control: true):
               () => _goBranch(AppBranches.browse),
-          const SingleActivator(LogicalKeyboardKey.digit4, control: true):
+          if (browserSupported)
+            const SingleActivator(LogicalKeyboardKey.digit4, control: true):
+                () => _goBranch(AppBranches.browser),
+          const SingleActivator(LogicalKeyboardKey.digit5, control: true):
               () => _goBranch(AppBranches.settings),
         },
         child: Focus(autofocus: true, child: child),
@@ -61,15 +66,17 @@ class _CompactShell extends StatelessWidget {
   final StatefulNavigationShell shell;
   final ValueChanged<int> onSelect;
 
-  /// Branches shown in the bottom bar: reading / feed / browse / settings.
+  /// Branches shown in the bottom bar: reading / feed / browse / browser / me.
   ///
-  /// 移动端底部 4 Tab：日常三类页面 + "我的"（设置入口）。
+  /// 移动端底部 4 Tab：日常三类页面 + "我的"（设置入口）；
+  /// iOS 额外插入"浏览器"Tab（浏览之后，共 5 Tab，M6 F-601）。
   /// PC 端仍走侧边栏（[_RailShell]），[AppBranches.settings] 在那里以
   /// 设置图标形式挂在底部。
-  static const List<int> _visibleBranches = [
+  static final List<int> _visibleBranches = [
     AppBranches.reading,
     AppBranches.feed,
     AppBranches.browse,
+    if (browserSupported) AppBranches.browser,
     AppBranches.settings,
   ];
 
@@ -142,23 +149,30 @@ class _CompactShell extends StatelessWidget {
                 selectedIndex: selected,
                 onDestinationSelected: (index) =>
                     onSelect(_visibleBranches[index]),
-                destinations: const [
-                  NavigationDestination(
+                destinations: [
+                  const NavigationDestination(
                     icon: Icon(LucideIcons.house),
                     selectedIcon: Icon(LucideIcons.house),
                     label: '阅读',
                   ),
-                  NavigationDestination(
+                  const NavigationDestination(
                     icon: Icon(LucideIcons.zap),
                     selectedIcon: Icon(LucideIcons.zap),
                     label: '动态',
                   ),
-                  NavigationDestination(
+                  const NavigationDestination(
                     icon: Icon(LucideIcons.folder),
                     selectedIcon: Icon(LucideIcons.folder),
                     label: '浏览',
                   ),
-                  NavigationDestination(
+                  // iOS 浏览器页签（WebView 不可用平台隐藏，M6 F-601）
+                  if (browserSupported)
+                    const NavigationDestination(
+                      icon: Icon(LucideIcons.globe),
+                      selectedIcon: Icon(LucideIcons.globe),
+                      label: '浏览器',
+                    ),
+                  const NavigationDestination(
                     icon: Icon(LucideIcons.userRound),
                     selectedIcon: Icon(LucideIcons.userRound),
                     label: '我的',
@@ -186,10 +200,13 @@ class _RailShell extends ConsumerWidget {
   ///
   /// 收藏不再占用侧边栏分页：入口收敛到「正在阅读」页标题栏的星号按钮
   /// （见 ReadingScreen._buildHeader），点击后切到收藏分支。
-  static const List<({int branch, IconData icon, String label})> _items = [
+  /// "浏览器"项仅在 WebView 可用平台（Windows）显示（浏览之后，M6 F-601）。
+  static final List<({int branch, IconData icon, String label})> _items = [
     (branch: AppBranches.reading, icon: LucideIcons.house, label: '阅读'),
     (branch: AppBranches.feed, icon: LucideIcons.zap, label: '动态'),
     (branch: AppBranches.browse, icon: LucideIcons.folder, label: '浏览'),
+    if (browserSupported)
+      (branch: AppBranches.browser, icon: LucideIcons.globe, label: '浏览器'),
   ];
 
   @override

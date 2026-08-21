@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:myhub_flutter/core/utils/browser_support.dart';
 import 'package:myhub_flutter/features/auth/login_screen.dart';
 import 'package:myhub_flutter/features/browse/browse_screen.dart';
+import 'package:myhub_flutter/features/browser/browser_screen.dart';
 import 'package:myhub_flutter/features/favorites/favorites_screen.dart';
 import 'package:myhub_flutter/features/feed/feed_screen.dart';
 import 'package:myhub_flutter/features/profile/profile_screen.dart';
@@ -17,7 +19,8 @@ abstract final class AppBranches {
   static const int favorites = 1;
   static const int feed = 2;
   static const int browse = 3;
-  static const int settings = 4;
+  static const int browser = 4;
+  static const int settings = 5;
 }
 
 /// App-wide [GoRouter]; the indexed-stack shell keeps pages alive.
@@ -42,6 +45,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         case AuthStatus.unauthenticated:
           return atLogin ? null : _toLogin(state);
         case AuthStatus.authenticated:
+          // 浏览器页签平台降级：WebView 不可用平台（非 Windows / iOS）
+          // 深层链接进入 /browser 时回退到浏览页
+          if (!browserSupported &&
+              state.matchedLocation.startsWith('/browser')) {
+            return '/browse';
+          }
           if (atLogin) {
             final from = state.uri.queryParameters['from'];
             return (from != null && from.startsWith('/'))
@@ -94,6 +103,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 path: '/browse',
                 name: 'browse',
                 builder: (context, state) => const BrowseScreen(),
+              ),
+            ],
+          ),
+          // 内置浏览器（仅 PC（Windows）/ iOS 平台显示入口，其余平台
+          // 由路由降级回 /browse）
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/browser',
+                name: 'browser',
+                builder: (context, state) => const BrowserScreen(),
               ),
             ],
           ),
