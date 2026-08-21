@@ -86,6 +86,33 @@ func (h *BrowserHandler) RemoveBookmark(c *gin.Context) {
 	Success(c, nil)
 }
 
+// BookmarkUpdateRequest 更新书签请求体（指针字段区分"未提供"）
+type BookmarkUpdateRequest struct {
+	ID      uint    `json:"id" binding:"required"`
+	Title   *string `json:"title"`
+	URL     *string `json:"url"`
+	Favicon *string `json:"favicon"`
+}
+
+// UpdateBookmark PUT /api/browser/bookmarks
+func (h *BrowserHandler) UpdateBookmark(c *gin.Context) {
+	var req BookmarkUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "参数错误：id 为必填")
+		return
+	}
+	b, err := h.svc.UpdateBookmark(service.BookmarkUpdate{
+		ID:      req.ID,
+		Title:   req.Title,
+		URL:     req.URL,
+		Favicon: req.Favicon,
+	})
+	if mapBrowserError(c, err) {
+		return
+	}
+	Success(c, b)
+}
+
 // ---------- 历史 ----------
 
 // HistoryReportItem 单条历史上报

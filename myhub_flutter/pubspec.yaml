@@ -59,6 +59,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   path: ^1.9.1
   flutter_inappwebview: 6.2.0-beta.3
+  # Open external links / downloads in the system browser (browser module)
+  url_launcher: ^6.3.0
+  # Reorderable grid (browser start page shortcuts drag sorting)
+  reorderable_grid_view: ^2.2.8
 
 dev_dependencies:
   flutter_test:

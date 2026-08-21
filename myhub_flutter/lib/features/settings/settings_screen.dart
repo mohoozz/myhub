@@ -2,14 +2,17 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:myhub_flutter/core/api/browser_api.dart';
 import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/core/theme/theme_mode_provider.dart';
 import 'package:myhub_flutter/features/auth/providers/auth_provider.dart';
 import 'package:myhub_flutter/features/auth/widgets/change_password_dialog.dart';
+import 'package:myhub_flutter/features/browser/browser_settings.dart';
 import 'package:myhub_flutter/features/settings/providers/app_config_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 import 'package:myhub_flutter/shared/utils/app_cache.dart';
@@ -41,8 +44,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   int _selected = 0;
 
-  static const List<({String title, IconData icon, Widget child})> _sections =
-      [
+  static const List<({String title, IconData icon, Widget child})> _sections = [
     (title: '服务器', icon: LucideIcons.server, child: _ServerSection()),
     (title: '账号安全', icon: LucideIcons.shieldCheck, child: _AccountSection()),
     (title: '外观', icon: LucideIcons.sunMoon, child: _AppearanceSection()),
@@ -51,6 +53,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     (title: '播放设置', icon: LucideIcons.play, child: _PlayerSection()),
     (title: '回收站', icon: LucideIcons.trash2, child: _TrashSection()),
     (title: '动态聚合', icon: LucideIcons.zap, child: _FeedSection()),
+    (title: '浏览器', icon: LucideIcons.globe, child: _BrowserSection()),
     (title: '存储', icon: LucideIcons.database, child: _StorageSection()),
     (title: '关于', icon: LucideIcons.info, child: _AboutSection()),
   ];
@@ -119,9 +122,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               const SizedBox(width: 20),
               Expanded(
-                child: SingleChildScrollView(
-                  child: _sections[_selected].child,
-                ),
+                child: SingleChildScrollView(child: _sections[_selected].child),
               ),
             ],
           ),
@@ -216,8 +217,7 @@ class _NavItem extends StatelessWidget {
           title,
           style: theme.textTheme.bodySmall?.copyWith(
             fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-            color:
-                selected ? colorScheme.primary : colorScheme.onSurface,
+            color: selected ? colorScheme.primary : colorScheme.onSurface,
           ),
         ),
         selected: selected,
@@ -301,9 +301,9 @@ class _ServerSection extends ConsumerWidget {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(
-                (wan: wanController.text, lan: lanController.text),
-              ),
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop((wan: wanController.text, lan: lanController.text)),
               child: const Text('保存'),
             ),
           ],
@@ -312,18 +312,18 @@ class _ServerSection extends ConsumerWidget {
       wanController.dispose();
       lanController.dispose();
       if (saved == null || saved.wan.trim().isEmpty) return;
-      await ref.read(serverConfigProvider.notifier).setUrls(
-        wanUrl: saved.wan,
-        lanUrl: saved.lan,
-      );
+      await ref
+          .read(serverConfigProvider.notifier)
+          .setUrls(wanUrl: saved.wan, lanUrl: saved.lan);
       // 保存后立即自动判断内网/外网
       await ref.read(serverConfigProvider.notifier).autoDetect();
       if (context.mounted) showTopSnackBar(context, '服务器配置已更新');
     }
 
     Future<void> test() async {
-      final result =
-          await ref.read(serverConfigProvider.notifier).testConnection();
+      final result = await ref
+          .read(serverConfigProvider.notifier)
+          .testConnection();
       if (context.mounted) showTopSnackBar(context, result.message);
     }
 
@@ -577,18 +577,13 @@ class _ReaderSection extends ConsumerWidget {
         _DropdownRow<ReaderTheme>(
           label: '阅读主题',
           value: reader.theme,
-          options: [
-            for (final t in ReaderTheme.values) (t, t.label),
-          ],
+          options: [for (final t in ReaderTheme.values) (t, t.label)],
           onChanged: readerNotifier.setTheme,
         ),
         _DropdownRow<ReaderMode>(
           label: '翻页模式',
           value: reader.mode,
-          options: const [
-            (ReaderMode.page, '翻页'),
-            (ReaderMode.scroll, '滚动'),
-          ],
+          options: const [(ReaderMode.page, '翻页'), (ReaderMode.scroll, '滚动')],
           onChanged: readerNotifier.setMode,
         ),
         _DropdownRow<String>(
@@ -638,16 +633,12 @@ class _PlayerSection extends ConsumerWidget {
           options: [
             for (final s in kPlaybackSpeeds) (s, playbackSpeedLabel(s)),
           ],
-          onChanged: (v) =>
-              notifier.update(settings.copyWith(defaultSpeed: v)),
+          onChanged: (v) => notifier.update(settings.copyWith(defaultSpeed: v)),
         ),
         _DropdownRow<bool>(
           label: '转码偏好',
           value: settings.preferTranscode,
-          options: const [
-            (false, '直通优先（原画零损耗）'),
-            (true, '转码优先（HLS 兼容性好）'),
-          ],
+          options: const [(false, '直通优先（原画零损耗）'), (true, '转码优先（HLS 兼容性好）')],
           onChanged: (v) =>
               notifier.update(settings.copyWith(preferTranscode: v)),
         ),
@@ -679,10 +670,11 @@ class _TrashSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final days = int.tryParse(
+    final days =
+        int.tryParse(
           ref
-              .watch(appConfigProvider)
-              .valueOrNull?[AppConfigKeys.trashRetentionDays] ??
+                  .watch(appConfigProvider)
+                  .valueOrNull?[AppConfigKeys.trashRetentionDays] ??
               '',
         ) ??
         30;
@@ -695,12 +687,8 @@ class _TrashSection extends ConsumerWidget {
           min: 1,
           max: 90,
           suffix: '天后自动清理',
-          onChanged: (v) => _saveConfig(
-            context,
-            ref,
-            AppConfigKeys.trashRetentionDays,
-            '$v',
-          ),
+          onChanged: (v) =>
+              _saveConfig(context, ref, AppConfigKeys.trashRetentionDays, '$v'),
         ),
         const Divider(height: 24),
         _ActionRow(
@@ -749,12 +737,8 @@ class _FeedSection extends ConsumerWidget {
           min: 50,
           max: 1000,
           step: 50,
-          onChanged: (v) => _saveConfig(
-            context,
-            ref,
-            AppConfigKeys.feedKeepCount,
-            '$v',
-          ),
+          onChanged: (v) =>
+              _saveConfig(context, ref, AppConfigKeys.feedKeepCount, '$v'),
         ),
         const SizedBox(height: 8),
         Text(
@@ -769,6 +753,195 @@ class _FeedSection extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
+// 浏览器（F-605：默认搜索引擎 / UA / 清除浏览数据）
+// ---------------------------------------------------------------------------
+
+class _BrowserSection extends ConsumerWidget {
+  const _BrowserSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(browserSettingsProvider);
+
+    return _SectionCard(
+      title: '浏览器',
+      children: [
+        _DropdownRow<SearchEngine>(
+          label: '搜索引擎',
+          value: settings.searchEngine,
+          options: [for (final e in SearchEngine.values) (e, e.label)],
+          onChanged: (v) => _saveConfig(
+            context,
+            ref,
+            AppConfigKeys.browserSearchEngine,
+            v.name,
+          ),
+        ),
+        // 自定义搜索引擎 URL 模板（选"自定义"时显示）
+        if (settings.searchEngine == SearchEngine.custom) ...[
+          const SizedBox(height: 4),
+          _CustomSearchUrlRow(current: settings.customSearchUrl),
+          const SizedBox(height: 4),
+        ],
+        _DropdownRow<UserAgentMode>(
+          label: '默认 UA',
+          value: settings.userAgent,
+          options: [for (final u in UserAgentMode.values) (u, u.label)],
+          onChanged: (v) =>
+              _saveConfig(context, ref, AppConfigKeys.browserUserAgent, v.name),
+        ),
+        const Divider(height: 24),
+        // 清除浏览数据
+        _ActionRow(
+          icon: LucideIcons.cookie,
+          label: '清除 Cookie',
+          onTap: () => _clearCookies(context),
+        ),
+        _ActionRow(
+          icon: LucideIcons.database,
+          label: '清除站点数据',
+          onTap: () => _clearSiteData(context),
+        ),
+        _ActionRow(
+          icon: LucideIcons.history,
+          label: '清除浏览历史',
+          onTap: () => _clearHistory(context, ref),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _clearCookies(BuildContext context) async {
+    try {
+      await CookieManager.instance().deleteAllCookies();
+      if (context.mounted) showTopSnackBar(context, 'Cookie 已清除');
+    } catch (e) {
+      if (context.mounted) showTopSnackBar(context, '清除失败：$e');
+    }
+  }
+
+  Future<void> _clearSiteData(BuildContext context) async {
+    try {
+      await WebStorageManager.instance().deleteAllData();
+      if (context.mounted) showTopSnackBar(context, '站点数据已清除');
+    } catch (e) {
+      if (context.mounted) showTopSnackBar(context, '清除失败：$e');
+    }
+  }
+
+  Future<void> _clearHistory(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(LucideIcons.history),
+        title: const Text('清除浏览历史'),
+        content: const Text('确定清空全部浏览历史吗？此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('清空'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await ref.read(browserApiProvider).clearHistory();
+      if (context.mounted) showTopSnackBar(context, '浏览历史已清除');
+    } catch (e) {
+      if (context.mounted) showTopSnackBar(context, '清除失败：$e');
+    }
+  }
+}
+
+/// 自定义搜索引擎 URL 模板输入行。
+class _CustomSearchUrlRow extends ConsumerStatefulWidget {
+  const _CustomSearchUrlRow({required this.current});
+
+  final String current;
+
+  @override
+  ConsumerState<_CustomSearchUrlRow> createState() =>
+      _CustomSearchUrlRowState();
+}
+
+class _CustomSearchUrlRowState extends ConsumerState<_CustomSearchUrlRow> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.current);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final value = _controller.text.trim();
+    if (value.isEmpty) {
+      showTopSnackBar(context, '请输入 URL 模板');
+      return;
+    }
+    if (!value.contains('{query}') && !value.contains('%s')) {
+      showTopSnackBar(context, '模板需包含 {query} 或 %s 占位符');
+      return;
+    }
+    await _saveConfig(
+      context,
+      ref,
+      AppConfigKeys.browserCustomSearchUrl,
+      value,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 64,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text('URL 模板', style: theme.textTheme.bodySmall),
+            ),
+          ),
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              decoration: InputDecoration(
+                hintText: 'https://example.com/search?q={query}',
+                isDense: true,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+              ),
+              onSubmitted: (_) => _save(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(onPressed: _save, child: const Text('保存')),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 存储（Flutter 专属：离线缓存管理）
 // ---------------------------------------------------------------------------
 
@@ -777,10 +950,7 @@ class _StorageSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const _SectionCard(
-      title: '存储',
-      children: [_CacheRow()],
-    );
+    return const _SectionCard(title: '存储', children: [_CacheRow()]);
   }
 }
 
@@ -827,7 +997,11 @@ class _CacheRowState extends State<_CacheRow> {
       height: 48,
       child: Row(
         children: [
-          Icon(LucideIcons.database, size: 16, color: colorScheme.onSurfaceVariant),
+          Icon(
+            LucideIcons.database,
+            size: 16,
+            color: colorScheme.onSurfaceVariant,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -890,10 +1064,8 @@ class _AboutSection extends StatelessWidget {
         _ActionRow(
           icon: LucideIcons.fileText,
           label: '开源许可',
-          onTap: () => showLicensePage(
-            context: context,
-            applicationName: 'myhub',
-          ),
+          onTap: () =>
+              showLicensePage(context: context, applicationName: 'myhub'),
         ),
       ],
     );
@@ -978,9 +1150,7 @@ class _ActionRow extends StatelessWidget {
           children: [
             Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
             const SizedBox(width: 10),
-            Expanded(
-              child: Text(label, style: labelStyle),
-            ),
+            Expanded(child: Text(label, style: labelStyle)),
             ?trailing,
             if (onTap != null && trailing == null)
               Icon(
@@ -1027,10 +1197,7 @@ class _SliderRow extends StatelessWidget {
       height: 48,
       child: Row(
         children: [
-          SizedBox(
-            width: 64,
-            child: Text(label, style: labelStyle),
-          ),
+          SizedBox(width: 64, child: Text(label, style: labelStyle)),
           Expanded(
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
@@ -1093,10 +1260,7 @@ class _DropdownRow<T> extends StatelessWidget {
       height: 48,
       child: Row(
         children: [
-          SizedBox(
-            width: 64,
-            child: Text(label, style: labelStyle),
-          ),
+          SizedBox(width: 64, child: Text(label, style: labelStyle)),
           Expanded(
             child: SizedBox(
               height: 36,
@@ -1161,10 +1325,7 @@ class _StepperRow extends StatelessWidget {
       height: 48,
       child: Row(
         children: [
-          SizedBox(
-            width: 64,
-            child: Text(label, style: labelStyle),
-          ),
+          SizedBox(width: 64, child: Text(label, style: labelStyle)),
           _StepButton(
             icon: LucideIcons.minus,
             onTap: value > min ? () => onChanged(value - step) : null,

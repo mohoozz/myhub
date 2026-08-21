@@ -36,6 +36,15 @@ func (r *BrowserRepository) GetBookmarkByURL(url string) (*model.Bookmark, error
 	return &b, nil
 }
 
+// GetBookmarkByID 按 ID 查找书签
+func (r *BrowserRepository) GetBookmarkByID(id uint) (*model.Bookmark, error) {
+	var b model.Bookmark
+	if err := r.db.First(&b, id).Error; err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
 // SaveBookmark 创建或保存书签（有主键更新，无主键插入）
 func (r *BrowserRepository) SaveBookmark(b *model.Bookmark) error {
 	return r.db.Save(b).Error

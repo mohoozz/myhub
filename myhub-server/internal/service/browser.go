@@ -47,6 +47,14 @@ type ShortcutUpdate struct {
 	SortOrder *int
 }
 
+// BookmarkUpdate 书签更新输入（指针字段区分"未提供"与"置空"）
+type BookmarkUpdate struct {
+	ID      uint
+	Title   *string
+	URL     *string
+	Favicon *string
+}
+
 // BrowserService 浏览器书签/历史/快捷入口业务逻辑
 type BrowserService struct {
 	repo *repository.BrowserRepository
@@ -130,6 +138,39 @@ func (s *BrowserService) RemoveBookmark(id uint, rawURL string) error {
 		return nil
 	}
 	return ErrBookmarkNotFound
+}
+
+// UpdateBookmark 更新书签标题/URL/favicon（指针字段区分"未提供"与"置空"）。
+func (s *BrowserService) UpdateBookmark(in BookmarkUpdate) (*model.Bookmark, error) {
+	if in.ID == 0 {
+		return nil, ErrBookmarkNotFound
+	}
+	b, err := s.repo.GetBookmarkByID(in.ID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrBookmarkNotFound
+		}
+		return nil, err
+	}
+
+	if in.Title != nil {
+		b.Title = clipRunes(strings.TrimSpace(*in.Title), maxTitleRunes)
+	}
+	if in.URL != nil {
+		u, err := NormalizeURL(*in.URL)
+		if err != nil {
+			return nil, err
+		}
+		b.URL = u
+	}
+	if in.Favicon != nil {
+		b.Favicon = clipFavicon(*in.Favicon)
+	}
+
+	if err := s.repo.SaveBookmark(b); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // ---------- 历史 ----------
@@ -314,6 +355,43 @@ func (s *BrowserService) RemoveShortcut(id uint) error {
 			return ErrShortcutNotFound
 		}
 		return err
+	}
+	return nil
+}
+
+// defaultShortcuts 首次启动预置的默认快捷入口（常用站点）。
+var defaultShortcuts = []struct {
+	Title string
+	URL   string
+}{
+	{"百度", "https://www.baidu.com"},
+	{"Bing", "https://www.bing.com"},
+	{"GitHub", "https://github.com"},
+	{"知乎", "https://www.zhihu.com"},
+	{"哔哩哔哩", "https://www.bilibili.com"},
+	{"YouTube", "https://www.youtube.com"},
+	{"维基百科", "https://www.wikipedia.org"},
+	{"豆瓣", "https://www.douban.com"},
+}
+
+// SeedDefaultShortcuts 首次启动预置默认快捷入口：仅当快捷入口表为空时执行。
+func (s *BrowserService) SeedDefaultShortcuts() error {
+	existing, err := s.repo.ListShortcuts()
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		return nil // 已有快捷入口（用户可能已清空或自定义），不重复预置
+	}
+	for i, d := range defaultShortcuts {
+		sc := &model.BrowserShortcut{
+			Title:     d.Title,
+			URL:       d.URL,
+			SortOrder: i,
+		}
+		if err := s.repo.SaveShortcut(sc); err != nil {
+			return err
+		}
 	}
 	return nil
 }

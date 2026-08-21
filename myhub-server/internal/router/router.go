@@ -171,6 +171,7 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 		{
 			browser.GET("/bookmarks", browserHandler.ListBookmarks)
 			browser.POST("/bookmarks", browserHandler.AddBookmark)
+			browser.PUT("/bookmarks", browserHandler.UpdateBookmark)
 			browser.DELETE("/bookmarks", browserHandler.RemoveBookmark)
 
 			browser.GET("/history", browserHandler.ListHistory)

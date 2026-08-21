@@ -11,20 +11,30 @@ abstract final class AppConfigKeys {
 
   /// 动态抓取频率（分钟，M5 动态模块消费）。
   static const feedFetchIntervalMin = 'feed.fetch_interval_min';
+
+  /// 浏览器默认搜索引擎（google/bing/baidu/custom，F-605）。
+  static const browserSearchEngine = 'browser.search_engine';
+
+  /// 浏览器自定义搜索引擎 URL 模板（含 {query} 或 %s 占位符）。
+  static const browserCustomSearchUrl = 'browser.custom_search_url';
+
+  /// 浏览器默认 UA（follow_platform/desktop/mobile）。
+  static const browserUserAgent = 'browser.user_agent';
 }
 
 /// 服务端应用配置（键值对），设置页读写。
 final appConfigProvider =
     AsyncNotifierProvider<AppConfigNotifier, Map<String, String>>(
-  AppConfigNotifier.new,
-);
+      AppConfigNotifier.new,
+    );
 
 class AppConfigNotifier extends AsyncNotifier<Map<String, String>> {
   @override
   Future<Map<String, String>> build() => ref.read(configApiProvider).getAll();
 
   /// 读取单个配置（缺省返回 [fallback]）。
-  String get(String key, String fallback) => state.valueOrNull?[key] ?? fallback;
+  String get(String key, String fallback) =>
+      state.valueOrNull?[key] ?? fallback;
 
   /// 更新单个配置：本地即时生效 + 远端持久化，失败回滚并抛错。
   Future<void> setValue(String key, String value) async {

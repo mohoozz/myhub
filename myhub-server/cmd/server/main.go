@@ -41,6 +41,13 @@ func main() {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}
 
+	// 首次启动预置默认快捷入口（仅表为空时执行，F-602）
+	if err := service.NewBrowserService(
+		repository.NewBrowserRepository(db),
+	).SeedDefaultShortcuts(); err != nil {
+		log.Fatalf("预置默认快捷入口失败: %v", err)
+	}
+
 	// 3. 注册路由
 	r, cleanup := router.Setup(cfg, db)
 

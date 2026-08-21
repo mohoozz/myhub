@@ -76,9 +76,11 @@ class FileListView extends StatelessWidget {
       controller: controller,
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: items.length,
-      // 行间细线分隔（iOS Files 风格）：从图标后面开始到行尾留白前结束。
+      // 行间细线分隔（iOS Files 风格）：从图标后面开始，左右两端留白对称。
+      // 调整 endIndent 让右侧不再紧贴卡片边框，避免视觉上"尾部长"，
+      // 与 favorites_screen.dart 中的对称缩进保持一致。
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, indent: 60, endIndent: 16),
+          const Divider(height: 1, indent: 60, endIndent: 56),
       itemBuilder: (context, index) {
         final item = items[index];
         final highlighted = highlightPath != null && item.path == highlightPath;

@@ -718,48 +718,48 @@
 
 ### 13.3 网页浏览核心（F-601）
 
-- [ ] `features/browser/widgets/browser_view.dart`：InAppWebView 封装
+- [x] `features/browser/widgets/browser_view.dart`：InAppWebView 封装
   - 平台初始化：Windows（WebView2 userDataFolder、Runtime 缺失检测并引导安装）、iOS（WKWebView 配置）
   - 标签页 keepAlive：后台标签保持会话不销毁
-- [ ] `features/browser/widgets/address_bar.dart`：地址栏
+- [x] `features/browser/widgets/address_bar.dart`：地址栏
   - URL 智能识别：合法 URL 直接导航，非 URL 输入走默认搜索引擎
   - 显示当前页域名 + 安全图标（HTTPS 锁 / 警示）
   - 聚焦全选编辑、Enter 提交、Esc 取消恢复
-- [ ] 导航控制：后退 / 前进 / 刷新 / 停止（按历史栈状态禁用）
-- [ ] 加载进度条：地址栏下方 2px 蓝色进度条
-- [ ] 页面标题 + favicon 显示
-- [ ] 错误页：加载失败 / SSL 错误提示 + 重试按钮
-- [ ] `target=_blank` / `window.open` → 新标签页打开
-- [ ] iOS 侧滑返回上一页（历史栈空则退出页签，与系统返回手势协调）
-- [ ] 键盘快捷键（PC）：`Ctrl+T` 新标签、`Ctrl+W` 关标签、`Ctrl+L` 聚焦地址栏、`Ctrl+R` 刷新、`Alt+←/→` 后退/前进
-- [ ] 下载链接拦截：一期引导系统浏览器打开（不做下载管理）
-- [ ] 历史自动记录：页面加载完成节流上报（无痕标签跳过）
+- [x] 导航控制：后退 / 前进 / 刷新 / 停止（按历史栈状态禁用）
+- [x] 加载进度条：地址栏下方 2px 蓝色进度条
+- [x] 页面标题 + favicon 显示
+- [x] 错误页：加载失败 / SSL 错误提示 + 重试按钮
+- [x] `target=_blank` / `window.open` → 新标签页打开
+- [x] iOS 侧滑返回上一页（历史栈空则退出页签，与系统返回手势协调）
+- [x] 键盘快捷键（PC）：`Ctrl+T` 新标签、`Ctrl+W` 关标签、`Ctrl+L` 聚焦地址栏、`Ctrl+R` 刷新、`Alt+←/→` 后退/前进
+- [x] 下载链接拦截：一期引导系统浏览器打开（不做下载管理）
+- [x] 历史自动记录：页面加载完成节流上报（无痕标签跳过）
 
 ### 13.4 多标签页管理（F-601）
 
-- [ ] PC 端 `features/browser/widgets/tab_strip.dart`：Chrome 风格标签栏
+- [x] PC 端 `features/browser/widgets/tab_strip.dart`：Chrome 风格标签栏
   - 标签项：favicon / 加载转圈 + 标题 + 关闭按钮
   - 新建（+）/ 关闭 / 切换，中键关闭
-- [ ] iOS 端标签管理页：卡片网格（域名 / 标题），Safari 风格
+- [x] iOS 端标签管理页：卡片网格（域名 / 标题），Safari 风格
   - 底部工具栏：标签数切换、新建、无痕开关
-- [ ] 标签会话 Riverpod 全局持有（`browserProvider`），切页签不销毁
-- [ ] 右键 / 长按标签：关闭其他、关闭全部
+- [x] 标签会话 Riverpod 全局持有（`browserProvider`），切页签不销毁
+- [x] 右键 / 长按标签：关闭其他、关闭全部
 
 ### 13.5 起始页与快捷入口（F-602）
 
-- [ ] `features/browser/widgets/start_page.dart`：新标签页
+- [x] `features/browser/widgets/start_page.dart`：新标签页
   - 默认搜索引擎大搜索框
   - 常用站点快捷入口网格（favicon + 标题）
-- [ ] 快捷入口管理：空位"+"添加（标题 + URL 对话框）、编辑、删除、拖拽排序
-- [ ] 快捷入口经 `/api/browser/shortcuts` 持久化（跨端同步）
-- [ ] 首次启动预置默认入口
+- [x] 快捷入口管理：空位"+"添加（标题 + URL 对话框）、编辑、删除、拖拽排序
+- [x] 快捷入口经 `/api/browser/shortcuts` 持久化（跨端同步）
+- [x] 首次启动预置默认入口
 
 ### 13.6 书签与历史（F-603）
 
-- [ ] 地址栏星标：一键收藏 / 取消（已收藏高亮）
-- [ ] 书签管理页：列表 + 搜索 + 编辑（标题/URL）+ 删除
-- [ ] 历史管理页：按日分组、搜索、单条删除、清空
-- [ ] 无痕模式：不记录历史（iOS 标签管理页开关 / PC 菜单入口）
+- [x] 地址栏星标：一键收藏 / 取消（已收藏高亮）
+- [x] 书签管理页：列表 + 搜索 + 编辑（标题/URL）+ 删除
+- [x] 历史管理页：按日分组、搜索、单条删除、清空
+- [x] 无痕模式：不记录历史（iOS 标签管理页开关 / PC 菜单入口）
 
 ### 13.7 与 myhub 内容联动（F-604，二期）
 
@@ -769,10 +769,10 @@
 
 ### 13.8 浏览器设置（F-605）
 
-- [ ] 设置页新增"浏览器"分组（经 `/api/config` 持久化）：
+- [x] 设置页新增"浏览器"分组（经 `/api/config` 持久化）：
   - 默认搜索引擎（Google / Bing / 百度 / 自定义 URL 模板）
   - 默认 UA（跟随平台 / 桌面 / 移动）
-- [ ] 清除浏览数据：缓存 / Cookie / 历史（WebView API + 后端历史清空）
+- [x] 清除浏览数据：缓存 / Cookie / 历史（WebView API + 后端历史清空）
 
 ---
 

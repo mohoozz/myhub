@@ -1,126 +1,229 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/utils/browser_support.dart';
+import 'package:myhub_flutter/features/browser/bookmarks_page.dart';
+import 'package:myhub_flutter/features/browser/browser_provider.dart';
+import 'package:myhub_flutter/features/browser/browser_settings.dart';
+import 'package:myhub_flutter/features/browser/history_page.dart';
+import 'package:myhub_flutter/features/browser/widgets/address_bar.dart';
+import 'package:myhub_flutter/features/browser/widgets/browser_view.dart';
+import 'package:myhub_flutter/features/browser/widgets/tab_manager_sheet.dart';
+import 'package:myhub_flutter/features/browser/widgets/tab_strip.dart';
 
-/// 浏览器页主界面：顶栏（后退/前进/刷新 + 地址显示）+ WebView 区（M6 F-601）。
+/// 浏览器页主界面（F-601）：地址栏 + 导航控制 + WebView 区。
 ///
-/// 13.2 阶段：单标签 + 内置起始页占位 + 基本导航控制；
-/// 13.3 将补充地址栏智能输入、多标签管理、错误页与平台特定初始化
-/// （Windows WebView2 userDataFolder / Runtime 缺失引导）。
-class BrowserScreen extends StatefulWidget {
+/// 13.3 完成：地址栏智能输入、导航控制（后退/前进/刷新/停止）、
+/// 加载进度条、页面标题 + favicon、错误页、`target=_blank` 新标签、
+/// iOS 侧滑返回、PC 键盘快捷键、下载链接拦截（转系统浏览器）、
+/// 历史节流上报（无痕标签跳过）。
+///
+/// 13.4 完成：PC Chrome 风格标签条、iOS 标签管理页（卡片网格）、
+/// 标签会话切页签不销毁（IndexedStack keepAlive）、右键/长按关闭其他/全部。
+class BrowserScreen extends ConsumerStatefulWidget {
   const BrowserScreen({super.key});
 
   @override
-  State<BrowserScreen> createState() => _BrowserScreenState();
+  ConsumerState<BrowserScreen> createState() => _BrowserScreenState();
 }
 
-class _BrowserScreenState extends State<BrowserScreen> {
-  InAppWebViewController? _controller;
+class _BrowserScreenState extends ConsumerState<BrowserScreen> {
+  /// 每个标签独立的 WebView 控制器（key: tab.id）。
+  final Map<int, InAppWebViewController> _controllers = {};
 
+  final FocusNode _addressFocus = FocusNode();
+
+  // 激活标签的运行时视图状态
+  String _url = '';
   bool _canGoBack = false;
   bool _canGoForward = false;
+  bool _loading = false;
   int _progress = 0;
-  String _url = '';
 
-  /// 内置起始页占位（13.5 将替换为完整起始页：搜索框 + 快捷入口网格）。
-  /// CSS `prefers-color-scheme` 自动适配应用亮/暗主题。
-  static const String _startPageHtml = '''
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-family: system-ui, -apple-system, "Segoe UI",
-      "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: #eef4fb;
-    color: #1a1a2e;
-  }
-  h1 { margin: 0; font-size: 22px; font-weight: 600; }
-  p { margin: 0; font-size: 14px; color: #6b7280; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #000000; color: #e0e0e0; }
-    p { color: #888888; }
-  }
-</style>
-</head>
-<body>
-  <h1>myhub 浏览器</h1>
-  <p>完整起始页即将上线：搜索框与快捷入口</p>
-</body>
-</html>
-''';
+  /// iOS 标签管理页是否展开。
+  bool _showTabManager = false;
 
   @override
   void dispose() {
-    _controller = null;
+    _addressFocus.dispose();
+    _controllers.clear();
     super.dispose();
   }
 
-  /// 从 WebView 同步后退/前进可用状态（历史栈变化时调用）。
-  Future<void> _refreshNavState() async {
-    final controller = _controller;
-    if (controller == null) return;
-    final canBack = await controller.canGoBack();
-    final canForward = await controller.canGoForward();
-    if (!mounted) return;
-    setState(() {
-      _canGoBack = canBack;
-      _canGoForward = canForward;
-    });
-  }
+  // ---------- 导航命令 ----------
+
+  void _goBack() => _controller?.goBack();
+
+  void _goForward() => _controller?.goForward();
+
+  void _stop() => _controller?.stopLoading();
 
   Future<void> _reload() async {
     final controller = _controller;
     if (controller == null) return;
-    // 起始页经 initialData 加载（about:blank），部分平台 reload() 无法
-    // 重新渲染 data 页，此时改为重新 loadData。
-    if (_url.isEmpty || _url == 'about:blank') {
-      await controller.loadData(
-        data: _startPageHtml,
-        mimeType: 'text/html',
-        encoding: 'utf-8',
-      );
-    } else {
-      await controller.reload();
+    // 起始页为 Flutter 原生 widget，无 WebView 可刷新
+    if (_url.isEmpty) return;
+    await controller.reload();
+  }
+
+  InAppWebViewController? get _controller {
+    final tab = ref.read(activeBrowserTabProvider);
+    if (tab == null) return null;
+    return _controllers[tab.id];
+  }
+
+  // ---------- 地址栏提交 ----------
+
+  void _onAddressSubmit(String input) {
+    final settings = ref.read(browserSettingsProvider);
+    final url = resolveNavigationUrl(
+      input,
+      searchUrlTemplate: settings.searchUrlTemplate,
+    );
+    if (url.isEmpty) return;
+    final tab = ref.read(activeBrowserTabProvider);
+    if (tab == null) return;
+    ref
+        .read(browserTabsProvider.notifier)
+        .update(tab.id, (t) => t.copyWith(url: url));
+    _addressFocus.unfocus();
+  }
+
+  // ---------- 新标签 ----------
+
+  void _newTab({bool incognito = false}) {
+    ref.read(browserTabsProvider.notifier).newTab(incognito: incognito);
+    setState(() {
+      _url = '';
+      _canGoBack = false;
+      _canGoForward = false;
+      _loading = false;
+      _progress = 0;
+    });
+    // 新标签聚焦地址栏
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addressFocus.requestFocus();
+    });
+  }
+
+  void _closeTab(int id) {
+    ref.read(browserTabsProvider.notifier).closeTab(id);
+    _controllers.remove(id);
+    // 关闭后同步视图状态到新的激活标签
+    _syncStateFromActiveTab();
+  }
+
+  /// 切换当前激活标签的无痕模式（PC 菜单入口）。
+  void _toggleIncognito() {
+    final tab = ref.read(activeBrowserTabProvider);
+    if (tab == null) return;
+    ref
+        .read(browserTabsProvider.notifier)
+        .update(tab.id, (t) => t.copyWith(incognito: !t.incognito));
+  }
+
+  /// 从当前激活标签的持久状态同步 UI 字段（标签切换/关闭后调用）。
+  void _syncStateFromActiveTab() {
+    final tab = ref.read(activeBrowserTabProvider);
+    if (!mounted) return;
+    setState(() {
+      _url = tab?.url ?? '';
+      _canGoBack = false;
+      _canGoForward = false;
+      _loading = tab?.loading ?? false;
+      _progress = 0;
+    });
+    // 异步查询该标签的导航栈状态（WebView 已存活，controller 应已就绪）
+    final controller = tab == null ? null : _controllers[tab.id];
+    if (controller != null) {
+      _queryNavState(controller);
     }
   }
 
-  /// 地址栏显示文案：起始页显示"新建标签页"，其余显示当前页域名
-  /// （13.3 升级为安全图标 + 可编辑地址输入）。
-  String get _addressLabel {
-    final uri = Uri.tryParse(_url);
-    if (_url.isEmpty ||
-        _url == 'about:blank' ||
-        uri == null ||
-        uri.host.isEmpty) {
-      return '新建标签页';
+  Future<void> _queryNavState(InAppWebViewController controller) async {
+    final canBack = await controller.canGoBack();
+    final canForward = await controller.canGoForward();
+    if (!mounted) return;
+    // 仅当查询结果属于当前激活标签时才更新
+    final active = ref.read(activeBrowserTabProvider);
+    if (active != null && _controllers[active.id] == controller) {
+      setState(() {
+        _canGoBack = canBack;
+        _canGoForward = canForward;
+      });
     }
-    return uri.host;
+  }
+
+  // ---------- 历史上报 ----------
+
+  void _reportHistory(BrowserTabState tab, String url, String title) {
+    if (tab.incognito) return; // 无痕跳过
+    if (url.isEmpty || url == 'about:blank') return;
+    ref
+        .read(historyReporterProvider)
+        .report(
+          url: url,
+          title: title.isEmpty ? (Uri.tryParse(url)?.host ?? '') : title,
+          favicon: tab.faviconUrl,
+        );
+  }
+
+  // ---------- 键盘快捷键（PC） ----------
+
+  Map<ShortcutActivator, VoidCallback> _shortcuts() {
+    if (!Platform.isWindows) return const {};
+    return {
+      const SingleActivator(LogicalKeyboardKey.keyT, control: true): _newTab,
+      const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
+        final tab = ref.read(activeBrowserTabProvider);
+        if (tab != null) _closeTab(tab.id);
+      },
+      const SingleActivator(LogicalKeyboardKey.keyL, control: true):
+          _addressFocus.requestFocus,
+      const SingleActivator(LogicalKeyboardKey.keyR, control: true): _reload,
+      const SingleActivator(LogicalKeyboardKey.arrowLeft, alt: true): _goBack,
+      const SingleActivator(LogicalKeyboardKey.arrowRight, alt: true):
+          _goForward,
+    };
   }
 
   @override
   Widget build(BuildContext context) {
-    // 防御降级：WebView 不可用平台正常情况下无法到达本页
-    // （路由层已将 /browser 重定向至 /browse）；直接构造时展示占位。
     if (!browserSupported) {
       return const _BrowserUnavailable();
     }
+    // iOS 标签管理页（全屏覆盖）
+    if (_showTabManager && Platform.isIOS) {
+      return TabManagerSheet(
+        onClose: () {
+          setState(() => _showTabManager = false);
+          // 管理页内可能已切换激活标签，关闭后同步顶栏状态
+          _syncStateFromActiveTab();
+        },
+      );
+    }
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    return Scaffold(
+    final tabs = ref.watch(browserTabsProvider);
+    final activeIndex = ref.watch(activeBrowserTabIndexProvider);
+    final activeTab = (activeIndex >= 0 && activeIndex < tabs.length)
+        ? tabs[activeIndex]
+        : null;
+
+    // 激活标签切换时，同步顶栏地址栏 / 导航状态
+    ref.listen(activeBrowserTabIndexProvider, (prev, next) {
+      if (prev != next) _syncStateFromActiveTab();
+    });
+
+    final body = Scaffold(
       body: Column(
         children: [
+          // PC：Chrome 风格标签条
+          if (Platform.isWindows) _buildTabStrip(tabs, activeTab),
           _buildTopBar(theme, colorScheme),
           // 地址栏下方 2px 蓝色加载进度条
           SizedBox(
@@ -136,39 +239,137 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   )
                 : null,
           ),
-          // WebView 区
+          // WebView 区（IndexedStack 保持所有标签存活）
           Expanded(
-            child: InAppWebView(
-              initialData: InAppWebViewInitialData(
-                data: _startPageHtml,
-                mimeType: 'text/html',
-                encoding: 'utf-8',
-              ),
-              // 13.3 将按平台补充：Windows userDataFolder、UA 偏好等
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-              ),
-              onWebViewCreated: (controller) =>
-                  setState(() => _controller = controller),
-              onLoadStop: (controller, url) {
-                _refreshNavState();
-                setState(() => _url = url?.toString() ?? '');
-              },
-              onUpdateVisitedHistory: (controller, url, androidIsReload) {
-                _refreshNavState();
-                setState(() => _url = url?.toString() ?? '');
-              },
-              onProgressChanged: (controller, progress) {
-                setState(() => _progress = progress);
-              },
-            ),
+            child: tabs.isEmpty
+                ? const SizedBox.shrink()
+                : _buildWebViewStack(tabs, activeIndex),
           ),
         ],
       ),
     );
+
+    // PC 键盘快捷键
+    if (Platform.isWindows) {
+      return CallbackShortcuts(
+        bindings: _shortcuts(),
+        child: Focus(autofocus: true, child: body),
+      );
+    }
+    return body;
   }
 
-  /// 顶栏：导航按钮（按历史栈状态禁用）+ 地址显示区（输入框风格 8px 圆角）。
+  /// PC 标签条。
+  Widget _buildTabStrip(List<BrowserTabState> tabs, BrowserTabState? active) {
+    return TabStrip(
+      tabs: tabs,
+      activeId: active?.id ?? -1,
+      onSelect: (id) {
+        ref.read(browserTabsProvider.notifier).activate(id);
+        _syncStateFromActiveTab();
+      },
+      onClose: _closeTab,
+      onNew: _newTab,
+      onCloseOthers: (id) {
+        ref.read(browserTabsProvider.notifier).closeOthers(id);
+        _syncStateFromActiveTab();
+      },
+      onCloseAll: () {
+        ref.read(browserTabsProvider.notifier).closeAll();
+        _syncStateFromActiveTab();
+      },
+    );
+  }
+
+  /// WebView 区：IndexedStack 承载所有标签，切页签不销毁。
+  Widget _buildWebViewStack(List<BrowserTabState> tabs, int activeIndex) {
+    return IndexedStack(
+      index: activeIndex,
+      children: [for (final tab in tabs) _buildWebView(tab)],
+    );
+  }
+
+  Widget _buildWebView(BrowserTabState tab) {
+    return BrowserView(
+      key: ValueKey(tab.id),
+      url: tab.url,
+      keepAlive: true,
+      userAgent: ref.read(browserSettingsProvider).userAgentString,
+      onWebViewCreated: (controller) => _controllers[tab.id] = controller,
+      callbacks: _BrowserCallbacksAdapter(
+        onUrlChangedCb: (url) {
+          // 仅激活标签同步顶栏地址栏
+          if (_isActive(tab.id)) setState(() => _url = url);
+          ref
+              .read(browserTabsProvider.notifier)
+              .update(tab.id, (t) => t.copyWith(url: url));
+        },
+        onTitleChangedCb: (title) {
+          ref
+              .read(browserTabsProvider.notifier)
+              .update(tab.id, (t) => t.copyWith(title: title));
+        },
+        onFaviconChangedCb: (favicon) {
+          ref
+              .read(browserTabsProvider.notifier)
+              .update(tab.id, (t) => t.copyWith(faviconUrl: favicon));
+        },
+        onProgressChangedCb: (progress) {
+          if (_isActive(tab.id)) {
+            setState(() {
+              _progress = progress;
+              _loading = progress > 0 && progress < 100;
+            });
+          }
+          ref
+              .read(browserTabsProvider.notifier)
+              .update(
+                tab.id,
+                (t) => t.copyWith(loading: progress > 0 && progress < 100),
+              );
+        },
+        onNavStateChangedCb: ({required canGoBack, required canGoForward}) {
+          if (_isActive(tab.id)) {
+            setState(() {
+              _canGoBack = canGoBack;
+              _canGoForward = canGoForward;
+            });
+          }
+        },
+        onCreateWindowRequestCb: (url) {
+          // target=_blank / window.open → 新标签打开
+          if (url.isNotEmpty) {
+            final newTab = ref.read(browserTabsProvider.notifier).newTab();
+            ref
+                .read(browserTabsProvider.notifier)
+                .update(newTab.id, (t) => t.copyWith(url: url));
+            _syncStateFromActiveTab();
+          } else {
+            _newTab();
+          }
+        },
+        onErrorCb: (url, message) {
+          // 错误页已由 BrowserView 内部展示；此处仅记录。
+        },
+        onPageFinishedCb: (url) {
+          // 页面加载完成节流上报历史（无痕标签由 _reportHistory 内部跳过）
+          _reportHistory(tab, url, tab.title);
+        },
+        onNavigateRequestCb: (url) {
+          // 起始页请求导航（搜索 / 快捷入口）→ 更新标签 URL 触发加载
+          ref
+              .read(browserTabsProvider.notifier)
+              .update(tab.id, (t) => t.copyWith(url: url));
+          if (_isActive(tab.id)) setState(() => _url = url);
+        },
+      ),
+    );
+  }
+
+  /// 判断指定 id 是否为当前激活标签。
+  bool _isActive(int id) => ref.read(activeBrowserTabProvider)?.id == id;
+
+  /// 顶栏：导航按钮（后退/前进/刷新/停止）+ 地址栏 + 新标签按钮。
   Widget _buildTopBar(ThemeData theme, ColorScheme colorScheme) {
     return Container(
       height: 44,
@@ -180,84 +381,270 @@ class _BrowserScreenState extends State<BrowserScreen> {
         children: [
           const SizedBox(width: 4),
           IconButton(
-            onPressed: _canGoBack ? () => _controller?.goBack() : null,
+            onPressed: _canGoBack ? _goBack : null,
             icon: const Icon(LucideIcons.arrowLeft),
             iconSize: 18,
             visualDensity: VisualDensity.compact,
             tooltip: '后退',
           ),
           IconButton(
-            onPressed: _canGoForward ? () => _controller?.goForward() : null,
+            onPressed: _canGoForward ? _goForward : null,
             icon: const Icon(LucideIcons.arrowRight),
             iconSize: 18,
             visualDensity: VisualDensity.compact,
             tooltip: '前进',
           ),
           IconButton(
-            onPressed: _reload,
-            icon: const Icon(LucideIcons.rotateCw),
-            iconSize: 18,
+            onPressed: _loading ? _stop : _reload,
+            icon: Icon(
+              _loading ? LucideIcons.x : LucideIcons.rotateCw,
+              size: 18,
+            ),
             visualDensity: VisualDensity.compact,
-            tooltip: '刷新',
+            tooltip: _loading ? '停止' : '刷新',
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: Container(
-              height: 30,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: colorScheme.brightness == Brightness.dark
-                    ? const Color(0xFF1A1A1A) // AppColors.inputBackgroundDark
-                    : Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: colorScheme.outline),
-              ),
-              alignment: Alignment.centerLeft,
-              child: Row(
-                children: [
-                  _SecurityIcon(url: _url),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _addressLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            child: AddressBar(
+              url: _url,
+              focusNode: _addressFocus,
+              onSubmit: _onAddressSubmit,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 4),
+          // 星标：一键收藏 / 取消（已收藏高亮）
+          _BookmarkToggleButton(url: _url),
+          const SizedBox(width: 4),
+          // iOS：标签管理入口（Safari 风格）
+          if (Platform.isIOS)
+            _TabCountButton(
+              count: ref.watch(browserTabsProvider).length,
+              onPressed: () => setState(() => _showTabManager = true),
+            ),
+          // 菜单：书签 / 历史 / 无痕（PC + iOS 通用入口）
+          _BrowserMenuButton(
+            incognito: ref.watch(activeBrowserTabProvider)?.incognito ?? false,
+            onIncognitoToggle: _toggleIncognito,
+          ),
+          const SizedBox(width: 4),
         ],
       ),
     );
   }
 }
 
-/// 安全图标：HTTPS 锁形 / HTTP 警示；起始页（about:blank）不显示。
-class _SecurityIcon extends StatelessWidget {
-  const _SecurityIcon({required this.url});
+/// 将 BrowserView 的事件转发为 BrowserScreen 所需回调（含标签上下文）。
+///
+/// 字段以 `_cb` 后缀命名，避免与 [BrowserViewCallbacks] 接口方法同名冲突。
+class _BrowserCallbacksAdapter implements BrowserViewCallbacks {
+  _BrowserCallbacksAdapter({
+    required this.onUrlChangedCb,
+    required this.onTitleChangedCb,
+    required this.onFaviconChangedCb,
+    required this.onProgressChangedCb,
+    required this.onNavStateChangedCb,
+    required this.onCreateWindowRequestCb,
+    required this.onErrorCb,
+    required this.onPageFinishedCb,
+    required this.onNavigateRequestCb,
+  });
 
-  final String url;
+  final void Function(String) onUrlChangedCb;
+  final void Function(String) onTitleChangedCb;
+  final void Function(String) onFaviconChangedCb;
+  final void Function(int) onProgressChangedCb;
+  final void Function({required bool canGoBack, required bool canGoForward})
+  onNavStateChangedCb;
+  final void Function(String) onCreateWindowRequestCb;
+  final void Function(String, String) onErrorCb;
+  final void Function(String) onPageFinishedCb;
+  final void Function(String) onNavigateRequestCb;
+
+  @override
+  void onUrlChanged(String url) => onUrlChangedCb(url);
+
+  @override
+  void onTitleChanged(String title) => onTitleChangedCb(title);
+
+  @override
+  void onFaviconChanged(String faviconUrl) => onFaviconChangedCb(faviconUrl);
+
+  @override
+  void onProgressChanged(int progress) => onProgressChangedCb(progress);
+
+  @override
+  void onNavStateChanged({
+    required bool canGoBack,
+    required bool canGoForward,
+  }) {
+    onNavStateChangedCb(canGoBack: canGoBack, canGoForward: canGoForward);
+  }
+
+  @override
+  void onCreateWindowRequest(String url) => onCreateWindowRequestCb(url);
+
+  @override
+  void onError(String url, String message) => onErrorCb(url, message);
+
+  @override
+  void onPageFinished(String url) => onPageFinishedCb(url);
+
+  @override
+  void onNavigateRequest(String url) => onNavigateRequestCb(url);
+}
+
+/// iOS 标签数按钮：点击打开标签管理页（Safari 风格）。
+class _TabCountButton extends StatelessWidget {
+  const _TabCountButton({required this.count, required this.onPressed});
+
+  final int count;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    if (url.startsWith('https://')) {
-      return Icon(LucideIcons.lock, size: 12, color: colorScheme.primary);
-    }
-    if (url.startsWith('http://')) {
-      return Icon(
-        LucideIcons.alertTriangle,
-        size: 12,
-        color: colorScheme.error,
+    return IconButton(
+      onPressed: onPressed,
+      icon: Stack(
+        alignment: Alignment.center,
+        children: [
+          const Icon(LucideIcons.layers, size: 18),
+          Positioned(
+            top: 1,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+              constraints: const BoxConstraints(minWidth: 13),
+              decoration: BoxDecoration(
+                color: colorScheme.primary,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$count',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                  height: 1.1,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      visualDensity: VisualDensity.compact,
+      tooltip: '标签页',
+    );
+  }
+}
+
+/// 地址栏星标：一键收藏 / 取消（已收藏高亮实心星）。
+class _BookmarkToggleButton extends ConsumerWidget {
+  const _BookmarkToggleButton({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final bookmarksAsync = ref.watch(bookmarksProvider);
+
+    // 起始页无 URL 时禁用
+    if (url.isEmpty) {
+      return const IconButton(
+        onPressed: null,
+        icon: Icon(LucideIcons.star),
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
       );
     }
-    return const SizedBox.shrink();
+
+    final isBookmarked = bookmarksAsync.maybeWhen(
+      data: (items) => items.any((b) => b.url == url),
+      orElse: () => false,
+    );
+
+    return IconButton(
+      onPressed: () => _toggle(ref),
+      icon: Icon(
+        isBookmarked ? LucideIcons.star : LucideIcons.star,
+        size: 18,
+        color: isBookmarked
+            ? colorScheme.primary
+            : colorScheme.onSurfaceVariant,
+      ),
+      visualDensity: VisualDensity.compact,
+      tooltip: isBookmarked ? '取消收藏' : '收藏此页',
+    );
+  }
+
+  Future<void> _toggle(WidgetRef ref) async {
+    final bookmarksAsync = ref.read(bookmarksProvider);
+    final items = bookmarksAsync.valueOrNull ?? const <BookmarkItem>[];
+    final existing = items.where((b) => b.url == url).firstOrNull;
+    final notifier = ref.read(bookmarksNotifierProvider.notifier);
+    if (existing != null) {
+      await notifier.remove(existing.id);
+    } else {
+      final tab = ref.read(activeBrowserTabProvider);
+      final title = tab?.title ?? '';
+      await notifier.add(title, url, favicon: tab?.faviconUrl ?? '');
+    }
+  }
+}
+
+/// PC 菜单入口：书签 / 历史 / 无痕开关。
+class _BrowserMenuButton extends ConsumerWidget {
+  const _BrowserMenuButton({
+    required this.incognito,
+    required this.onIncognitoToggle,
+  });
+
+  final bool incognito;
+  final VoidCallback onIncognitoToggle;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return PopupMenuButton<String>(
+      icon: const Icon(LucideIcons.menu, size: 18),
+      tooltip: '菜单',
+      onSelected: (value) {
+        switch (value) {
+          case 'bookmarks':
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BookmarksPage()),
+            );
+          case 'history':
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HistoryPage()),
+            );
+          case 'incognito':
+            onIncognitoToggle();
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(value: 'bookmarks', child: Text('书签')),
+        const PopupMenuItem(value: 'history', child: Text('历史记录')),
+        PopupMenuItem(
+          value: 'incognito',
+          child: Row(
+            children: [
+              const Text('无痕模式'),
+              const Spacer(),
+              if (incognito)
+                Icon(
+                  LucideIcons.check,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
