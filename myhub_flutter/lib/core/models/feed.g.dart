@@ -78,6 +78,9 @@ _$WatchLaterImpl _$$WatchLaterImplFromJson(Map<String, dynamic> json) =>
       createdAt: json['created_at'] == null
           ? null
           : DateTime.parse(json['created_at'] as String),
+      item: json['item'] == null
+          ? null
+          : FeedItem.fromJson(json['item'] as Map<String, dynamic>),
     );
 
 Map<String, dynamic> _$$WatchLaterImplToJson(_$WatchLaterImpl instance) =>
@@ -86,4 +89,5 @@ Map<String, dynamic> _$$WatchLaterImplToJson(_$WatchLaterImpl instance) =>
       'platform': instance.platform,
       'content_id': instance.contentId,
       'created_at': instance.createdAt?.toIso8601String(),
+      'item': instance.item?.toJson(),
     };

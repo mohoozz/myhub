@@ -734,6 +734,7 @@ mixin _$WatchLater {
   String get platform => throw _privateConstructorUsedError;
   String get contentId => throw _privateConstructorUsedError;
   DateTime? get createdAt => throw _privateConstructorUsedError;
+  FeedItem? get item => throw _privateConstructorUsedError;
 
   /// Serializes this WatchLater to a JSON map.
   Map<String, dynamic> toJson() => throw _privateConstructorUsedError;
@@ -752,7 +753,15 @@ abstract class $WatchLaterCopyWith<$Res> {
     $Res Function(WatchLater) then,
   ) = _$WatchLaterCopyWithImpl<$Res, WatchLater>;
   @useResult
-  $Res call({int id, String platform, String contentId, DateTime? createdAt});
+  $Res call({
+    int id,
+    String platform,
+    String contentId,
+    DateTime? createdAt,
+    FeedItem? item,
+  });
+
+  $FeedItemCopyWith<$Res>? get item;
 }
 
 /// @nodoc
@@ -774,6 +783,7 @@ class _$WatchLaterCopyWithImpl<$Res, $Val extends WatchLater>
     Object? platform = null,
     Object? contentId = null,
     Object? createdAt = freezed,
+    Object? item = freezed,
   }) {
     return _then(
       _value.copyWith(
@@ -793,9 +803,27 @@ class _$WatchLaterCopyWithImpl<$Res, $Val extends WatchLater>
                 ? _value.createdAt
                 : createdAt // ignore: cast_nullable_to_non_nullable
                       as DateTime?,
+            item: freezed == item
+                ? _value.item
+                : item // ignore: cast_nullable_to_non_nullable
+                      as FeedItem?,
           )
           as $Val,
     );
+  }
+
+  /// Create a copy of WatchLater
+  /// with the given fields replaced by the non-null parameter values.
+  @override
+  @pragma('vm:prefer-inline')
+  $FeedItemCopyWith<$Res>? get item {
+    if (_value.item == null) {
+      return null;
+    }
+
+    return $FeedItemCopyWith<$Res>(_value.item!, (value) {
+      return _then(_value.copyWith(item: value) as $Val);
+    });
   }
 }
 
@@ -808,7 +836,16 @@ abstract class _$$WatchLaterImplCopyWith<$Res>
   ) = __$$WatchLaterImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({int id, String platform, String contentId, DateTime? createdAt});
+  $Res call({
+    int id,
+    String platform,
+    String contentId,
+    DateTime? createdAt,
+    FeedItem? item,
+  });
+
+  @override
+  $FeedItemCopyWith<$Res>? get item;
 }
 
 /// @nodoc
@@ -829,6 +866,7 @@ class __$$WatchLaterImplCopyWithImpl<$Res>
     Object? platform = null,
     Object? contentId = null,
     Object? createdAt = freezed,
+    Object? item = freezed,
   }) {
     return _then(
       _$WatchLaterImpl(
@@ -848,6 +886,10 @@ class __$$WatchLaterImplCopyWithImpl<$Res>
             ? _value.createdAt
             : createdAt // ignore: cast_nullable_to_non_nullable
                   as DateTime?,
+        item: freezed == item
+            ? _value.item
+            : item // ignore: cast_nullable_to_non_nullable
+                  as FeedItem?,
       ),
     );
   }
@@ -861,6 +903,7 @@ class _$WatchLaterImpl implements _WatchLater {
     required this.platform,
     required this.contentId,
     this.createdAt,
+    this.item,
   });
 
   factory _$WatchLaterImpl.fromJson(Map<String, dynamic> json) =>
@@ -874,10 +917,12 @@ class _$WatchLaterImpl implements _WatchLater {
   final String contentId;
   @override
   final DateTime? createdAt;
+  @override
+  final FeedItem? item;
 
   @override
   String toString() {
-    return 'WatchLater(id: $id, platform: $platform, contentId: $contentId, createdAt: $createdAt)';
+    return 'WatchLater(id: $id, platform: $platform, contentId: $contentId, createdAt: $createdAt, item: $item)';
   }
 
   @override
@@ -891,13 +936,14 @@ class _$WatchLaterImpl implements _WatchLater {
             (identical(other.contentId, contentId) ||
                 other.contentId == contentId) &&
             (identical(other.createdAt, createdAt) ||
-                other.createdAt == createdAt));
+                other.createdAt == createdAt) &&
+            (identical(other.item, item) || other.item == item));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   int get hashCode =>
-      Object.hash(runtimeType, id, platform, contentId, createdAt);
+      Object.hash(runtimeType, id, platform, contentId, createdAt, item);
 
   /// Create a copy of WatchLater
   /// with the given fields replaced by the non-null parameter values.
@@ -919,6 +965,7 @@ abstract class _WatchLater implements WatchLater {
     required final String platform,
     required final String contentId,
     final DateTime? createdAt,
+    final FeedItem? item,
   }) = _$WatchLaterImpl;
 
   factory _WatchLater.fromJson(Map<String, dynamic> json) =
@@ -932,6 +979,8 @@ abstract class _WatchLater implements WatchLater {
   String get contentId;
   @override
   DateTime? get createdAt;
+  @override
+  FeedItem? get item;
 
   /// Create a copy of WatchLater
   /// with the given fields replaced by the non-null parameter values.

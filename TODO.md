@@ -583,21 +583,21 @@
 
 > 动态模块为后端主导功能，Flutter 端主要负责 UI 展示。
 
-- [ ] `features/feed/providers/feed_provider.dart`：动态数据管理
-- [ ] `features/feed/screens/feed_screen.dart`：动态流 UI
+- [x] `features/feed/providers/feed_provider.dart`：动态数据管理
+- [x] `features/feed/feed_screen.dart`：动态流 UI
   - 时间序卡片列表：`ListView.builder` + 无限滚动（`ScrollController` 触底加载更多）
   - 卡片内容：平台徽标、作者、封面缩略图、标题、发布时间（相对时间）、类型徽标
   - 视频/音频动态点击内嵌播放（复用统一播放器）或跳转原站
   - "已看到此处"进度锚点
   - 下拉刷新加载最新
   - "全部标为已读"按钮
-- [ ] 稍后观看（F-304）：
+- [x] 稍后观看（F-304）：
   - 动态卡片书签按钮（点击收录/取消，实心高亮）
   - 顶栏书签图标 + 数量角标
   - 点击角标展开稍后观看列表（`BottomSheet`）
   - 列表支持单条移除、内嵌播放
-- [ ] 订阅源管理：设置页添加/编辑/删除/启停
-- [ ] 手动触发抓取按钮
+- [x] 订阅源管理：设置页添加/编辑/删除/启停
+- [x] 手动触发抓取按钮
 
 ---
 

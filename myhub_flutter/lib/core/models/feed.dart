@@ -42,7 +42,7 @@ abstract class FeedSubscription with _$FeedSubscription {
       _$FeedSubscriptionFromJson(json);
 }
 
-/// 稍后观看条目（对应后端 watch_later 表）。
+/// 稍后观看条目（对应后端 watch_later 表，附带关联的动态详情）。
 @freezed
 abstract class WatchLater with _$WatchLater {
   const factory WatchLater({
@@ -50,6 +50,7 @@ abstract class WatchLater with _$WatchLater {
     required String platform,
     required String contentId,
     DateTime? createdAt,
+    FeedItem? item,
   }) = _WatchLater;
 
   factory WatchLater.fromJson(Map<String, dynamic> json) =>

@@ -73,6 +73,10 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 	browserSvc := service.NewBrowserService(browserRepo)
 	browserHandler := handler.NewBrowserHandler(browserSvc)
 
+	feedRepo := repository.NewFeedRepository(db)
+	feedSvc := service.NewFeedService(cfg, feedRepo)
+	feedHandler := handler.NewFeedHandler(feedSvc)
+
 	// 健康检查
 	r.GET("/api/health", handler.Health)
 
@@ -165,6 +169,23 @@ func Setup(cfg *config.Config, db *gorm.DB) (*gin.Engine, func()) {
 		// 系统配置
 		api.GET("/config", configHandler.GetAll)
 		api.PUT("/config", configHandler.BatchUpdate)
+
+		// 动态模块（1.12 / M5，代理 myhub-feed + 本地游标/稍后观看）
+		feed := api.Group("/feed")
+		{
+			feed.GET("", feedHandler.List)
+			feed.POST("/read", feedHandler.MarkRead)
+			feed.POST("/read-all", feedHandler.ReadAll)
+			feed.GET("/cursor", feedHandler.Cursor)
+			feed.GET("/subscriptions", feedHandler.ListSubscriptions)
+			feed.POST("/subscriptions", feedHandler.AddSubscription)
+			feed.DELETE("/subscriptions/:id", feedHandler.DeleteSubscription)
+			feed.POST("/fetch", feedHandler.Fetch)
+			feed.GET("/logs", feedHandler.ListLogs)
+			feed.GET("/watch-later", feedHandler.ListWatchLater)
+			feed.POST("/watch-later", feedHandler.AddWatchLater)
+			feed.DELETE("/watch-later", feedHandler.RemoveWatchLater)
+		}
 
 		// 浏览器（书签/历史/起始页快捷入口）
 		browser := api.Group("/browser")

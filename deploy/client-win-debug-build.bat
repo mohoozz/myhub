@@ -1,6 +1,6 @@
 @echo off
-REM dev-flutter.bat - clean, fetch deps and run Flutter Windows desktop
-REM Usage: double-click, or run "dev-flutter.bat" in terminal
+REM client-win-debug-build.bat - clean, fetch deps and run Flutter Windows desktop (debug)
+REM Usage: double-click, or run "client-win-debug-build.bat" in terminal
 
 cd /d "%~dp0..\myhub_flutter"
 
@@ -10,5 +10,5 @@ call flutter clean || exit /b 1
 echo ==^> flutter pub get
 call flutter pub get || exit /b 1
 
-echo ==^> flutter run -d windows
+echo ==^> flutter run -d windows (debug)
 call flutter run -d windows --dart-define=API_BASE_URL=http://localhost:8080

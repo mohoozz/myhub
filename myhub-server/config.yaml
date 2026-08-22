@@ -51,3 +51,7 @@ web:
   # 非 /api 路径优先匹配静态文件，未命中回退 index.html（前端路由）
   # 示例：dir: "web"
   dir: ""
+
+feed:
+  # 动态抓取服务（myhub-feed）地址，供本服务代理调用
+  base_url: "http://127.0.0.1:8100"

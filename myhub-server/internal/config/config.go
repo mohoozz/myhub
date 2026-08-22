@@ -18,6 +18,7 @@ type Config struct {
 	Internal InternalConfig `mapstructure:"internal"`
 	Trash    TrashConfig    `mapstructure:"trash"`
 	Web      WebConfig      `mapstructure:"web"`
+	Feed     FeedConfig     `mapstructure:"feed"`
 }
 
 // ServerConfig HTTP 服务配置
@@ -69,6 +70,12 @@ type WebConfig struct {
 	Dir string `mapstructure:"dir"` // Flutter Web 构建产物目录；为空则不托管
 }
 
+// FeedConfig 动态抓取服务（myhub-feed）配置
+type FeedConfig struct {
+	// BaseURL myhub-feed 服务地址（含协议与端口，不带 /api 后缀）
+	BaseURL string `mapstructure:"base_url"`
+}
+
 // Load 加载配置文件，并应用默认值与环境变量覆盖。
 // configPath 为空时默认读取当前目录下的 config.yaml。
 func Load(configPath string) (*Config, error) {
@@ -99,6 +106,7 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("internal.token", "myhub-internal-token-please-change")
 	v.SetDefault("trash.retention_days", 30)
 	v.SetDefault("web.dir", "")
+	v.SetDefault("feed.base_url", "http://127.0.0.1:8100")
 
 	// 环境变量覆盖：前缀 MYHUB，"." 替换为 "_"
 	// 例如 MYHUB_SERVER_PORT 覆盖 server.port

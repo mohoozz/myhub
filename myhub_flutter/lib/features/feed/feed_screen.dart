@@ -1,37 +1,279 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:myhub_flutter/core/api/feed_api.dart';
+import 'package:myhub_flutter/core/models/feed.dart';
+import 'package:myhub_flutter/features/feed/providers/feed_provider.dart';
+import 'package:myhub_flutter/features/feed/widgets/feed_card.dart';
+import 'package:myhub_flutter/features/feed/widgets/subscriptions_sheet.dart';
+import 'package:myhub_flutter/features/feed/widgets/watch_later_sheet.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
+import 'package:url_launcher/url_launcher.dart' as launcher;
 
-/// Placeholder feed page.
-class FeedScreen extends StatelessWidget {
+/// 动态流页面（M5）：时间序卡片列表 + 无限滚动 + 下拉刷新 + 全部标为已读，
+/// 顶栏提供书签（稍后观看）与订阅源管理入口。
+class FeedScreen extends ConsumerStatefulWidget {
   const FeedScreen({super.key});
+
+  @override
+  ConsumerState<FeedScreen> createState() => _FeedScreenState();
+}
+
+class _FeedScreenState extends ConsumerState<FeedScreen> {
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    // 首次进入拉取列表。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(feedListProvider.notifier).refresh();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      ref.read(feedListProvider.notifier).loadMore();
+    }
+  }
+
+  /// 点击卡片：跳转原站（B站/抖音有反爬，无法内嵌播放，走系统浏览器）。
+  Future<void> _openItem(FeedItem item) async {
+    if (item.url.isEmpty) return;
+    final uri = Uri.tryParse(item.url);
+    if (uri == null) return;
+    try {
+      await launcher.launchUrl(
+        uri,
+        mode: launcher.LaunchMode.externalApplication,
+      );
+    } catch (e) {
+      if (mounted) showTopSnackBar(context, '打开失败：$e');
+    }
+  }
+
+  /// 书签点击：收录 / 取消稍后观看。
+  Future<void> _toggleBookmark(FeedItem item) async {
+    final api = ref.read(feedApiProvider);
+    final current = ref.read(watchLaterProvider).valueOrNull ?? const [];
+    final exists = current.any(
+      (w) => w.platform == item.platform && w.contentId == item.contentId,
+    );
+    try {
+      if (exists) {
+        await api.removeWatchLater(item.platform, item.contentId);
+        if (mounted) showTopSnackBar(context, '已移出稍后观看');
+      } else {
+        await api.addWatchLater(item.platform, item.contentId);
+        if (mounted) showTopSnackBar(context, '已加入稍后观看');
+      }
+      ref.invalidate(watchLaterProvider);
+    } catch (e) {
+      if (mounted) showTopSnackBar(context, '操作失败：$e');
+    }
+  }
+
+  /// 全部标为已读。
+  Future<void> _markAllRead() async {
+    try {
+      await ref.read(feedListProvider.notifier).markAllRead();
+      if (mounted) showTopSnackBar(context, '已全部标为已读');
+    } catch (e) {
+      if (mounted) showTopSnackBar(context, '操作失败：$e');
+    }
+  }
+
+  /// 手动触发抓取。
+  Future<void> _triggerFetch() async {
+    try {
+      await ref.read(feedApiProvider).fetch();
+      if (mounted) showTopSnackBar(context, '已触发抓取');
+      await ref.read(feedListProvider.notifier).refresh();
+    } catch (e) {
+      if (mounted) showTopSnackBar(context, '抓取失败：$e');
+    }
+  }
+
+  void _showWatchLater() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => const WatchLaterSheet(),
+    );
+  }
+
+  void _showSubscriptions() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => const SubscriptionsSheet(),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 7),
-        child: Center(
+    final state = ref.watch(feedListProvider);
+    final watchLaterCount = ref.watch(watchLaterCountProvider);
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 860),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(7, 8, 7, 0),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(
-                LucideIcons.zap,
-                size: 40,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '动态',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: theme.colorScheme.onSurfaceVariant,
+              _buildHeader(theme, watchLaterCount),
+              const SizedBox(height: 8),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: () =>
+                      ref.read(feedListProvider.notifier).refresh(),
+                  child: _buildContent(theme, state),
                 ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildHeader(ThemeData theme, int watchLaterCount) {
+    return Row(
+      children: [
+        Text(
+          '动态',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const Spacer(),
+        // 书签（稍后观看）图标 + 数量角标。
+        IconButton(
+          icon: Badge(
+            isLabelVisible: watchLaterCount > 0,
+            label: Text('$watchLaterCount'),
+            child: const Icon(LucideIcons.bookmark, size: 16),
+          ),
+          onPressed: _showWatchLater,
+          tooltip: '稍后观看',
+          visualDensity: VisualDensity.compact,
+        ),
+        // 订阅源管理。
+        IconButton(
+          icon: const Icon(LucideIcons.rss, size: 16),
+          onPressed: _showSubscriptions,
+          tooltip: '订阅源管理',
+          visualDensity: VisualDensity.compact,
+        ),
+        // 手动触发抓取。
+        IconButton(
+          icon: const Icon(LucideIcons.refreshCw, size: 16),
+          onPressed: _triggerFetch,
+          tooltip: '手动抓取',
+          visualDensity: VisualDensity.compact,
+        ),
+        // 全部标为已读。
+        IconButton(
+          icon: const Icon(LucideIcons.checkCheck, size: 16),
+          onPressed: _markAllRead,
+          tooltip: '全部标为已读',
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildContent(ThemeData theme, FeedListState state) {
+    if (state.loading && state.items.isEmpty) {
+      return const Center(
+        child: SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+
+    if (state.items.isEmpty) {
+      return const _EmptyView();
+    }
+
+    final watchLater = ref.watch(watchLaterProvider).valueOrNull ?? const [];
+    final bookmarkedKeys = {
+      for (final w in watchLater) '${w.platform}|${w.contentId}',
+    };
+    final cursorId = ref.watch(feedCursorProvider).valueOrNull ?? 0;
+
+    return ListView.separated(
+      controller: _scrollController,
+      padding: const EdgeInsets.only(bottom: 24),
+      itemCount: state.items.length + (state.loadingMore ? 1 : 0),
+      separatorBuilder: (_, __) => const Divider(height: 1, indent: 12),
+      itemBuilder: (context, index) {
+        if (index >= state.items.length) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        final item = state.items[index];
+        final unread = cursorId == 0 || item.id > cursorId;
+        return FeedCard(
+          item: item,
+          unread: unread,
+          bookmarked: bookmarkedKeys.contains('${item.platform}|${item.contentId}'),
+          onTap: () => _openItem(item),
+          onToggleBookmark: () => _toggleBookmark(item),
+        );
+      },
+    );
+  }
+}
+
+class _EmptyView extends StatelessWidget {
+  const _EmptyView();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return ListView(
+      children: [
+        const SizedBox(height: 120),
+        Icon(
+          LucideIcons.zap,
+          size: 40,
+          color: colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(height: 10),
+        Text(
+          '暂无动态，点击右上角「订阅源」添加或「刷新」抓取',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
     );
   }
 }

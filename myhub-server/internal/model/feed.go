@@ -31,6 +31,9 @@ type FeedItem struct {
 	Description string    `gorm:"type:text" json:"description"`
 	PublishedAt time.Time `gorm:"not null;index" json:"published_at"` // 平台发布时间
 	CreatedAt   time.Time `json:"created_at"`
+	// SourceID 记录 myhub-feed 源库的条目自增 id，用于增量同步（since_id）游标。
+	// 不参与业务序列化，也不作为本地主键（本地 ID 独立自增，供前端游标分页）。
+	SourceID uint `gorm:"index" json:"-"`
 }
 
 // TableName 指定表名
