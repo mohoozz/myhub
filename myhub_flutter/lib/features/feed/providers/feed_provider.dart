@@ -1,8 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/feed_api.dart';
 import 'package:myhub_flutter/core/models/feed.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-/// 动态列表状态：分页数据 + 加载标记。
+/// 动态列表状态：分页数据 + 加载标记 + 当前阅读索引。
 class FeedListState {
   const FeedListState({
     this.items = const [],
@@ -10,6 +11,7 @@ class FeedListState {
     this.hasMore = true,
     this.loading = false,
     this.loadingMore = false,
+    this.currentIndex = 0,
   });
 
   final List<FeedItem> items;
@@ -18,12 +20,16 @@ class FeedListState {
   final bool loading;
   final bool loadingMore;
 
+  /// 当前正在阅读的动态下标（0 起），用于单条沉浸式浏览。
+  final int currentIndex;
+
   FeedListState copyWith({
     List<FeedItem>? items,
     int? cursorId,
     bool? hasMore,
     bool? loading,
     bool? loadingMore,
+    int? currentIndex,
   }) {
     return FeedListState(
       items: items ?? this.items,
@@ -31,6 +37,7 @@ class FeedListState {
       hasMore: hasMore ?? this.hasMore,
       loading: loading ?? this.loading,
       loadingMore: loadingMore ?? this.loadingMore,
+      currentIndex: currentIndex ?? this.currentIndex,
     );
   }
 }
@@ -41,6 +48,8 @@ final feedListProvider = NotifierProvider<FeedListNotifier, FeedListState>(
 );
 
 class FeedListNotifier extends Notifier<FeedListState> {
+  static const _kLastReadIdKey = 'feed.last_read_id';
+
   FeedApi get _api => ref.read(feedApiProvider);
 
   @override
@@ -49,17 +58,25 @@ class FeedListNotifier extends Notifier<FeedListState> {
     return const FeedListState();
   }
 
-  /// 下拉刷新 / 首次加载：拉取最新一页。
+  /// 下拉刷新 / 首次加载：拉取最新一页，并恢复到上次阅读的动态。
   Future<void> refresh() async {
     if (state.loading) return;
     state = state.copyWith(loading: true);
     try {
       final page = await _api.listFeed(limit: 20);
+      // 恢复阅读进度：以稳定的 item id 定位上次阅读的动态（找不到则回到最新）。
+      final lastReadId = await _loadLastReadId();
+      var index = 0;
+      if (lastReadId > 0) {
+        final i = page.items.indexWhere((it) => it.id == lastReadId);
+        if (i >= 0) index = i;
+      }
       state = FeedListState(
         items: page.items,
         cursorId: page.cursorId,
         hasMore: page.hasMore,
         loading: false,
+        currentIndex: index,
       );
     } catch (_) {
       state = state.copyWith(loading: false);
@@ -83,6 +100,25 @@ class FeedListNotifier extends Notifier<FeedListState> {
       state = state.copyWith(loadingMore: false);
       rethrow;
     }
+  }
+
+  /// 切换当前阅读的动态并持久化进度（记录稳定 item id）。
+  Future<void> setCurrentIndex(int index) async {
+    if (index == state.currentIndex) return;
+    state = state.copyWith(currentIndex: index);
+    if (index >= 0 && index < state.items.length) {
+      await _saveLastReadId(state.items[index].id);
+    }
+  }
+
+  Future<int> _loadLastReadId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_kLastReadIdKey) ?? 0;
+  }
+
+  Future<void> _saveLastReadId(int id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kLastReadIdKey, id);
   }
 
   /// 全部标为已读。

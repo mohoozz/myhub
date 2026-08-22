@@ -4,14 +4,15 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/feed_api.dart';
 import 'package:myhub_flutter/core/models/feed.dart';
 import 'package:myhub_flutter/features/feed/providers/feed_provider.dart';
-import 'package:myhub_flutter/features/feed/widgets/feed_card.dart';
+import 'package:myhub_flutter/features/feed/widgets/feed_detail_card.dart';
+import 'package:myhub_flutter/features/feed/widgets/feed_paged_viewer.dart';
 import 'package:myhub_flutter/features/feed/widgets/subscriptions_sheet.dart';
 import 'package:myhub_flutter/features/feed/widgets/watch_later_sheet.dart';
 import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:url_launcher/url_launcher.dart' as launcher;
 
-/// 动态流页面（M5）：时间序卡片列表 + 无限滚动 + 下拉刷新 + 全部标为已读，
-/// 顶栏提供书签（稍后观看）与订阅源管理入口。
+/// 动态流页面（M5）：单条沉浸式垂直翻页浏览，上/下方向键、滚轮、
+/// 手势、悬浮按钮均可切换，并记录阅读进度（下次进入恢复到上次阅读的动态）。
 class FeedScreen extends ConsumerStatefulWidget {
   const FeedScreen({super.key});
 
@@ -20,29 +21,13 @@ class FeedScreen extends ConsumerStatefulWidget {
 }
 
 class _FeedScreenState extends ConsumerState<FeedScreen> {
-  final _scrollController = ScrollController();
-
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
-    // 首次进入拉取列表。
+    // 首次进入拉取列表（内部会恢复阅读进度）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(feedListProvider.notifier).refresh();
     });
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  void _onScroll() {
-    if (_scrollController.position.pixels >=
-        _scrollController.position.maxScrollExtent - 200) {
-      ref.read(feedListProvider.notifier).loadMore();
-    }
   }
 
   /// 点击卡片：跳转原站（B站/抖音有反爬，无法内嵌播放，走系统浏览器）。
@@ -137,13 +122,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
             children: [
               _buildHeader(theme, watchLaterCount),
               const SizedBox(height: 8),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: () =>
-                      ref.read(feedListProvider.notifier).refresh(),
-                  child: _buildContent(theme, state),
-                ),
-              ),
+              Expanded(child: _buildContent(theme, state)),
             ],
           ),
         ),
@@ -216,33 +195,24 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final bookmarkedKeys = {
       for (final w in watchLater) '${w.platform}|${w.contentId}',
     };
-    final cursorId = ref.watch(feedCursorProvider).valueOrNull ?? 0;
 
-    return ListView.separated(
-      controller: _scrollController,
-      padding: const EdgeInsets.only(bottom: 24),
-      itemCount: state.items.length + (state.loadingMore ? 1 : 0),
-      separatorBuilder: (_, __) => const Divider(height: 1, indent: 12),
+    return FeedPagedViewer(
+      itemCount: state.items.length,
+      initialIndex: state.currentIndex.clamp(0, state.items.length - 1),
+      onIndexChanged: (index) {
+        ref.read(feedListProvider.notifier).setCurrentIndex(index);
+      },
+      onReachEnd: () {
+        ref.read(feedListProvider.notifier).loadMore();
+      },
       itemBuilder: (context, index) {
-        if (index >= state.items.length) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          );
-        }
         final item = state.items[index];
-        final unread = cursorId == 0 || item.id > cursorId;
-        return FeedCard(
+        return FeedDetailCard(
           item: item,
-          unread: unread,
-          bookmarked: bookmarkedKeys.contains('${item.platform}|${item.contentId}'),
-          onTap: () => _openItem(item),
+          bookmarked: bookmarkedKeys.contains(
+            '${item.platform}|${item.contentId}',
+          ),
+          onOpen: () => _openItem(item),
           onToggleBookmark: () => _toggleBookmark(item),
         );
       },
