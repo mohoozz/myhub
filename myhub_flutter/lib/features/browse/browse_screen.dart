@@ -243,9 +243,15 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
 
   void _openItem(FileItem item) {
     if (item.isDir) {
-      _searchController.clear();
-      ref.read(searchQueryProvider.notifier).state = '';
-      ref.read(browsePathProvider.notifier).state = item.path;
+      // 延迟到下一帧再切换目录：让 InkWell 的水波纹点击动画先渲染出来。
+      // 否则同步切换路径会导致列表立即重建，动画被截断/推迟到新目录
+      // 渲染后才出现，造成"先跳转、后出现点击动画"的观感。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _searchController.clear();
+        ref.read(searchQueryProvider.notifier).state = '';
+        ref.read(browsePathProvider.notifier).state = item.path;
+      });
       return;
     }
     if (item.isVideo || item.isAudio) {
@@ -1274,9 +1280,6 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
         final selectionMode = ref.watch(selectionModeProvider);
         // 移动端无右键，长按（非多选模式）弹出与 PC 右键相同的上下文菜单；
         // 桌面端长按保留"进入多选模式"（长按手势与菜单手势互斥，需按平台二选一）。
-        final longPressMenu = !isDesktopPlatform && !selectionMode
-            ? _showItemMenu
-            : null;
         final favoriteSourceId = ref.read(effectiveSourceProvider)?.id;
         final highlightPath = ref.watch(highlightFileProvider);
         final nameLines = ref.watch(fileNameLinesProvider);
@@ -1329,8 +1332,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
                   ? (f) => selectionNotifier.toggle(f.path)
                   : isDesktopPlatform
                   ? (f) => selectionNotifier.enter(f.path)
-                  : null,
-              onLongPressMenu: longPressMenu,
+                  : (f) => unawaited(_showItemMenu(f, Offset.zero)),
               coverSourceId: favoriteSourceId,
               onShowMenu: _showItemMenu,
               highlightPath: highlightPath,
@@ -1350,8 +1352,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
                   ? (f) => selectionNotifier.toggle(f.path)
                   : isDesktopPlatform
                   ? (f) => selectionNotifier.enter(f.path)
-                  : null,
-              onLongPressMenu: longPressMenu,
+                  : (f) => unawaited(_showItemMenu(f, Offset.zero)),
               coverSourceId: favoriteSourceId,
               onShowMenu: _showItemMenu,
               highlightPath: highlightPath,
@@ -1407,9 +1408,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
                   else
                     const SizedBox(width: 15),
                   const SizedBox(width: 8),
-                  Text(
-                    '${_fieldLabel(field)}${asc ? '（升序）' : '（降序）'}',
-                  ),
+                  Text('${_fieldLabel(field)}${asc ? '（升序）' : '（降序）'}'),
                 ],
               ),
             ),
