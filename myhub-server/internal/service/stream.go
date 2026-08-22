@@ -134,15 +134,28 @@ func (s *StreamService) Stat(ctx context.Context, sourceID uint, p string) (*ada
 	return a.Stat(ctx, p)
 }
 
-// ProbeCodec 探测视频主流的编码名（如 "hevc"、"h264"、"vp9"）。
-// 客户端据此在播放前决定直连硬解还是转码/软解，避免"黑屏有声"再兜底。
+// ProbeCodec 探测视频与音频主流的编码名（如 "hevc"/"h264"、"aac"/"ac3"），
+// 以及音频的 codec_tag（如 "mp4a"），供客户端识别畸形封装（如 mp4a tag 装 MP3）。
+// 客户端据此在播放前决定直连硬解还是转码/软解，避免"黑屏有声"或"有声无图"再兜底。
 // 探测失败返回空字符串（客户端按"未知"处理，走既有兜底路径）。
-func (s *StreamService) ProbeCodec(ctx context.Context, sourceID uint, p string) string {
+func (s *StreamService) ProbeCodec(ctx context.Context, sourceID uint, p string) (videoCodec, audioCodec, audioTag string) {
 	_, source, err := s.sourceSvc.GetAdapter(sourceID)
 	if err != nil {
-		return ""
+		return "", "", ""
 	}
-	return probeVideoCodec(ctx, source, p)
+	video := probeVideoCodec(ctx, source, p)
+	audio := probeAudioCodec(ctx, source, p)
+	// audio 形如 "mp3,mp4a"（codec_name,codec_tag_string），无音频轨时为空
+	audioCodec, audioTag = "", ""
+	if audio != "" {
+		if parts := strings.SplitN(audio, ",", 2); len(parts) == 2 {
+			audioCodec = strings.TrimSpace(parts[0])
+			audioTag = strings.TrimSpace(parts[1])
+		} else {
+			audioCodec = strings.TrimSpace(audio)
+		}
+	}
+	return video, audioCodec, audioTag
 }
 
 // Open 打开文件流（支持 Range）

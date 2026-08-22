@@ -71,6 +71,44 @@ func probeVideoCodec(ctx context.Context, source *model.Source, p string) string
 	return strings.TrimSpace(string(out))
 }
 
+// probeAudioCodec 用 ffprobe 探测主音频流编码名（如 "aac"、"ac3"、"eac3"）。
+// 返回 codec_name|codec_tag_string 两个值（空格分隔，csv 一行两列）。
+// 探测失败返回空字符串（调用方按"未知"处理）。
+func probeAudioCodec(ctx context.Context, source *model.Source, p string) string {
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return ""
+	}
+	inputArgs, err := ffmpegInputArgs(source, p)
+	if err != nil {
+		return ""
+	}
+	probeOpts := []string{
+		"-analyzeduration", "3000000",
+		"-probesize", "10485760",
+	}
+	args := make([]string, 0, len(inputArgs)+len(probeOpts)+8)
+	for _, a := range inputArgs {
+		if a == "-i" {
+			args = append(args, probeOpts...)
+		}
+		args = append(args, a)
+	}
+	args = append(args,
+		"-v", "error",
+		"-select_streams", "a:0",
+		"-show_entries", "stream=codec_name,codec_tag_string",
+		"-of", "csv=p=0",
+	)
+	cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cmdCtx, ffprobe, args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // ffmpegInputArgs 构造 ffmpeg 输入参数（含 -i）。
 // 本地源直接用文件绝对路径；WebDAV 源用 URL + Basic 认证头。
 func ffmpegInputArgs(source *model.Source, p string) ([]string, error) {

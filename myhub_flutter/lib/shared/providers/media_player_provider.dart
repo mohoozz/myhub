@@ -614,11 +614,15 @@ class MediaPlayerController {
     unawaited(_switchToSoftDecode());
   }
 
-  /// 播放前探测编码：HEVC 等 iOS 无法硬解的编码直接切软解。
+  /// 播放前探测编码：HEVC 等 iOS 无法硬解的视频编码、以及 iOS AVPlayer
+  /// 无法解码的音频编码（如 AC-3/E-AC-3/DTS），直接切软解。
   ///
   /// 在 AVPlayer 开始播放的同时并行探测（服务端 ffprobe，约几百 ms），
-  /// 探测到无法硬解的编码后立即切软解，避免「黑屏 3 秒后无帧检测兜底」
-  /// 的长时间黑屏。探测失败/非 HEVC 则保持 AVPlayer（无帧检测仍兜底）。
+  /// 探测到无法硬解的视频编码后立即切软解，避免「黑屏 3 秒后无帧检测兜底」
+  /// 的长时间黑屏。同时探测音频编码：iOS AVPlayer 对 h264 视频能硬解（有画面）
+  /// 但会静默丢弃不支持的音轨（AC-3 等），表现为「有画面无声音」，需要切
+  /// media_kit 软解（mpv 内置软解几乎所有音频编码）。探测失败/兼容则保持
+  /// AVPlayer（无帧检测仍兜底）。
   Future<void> _probeAndMaybeSoftDecode(int sourceId, FileItem file) async {
     try {
       final dio = _ref.read(dioProvider);
@@ -629,17 +633,65 @@ class MediaPlayerController {
       // 服务端统一响应结构为 {code, data, message}，真实数据在 data 字段。
       final data = resp.data?['data'] as Map<String, dynamic>?;
       final codec = (data?['codec'] as String?)?.toLowerCase() ?? '';
-      debugPrint('[player] 探测编码: codec=$codec resp=${resp.data}');
+      final audioCodec = (data?['audioCodec'] as String?)?.toLowerCase() ?? '';
+      final audioTag = (data?['audioTag'] as String?)?.toLowerCase() ?? '';
+      debugPrint('[player] 探测编码: codec=$codec audioCodec=$audioCodec '
+          'audioTag=$audioTag resp=${resp.data}');
       // 会话已切换或已切软解：放弃本次探测结果
       if (!hasMedia || _file?.path != file.path || _softDecode) return;
-      if (codec == 'hevc' || codec == 'h265' || codec == 'x265') {
+      final videoIncompatible =
+          codec == 'hevc' || codec == 'h265' || codec == 'x265';
+      final audioIncompatible = _isAvPlayerIncompatibleAudio(
+        audioCodec,
+        audioTag: audioTag,
+      );
+      if (videoIncompatible || audioIncompatible) {
         _softDecode = true;
-        debugPrint('[player] 探测到 HEVC，提前切换 media_kit 软解');
+        debugPrint('[player] 探测到不兼容编码（video=$codec audio=$audioCodec'
+            '/$audioTag），提前切换 media_kit 软解');
         unawaited(_switchToSoftDecode());
       }
     } catch (e) {
       // 探测失败（网络/无 ffprobe 等）：保持 AVPlayer，靠无帧检测兜底
       debugPrint('[player] 编码探测失败，保持 AVPlayer: $e');
+    }
+  }
+
+  /// 判断音频编码是否 iOS AVPlayer 无法解码。
+  ///
+  /// AVPlayer（CoreAudio 内置软解）仅支持 AAC/MP3/ALAC/PCM/AMR 等少数编码；
+  /// 对 AC-3 / E-AC-3 / DTS / TrueHD / Opus / Vorbis / FLAC 等会静默丢弃音轨，
+  /// 表现为「有画面无声音」。这些需要 media_kit（mpv/libavcodec）软解。
+  ///
+  /// 另处理「畸形封装」：ShanaEncoder 等压制器会把 MP3 音频用 mp4a tag 封装进
+  /// MP4（codec_tag=mp4a 但实际编码非 aac）。iOS AVPlayer 按 mp4a tag 走 AAC
+  /// 解码器，实际数据是 MP3 帧 → 解码失败静默丢音轨（有画面无声音），而 mpv
+  /// 能正确识别。当 tag 是 mp4a 且编码不是 aac 时判定为不兼容。
+  bool _isAvPlayerIncompatibleAudio(String codec, {String? audioTag}) {
+    if (codec.isEmpty) return false; // 无音频轨或探测失败，不干预
+    // 畸形封装：mp4a tag 装着非 AAC 编码
+    if (audioTag == 'mp4a' && codec != 'aac') {
+      return true;
+    }
+    switch (codec) {
+      case 'ac3':
+      case 'eac3':
+      case 'ec-3':
+      case 'dts':
+      case 'truehd':
+      case 'mlp':
+      case 'opus':
+      case 'vorbis':
+      case 'flac':
+      case 'wmav2':
+      case 'wmav1':
+      case 'wmapro':
+      case 'ape':
+      case 'mp2':
+      case 'mp1':
+        return true;
+      default:
+        return false;
     }
   }
 

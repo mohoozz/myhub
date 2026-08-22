@@ -97,9 +97,9 @@ func (h *StreamHandler) handleProbe(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, http.StatusBadRequest, "缺少 path 参数")
 		return
 	}
-	codec := h.streamSvc.ProbeCodec(c.Request.Context(), sourceID, p)
-	log.Printf("[probe] sourceID=%d path=%s codec=%q", sourceID, p, codec)
-	Success(c, gin.H{"codec": codec})
+	videoCodec, audioCodec, audioTag := h.streamSvc.ProbeCodec(c.Request.Context(), sourceID, p)
+	log.Printf("[probe] sourceID=%d path=%s codec=%q audio=%q audioTag=%q", sourceID, p, videoCodec, audioCodec, audioTag)
+	Success(c, gin.H{"codec": videoCodec, "audioCodec": audioCodec, "audioTag": audioTag})
 }
 
 // handleRaw 原始流：解析 Range 头，返回 200 全量或 206 部分内容
