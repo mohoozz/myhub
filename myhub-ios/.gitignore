@@ -1,0 +1,16 @@
+# XcodeGen 生成的工程（由 project.yml 重新生成，不入库）
+MyHub.xcodeproj/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# SwiftPM
+.swiftpm/
+.build/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
