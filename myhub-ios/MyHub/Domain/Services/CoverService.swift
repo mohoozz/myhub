@@ -22,7 +22,11 @@ actor CoverService {
     /// 单条封面读取的字节上限（防大图/异常文件撑爆内存）
     private let maxImageBytes: Int64 = 24 * 1024 * 1024
     /// 远程视频抽帧的前缀下载量（moov 前置的 mp4/mov 足够；失败则占位）
-    private let videoProbeBytes: Int64 = 8 * 1024 * 1024
+    private let videoProbeBytes: Int64 = 32 * 1024 * 1024
+    /// 远程音频内嵌封面整文件下载上限（音频通常较小，内嵌封面位置不可预测）
+    private let audioCoverMaxBytes: Int64 = 64 * 1024 * 1024
+    /// 远程 rar/cbr 漫画封面整文件下载上限（UnrarKit 需本地文件）
+    private let rarCoverMaxBytes: Int64 = 150 * 1024 * 1024
 
     private final class Box {
         let result: CoverResult
@@ -153,12 +157,17 @@ actor CoverService {
             case .video:
                 return try await videoCover(entry: entry, connection: connection, adapter: adapter)
             case .audio:
-                guard let coverEntry = Self.audioCoverEntry(in: siblings, for: entry) else {
-                    return CoverResult(image: nil, duration: nil)
+                // 1. 同目录图片约定（同名 / cover / folder / front）
+                if let coverEntry = Self.audioCoverEntry(in: siblings, for: entry) {
+                    let data = try await readAll(adapter: adapter, path: coverEntry.path, limit: maxImageBytes)
+                    let image = await Task.detached { ImageDownsampler.downsample(data: data) }.value
+                    if image != nil { return CoverResult(image: image, duration: nil) }
                 }
-                let data = try await readAll(adapter: adapter, path: coverEntry.path, limit: maxImageBytes)
-                let image = await Task.detached { ImageDownsampler.downsample(data: data) }.value
-                return CoverResult(image: image, duration: nil)
+                // 2. 音频内嵌封面（ID3 APIC / m4a covr / flac PICTURE）
+                if let image = try await embeddedAudioCover(entry: entry, adapter: adapter) {
+                    return CoverResult(image: image, duration: nil)
+                }
+                return CoverResult(image: nil, duration: nil)
             case .comic:
                 let image = try await comicCover(entry: entry, connection: connection, adapter: adapter)
                 return CoverResult(image: image, duration: nil)
@@ -209,7 +218,7 @@ actor CoverService {
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 512, height: 512)
         let time = CMTime(seconds: 0.1, preferredTimescale: 600)
-        let (image, _, _) = try await generator.image(at: time)
+        let (image, _) = try await generator.image(at: time)
         return CoverResult(image: UIImage(cgImage: image), duration: seconds)
     }
 
@@ -227,21 +236,36 @@ actor CoverService {
             let data = try await reader.extract(first)
             return await Task.detached { ImageDownsampler.downsample(data: data) }.value
         case "rar", "cbr":
-            // UnrarKit 需要文件 URL：仅本地源支持；远程源待 §4.2 数据源层落地后接入
-            guard let local = adapter as? LocalAdapter, let url = local.localFileURL(for: entry.path) else {
-                return nil
+            // 本地源直接 UnrarKit；远程源整文件下载后解析（设上限，超大归档跳过）
+            if let local = adapter as? LocalAdapter, let url = local.localFileURL(for: entry.path) {
+                return try await local.withLocalAccess {
+                    try Self.unrarCover(url: url)
+                }
             }
-            return try await local.withLocalAccess {
-                let archive = try URKArchive(url: url)
-                let names = try archive.listFilenames()
-                    .filter { ["jpg", "jpeg", "png", "gif", "webp", "bmp"].contains(StoragePath.ext(of: $0)) }
-                guard let first = names.naturalSorted().first,
-                      let data = try archive.extractData(from: first) else { return nil }
-                return ImageDownsampler.downsample(data: data)
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("comic-cover-\(UUID().uuidString).\(entry.ext)")
+            do {
+                let data = try await readAll(adapter: adapter, path: entry.path, limit: rarCoverMaxBytes)
+                try data.write(to: temp)
+                defer { try? FileManager.default.removeItem(at: temp) }
+                return try Self.unrarCover(url: temp)
+            } catch {
+                try? FileManager.default.removeItem(at: temp)
+                return nil
             }
         default:
             return nil
         }
+    }
+
+    /// rar/cbr 抽取首个图片条目（本地/临时文件 URL 通用）
+    private static func unrarCover(url: URL) throws -> UIImage? {
+        let archive = try URKArchive(url: url)
+        let names = try archive.listFilenames()
+            .filter { ["jpg", "jpeg", "png", "gif", "webp", "bmp"].contains(StoragePath.ext(of: $0)) }
+        guard let first = names.naturalSorted().first else { return nil }
+        let data = try archive.extractData(fromFile: first)
+        return ImageDownsampler.downsample(data: data)
     }
 
     // MARK: - 音频：同目录封面约定
@@ -257,6 +281,41 @@ actor CoverService {
             if fallback == nil, ["cover", "folder", "front"].contains(stem) { fallback = sibling }
         }
         return fallback
+    }
+
+    // MARK: - 音频：内嵌封面
+
+    /// 音频内嵌封面（ID3 APIC / m4a covr / flac PICTURE）。
+    /// 本地直接读 metadata；远程整文件下载（限上限，内嵌封面位置不可预测）。
+    private func embeddedAudioCover(entry: FileEntry, adapter: StorageAdapter) async throws -> UIImage? {
+        if let local = adapter as? LocalAdapter, let url = local.localFileURL(for: entry.path) {
+            return try await local.withLocalAccess {
+                try await Self.audioArtwork(url: url)
+            }
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("audio-cover-\(UUID().uuidString).\(entry.ext.isEmpty ? "bin" : entry.ext)")
+        do {
+            let data = try await readAll(adapter: adapter, path: entry.path, limit: audioCoverMaxBytes)
+            try data.write(to: temp)
+            defer { try? FileManager.default.removeItem(at: temp) }
+            return try await Self.audioArtwork(url: temp)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            return nil
+        }
+    }
+
+    /// 读取音频文件的 artwork 内嵌封面（AVFoundation 支持 mp3/m4a/aac/flac/wav 等）
+    private static func audioArtwork(url: URL) async throws -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        guard let metadata = try? await asset.load(.commonMetadata) else { return nil }
+        for element in metadata where element.commonKey == AVMetadataKey.commonKeyArtwork {
+            if let data = try? await element.load(.dataValue), let image = UIImage(data: data) {
+                return image
+            }
+        }
+        return nil
     }
 
     // MARK: - 流收集

@@ -20,7 +20,7 @@ struct ReaderPreferencesView: View {
                 }
                 Toggle("正文宋体（思源宋体）", isOn: $useSerifFont)
             }
-            Section("外观") {
+            Section {
                 Picker("阅读主题", selection: $theme) {
                     Text("日间").tag(ReaderTheme.day)
                     Text("护眼").tag(ReaderTheme.eyeCare)
@@ -35,6 +35,8 @@ struct ReaderPreferencesView: View {
                     Text("从右向左").tag(ComicReadingDirection.rightToLeft)
                     Text("从左向右").tag(ComicReadingDirection.leftToRight)
                 }
+            } header: {
+                Text("外观")
             } footer: {
                 Text("此处为默认值，阅读器内仍可临时调整；漫画「自动」方向默认日漫从右向左。")
             }

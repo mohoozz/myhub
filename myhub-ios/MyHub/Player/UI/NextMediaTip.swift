@@ -6,7 +6,7 @@ enum NextMediaFinder {
     static func find(after item: PlayableItem) async -> (Connection, FileEntry)? {
         guard let connectionID = item.connectionID,
               let db = AppDatabase.shared.dbQueue,
-              let connection = try? db.read({ try Connection.fetchOne($0, id: connectionID) }),
+              let connection = try? await db.read({ try Connection.fetchOne($0, id: connectionID) }),
               let adapter = try? AdapterFactory.makeAdapter(for: connection) else { return nil }
 
         let mediaType = MediaType.detect(ext: StoragePath.ext(of: item.path))

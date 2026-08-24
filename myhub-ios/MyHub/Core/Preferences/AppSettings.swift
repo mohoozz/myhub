@@ -142,6 +142,8 @@ enum AppSettings {
         @RawUserDefault("browse.viewMode", default: .grid) static var viewMode: BrowseViewMode
         /// 各连接源最后浏览路径（key = connectionID），二次进入恢复
         @UserDefault("browse.lastPaths", default: [:]) static var lastPaths: [String: String]
+        /// 网格卡片文件名显示行数（3~5），配合 reservesSpace 让卡片高度一致
+        @UserDefault("browse.fileNameLines", default: 3) static var fileNameLines: Int
     }
 
     /// 收藏页偏好（IOS-107）

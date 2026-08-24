@@ -16,7 +16,7 @@ struct CacheSettingsView: View {
 
     var body: some View {
         Form {
-            Section("缓存占用") {
+            Section {
                 HStack {
                     Text("总计")
                     Spacer()
@@ -34,23 +34,29 @@ struct CacheSettingsView: View {
                     .onTapGesture { clearing = partition }
                 }
                 Button("清空全部缓存", role: .destructive) { confirmClearAll = true }
+            } header: {
+                Text("缓存占用")
             } footer: {
                 Text("点击某类缓存可单独清理；缓存均可重建，清理不影响阅读进度与收藏。")
             }
 
-            Section("缓存策略") {
+            Section {
                 Picker("容量上限", selection: $totalLimitMB) {
                     ForEach(Self.limitOptions, id: \.self) { mb in
                         Text(DisplayFormatters.size(Int64(mb) * 1024 * 1024)).tag(mb)
                     }
                 }
                 Toggle("内容缓存本地化", isOn: $contentCachingEnabled)
+            } header: {
+                Text("缓存策略")
             } footer: {
                 Text("媒体分片超出容量上限时按 LRU 自动淘汰；开启本地化后，漫画/视频/音频/小说在使用时产生的缓存保存在本地，下次打开无需重新加载。")
             }
 
-            Section("回收站") {
+            Section {
                 Stepper("保留 \(trashRetentionDays) 天", value: $trashRetentionDays, in: 1...90)
+            } header: {
+                Text("回收站")
             } footer: {
                 Text("超过保留天数的回收站内容会在进入回收站页面时自动清理。")
             }

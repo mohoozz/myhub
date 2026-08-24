@@ -23,12 +23,12 @@ final class VLCEngine: NSObject, PlaybackEngine {
     var videoOutput: Any? { player }
 
     var duration: TimeInterval {
-        guard let seconds = player.media?.length?.value?.doubleValue, seconds > 0 else { return 0 }
+        guard let seconds = player.media?.length.value?.doubleValue, seconds > 0 else { return 0 }
         return seconds / 1000
     }
 
     var currentTime: TimeInterval {
-        guard let seconds = player.time?.value?.doubleValue, seconds > 0 else { return 0 }
+        guard let seconds = player.time.value?.doubleValue, seconds > 0 else { return 0 }
         return seconds / 1000
     }
 

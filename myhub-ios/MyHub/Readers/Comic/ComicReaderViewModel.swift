@@ -149,10 +149,12 @@ final class ComicReaderViewModel: ObservableObject {
         state = .ready
 
         // 封面缩略图缓存（「正在阅读」封面，异步不阻塞）
+        let coverConnectionID = connectionID
+        let coverPath = entry.path
         Task.detached(priority: .utility) { [weak self] in
             guard let self, let data = try? await source.pageData(at: 0) else { return }
             let key = ComicProgressStore.cacheCover(
-                data: data, connectionID: self.connectionID, path: self.entry.path
+                data: data, connectionID: coverConnectionID, path: coverPath
             )
             await MainActor.run { self.coverKey = key }
         }

@@ -166,6 +166,23 @@ final class EpubBook {
         return blocks
     }
 
+    /// 漫画阅读器用：按 spine 阅读顺序返回所有插图条目名（仅解析 XHTML 内 <img>，不加载图片数据）
+    func comicPageNames() async throws -> [String] {
+        guard let zip else { throw BookError.offlineUncached }
+        var names: [String] = []
+        for item in spine {
+            guard let zipEntry = entryMap[item.name],
+                  let data = try? await zip.extract(zipEntry) else { continue }
+            let blocks = EpubHTMLParser.parse(data: data, baseDir: Self.directory(of: item.name))
+            for block in blocks {
+                if case .image(let name, _) = block {
+                    names.append(name)
+                }
+            }
+        }
+        return names
+    }
+
     /// zip 内图片数据（内存缓存）
     func imageData(named name: String) async throws -> Data? {
         guard let zip else { return nil }

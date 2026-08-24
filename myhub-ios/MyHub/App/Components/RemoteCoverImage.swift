@@ -11,6 +11,8 @@ struct RemoteCoverImage: View {
     /// 当前目录兄弟条目（音频按同名/cover/folder/front 约定找封面，零额外请求）
     var siblings: [FileEntry] = []
     @Binding var duration: Double?
+    /// 沉浸占位（「正在阅读」网格卡）：无封面时类型渐变底 + 白色图标
+    var immersivePlaceholder = false
 
     @State private var result: CoverResult?
 
@@ -19,27 +21,44 @@ struct RemoteCoverImage: View {
         connection: Connection,
         adapter: StorageAdapter,
         siblings: [FileEntry] = [],
-        duration: Binding<Double?> = .constant(nil)
+        duration: Binding<Double?> = .constant(nil),
+        immersivePlaceholder: Bool = false
     ) {
         self.entry = entry
         self.connection = connection
         self.adapter = adapter
         self.siblings = siblings
         self._duration = duration
+        self.immersivePlaceholder = immersivePlaceholder
     }
 
     var body: some View {
         ZStack {
-            AppColors.cardBackground
+            if immersivePlaceholder {
+                entry.coverPlaceholderGradient
+            } else {
+                AppColors.cardBackground
+            }
             if let image = result?.image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
+                // 用 Color.clear 撑满容器，图片仅作为 overlay 填充，避免图片原始分辨率
+                // 作为理想尺寸泄漏到外层布局（否则漫画/竖屏视频封面的卡片会被撑高、
+                // 正常视频封面会比无封面的宽，导致网格卡片大小不一）。
+                Color.clear
+                    .overlay {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    }
+                    .clipped()
                     .transition(.opacity)
             } else {
                 Image(systemName: entry.placeholderSymbol)
-                    .font(.title2)
-                    .foregroundStyle(entry.isDir ? AppColors.primary : AppColors.textSecondary)
+                    .font(immersivePlaceholder ? .system(size: 40) : .title2)
+                    .foregroundStyle(
+                        immersivePlaceholder
+                            ? Color.white.opacity(0.9)
+                            : (entry.isDir ? AppColors.primary : AppColors.textSecondary)
+                    )
             }
         }
         .clipped()
@@ -55,6 +74,19 @@ struct RemoteCoverImage: View {
 }
 
 extension FileEntry {
+    /// 无封面时的类型渐变底（参照旧版 Flutter 深色配色）
+    var coverPlaceholderGradient: LinearGradient {
+        let colors: [Color]
+        switch MediaType.detect(ext: ext) {
+        case .video: colors = [Color(hex: 0x0D0D2B), Color(hex: 0x000000)]
+        case .audio: colors = [Color(hex: 0x0F2027), Color(hex: 0x203A43)]
+        case .novel: colors = [Color(hex: 0x1A0533), Color(hex: 0x0D021A)]
+        case .comic: colors = [Color(hex: 0x2D1515), Color(hex: 0x1A0A0A)]
+        default: colors = [Color(hex: 0x232526), Color(hex: 0x000000)]
+        }
+        return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
     /// 占位 / 无封面时的类型图标
     var placeholderSymbol: String {
         if isDir { return "folder.fill" }

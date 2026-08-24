@@ -36,22 +36,25 @@ enum GestureFeedback: Equatable {
 /// - 水平滑动调节进度（松手 seek）；右侧 1/3 竖滑调音量（系统联动，步进 5%）；左侧 1/3 竖滑调亮度；
 /// - **画面中央 1/3 向下拖动进入 mini（跟随手指偏移，松手过阈值进入，带过渡动画）**；
 /// - 双击左/右快退/快进（步进 AppSettings.Player.seekStepSeconds，默认 10s）；双击中央播放/暂停；
-/// - 长按 2x 倍速，松开恢复；单击切换控制层。
+/// - 单击切换控制层；长按进入界面锁定。
 struct PlayerGestureLayer: View {
     @ObservedObject var core: PlayerCore
     @Binding var feedback: GestureFeedback?
     /// 中央下拉偏移（PlayerView 据此做跟随动画）
     @Binding var miniDragOffset: CGFloat
+    /// 界面锁定状态（锁定后手势层整体失效，由 PlayerView 提供解锁入口）
+    @Binding var isLocked: Bool
     let onToggleControls: () -> Void
     /// 下拉过阈值进入 mini
     let onMini: () -> Void
+    /// 长按进入界面锁定
+    let onLock: () -> Void
 
     @State private var dragMode: DragMode?
     @State private var seekBase: TimeInterval = 0
     @State private var seekTarget: TimeInterval = 0
     @State private var gestureStartVolume: Float = 0
     @State private var gestureStartBrightness: CGFloat = 0
-    @State private var rateBeforeLongPress: Float?
     @State private var hideTask: Task<Void, Never>?
 
     private enum DragMode { case seek, volume, brightness, mini }
@@ -68,10 +71,10 @@ struct PlayerGestureLayer: View {
                     onToggleControls()
                 }
                 .onLongPressGesture(minimumDuration: 0.5) {
-                } onPressingChanged: { pressing in
-                    handleLongPress(pressing)
+                    onLock()
                 }
         }
+        .allowsHitTesting(!isLocked)
     }
 
     // MARK: - 拖动手势（进度 / 音量 / 亮度）
@@ -137,7 +140,7 @@ struct PlayerGestureLayer: View {
             }
     }
 
-    // MARK: - 双击 / 长按
+    // MARK: - 双击
 
     private func handleDoubleTap(at point: CGPoint, in size: CGSize) {
         let step = AppSettings.Player.seekStepSeconds
@@ -152,18 +155,6 @@ struct PlayerGestureLayer: View {
             return
         }
         hideFeedbackLater()
-    }
-
-    private func handleLongPress(_ pressing: Bool) {
-        if pressing {
-            rateBeforeLongPress = core.rate
-            core.setRate(2.0)
-            show(.speed(rate: 2.0))
-        } else if let rate = rateBeforeLongPress {
-            core.setRate(rate)
-            rateBeforeLongPress = nil
-            hideFeedbackLater()
-        }
     }
 
     // MARK: - 反馈显示

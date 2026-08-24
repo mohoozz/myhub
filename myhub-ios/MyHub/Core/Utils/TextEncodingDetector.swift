@@ -68,9 +68,9 @@ enum TextEncodingDetector {
         }
 
         // 4. GBK（GB18030 超集）→ Big5 启发式：谁解码出的 CJK 占比高选谁
-        let gb = String(data: data, encoding: gb18030)
-        let big5 = String(data: data, encoding: big5)
-        if let candidate = [gb.map { ($0, gb18030, "GBK") }, big5.map { ($0, big5, "Big5") }]
+        let gbText = String(data: data, encoding: gb18030)
+        let big5Text = String(data: data, encoding: big5)
+        if let candidate = [gbText.map { ($0, gb18030, "GBK") }, big5Text.map { ($0, big5, "Big5") }]
             .compactMap({ $0 })
             .max(by: { cjkScore($0.0) < cjkScore($1.0) }) {
             return Result(text: candidate.0, encoding: candidate.1, encodingName: candidate.2)

@@ -30,7 +30,7 @@ struct PlayerPreferencesView: View {
                 }
                 Toggle("默认纯音频模式", isOn: $audioOnlyByDefault)
             }
-            Section("解码与缓冲") {
+            Section {
                 Picker("解码偏好", selection: $decodePreference) {
                     Text("自动").tag(DecodePreference.auto)
                     Text("强制硬解").tag(DecodePreference.hardware)
@@ -39,6 +39,8 @@ struct PlayerPreferencesView: View {
                 valueRow(title: "预读窗口", value: "\(Int(preloadSeconds)) 秒") {
                     Slider(value: $preloadSeconds, in: 10...120, step: 10)
                 }
+            } header: {
+                Text("解码与缓冲")
             } footer: {
                 Text("自动模式按格式路由硬解/软解，硬解失败自动回退软解；预读窗口决定向前缓冲的数据量。")
             }
@@ -50,12 +52,14 @@ struct PlayerPreferencesView: View {
                     Slider(value: $subtitleDelay, in: -5...5, step: 0.5)
                 }
             }
-            Section("音量") {
+            Section {
                 Picker("音量步进", selection: $volumeStep) {
                     ForEach(Self.volumeStepOptions, id: \.self) { step in
                         Text("\(Int(step * 100))%").tag(step)
                     }
                 }
+            } header: {
+                Text("音量")
             } footer: {
                 Text("播放器手势调节音量与系统音量联动，默认步进 5%。")
             }

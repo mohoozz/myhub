@@ -89,7 +89,17 @@ final class SMBAdapter: StorageAdapter {
 
     func writeStream(_ path: String, data: AsyncThrowingStream<Data, Error>) async throws {
         let client = try await connected()
-        try await client.write(stream: data, toPath: StoragePath.normalize(path), progress: nil)
+        let normalized = StoragePath.normalize(path)
+        var offset: Int64 = 0
+        var wroteAny = false
+        for try await chunk in data {
+            try await client.append(data: chunk, toPath: normalized, offset: offset, progress: nil)
+            offset += Int64(chunk.count)
+            wroteAny = true
+        }
+        if !wroteAny {
+            try await client.write(data: Data(), toPath: normalized, progress: nil)
+        }
     }
 
     func move(_ src: String, _ dest: String) async throws {

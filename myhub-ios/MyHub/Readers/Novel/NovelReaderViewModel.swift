@@ -28,7 +28,7 @@ final class NovelReaderViewModel: ObservableObject {
     @Published private(set) var blocks: [ReaderBlock] = []
     @Published private(set) var pagination: ChapterPagination?
     @Published private(set) var chapterLoading = false
-    /// epub 图集型提示（一键转漫画阅读器）
+    /// epub 图集型检测信号：为 true 时 View 层自动转交漫画阅读器（不再弹选择框）
     @Published var comicLikePrompt = false
     @Published var toast: String?
     /// 滚动模式：程序滚动目标页（ScrollViewReader 消费；滚动期间忽略可见页回写）
@@ -189,7 +189,9 @@ final class NovelReaderViewModel: ObservableObject {
         bookTitle = book.title
         toc = book.toc.map { NovelTocEntry(id: $0.spineIndex, title: $0.title) }
         if book.isComicLike {
+            // 图集型：交由 View 层自动转交漫画阅读器（不再弹选择框）
             comicLikePrompt = true
+            return
         }
         // 封面异步提取缓存（「正在阅读」封面）
         Task.detached { [weak self, connectionID = self.connectionID, path = self.entry.path] in
@@ -590,13 +592,13 @@ final class NovelReaderViewModel: ObservableObject {
         toc.indices.contains(chapter) ? toc[chapter].title : ""
     }
 
-    func pageAttributedContent(_ target: Int) -> AttributedString {
-        guard let pagination, pagination.pages.indices.contains(target) else { return AttributedString() }
+    /// 分页结果中某一页的富文本（保留 NSParagraphStyle 行距/段距，供 UILabel 渲染）
+    func pageContent(_ target: Int) -> NSAttributedString {
+        guard let pagination, pagination.pages.indices.contains(target) else { return NSAttributedString() }
         let range = pagination.pages[target]
-        let sub = pagination.attributedText.attributedSubstring(
+        return pagination.attributedText.attributedSubstring(
             from: NSRange(location: range.lowerBound, length: range.count)
         )
-        return AttributedString(sub)
     }
 
     private func showToast(_ message: String) {

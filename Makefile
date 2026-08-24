@@ -1,6 +1,6 @@
 # myhub 常用命令（Windows 可使用 Git Bash / WSL 执行，或直接参考命令内容）
 
-.PHONY: help dev dev-server dev-flutter build build-server build-flutter-windows run docker-up docker-down tidy test
+.PHONY: help dev dev-server dev-flutter build build-server build-flutter-windows run docker-up docker-down tidy test install-ios-native
 
 help: ## 显示帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -28,6 +28,9 @@ build-flutter-windows: ## 构建 Flutter Windows Release
 
 run: build-server ## 运行编译后的后端
 	./myhub-server/bin/myhub-server.exe
+
+install-ios-native: ## 编译并安装原生 iOS（myhub-ios）到真机（macOS）
+	./deploy/install-myhub-ios.sh
 
 # ---------- 依赖与质量 ----------
 

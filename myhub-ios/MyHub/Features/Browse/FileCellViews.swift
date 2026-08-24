@@ -60,7 +60,7 @@ struct SelectionCheckmark: View {
 // MARK: - 网格单元格
 
 /// 网格视图单元格：封面/图标、文件名、文件夹子项数、视频时长角标、漫画徽标。
-/// iOS 长按进入多选模式（非仅弹菜单）；指针右键（iPad/PC）弹圆角操作菜单。
+/// 长按（iOS）/ 指针右键（iPad/PC）弹出圆角操作菜单；多选经右上角「…」→「选择」进入。
 struct FileGridCell: View {
     let entry: FileEntry
     let connection: Connection
@@ -72,7 +72,6 @@ struct FileGridCell: View {
     let isSelected: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
-    let onLongPress: () -> Void
 
     @State private var duration: Double?
     @State private var hovering = false
@@ -80,28 +79,25 @@ struct FileGridCell: View {
     private var mediaType: MediaType { MediaType.detect(ext: entry.ext) }
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 6) {
-                cover
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name)
-                        .font(.subheadline)
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(spacing: 6) {
+            cover
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(AppSettings.Browse.fileNameLines, reservesSpace: true)
+                    .multilineTextAlignment(.leading)
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .lineLimit(1)
             }
-            .padding(8)
-            .background(AppColors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(SelectableCellStyle())
+        .padding(8)
+        .background(AppColors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onHover { hovering = $0 }              // iPad/PC 指针 hover 高亮（IOS-702）
         .hoverEffect(.highlight)
         .overlay(
@@ -113,8 +109,7 @@ struct FileGridCell: View {
                 .stroke(isSelected ? AppColors.primary : Color.clear, lineWidth: 2)
         )
         .breathingHighlight(highlighted)        // 「定位到原路径」呼吸灯（约 10s，不常亮）
-        .popupSecondaryMenu(menuItems)          // 指针右键菜单；长按进入多选
-        .onLongPressGesture(minimumDuration: 0.5, perform: onLongPress)
+        .cellPressableMenu(items: menuItems, onTap: onTap)   // 点击 / 长按 / 指针右键弹出操作菜单
     }
 
     private var cover: some View {
@@ -122,6 +117,7 @@ struct FileGridCell: View {
             entry: entry, connection: connection, adapter: adapter,
             siblings: siblings, duration: $duration
         )
+        .frame(maxWidth: .infinity)
         .aspectRatio(1.35, contentMode: .fit)
         .background(AppColors.highlightBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -167,7 +163,6 @@ struct FileListRow: View {
     let isSelected: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
-    let onLongPress: () -> Void
 
     @State private var duration: Double?
     @State private var hovering = false
@@ -175,55 +170,52 @@ struct FileListRow: View {
     private var mediaType: MediaType { MediaType.detect(ext: entry.ext) }
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                RemoteCoverImage(
-                    entry: entry, connection: connection, adapter: adapter,
-                    siblings: siblings, duration: $duration
-                )
-                .frame(width: 52, height: 52)
-                .background(AppColors.highlightBackground.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(alignment: .bottomTrailing) {
-                    if let duration, !isSelecting {
-                        DurationBadge(seconds: duration)
-                            .padding(3)
-                            .scaleEffect(0.85, anchor: .bottomTrailing)
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    if mediaType == .comic, !isSelecting {
-                        ComicBadge().padding(3).scaleEffect(0.85, anchor: .topLeading)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.name)
-                        .font(.body)
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(1)
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if isSelecting {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
-                } else if entry.isDir {
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
+        HStack(spacing: 12) {
+            RemoteCoverImage(
+                entry: entry, connection: connection, adapter: adapter,
+                siblings: siblings, duration: $duration
+            )
+            .frame(width: 52, height: 52)
+            .background(AppColors.highlightBackground.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(alignment: .bottomTrailing) {
+                if let duration, !isSelecting {
+                    DurationBadge(seconds: duration)
+                        .padding(3)
+                        .scaleEffect(0.85, anchor: .bottomTrailing)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(AppColors.cardBackground)
-            .contentShape(Rectangle())
+            .overlay(alignment: .topLeading) {
+                if mediaType == .comic, !isSelecting {
+                    ComicBadge().padding(3).scaleEffect(0.85, anchor: .topLeading)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.name)
+                    .font(.body)
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(1)
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if isSelecting {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
+            } else if entry.isDir {
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+            }
         }
-        .buttonStyle(SelectableCellStyle(cornerRadius: 10))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(AppColors.cardBackground)
+        .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .hoverEffect(.highlight)
         .overlay(
@@ -235,8 +227,7 @@ struct FileListRow: View {
                 .stroke(isSelected ? AppColors.primary : Color.clear, lineWidth: 2)
         )
         .breathingHighlight(highlighted, cornerRadius: 10)
-        .popupSecondaryMenu(menuItems)
-        .onLongPressGesture(minimumDuration: 0.5, perform: onLongPress)
+        .cellPressableMenu(cornerRadius: 10, items: menuItems, onTap: onTap)
     }
 
     private var caption: String {

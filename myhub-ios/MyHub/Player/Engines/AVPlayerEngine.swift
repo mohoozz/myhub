@@ -61,8 +61,8 @@ final class AVPlayerEngine: PlaybackEngine {
         self.didApplyStartAt = false
 
         // 音轨 / 字幕轨分组（内嵌轨选择）
-        audibleGroup = try? await asset.loadMediaSelectionGroup(forMediaCharacteristic: .audible)
-        legibleGroup = try? await asset.loadMediaSelectionGroup(forMediaCharacteristic: .legible)
+        audibleGroup = try? await asset.loadMediaSelectionGroup(for: .audible)
+        legibleGroup = try? await asset.loadMediaSelectionGroup(for: .legible)
 
         installObservers(player: player, item: item)
         onEvent?(.stateChanged(.loading))

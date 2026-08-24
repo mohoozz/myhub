@@ -10,8 +10,8 @@ struct BrowseLocation: Hashable, Codable {
 
 /// 目录浏览页（IOS-102 浏览 + IOS-103~105 文件操作）：
 /// - 面包屑 + 搜索 + 视图切换 + 排序 + 上传（文件/相册）+ 下拉刷新 + 空/加载/错误状态；
-/// - iOS 长按进入多选模式（非仅弹菜单），底部操作栏：移动/复制/重命名/下载/收藏/删除（不超出屏幕）；
-/// - 指针右键（iPad/PC）弹圆角操作菜单；NavigationStack 系统交互式 pop 返回上一级。
+/// - 长按（iOS）/ 指针右键（iPad/PC）弹圆角操作菜单；多选经右上角「…」→「选择」进入，底部操作栏：移动/复制/重命名/下载/收藏/删除；
+/// - NavigationStack 系统交互式 pop 返回上一级。
 struct BrowseDirectoryView: View {
     let connection: Connection
     let path: String
@@ -25,6 +25,7 @@ struct BrowseDirectoryView: View {
     @EnvironmentObject private var player: PlayerPresenter
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
+    @EnvironmentObject private var txtReader: TxtReaderPresenter
 
     @State private var sheet: SheetRoute?
     @State private var imagePreview: ImagePreviewContext?
@@ -308,8 +309,7 @@ struct BrowseDirectoryView: View {
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
                     menuItems: contextMenuItems(for: entry),
-                    onTap: { tap(entry) },
-                    onLongPress: { viewModel.beginSelection(with: entry) }
+                    onTap: { tap(entry) }
                 )
                 .onAppear { viewModel.loadChildCountIfNeeded(for: entry) }
             }
@@ -330,8 +330,7 @@ struct BrowseDirectoryView: View {
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
                     menuItems: contextMenuItems(for: entry),
-                    onTap: { tap(entry) },
-                    onLongPress: { viewModel.beginSelection(with: entry) }
+                    onTap: { tap(entry) }
                 )
                 .onAppear { viewModel.loadChildCountIfNeeded(for: entry) }
             }
@@ -565,7 +564,7 @@ struct BrowseDirectoryView: View {
         return items
     }
 
-    // MARK: - 右键操作菜单（iPad/PC 指针；iOS 长按进入多选）
+    // MARK: - 操作菜单（长按 / 指针右键）
 
     private func contextMenuItems(for entry: FileEntry) -> [PopupMenuItem] {
         let type = MediaType.detect(ext: entry.ext)
@@ -575,6 +574,10 @@ struct BrowseDirectoryView: View {
             },
         ]
         if type == .novel, entry.ext == "txt" {
+            // txt 默认已走纯 txt 阅读器，这里提供「以小说阅读器打开」切换章节/进度阅读
+            items.append(PopupMenuItem(title: "以小说阅读器打开", systemImage: "book") {
+                novelReader.open(connection: connection, entry: entry)
+            })
             items.append(PopupMenuItem(title: "在线编辑", systemImage: "square.and.pencil") {
                 sheet = .editText(entry)
             })
@@ -674,8 +677,12 @@ struct BrowseDirectoryView: View {
                 imagePreview = ImagePreviewContext(images: images, index: index)
             }
         case .novel:
-            // 小说阅读器（TODO §5）：txt/epub，排版无关锚点一步定位恢复进度
-            novelReader.open(connection: connection, entry: entry)
+            // txt 默认走纯 txt 阅读器（全文滚动）；epub 走小说阅读器（章节/进度）
+            if entry.ext == "txt" {
+                txtReader.open(connection: connection, entry: entry)
+            } else {
+                novelReader.open(connection: connection, entry: entry)
+            }
         case .comic:
             // 漫画阅读器（TODO §6）：先展示加载 UI，再后台解析归档（弱网不卡顿）+ 点击防抖
             comicReader.open(connection: connection, entry: entry)

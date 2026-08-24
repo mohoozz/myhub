@@ -216,6 +216,91 @@ private struct PopupSecondaryMenuModifier: ViewModifier {
     }
 }
 
+// MARK: - 单元格按压交互
+
+/// 单元格按压交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单 / 长按多选无法触发）：
+/// - 点击 → onTap；长按 → 弹菜单或自定义动作（互斥：长按识别后松开不再触发点击）；
+/// - 按压中浅蓝高亮 + 缩放 0.97（与原 SelectableCellStyle 视觉一致）；
+/// - secondaryMenuItems 非空时，iPad/Mac 指针右键弹圆角菜单。
+private struct CellPressModifier: ViewModifier {
+    enum LongPressAction {
+        case menu([PopupMenuItem])
+        case custom(() -> Void)
+    }
+
+    var cornerRadius: CGFloat = 12
+    var secondaryMenuItems: [PopupMenuItem] = []
+    let onTap: () -> Void
+    let longPress: LongPressAction
+
+    @EnvironmentObject private var presenter: PopupMenuPresenter
+    @GestureState private var isPressing = false
+    @State private var anchor: CGRect = .zero
+
+    func body(content: Content) -> some View {
+        content
+            .background(AnchorReader(anchor: $anchor))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
+            )
+            .scaleEffect(isPressing ? 0.97 : 1)
+            .animation(.appFast, value: isPressing)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .gesture(
+                LongPressGesture(minimumDuration: 0.5)
+                    .updating($isPressing) { value, state, _ in state = value }
+                    .onEnded { _ in performLongPress() }
+                    .exclusively(before: TapGesture().onEnded { onTap() })
+            )
+            .accessibilityAddTraits(.isButton)
+            .background(SecondaryClickBridge {
+                guard !secondaryMenuItems.isEmpty else { return }
+                presenter.show(items: secondaryMenuItems, anchor: anchor)
+            })
+    }
+
+    private func performLongPress() {
+        switch longPress {
+        case .menu(let items):
+            presenter.show(items: items, anchor: anchor)
+        case .custom(let action):
+            action()
+        }
+    }
+}
+
+extension View {
+    /// 单元格交互：点击 + 长按弹圆角菜单 + 指针右键同一菜单（修复 Button 吞长按）
+    func cellPressableMenu(
+        cornerRadius: CGFloat = 12,
+        items: [PopupMenuItem],
+        onTap: @escaping () -> Void
+    ) -> some View {
+        modifier(CellPressModifier(
+            cornerRadius: cornerRadius,
+            secondaryMenuItems: items,
+            onTap: onTap,
+            longPress: .menu(items)
+        ))
+    }
+
+    /// 单元格交互：点击 + 长按自定义动作（如进入多选）+ 可选指针右键菜单
+    func cellPressable(
+        cornerRadius: CGFloat = 12,
+        secondaryMenuItems: [PopupMenuItem] = [],
+        onTap: @escaping () -> Void,
+        onLongPress: @escaping () -> Void
+    ) -> some View {
+        modifier(CellPressModifier(
+            cornerRadius: cornerRadius,
+            secondaryMenuItems: secondaryMenuItems,
+            onTap: onTap,
+            longPress: .custom(onLongPress)
+        ))
+    }
+}
+
 // MARK: - 右键桥接
 
 /// 窗口级 `.secondary`（右键）手势桥接：不拦截普通触摸，命中本视图区域时回调。

@@ -2,7 +2,7 @@
 # 用法：brew install xcodegen && xcodegen generate（详见 README.md）
 name: MyHub
 options:
-  bundleIdPrefix: com.myhub
+  bundleIdPrefix: com.mohoo
   deploymentTarget:
     iOS: "16.0"
 
@@ -17,15 +17,14 @@ packages:
   AMSMB2:                              # SMB2/3 直连（基于 libsmb2）
     url: https://github.com/amosavian/AMSMB2
     from: 3.0.0
-  VLCKit:                              # 全格式软解兜底（含 MobileVLCKit 二进制）
-    url: https://code.videolan.org/videolan/VLCKit.git
-    from: 4.0.0
+  VLCKit:                              # 全格式软解兜底（MobileVLCKit 3.x）
+    url: https://github.com/tylerjonesio/vlckit-spm.git
+    from: 3.6.0                         # 官方 3.x 无 SPM，用社区 3.6.0 包装器（模块名仍为 MobileVLCKit）
   ZIPFoundation:                       # zip / cbz / epub
     url: https://github.com/weichsel/ZIPFoundation.git
     from: 0.9.19
-  UnrarKit:                            # rar / cbr
-    url: https://github.com/abbeycode/UnrarKit.git
-    from: 2.11.0
+  UnrarKit:                            # rar / cbr（本地 vendor：官方仓库不支持 SPM）
+    path: ThirdParty/UnrarKit
   GRDB:                                # SQLite 结构化存储
     url: https://github.com/groue/GRDB.swift.git
     from: 6.29.0
@@ -45,11 +44,14 @@ targets:
           - "MyHub.entitlements"
     info:
       path: MyHub/Info.plist
+      properties:
+        UILaunchScreen:
+          UIColorName: LaunchBackground
     entitlements:
       path: MyHub/MyHub.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.myhub.MyHub
+        PRODUCT_BUNDLE_IDENTIFIER: com.mohoo.myhubios
         TARGETED_DEVICE_FAMILY: "1,2"          # iPhone + iPad
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
@@ -58,8 +60,9 @@ targets:
     dependencies:
       - package: AMSMB2
         product: AMSMB2
+        embed: true
       - package: VLCKit
-        product: MobileVLCKit
+        product: VLCKitSPM
       - package: ZIPFoundation
         product: ZIPFoundation
       - package: UnrarKit

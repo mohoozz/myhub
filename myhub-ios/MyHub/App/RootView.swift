@@ -13,6 +13,7 @@ struct RootView: View {
     @EnvironmentObject private var router: AppRouter
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
+    @EnvironmentObject private var txtReader: TxtReaderPresenter
     private var selection: AppTab { router.selectedTab }
 
     /// 漫画阅读器路由绑定（下滑/系统关闭时联动 presenter）
@@ -39,6 +40,10 @@ struct RootView: View {
         // 小说阅读器独立全屏路由（TODO §5）
         .fullScreenCover(item: $novelReader.current) { context in
             NovelReaderView(context: context)
+        }
+        // 纯 txt 阅读器独立全屏路由（txt 默认打开，与小说阅读器并列）
+        .fullScreenCover(item: $txtReader.current) { context in
+            TxtReaderView(context: context)
         }
         // 漫画阅读器独立全屏路由（TODO §6）
         .fullScreenCover(item: comicReaderBinding) { context in
@@ -78,7 +83,8 @@ struct RootView: View {
             TabView(selection: $router.selectedTab) {
                 ForEach(AppTab.phoneTabs) { tab in
                     tab.makeView()
-                        .tabItem { Label(tab.title, systemImage: tab.symbol) }
+                        // 参照旧版 Flutter 底栏：纯图标、无文字标签
+                        .tabItem { Image(systemName: tab.symbol).accessibilityLabel(tab.title) }
                         .tag(tab)
                 }
             }
@@ -88,19 +94,23 @@ struct RootView: View {
 
     /// iPad 侧边栏：选中项浅蓝胶囊高亮（§2.10）
     private var sidebar: some View {
-        List(selection: $router.selectedTab) {
+        List {
             ForEach(AppTab.allCases) { tab in
-                Label(tab.title, systemImage: tab.symbol)
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .foregroundStyle(selection == tab ? AppColors.primary : AppColors.textPrimary)
-                    .tag(tab)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(
-                        Capsule()
-                            .fill(selection == tab ? AppColors.highlightBackground : Color.clear)
-                            .padding(.horizontal, 6)
-                    )
+                Button {
+                    router.selectedTab = tab
+                } label: {
+                    Label(tab.title, systemImage: tab.symbol)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .foregroundStyle(selection == tab ? AppColors.primary : AppColors.textPrimary)
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
+                .listRowBackground(
+                    Capsule()
+                        .fill(selection == tab ? AppColors.highlightBackground : Color.clear)
+                        .padding(.horizontal, 6)
+                )
             }
         }
         .listStyle(.plain)

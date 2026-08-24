@@ -6,6 +6,8 @@ enum TextFileLoader {
     static let viewLimit: Int64 = 4 * 1024 * 1024
     /// 编辑上限 10MB
     static let editLimit: Int64 = 10 * 1024 * 1024
+    /// 纯 txt 阅读器上限 50MB（超出截断提示；小说阅读器走字节级索引无此限制）
+    static let readerLimit: Int64 = 50 * 1024 * 1024
 
     struct Loaded {
         var text: String
@@ -15,16 +17,16 @@ enum TextFileLoader {
     }
 
     static func load(adapter: StorageAdapter, path: String, limit: Int64) async throws -> Loaded {
-        let stream = try await adapter.readStream(path, range: nil)
+        // 只读取前 limit+1 字节即可判断是否截断；避免 range=nil 对 SMB 走「读到 EOF」整文件拉取导致大文件卡死
+        let stream = try await adapter.readStream(path, range: 0..<(limit + 1))
         var data = Data()
         var truncated = false
         for try await chunk in stream {
             data.append(chunk)
-            if Int64(data.count) > limit {
-                data = data.prefix(Int(limit))
-                truncated = true
-                break
-            }
+        }
+        if Int64(data.count) > limit {
+            data = data.prefix(Int(limit))
+            truncated = true
         }
         let result = TextEncodingDetector.decode(data)
         return Loaded(

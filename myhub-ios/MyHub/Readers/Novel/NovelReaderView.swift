@@ -1,10 +1,11 @@
 import SwiftUI
+import UIKit
 
 /// 小说阅读器主界面（TODO §5）：
 /// - 翻页模式（行边界分页，点击左右分区 / 滑动翻页）与滚动模式（连续滚动页块）；
 /// - 点击中央呼出控制层：顶栏（关闭 / 书名）、底栏（进度 / 上下章 / 目录 / 设置）；
 /// - 目录抽屉（当前章高亮跳转）+ 阅读设置面板（字号 / 行距 / 主题 / 翻页模式 / 亮度 / 字体）；
-/// - epub 图集型提示转漫画阅读器；沉浸式背景随阅读主题（夜间纯黑）。
+/// - epub 图集型自动转漫画阅读器；沉浸式背景随阅读主题（夜间纯黑）。
 struct NovelReaderView: View {
     let context: NovelOpenContext
 
@@ -25,7 +26,8 @@ struct NovelReaderView: View {
         ZStack {
             viewModel.themeSpec.background.ignoresSafeArea()
             content
-            if viewModel.state == .ready {
+            // 点击分区仅在翻页模式显示：滚动模式下全屏透明点击层会拦截 ScrollView 的滚动手势
+            if viewModel.state == .ready, viewModel.appearance.pageMode == .paging {
                 touchZones
             }
             if controlsVisible, viewModel.state == .ready {
@@ -47,18 +49,16 @@ struct NovelReaderView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .alert("这是图集型 EPUB", isPresented: $viewModel.comicLikePrompt) {
-            Button("以漫画阅读器打开") {
-                if let handler = presenter.onOpenComic {
-                    handler(context)
-                    presenter.close()
-                } else {
-                    viewModel.toast = "漫画阅读器将在后续版本接入（TODO §6）"
-                }
+        .onChange(of: viewModel.comicLikePrompt) { isComic in
+            // 图集型 epub：默认直接以漫画阅读器打开（不再弹选择框）
+            guard isComic else { return }
+            if let handler = presenter.onOpenComic {
+                handler(context)
+                presenter.close()
+            } else {
+                viewModel.comicLikePrompt = false
+                viewModel.toast = "漫画阅读器将在后续版本接入"
             }
-            Button("继续以文本阅读", role: .cancel) {}
-        } message: {
-            Text("该 EPUB 以插图为主，建议使用漫画阅读器获得更佳体验。")
         }
         .overlay(alignment: .bottom) {
             if let toast = viewModel.toast {
@@ -153,7 +153,7 @@ struct NovelReaderView: View {
             set: { viewModel.goToPage($0) }
         )) {
             ForEach(0..<max(viewModel.pageCount, 1), id: \.self) { index in
-                Text(viewModel.pageAttributedContent(index))
+                PagedTextLabel(attributedString: viewModel.pageContent(index))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .tag(index)
             }
@@ -167,7 +167,7 @@ struct NovelReaderView: View {
             ScrollView {
                 LazyVStack(spacing: 28) {
                     ForEach(0..<max(viewModel.pageCount, 1), id: \.self) { index in
-                        Text(viewModel.pageAttributedContent(index))
+                        PagedTextLabel(attributedString: viewModel.pageContent(index))
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                             .id(index)
                             .onAppear { viewModel.scrollVisiblePage(index) }
@@ -175,6 +175,7 @@ struct NovelReaderView: View {
                 }
                 .padding(.vertical, 8)
             }
+            .onTapGesture { withAnimation(.appQuick) { controlsVisible.toggle() } }
             .onChange(of: viewModel.scrollIntent) { target in
                 guard let target else { return }
                 withAnimation(.appQuick) {
@@ -363,6 +364,34 @@ struct NovelReaderView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - 分页富文本渲染（遵循 NSParagraphStyle 行距/段距）
+
+/// SwiftUI `Text` 会忽略 `NSAttributedString` 中的 `NSParagraphStyle`
+/// （`minimumLineHeight` / `maximumLineHeight` / `paragraphSpacing`），导致“行距”设置不生效。
+/// 改用 `UILabel` 渲染分页文本，与 CoreText 分页使用同一套段落样式，保证视觉与分页一致。
+private struct PagedTextLabel: UIViewRepresentable {
+    let attributedString: NSAttributedString
+
+    func makeUIView(context: Context) -> UILabel {
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        label.backgroundColor = .clear
+        return label
+    }
+
+    func updateUIView(_ label: UILabel, context: Context) {
+        label.attributedText = attributedString
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView label: UILabel, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        label.preferredMaxLayoutWidth = width
+        let size = label.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: size.height)
     }
 }
 

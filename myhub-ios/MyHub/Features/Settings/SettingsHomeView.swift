@@ -16,92 +16,123 @@ struct SettingsHomeView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("通用") {
-                    NavigationLink { ConnectionListView() } label: {
-                        Label("连接源管理", systemImage: "externaldrive.connected.to.line.below")
-                    }
-                    Picker(selection: themeModeBinding) {
-                        ForEach(AppThemeMode.allCases) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    } label: {
-                        Label("外观", systemImage: "circle.lefthalf.filled")
-                    }
-                }
+            settingsList
+        }
+    }
 
-                Section("阅读与播放") {
-                    NavigationLink { ReaderPreferencesView() } label: {
-                        Label("阅读器偏好", systemImage: "book")
-                    }
-                    NavigationLink { PlayerPreferencesView() } label: {
-                        Label("播放器偏好", systemImage: "play.rectangle")
-                    }
+    private var settingsList: some View {
+        List {
+            Section("通用") {
+                NavigationLink { ConnectionListView() } label: {
+                    Label("连接源管理", systemImage: "externaldrive.connected.to.line.below")
                 }
-
-                Section("存储") {
-                    NavigationLink { CacheSettingsView() } label: {
-                        Label("缓存与存储", systemImage: "internaldrive")
+                Picker(selection: themeModeBinding) {
+                    ForEach(AppThemeMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
                     }
-                    NavigationLink { TrashConnectionListView() } label: {
-                        Label("回收站", systemImage: "trash")
-                    }
-                }
-
-                Section("数据") {
-                    Button { exportConfig() } label: {
-                        Label("导出配置", systemImage: "square.and.arrow.up")
-                            .foregroundStyle(AppColors.textPrimary)
-                    }
-                    Button { showImporter = true } label: {
-                        Label("导入配置", systemImage: "square.and.arrow.down")
-                            .foregroundStyle(AppColors.textPrimary)
-                    }
-                } footer: {
-                    Text("导出内容为连接源与偏好设置快照，不含明文密码；导入后需重新录入密码。")
-                }
-
-                Section("安全") {
-                    NavigationLink { SecuritySettingsView() } label: {
-                        Label("应用锁与凭据", systemImage: "lock.shield")
-                    }
-                }
-
-                Section {
-                    NavigationLink { AboutView() } label: {
-                        Label("关于 MyHub", systemImage: "info.circle")
-                    }
+                } label: {
+                    Label("外观", systemImage: "circle.lefthalf.filled")
                 }
             }
-            .navigationTitle("设置")
-            .tint(AppColors.primary)
-            .sheet(isPresented: Binding(
-                get: { shareURL != nil },
-                set: { if !$0 { shareURL = nil } }
-            )) {
-                if let shareURL {
-                    ActivityView(url: shareURL)
-                        .onDisappear { try? FileManager.default.removeItem(at: shareURL) }
+
+            Section("显示") {
+                Picker(selection: fileNameLinesBinding) {
+                    ForEach(3...5, id: \.self) { lines in
+                        Text("\(lines) 行").tag(lines)
+                    }
+                } label: {
+                    Label("文件名行数", systemImage: "text.alignleft")
                 }
             }
-            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
-                importConfig(result)
+
+            Section("阅读与播放") {
+                NavigationLink { ReaderPreferencesView() } label: {
+                    Label("阅读器偏好", systemImage: "book")
+                }
+                NavigationLink { PlayerPreferencesView() } label: {
+                    Label("播放器偏好", systemImage: "play.rectangle")
+                }
             }
-            .alert(notice?.title ?? "", isPresented: Binding(
-                get: { notice != nil },
-                set: { if !$0 { notice = nil } }
-            ), presenting: notice) { _ in
-                Button("好", role: .cancel) {}
-            } message: { item in
-                Text(item.message)
+
+            Section("存储") {
+                NavigationLink { CacheSettingsView() } label: {
+                    Label("缓存与存储", systemImage: "internaldrive")
+                }
+                NavigationLink { TrashConnectionListView() } label: {
+                    Label("回收站", systemImage: "trash")
+                }
+            }
+
+            Section {
+                Button { exportConfig() } label: {
+                    Label("导出配置", systemImage: "square.and.arrow.up")
+                        .foregroundStyle(AppColors.textPrimary)
+                }
+                Button { showImporter = true } label: {
+                    Label("导入配置", systemImage: "square.and.arrow.down")
+                        .foregroundStyle(AppColors.textPrimary)
+                }
+            } header: {
+                Text("数据")
+            } footer: {
+                Text("导出内容为连接源与偏好设置快照，不含明文密码；导入后需重新录入密码。")
+            }
+
+            Section("安全") {
+                NavigationLink { SecuritySettingsView() } label: {
+                    Label("应用锁与凭据", systemImage: "lock.shield")
+                }
+            }
+
+            Section {
+                NavigationLink { AboutView() } label: {
+                    Label("关于 MyHub", systemImage: "info.circle")
+                }
             }
         }
+        .navigationTitle("设置")
+        .tint(AppColors.primary)
+        .sheet(isPresented: shareSheetBinding) {
+            if let shareURL {
+                ActivityView(url: shareURL)
+                    .onDisappear { try? FileManager.default.removeItem(at: shareURL) }
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
+            importConfig(result)
+        }
+        .alert(notice?.title ?? "", isPresented: noticeBinding, presenting: notice) { _ in
+            Button("好", role: .cancel) {}
+        } message: { item in
+            Text(item.message)
+        }
+    }
+
+    private var shareSheetBinding: Binding<Bool> {
+        Binding(
+            get: { shareURL != nil },
+            set: { if !$0 { shareURL = nil } }
+        )
+    }
+
+    private var noticeBinding: Binding<Bool> {
+        Binding(
+            get: { notice != nil },
+            set: { if !$0 { notice = nil } }
+        )
     }
 
     private var themeModeBinding: Binding<AppThemeMode> {
         Binding(
             get: { themeManager.mode },
             set: { themeManager.mode = $0 }
+        )
+    }
+
+    private var fileNameLinesBinding: Binding<Int> {
+        Binding(
+            get: { AppSettings.Browse.fileNameLines },
+            set: { AppSettings.Browse.fileNameLines = min(max($0, 3), 5) }
         )
     }
 

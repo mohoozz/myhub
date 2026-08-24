@@ -45,8 +45,10 @@ enum ArchiveDecoder {
         onDownloadProgress: ((Double) -> Void)? = nil
     ) async throws -> ComicPageSource {
         switch entry.ext {
-        case "zip", "cbz", "epub":
+        case "zip", "cbz":
             return try await openZipFamily(entry: entry, adapter: adapter)
+        case "epub":
+            return try await openEpub(entry: entry, adapter: adapter)
         case "rar", "cbr":
             return try await openRar(
                 entry: entry, adapter: adapter, connectionID: connectionID,
@@ -57,7 +59,7 @@ enum ArchiveDecoder {
         }
     }
 
-    // MARK: - zip / cbz / epub（Range 解包，不整包下载）
+    // MARK: - zip / cbz（Range 解包，不整包下载）
 
     private static func openZipFamily(entry: FileEntry, adapter: StorageAdapter) async throws -> ComicPageSource {
         let reader = RangeZipReader(totalSize: entry.size) { range in
@@ -71,7 +73,7 @@ enum ArchiveDecoder {
             return data
         }
         let all = try await reader.entries()
-        // 内容嗅探兜底（识别策略 2）：cbz 扩展名直接放行；zip/epub 需图片占比 ≥90% + 自然序列
+        // 内容嗅探兜底（识别策略 2）：cbz 扩展名直接放行；zip 需图片占比 ≥90% + 自然序列
         if !ComicDetector.isComicExtension(entry.ext),
            !ComicDetector.sniff(entryNames: all.map(\.name)) {
             throw ArchiveDecodeError.noPages
@@ -81,6 +83,15 @@ enum ArchiveDecoder {
             .sorted { $0.name.naturalCompare($1.name) == .orderedAscending }
         guard !pages.isEmpty else { throw ArchiveDecodeError.noPages }
         return ZipComicSource(reader: reader, pages: pages)
+    }
+
+    // MARK: - epub 漫画（按 spine 阅读顺序提取插图页）
+
+    private static func openEpub(entry: FileEntry, adapter: StorageAdapter) async throws -> ComicPageSource {
+        let book = try await EpubBook(adapter: adapter, entry: entry)
+        let pageNames = try await book.comicPageNames()
+        guard !pageNames.isEmpty else { throw ArchiveDecodeError.noPages }
+        return EpubComicSource(book: book, pageNames: pageNames)
     }
 
     // MARK: - rar / cbr（UnrarKit 需要文件 URL）
@@ -183,7 +194,7 @@ enum ArchiveDecoder {
     }
 }
 
-// MARK: - zip / cbz / epub 数据源
+// MARK: - zip / cbz 数据源
 
 private final class ZipComicSource: ComicPageSource {
     let pages: [RangeZipReader.Entry]
@@ -199,6 +210,26 @@ private final class ZipComicSource: ComicPageSource {
     func pageData(at index: Int) async throws -> Data {
         guard pages.indices.contains(index) else { throw ArchiveDecodeError.noPages }
         return try await reader.extract(pages[index])
+    }
+}
+
+// MARK: - epub 漫画数据源
+
+private final class EpubComicSource: ComicPageSource {
+    let pageNames: [String]
+    private let book: EpubBook
+
+    init(book: EpubBook, pageNames: [String]) {
+        self.book = book
+        self.pageNames = pageNames
+    }
+
+    func pageData(at index: Int) async throws -> Data {
+        guard pageNames.indices.contains(index) else { throw ArchiveDecodeError.noPages }
+        guard let data = try await book.imageData(named: pageNames[index]) else {
+            throw ArchiveDecodeError.noPages
+        }
+        return data
     }
 }
 
@@ -219,10 +250,7 @@ private final class LocalRarComicSource: ComicPageSource {
         guard pageNames.indices.contains(index) else { throw ArchiveDecodeError.noPages }
         let name = pageNames[index]
         return try await local.withLocalAccess {
-            guard let data = try archive.extractData(from: name) else {
-                throw ArchiveDecodeError.noPages
-            }
-            return data
+            try archive.extractData(fromFile: name)
         }
     }
 }
@@ -243,10 +271,7 @@ private final class TempRarComicSource: ComicPageSource {
 
     func pageData(at index: Int) async throws -> Data {
         guard pageNames.indices.contains(index) else { throw ArchiveDecodeError.noPages }
-        guard let data = try archive.extractData(from: pageNames[index]) else {
-            throw ArchiveDecodeError.noPages
-        }
-        return data
+        return try archive.extractData(fromFile: pageNames[index])
     }
 
     func close() {

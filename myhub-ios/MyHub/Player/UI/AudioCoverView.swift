@@ -79,7 +79,7 @@ struct AudioCoverView: View {
     private func loadSiblingCover() async -> UIImage? {
         guard let connectionID = item.connectionID,
               let db = AppDatabase.shared.dbQueue,
-              let connection = try? db.read({ try Connection.fetchOne($0, id: connectionID) }),
+              let connection = try? await db.read({ try Connection.fetchOne($0, id: connectionID) }),
               let adapter = try? AdapterFactory.makeAdapter(for: connection) else { return nil }
 
         let parent = StoragePath.parent(of: item.path)
@@ -99,7 +99,7 @@ struct AudioCoverView: View {
         guard let url = await PlayerCore.shared.request?.url else { return }
         let asset = AVURLAsset(url: url)
         guard let metadata = try? await asset.load(.commonMetadata) else { return }
-        for element in metadata where element.commonKey == .artwork {
+        for element in metadata where element.commonKey == AVMetadataKey.commonKeyArtwork {
             if let data = try? await element.load(.dataValue), let image = UIImage(data: data) {
                 cover = image
                 return

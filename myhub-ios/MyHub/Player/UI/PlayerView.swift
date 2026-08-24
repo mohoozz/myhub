@@ -13,6 +13,8 @@ struct PlayerView: View {
     @StateObject private var pip = PiPState()
 
     @State private var showControls = true
+    /// 界面锁定（长按进入；锁定后手势层失效）
+    @State private var isInterfaceLocked = false
     @State private var feedback: GestureFeedback?
     @State private var hideTask: Task<Void, Never>?
     /// 中央下拉进入 mini 的跟随偏移
@@ -45,8 +47,10 @@ struct PlayerView: View {
                 core: core,
                 feedback: $feedback,
                 miniDragOffset: $miniDragOffset,
+                isLocked: $isInterfaceLocked,
                 onToggleControls: { toggleControls() },
-                onMini: { player.enterMini() }
+                onMini: { player.enterMini() },
+                onLock: { lockInterface() }
             )
 
             // 字幕浮层
@@ -87,6 +91,31 @@ struct PlayerView: View {
                     onMini: { player.enterMini() },
                     onInteraction: { resetHideTimer() }
                 )
+                .transition(.opacity)
+            }
+
+            // 界面锁定（长按进入；锁定后手势层失效，仅显示解锁入口）
+            if isInterfaceLocked {
+                VStack {
+                    Button {
+                        unlockInterface()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("已锁定，点击解锁")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.55))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.pressScale)
+                    .padding(.top, 56)
+                    Spacer()
+                }
                 .transition(.opacity)
             }
 
@@ -213,6 +242,19 @@ struct PlayerView: View {
         } else {
             hideTask?.cancel()
         }
+    }
+
+    private func lockInterface() {
+        hideTask?.cancel()
+        withAnimation(.appQuick) {
+            isInterfaceLocked = true
+            showControls = false
+        }
+    }
+
+    private func unlockInterface() {
+        withAnimation(.appQuick) { isInterfaceLocked = false }
+        resetHideTimer()
     }
 
     private func resetHideTimer() {

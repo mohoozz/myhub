@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import MobileVLCKit
 import SwiftUI
 

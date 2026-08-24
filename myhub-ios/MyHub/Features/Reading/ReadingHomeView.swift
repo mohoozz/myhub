@@ -12,6 +12,7 @@ struct ReadingHomeView: View {
     @EnvironmentObject private var player: PlayerPresenter
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
+    @EnvironmentObject private var txtReader: TxtReaderPresenter
 
     @State private var viewMode: BrowseViewMode = AppSettings.Reading.viewMode {
         didSet { AppSettings.Reading.viewMode = viewMode }
@@ -31,7 +32,7 @@ struct ReadingHomeView: View {
         NavigationStack {
             content
                 .background(AppColors.pageBackground)
-                .navigationTitle(isSelecting ? "已选 \(selection?.count ?? 0) 项" : "阅读")
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
                 .overlay(alignment: .bottom) { bottomOverlay }
         }
@@ -81,7 +82,8 @@ struct ReadingHomeView: View {
                 Group {
                     if viewMode == .grid {
                         LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 110, maximum: 160), spacing: 12)],
+                            // 参照旧版 Flutter：卡片最大宽 320（iPhone 上两列横卡）
+                            columns: [GridItem(.adaptive(minimum: 160, maximum: 320), spacing: 12)],
                             spacing: 12
                         ) {
                             ForEach(history.records) { record in
@@ -121,55 +123,76 @@ struct ReadingHomeView: View {
 
     // MARK: - 网格单元格
 
+    /// 网格卡（参照旧版 Flutter）：封面铺满整卡 + 左深右浅渐变蒙层，
+    /// 标题/进度白字叠加在封面上，类型徽标在右上角，底部白色细进度条
     private func gridCell(_ record: ReadingProgress) -> some View {
         let entry = entry(for: record)
         let isSelected = isSelected(record)
-        return Button {
-            tap(record)
-        } label: {
-            VStack(spacing: 6) {
-                ReadingCoverImage(
-                    record: record, entry: entry,
-                    connection: connections[record.connectionID],
-                    adapter: adapters[record.connectionID]
-                )
-                .aspectRatio(1.35, contentMode: .fit)
-                .background(AppColors.highlightBackground.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(alignment: .topLeading) {
-                    if !isSelecting {
-                        MediaTypeBadge(type: record.mediaType).padding(6)
-                    }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if isSelecting {
-                        SelectionCheckmark(isSelected: isSelected)
-                    }
-                }
+        return ZStack(alignment: .topLeading) {
+            ReadingCoverImage(
+                record: record, entry: entry,
+                connection: connections[record.connectionID],
+                adapter: adapters[record.connectionID],
+                immersive: true
+            )
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title(of: record))
-                        .font(.subheadline)
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    progressLine(record)
+            // 左深右浅蒙层，保证白字可读
+            LinearGradient(
+                colors: [.black.opacity(0.55), .black.opacity(0.15)],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
+                    Image(systemName: entry.placeholderSymbol)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Spacer()
+                    if !isSelecting {
+                        MediaTypeBadge(type: record.mediaType)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(title(of: record))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .padding(.top, 4)
+                Spacer(minLength: 8)
+                Text("\(record.finished ? finishedText(record.mediaType) : percentText(record)) · \(DisplayFormatters.relative(record.updatedAt))")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .padding(.bottom, 6)
+                if record.finished || record.percent > 0 {
+                    thinProgress(record)
+                }
             }
-            .padding(8)
-            .background(AppColors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(10)
         }
-        .buttonStyle(SelectableCellStyle())
+        .aspectRatio(1.28, contentMode: .fit)   // Flutter：cellHeight = cellWidth × 0.78
+        .background(AppColors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .hoverEffect(.highlight)
+        .overlay(alignment: .topTrailing) {
+            if isSelecting {
+                SelectionCheckmark(isSelected: isSelected)
+            }
+        }
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isSelected ? AppColors.primary : Color.clear, lineWidth: 2)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isSelected ? AppColors.primary : Color.white.opacity(0.08),
+                        lineWidth: isSelected ? 2 : 1)
         )
-        .popupSecondaryMenu(menuItems(for: record))          // 指针右键菜单；长按进入多选
-        .onLongPressGesture(minimumDuration: 0.5) { beginSelection(with: record) }
+        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+        .cellPressable(
+            cornerRadius: 14,
+            secondaryMenuItems: menuItems(for: record),
+            onTap: { tap(record) },
+            onLongPress: { beginSelection(with: record) }   // 长按进入多选；右键弹菜单
+        )
     }
 
     // MARK: - 列表行
@@ -177,53 +200,52 @@ struct ReadingHomeView: View {
     private func listRow(_ record: ReadingProgress) -> some View {
         let entry = entry(for: record)
         let isSelected = isSelected(record)
-        return Button {
-            tap(record)
-        } label: {
-            HStack(spacing: 12) {
-                ReadingCoverImage(
-                    record: record, entry: entry,
-                    connection: connections[record.connectionID],
-                    adapter: adapters[record.connectionID]
-                )
-                .frame(width: 52, height: 52)
-                .background(AppColors.highlightBackground.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(alignment: .topLeading) {
-                    if !isSelecting {
-                        MediaTypeBadge(type: record.mediaType)
-                            .padding(3)
-                            .scaleEffect(0.85, anchor: .topLeading)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title(of: record))
-                        .font(.body)
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(1)
-                    progressLine(record)
-                }
-                Spacer(minLength: 8)
-                if isSelecting {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
+        return HStack(spacing: 12) {
+            ReadingCoverImage(
+                record: record, entry: entry,
+                connection: connections[record.connectionID],
+                adapter: adapters[record.connectionID]
+            )
+            .frame(width: 52, height: 52)
+            .background(AppColors.highlightBackground.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(alignment: .topLeading) {
+                if !isSelecting {
+                    MediaTypeBadge(type: record.mediaType)
+                        .padding(3)
+                        .scaleEffect(0.85, anchor: .topLeading)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(AppColors.cardBackground)
-            .contentShape(Rectangle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title(of: record))
+                    .font(.body)
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(1)
+                progressLine(record)
+            }
+            Spacer(minLength: 8)
+            if isSelecting {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
+            }
         }
-        .buttonStyle(SelectableCellStyle(cornerRadius: 10))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(AppColors.cardBackground)
+        .contentShape(Rectangle())
         .hoverEffect(.highlight)
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(isSelected ? AppColors.primary : Color.clear, lineWidth: 2)
         )
-        .popupSecondaryMenu(menuItems(for: record))
-        .onLongPressGesture(minimumDuration: 0.5) { beginSelection(with: record) }
+        .cellPressable(
+            cornerRadius: 10,
+            secondaryMenuItems: menuItems(for: record),
+            onTap: { tap(record) },
+            onLongPress: { beginSelection(with: record) }
+        )
     }
 
     /// 进度条 + 状态文案（已看完/已听完/已读完 或 百分比）+ 最后阅读时间
@@ -244,6 +266,18 @@ struct ReadingHomeView: View {
 
     private func percentText(_ record: ReadingProgress) -> String {
         "\(Int((min(1, max(0, record.percent)) * 100).rounded()))%"
+    }
+
+    /// 网格卡底部白色细进度条（参照旧版 Flutter：3pt 圆角，轨道为半透明白）
+    private func thinProgress(_ record: ReadingProgress) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.25))
+                Capsule().fill(.white)
+                    .frame(width: geo.size.width * (record.finished ? 1 : min(1, max(0, record.percent))))
+            }
+        }
+        .frame(height: 3)
     }
 
     /// 已读完文案：视频「已看完」/ 音频「已听完」/ 漫画·小说「已读完」（默认「已读完」）
@@ -269,14 +303,26 @@ struct ReadingHomeView: View {
                     selection = Set(history.records.compactMap(\.id))
                 }
             }
+            ToolbarItem(placement: .principal) {
+                Text("已选 \(selection?.count ?? 0) 项")
+                    .font(.headline)
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("完成") { selection = nil }
                     .fontWeight(.semibold)
             }
         } else {
-            // 头像入口：点击直达个人主页（IOS-704）
-            ToolbarItem(placement: .topBarLeading) {
-                ProfileEntryButton()
+            // 标题与右侧按钮同一行对齐（参照旧版 Flutter 头部：标题 + 条目数）
+            ToolbarItem(placement: .navigationBarLeading) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("阅读")
+                        .font(.title3.weight(.bold))
+                    if !history.records.isEmpty {
+                        Text("\(history.records.count) 项")
+                            .font(.caption)
+                            .foregroundStyle(AppColors.textSecondary)
+                    }
+                }
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button {
@@ -397,8 +443,12 @@ struct ReadingHomeView: View {
             // 精准续播：PlaybackSourceResolver 查历史进度直接从历史位置起播（TODO §4.2）
             player.play(connection: connection, entry: entry)
         case .novel:
-            // 排版无关锚点一步定位恢复（TODO §5）
-            novelReader.open(connection: connection, entry: entry)
+            // txt 默认走纯 txt 阅读器（全文滚动）；epub 走小说阅读器（章节/进度恢复）
+            if entry.ext == "txt" {
+                txtReader.open(connection: connection, entry: entry)
+            } else {
+                novelReader.open(connection: connection, entry: entry)
+            }
         case .comic:
             // 直接恢复到上次页码（TODO §6）
             comicReader.open(connection: connection, entry: entry)
@@ -495,24 +545,32 @@ private struct ReadingCoverImage: View {
     let entry: FileEntry
     let connection: Connection?
     let adapter: StorageAdapter?
+    /// 沉浸样式（网格卡）：无封面时类型渐变底 + 白色图标
+    var immersive = false
 
     @State private var cachedImage: UIImage?
     @State private var probed = false
 
     var body: some View {
         ZStack {
-            AppColors.cardBackground
+            if immersive {
+                entry.coverPlaceholderGradient
+            } else {
+                AppColors.cardBackground
+            }
             if let cachedImage {
-                Image(uiImage: cachedImage)
-                    .resizable()
-                    .scaledToFill()
+                Color.clear
+                    .overlay {
+                        Image(uiImage: cachedImage)
+                            .resizable()
+                            .scaledToFill()
+                    }
+                    .clipped()
                     .transition(.opacity)
             } else if probed {
                 fallback
             } else {
-                Image(systemName: entry.placeholderSymbol)
-                    .font(.title2)
-                    .foregroundStyle(AppColors.textSecondary)
+                placeholderIcon
             }
         }
         .clipped()
@@ -532,14 +590,21 @@ private struct ReadingCoverImage: View {
         }
     }
 
+    private var placeholderIcon: some View {
+        Image(systemName: entry.placeholderSymbol)
+            .font(immersive ? .system(size: 40) : .title2)
+            .foregroundStyle(immersive ? Color.white.opacity(0.9) : AppColors.textSecondary)
+    }
+
     @ViewBuilder
     private var fallback: some View {
         if let connection, let adapter {
-            RemoteCoverImage(entry: entry, connection: connection, adapter: adapter)
+            RemoteCoverImage(
+                entry: entry, connection: connection, adapter: adapter,
+                immersivePlaceholder: immersive
+            )
         } else {
-            Image(systemName: entry.placeholderSymbol)
-                .font(.title2)
-                .foregroundStyle(AppColors.textSecondary)
+            placeholderIcon
         }
     }
 }

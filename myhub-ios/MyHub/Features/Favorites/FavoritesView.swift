@@ -10,6 +10,7 @@ struct FavoritesView: View {
     @EnvironmentObject private var locator: BrowseLocator
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
+    @EnvironmentObject private var txtReader: TxtReaderPresenter
 
     @State private var viewMode: BrowseViewMode = AppSettings.Favorites.viewMode {
         didSet { AppSettings.Favorites.viewMode = viewMode }
@@ -107,69 +108,60 @@ struct FavoritesView: View {
 
     private func gridCell(_ favorite: Favorite) -> some View {
         let entry = entry(for: favorite)
-        return Button {
-            open(favorite)
-        } label: {
-            VStack(spacing: 6) {
-                cover(for: favorite, entry: entry)
-                    .aspectRatio(1.35, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name)
-                        .font(.subheadline)
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(connections[favorite.connectionID]?.name ?? "")
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        return VStack(spacing: 6) {
+            cover(for: favorite, entry: entry)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1.35, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(AppSettings.Browse.fileNameLines, reservesSpace: true)
+                    .multilineTextAlignment(.leading)
+                Text(connections[favorite.connectionID]?.name ?? "")
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .lineLimit(1)
             }
-            .padding(8)
-            .background(AppColors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(SelectableCellStyle())
+        .padding(8)
+        .background(AppColors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .hoverEffect(.highlight)
-        .popupContextMenu(menuItems(for: favorite))
+        .cellPressableMenu(items: menuItems(for: favorite)) { open(favorite) }
     }
 
     private func listRow(_ favorite: Favorite) -> some View {
         let entry = entry(for: favorite)
-        return Button {
-            open(favorite)
-        } label: {
-            HStack(spacing: 12) {
-                cover(for: favorite, entry: entry)
-                    .frame(width: 52, height: 52)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.name)
-                        .font(.body)
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(1)
-                    Text("\(connections[favorite.connectionID]?.name ?? "") · \(favorite.filePath)")
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "star.fill")
+        return HStack(spacing: 12) {
+            cover(for: favorite, entry: entry)
+                .frame(width: 52, height: 52)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.name)
+                    .font(.body)
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(1)
+                Text("\(connections[favorite.connectionID]?.name ?? "") · \(favorite.filePath)")
                     .font(.caption)
-                    .foregroundStyle(AppColors.primary)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(AppColors.cardBackground)
-            .contentShape(Rectangle())
+            Spacer(minLength: 8)
+            Image(systemName: "star.fill")
+                .font(.caption)
+                .foregroundStyle(AppColors.primary)
         }
-        .buttonStyle(SelectableCellStyle(cornerRadius: 10))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(AppColors.cardBackground)
+        .contentShape(Rectangle())
         .hoverEffect(.highlight)
-        .popupContextMenu(menuItems(for: favorite))
+        .cellPressableMenu(cornerRadius: 10, items: menuItems(for: favorite)) { open(favorite) }
     }
 
     /// 封面（复用浏览页组件，保证两页一致）；文件夹直接图标
@@ -232,8 +224,12 @@ struct FavoritesView: View {
                 )
             }
         case .novel:
-            // 小说阅读器（TODO §5）：txt/epub，恢复阅读进度
-            novelReader.open(connection: connection, entry: entry)
+            // txt 默认走纯 txt 阅读器（全文滚动）；epub 走小说阅读器（章节/进度）
+            if entry.ext == "txt" {
+                txtReader.open(connection: connection, entry: entry)
+            } else {
+                novelReader.open(connection: connection, entry: entry)
+            }
         case .comic:
             // 漫画阅读器（TODO §6）：直接恢复上次页码
             comicReader.open(connection: connection, entry: entry)

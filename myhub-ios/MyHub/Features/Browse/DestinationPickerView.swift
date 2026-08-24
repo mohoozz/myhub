@@ -203,7 +203,7 @@ struct DestinationPickerView: View {
             try await adapter.mkdir(StoragePath.joining(path, name))
             await load()
         } catch {
-            error = error.localizedDescription
+            self.error = error.localizedDescription
         }
     }
 }
