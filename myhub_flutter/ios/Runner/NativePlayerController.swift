@@ -82,6 +82,13 @@ final class NativePlayerController: NSObject, FlutterTexture {
   /// HLS 实时转码下 seekable 范围渐进增长，用它修正总时长显示。
   private var knownDurationSeconds: Double = 0
 
+  /// 待恢复的历史进度起点（毫秒，0 = 从头播放）。
+  ///
+  /// 音频恢复历史进度专用：open 时收到 startPositionMs 后先保持暂停，
+  /// item readyToPlay 后 seek 到此位置再开始播放，避免「先从 0 开始
+  /// 播放，再跳转到历史记录」。seek 完成后清零。
+  private var pendingStartPositionMs: Int64 = 0
+
   // MARK: - Lifecycle
 
   init(eventSink: FlutterEventSink?, textureRegistry: FlutterTextureRegistry?) {
@@ -226,13 +233,15 @@ final class NativePlayerController: NSObject, FlutterTexture {
 
   func open(
     url: URL, title: String, headers: [String: String], isAudio: Bool = false,
-    knownDurationMs: Int64 = 0
+    knownDurationMs: Int64 = 0, startPositionMs: Int64 = 0
   ) {
     print("Myhub NativePlayer: open url=\(url.absoluteString) isAudio=\(isAudio) "
-        + "knownDurationMs=\(knownDurationMs)")
+        + "knownDurationMs=\(knownDurationMs) startPositionMs=\(startPositionMs)")
     mediaTitle = title
     // 已知真实总时长（秒），来自 Flutter 直链阶段探测
     knownDurationSeconds = Double(knownDurationMs) / 1000.0
+    // 待恢复的历史进度起点（毫秒）：ready 后先 seek 到此位置再开始播放
+    pendingStartPositionMs = startPositionMs > 0 ? startPositionMs : 0
     // 新会话：重置播放完成标记（新媒体从头播放）
     didReachEnd = false
     // 重置无帧检测状态（新会话重新判定）
@@ -267,9 +276,18 @@ final class NativePlayerController: NSObject, FlutterTexture {
         player = p
         p.volume = volume
       }
-      p.rate = speed
-      isPlaying = true
-      print("Myhub NativePlayer: audio open set rate=\(speed) isPlaying=true")
+      if pendingStartPositionMs > 0 {
+        // 有历史起点：先保持暂停，等 item ready 后（statusObserver 的
+        // readyToPlay 分支）seek 到历史位置再开始播放，避免「先从 0 开始
+        // 播放，再跳转到历史记录」。
+        isPlaying = false
+        print("Myhub NativePlayer: audio open 等待 ready 后恢复历史位置 "
+            + "startPositionMs=\(pendingStartPositionMs)")
+      } else {
+        p.rate = speed
+        isPlaying = true
+        print("Myhub NativePlayer: audio open set rate=\(speed) isPlaying=true")
+      }
       // 关键：音频模式不调用 setupTexture()，textureId 保持为 0，
       // Flutter 侧 Texture 不会被渲染（显示黑底或 AudioCoverMode 唱片封面）。
       addObservers()
@@ -378,6 +396,14 @@ final class NativePlayerController: NSObject, FlutterTexture {
       })
       return
     }
+    // 有历史起点且尚未完成恢复：只记录播放意图，等 ready 后 seek 完成
+    // 再开始播放（statusObserver 的 seek completion 中执行），
+    // 避免此刻直接 play() 从 0 开始播放。
+    if pendingStartPositionMs > 0 {
+      isPlaying = true
+      print("Myhub NativePlayer: play() 等待恢复历史位置完成后开始播放")
+      return
+    }
     player?.play()
     isPlaying = true
     print("Myhub NativePlayer: play() called didReachEnd=\(didReachEnd) rate=\(player?.rate ?? 0)")
@@ -464,6 +490,11 @@ final class NativePlayerController: NSObject, FlutterTexture {
 
   func setSpeed(_ s: Double) {
     speed = Float(s)
+    // 恢复历史位置期间不设置 rate（会从 0 开始播放）：
+    // 倍速在 seek 完成后由 playImmediately(atRate:) 应用。
+    if pendingStartPositionMs > 0 {
+      return
+    }
     player?.rate = speed
     isPlaying = true
     updateNowPlaying()
@@ -612,11 +643,20 @@ final class NativePlayerController: NSObject, FlutterTexture {
       let durMs = Int64(durSec * 1000)
       let posMs = Int64(time.seconds * 1000)
       let percent = durMs > 0 ? min(100.0, Double(posMs) / Double(durMs) * 100) : 0
+      // 恢复历史位置期间（ready 前/seek 完成前）上报 loading 而非 playing：
+      // 此时实际未播放，若上报 playing，Flutter 会清掉加载遮罩并显示
+      // 0:00 的「假播放」进度，造成「先从头播放再跳转」的观感。
+      let state: String
+      if self.pendingStartPositionMs > 0 {
+        state = "loading"
+      } else {
+        state = self.isPlaying ? "playing" : "paused"
+      }
       self.emitStatus([
         "positionMs": posMs,
         "durationMs": durMs,
         "percent": percent,
-        "state": self.isPlaying ? "playing" : "paused",
+        "state": state,
       ])
       // 后台播放：同步锁屏/控制中心进度条
       if durMs > 0 {
@@ -648,16 +688,38 @@ final class NativePlayerController: NSObject, FlutterTexture {
       switch it.status {
       case .readyToPlay:
         print("Myhub NativePlayer: readyToPlay, 视频可播放")
-        // play() 可能在 item ready 之前被调用而不生效，这里确保真正播放
-        if self?.isPlaying == true {
-          self?.player?.play()
-        }
         if let self {
           self.mediaDuration = self.totalDurationSeconds(it)
+          if self.pendingStartPositionMs > 0 {
+            // 音频恢复历史进度：ready 后先 seek 到历史位置，seek 完成后
+            // 再开始播放，避免「先从 0 开始播放，再跳转到历史记录」。
+            let ms = self.pendingStartPositionMs
+            let durSec = self.totalDurationSeconds(it)
+            // 历史进度超过总时长（脏数据/媒体被替换过）：放弃恢复从头播放
+            let targetMs = (durSec > 0 && Double(ms) >= durSec * 1000) ? 0 : ms
+            let target = CMTime(value: targetMs, timescale: 1000)
+            print("Myhub NativePlayer: readyToPlay 恢复音频历史位置 "
+                + "targetMs=\(targetMs) isPlaying=\(self.isPlaying)")
+            self.player?.seek(
+              to: target, toleranceBefore: .zero, toleranceAfter: .zero
+            ) { [weak self] _ in
+              guard let self else { return }
+              self.pendingStartPositionMs = 0
+              // 等待 seek 期间用户可能已暂停：仅播放意图仍在时开始播放
+              guard self.isPlaying else { return }
+              self.player?.playImmediately(atRate: self.speed)
+              self.emitStatus(["state": "playing"])
+              self.updateNowPlaying()
+            }
+          } else if self.isPlaying {
+            // play() 可能在 item ready 之前被调用而不生效，这里确保真正播放
+            self.player?.play()
+          }
         }
         self?.updateNowPlaying()
         self?.emitStatus(["state": "ready"])
       case .failed:
+        self?.pendingStartPositionMs = 0
         let msg = it.error?.localizedDescription ?? "播放失败"
         print("Myhub NativePlayer: 播放失败 - \(msg)")
         self?.emitStatus(["error": msg])
@@ -914,6 +976,7 @@ final class NativePlayerController: NSObject, FlutterTexture {
   func dispose() {
     removeObservers()
     teardownTexture()
+    pendingStartPositionMs = 0
     playerLayer?.removeFromSuperlayer()
     playerLayer = nil
     // 注意：不销毁 volumeView。它是系统音量控制（MPVolumeView），

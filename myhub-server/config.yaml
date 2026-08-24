@@ -11,8 +11,9 @@ server:
 jwt:
   # JWT 签名密钥，生产环境务必通过 MYHUB_JWT_SECRET 环境变量覆盖
   secret: "myhub-default-secret-please-change"
-  # Token 过期时间（小时）
-  expire_hours: 24
+  # Token 有效期（小时）：连续 3 天未重新登录则旧 Token 失效；
+  # 3 天内重新登录会签发新 Token，重新开始计时
+  expire_hours: 72
 
 internal:
   # 内部接口访问令牌（供 OpenClaw 回传等内部服务调用 /api/internal/*）

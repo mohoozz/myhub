@@ -3,7 +3,11 @@ import 'dart:convert';
 /// JWT 工具：本地解析过期时间（不验签，仅做有效性预检）。
 abstract final class JwtUtils {
   /// 判断 Token 是否已过期；无法解析视为有效（交给后端裁决）。
-  static bool isExpired(String token, {Duration clockSkew = Duration.zero}) {
+  /// 默认预留 5 分钟时钟偏移，避免客户端与服务端时钟偏差导致误判过期。
+  static bool isExpired(
+    String token, {
+    Duration clockSkew = const Duration(minutes: 5),
+  }) {
     final exp = expiresAt(token);
     if (exp == null) return false;
     return DateTime.now().add(clockSkew).isAfter(exp);

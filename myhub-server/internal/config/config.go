@@ -30,7 +30,7 @@ type ServerConfig struct {
 // JWTConfig JWT 鉴权配置
 type JWTConfig struct {
 	Secret      string `mapstructure:"secret"`      // JWT 签名密钥
-	ExpireHours int    `mapstructure:"expire_hours"` // Token 过期时间（小时），默认 24
+	ExpireHours int    `mapstructure:"expire_hours"` // Token 有效期（小时），默认 72（3 天）
 }
 
 // DatabaseConfig 数据库配置
@@ -95,7 +95,7 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.mode", "debug")
 	v.SetDefault("jwt.secret", "myhub-default-secret-please-change")
-	v.SetDefault("jwt.expire_hours", 24)
+	v.SetDefault("jwt.expire_hours", 72)
 	v.SetDefault("database.path", "data/myhub.db")
 	v.SetDefault("storage.allowed_roots", []string{})
 	v.SetDefault("data.thumbs_dir", "data/thumbs")

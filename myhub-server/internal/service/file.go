@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -83,15 +84,22 @@ type FileService struct {
 	sourceSvc    *SourceService
 	trashRepo    *repository.TrashRepository
 	progressRepo *repository.ProgressRepository
+
+	// 缩略图 FFmpeg 抽帧并发控制（见 Thumbnail）
+	thumbSem      chan struct{}
+	thumbMu       sync.Mutex
+	thumbInflight map[string]*thumbCall
 }
 
 // NewFileService 创建 FileService
 func NewFileService(cfg *config.Config, sourceSvc *SourceService, trashRepo *repository.TrashRepository, progressRepo *repository.ProgressRepository) *FileService {
 	return &FileService{
-		cfg:          cfg,
-		sourceSvc:    sourceSvc,
-		trashRepo:    trashRepo,
-		progressRepo: progressRepo,
+		cfg:           cfg,
+		sourceSvc:     sourceSvc,
+		trashRepo:     trashRepo,
+		progressRepo:  progressRepo,
+		thumbSem:      make(chan struct{}, thumbMaxConcurrent),
+		thumbInflight: make(map[string]*thumbCall),
 	}
 }
 
@@ -352,10 +360,12 @@ func (s *FileService) TextPreview(ctx context.Context, sourceID uint, p string) 
 	}
 	sample, _ := io.ReadAll(sampleRC)
 	_ = sampleRC.Close()
-	if isBinarySample(sample) {
+	encName := parser.DetectEncoding(sample)
+	// UTF-16 文本天然含大量 NUL 字节（码元高/低位），须跳过二进制判定；
+	// 其余编码保持原判断，避免把二进制文件当文本解码
+	if !parser.IsUTF16(encName) && isBinarySample(sample) {
 		return nil, ErrNotText
 	}
-	encName := parser.DetectEncoding(sample)
 
 	// 超出上限仅读取头部
 	length := fi.Size
@@ -419,10 +429,62 @@ func garbageRatio(s string) float64 {
 	return float64(bytes.Count([]byte(s), []byte("\uFFFD"))) / float64(runes)
 }
 
+// thumbMaxConcurrent 缩略图 FFmpeg 抽帧的最大并发数。
+//
+// 目录内大量视频封面未缓存时，前端会并发请求几十个缩略图；若不限流，
+// 后端会同时启动几十个 FFmpeg 进程，抢满 CPU/磁盘 I/O（WebDAV 源还抢
+// 网络带宽），拖慢视频流（直链 Range / HLS 转码）导致播放启动卡顿。
+const thumbMaxConcurrent = 2
+
+// thumbCall 同一缩略图键（sourceID+path）的共享生成任务（singleflight）。
+type thumbCall struct {
+	done chan struct{}
+	path string
+	err  error
+}
+
 // Thumbnail 生成/获取音视频缩略图（FFmpeg，按 sourceID+path 缓存）
 // 视频抽帧；音频提取内嵌专辑封面（attached pic 以视频流形式存在）。
 // 返回缓存的 JPEG 文件路径
+//
+// 并发控制：
+// * 缓存命中直接返回，不占用抽帧并发额度；
+// * 同一文件的并发请求共享同一次抽帧（singleflight），等待方复用结果；
+// * 全局信号量把同时运行的 FFmpeg 抽帧进程限制在 thumbMaxConcurrent 内。
 func (s *FileService) Thumbnail(ctx context.Context, sourceID uint, p string) (string, error) {
+	// 缓存命中直接返回
+	sum := sha1.Sum([]byte(fmt.Sprintf("%d:%s", sourceID, p)))
+	outPath := filepath.Join(s.cfg.Data.ThumbsDir, hex.EncodeToString(sum[:])+".jpg")
+	if _, err := os.Stat(outPath); err == nil {
+		return outPath, nil
+	}
+
+	// singleflight：同一视频的并发请求只跑一次 FFmpeg
+	s.thumbMu.Lock()
+	if call, ok := s.thumbInflight[outPath]; ok {
+		s.thumbMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-call.done:
+			return call.path, call.err
+		}
+	}
+	call := &thumbCall{done: make(chan struct{})}
+	s.thumbInflight[outPath] = call
+	s.thumbMu.Unlock()
+
+	call.path, call.err = s.generateThumbnail(ctx, sourceID, p, outPath)
+
+	s.thumbMu.Lock()
+	delete(s.thumbInflight, outPath)
+	s.thumbMu.Unlock()
+	close(call.done)
+	return call.path, call.err
+}
+
+// generateThumbnail 实际执行 FFmpeg 抽帧（受全局并发限额约束）。
+func (s *FileService) generateThumbnail(ctx context.Context, sourceID uint, p, outPath string) (string, error) {
 	a, source, err := s.sourceSvc.GetAdapter(sourceID)
 	if err != nil {
 		return "", err
@@ -436,11 +498,12 @@ func (s *FileService) Thumbnail(ctx context.Context, sourceID uint, p string) (s
 		return "", ErrNotVideo
 	}
 
-	// 缓存命中直接返回
-	sum := sha1.Sum([]byte(fmt.Sprintf("%d:%s", sourceID, p)))
-	outPath := filepath.Join(s.cfg.Data.ThumbsDir, hex.EncodeToString(sum[:])+".jpg")
-	if _, err := os.Stat(outPath); err == nil {
-		return outPath, nil
+	// 并发限额：拿到许可才开始抽帧；排队等待期间响应请求取消
+	select {
+	case s.thumbSem <- struct{}{}:
+		defer func() { <-s.thumbSem }()
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
 
 	ffmpeg, err := ffmpegBinary()

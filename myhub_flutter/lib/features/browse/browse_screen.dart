@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:myhub_flutter/core/api/api_exception.dart';
+import 'package:myhub_flutter/core/api/dio_client.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
+import 'package:myhub_flutter/core/settings/server_config_provider.dart';
 import 'package:myhub_flutter/core/settings/settings_provider.dart';
 import 'package:myhub_flutter/core/theme/app_theme.dart' show AppTheme;
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
@@ -23,6 +26,7 @@ import 'package:myhub_flutter/features/browse/widgets/move_target_picker.dart';
 import 'package:myhub_flutter/features/browse/widgets/upload_sheet.dart';
 import 'package:myhub_flutter/features/favorites/providers/favorite_provider.dart';
 import 'package:myhub_flutter/shared/providers/source_provider.dart';
+import 'package:myhub_flutter/shared/utils/downloader.dart';
 import 'package:myhub_flutter/shared/utils/open_media.dart';
 import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_reader.dart';
@@ -78,6 +82,9 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
 
   /// 已滚动定位过的高亮路径（避免列表重建时反复滚动）。
   String? _scrolledHighlight;
+
+  /// 高亮呼吸灯边框的熄灭定时器："定位到源路径"的边框提示只亮 10 秒。
+  Timer? _highlightTimer;
 
   /// 高亮滚动重试次数（目标项未挂载时逐帧逼近，达到上限则放弃）。
   int _scrollRetries = 0;
@@ -162,6 +169,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
 
   @override
   void dispose() {
+    _highlightTimer?.cancel();
     _edgeBackController.dispose();
     _previewScrollController.dispose();
     _searchController.dispose();
@@ -341,6 +349,19 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
+              leading: const Icon(LucideIcons.download),
+              title: const Text('下载'),
+              subtitle: Text(
+                item.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                unawaited(_downloadItem(item));
+              },
+            ),
+            ListTile(
               leading: const Icon(LucideIcons.fileText),
               title: const Text('以纯文本打开'),
               subtitle: Text(
@@ -362,6 +383,34 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
         ),
       ),
     ).whenComplete(() => _opening = false);
+  }
+
+  /// 下载文件到本地：桌面端存系统「下载」目录，移动端存应用文档目录
+  /// （iOS 可在「文件」App 的 Myhub/Downloads 中查看）。
+  Future<void> _downloadItem(FileItem item) async {
+    if (kIsWeb) {
+      if (mounted) showTopSnackBar(context, '当前平台暂不支持下载');
+      return;
+    }
+    final sourceId = ref.read(effectiveSourceProvider)?.id;
+    if (sourceId == null) return;
+    // 先提示开始下载（toast 自动消失，慢速网络下载大文件期间也有反馈）
+    if (mounted) showTopSnackBar(context, '正在下载 ${item.name}…');
+    try {
+      final dir = await DownloadSaver.resolveDir();
+      final saved = await downloadRemoteFile(
+        dio: ref.read(dioProvider),
+        baseUrl: ref.read(apiBaseUrlProvider),
+        sourceId: sourceId,
+        path: item.path,
+        fileName: item.name,
+        destDir: dir,
+      );
+      if (!mounted) return;
+      showTopSnackBar(context, DownloadSaver.savedHint(saved));
+    } catch (e) {
+      _showError(e);
+    }
   }
 
   void _showError(Object e) {
@@ -486,6 +535,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
                 .toggle(sourceId, item.path),
           );
         }
+      case 'download':
+        await _downloadItem(item);
       case 'rename':
         final name = await showRenameDialog(context, item.name);
         if (name == null || name == item.name || !mounted) return;
@@ -558,6 +609,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
           _menuItem('openAsNovel', LucideIcons.bookOpen, '以小说阅读器打开'),
         if (!item.isDir && sourceId != null)
           _menuItem('favorite', LucideIcons.star, isFav ? '取消收藏' : '收藏'),
+        if (!item.isDir)
+          _menuItem('download', LucideIcons.download, '下载'),
         const PopupMenuDivider(),
         _menuItem('rename', LucideIcons.pencil, '重命名'),
         _menuItem('move', LucideIcons.folderInput, '移动到…'),
@@ -605,6 +658,13 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
                     LucideIcons.star,
                     isFav ? '取消收藏' : '收藏',
                     () => Navigator.of(sheetContext).pop('favorite'),
+                  ),
+                if (!item.isDir)
+                  _sheetTile(
+                    sheetContext,
+                    LucideIcons.download,
+                    '下载',
+                    () => Navigator.of(sheetContext).pop('download'),
                   ),
                 _sheetTile(
                   sheetContext,
@@ -687,6 +747,15 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen>
       if (prev != next) {
         _scrolledHighlight = null;
         _scrollRetries = 0;
+      }
+      // 高亮边框只提示 10 秒：新目标重置计时，到点自动熄灭
+      // （清空高亮目标，边框随状态消失，呼吸动画组件同步销毁）。
+      _highlightTimer?.cancel();
+      if (next != null) {
+        _highlightTimer = Timer(const Duration(seconds: 10), () {
+          if (!mounted) return;
+          ref.read(highlightFileProvider.notifier).state = null;
+        });
       }
     });
     ref.listen(effectiveSourceProvider, (prev, next) {

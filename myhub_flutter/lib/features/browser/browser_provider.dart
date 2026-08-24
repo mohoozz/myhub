@@ -1,6 +1,10 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/api/browser_api.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 单个浏览器标签的运行时状态。
 ///
@@ -16,6 +20,7 @@ class BrowserTabState {
     this.faviconUrl = '',
     this.loading = false,
     this.incognito = false,
+    this.navSeq = 0,
   });
 
   final int id;
@@ -35,12 +40,18 @@ class BrowserTabState {
   /// 是否无痕（不记录历史）。
   final bool incognito;
 
+  /// 外部导航命令序号：仅地址栏提交等显式导航递增；页面内跳转
+  /// （点击链接）URL 变化但不递增，[BrowserView] 据此区分是否需
+  /// 主动 loadUrl，避免重复加载打断 WebView 导航历史栈。
+  final int navSeq;
+
   BrowserTabState copyWith({
     String? url,
     String? title,
     String? faviconUrl,
     bool? loading,
     bool? incognito,
+    int? navSeq,
   }) {
     return BrowserTabState(
       id: id,
@@ -49,6 +60,27 @@ class BrowserTabState {
       faviconUrl: faviconUrl ?? this.faviconUrl,
       loading: loading ?? this.loading,
       incognito: incognito ?? this.incognito,
+      navSeq: navSeq ?? this.navSeq,
+    );
+  }
+
+  /// 序列化（会话持久化用；loading/navSeq 为运行时字段，不落盘）。
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'url': url,
+        'title': title,
+        'favicon': faviconUrl,
+        'incognito': incognito,
+      };
+
+  /// 反序列化恢复会话。
+  factory BrowserTabState.fromJson(Map<String, dynamic> json) {
+    return BrowserTabState(
+      id: json['id'] as int? ?? 0,
+      url: json['url'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      faviconUrl: json['favicon'] as String? ?? '',
+      incognito: json['incognito'] as bool? ?? false,
     );
   }
 
@@ -67,11 +99,27 @@ class BrowserTabState {
 /// 13.3 阶段建立会话骨架（支持 [target=_blank]/[window.open] 开新标签、
 /// 键盘快捷键 Ctrl+T/W、无痕标签跳过历史），
 /// 13.4 补充 Chrome 风格标签条与 iOS 标签管理页，以及"关闭其他/全部"。
+///
+/// 13.6 会话持久化：标签列表（跳过无痕）与激活标签写入 SharedPreferences，
+/// 启动时恢复上次打开的页面，避免每次打开 app 都从零开始。
 class BrowserTabsNotifier extends Notifier<List<BrowserTabState>> {
+  /// 会话持久化 key。
+  static const _kSessionKey = 'browser_tabs_session';
+
   int _nextId = 1;
+
+  /// 恢复完成前用户是否已操作（若已操作则放弃恢复，避免覆盖）。
+  bool _dirty = false;
+
+  Timer? _saveDebounce;
 
   @override
   List<BrowserTabState> build() {
+    // 状态变化即防抖保存会话；Provider 销毁（应用退出）时兜底 flush。
+    listenSelf((_, __) => _scheduleSave());
+    ref.onDispose(_flushSave);
+    // 启动后异步恢复上次会话（恢复期间用户已操作则放弃）。
+    Future.microtask(_restore);
     return [BrowserTabState(id: _nextId++)];
   }
 
@@ -83,8 +131,63 @@ class BrowserTabsNotifier extends Notifier<List<BrowserTabState>> {
     return (idx >= 0 && idx < state.length) ? idx : state.length - 1;
   }
 
+  // ---------- 会话持久化 ----------
+
+  /// 恢复上次关闭时打开的标签（跳过无痕标签）。
+  Future<void> _restore() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kSessionKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final tabs = [
+        for (final e in data['tabs'] as List<dynamic>? ?? const <dynamic>[])
+          if (e is Map<String, dynamic>) BrowserTabState.fromJson(e),
+      ];
+      if (_dirty || tabs.isEmpty) return;
+      var maxId = 0;
+      for (final t in tabs) {
+        if (t.id > maxId) maxId = t.id;
+      }
+      _nextId = maxId + 1;
+      state = tabs;
+      final activeId = data['activeId'] as int?;
+      final idx =
+          activeId == null ? 0 : tabs.indexWhere((t) => t.id == activeId);
+      ref.read(activeBrowserTabIndexProvider.notifier).state = idx >= 0 ? idx : 0;
+    } catch (_) {
+      // 会话数据损坏：静默放弃，从新标签开始
+    }
+  }
+
+  void _scheduleSave() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 500), _flushSave);
+  }
+
+  Future<void> _flushSave() async {
+    _saveDebounce?.cancel();
+    _saveDebounce = null;
+    // 无痕标签不落盘；激活标签为无痕时回退到最后一个保留标签
+    final tabs = state.where((t) => !t.incognito).toList();
+    final activeTab = state.isEmpty ? null : state[_activeIndexSafe];
+    final activeId = activeTab?.incognito == true
+        ? (tabs.isEmpty ? null : tabs.last.id)
+        : activeTab?.id;
+    final payload = jsonEncode({
+      'version': 1,
+      'tabs': [for (final t in tabs) t.toJson()],
+      'activeId': activeId,
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kSessionKey, payload);
+  }
+
+  // ---------- 标签操作 ----------
+
   /// 新建标签并激活。
   BrowserTabState newTab({bool incognito = false}) {
+    _dirty = true;
     final tab = BrowserTabState(id: _nextId++, incognito: incognito);
     state = [...state, tab];
     ref.read(activeBrowserTabIndexProvider.notifier).state = state.length - 1;
@@ -93,6 +196,7 @@ class BrowserTabsNotifier extends Notifier<List<BrowserTabState>> {
 
   /// 关闭指定 id 的标签；若关闭的是激活标签则切换相邻标签。
   void closeTab(int id) {
+    _dirty = true;
     final idx = state.indexWhere((t) => t.id == id);
     if (idx < 0) return;
     final next = [...state]..removeAt(idx);
@@ -116,6 +220,7 @@ class BrowserTabsNotifier extends Notifier<List<BrowserTabState>> {
 
   /// 切换激活标签。
   void activate(int id) {
+    _dirty = true;
     final idx = state.indexWhere((t) => t.id == id);
     if (idx >= 0) {
       ref.read(activeBrowserTabIndexProvider.notifier).state = idx;
@@ -124,6 +229,7 @@ class BrowserTabsNotifier extends Notifier<List<BrowserTabState>> {
 
   /// 关闭除 [keepId] 之外的所有标签。
   void closeOthers(int keepId) {
+    _dirty = true;
     final idx = state.indexWhere((t) => t.id == keepId);
     if (idx < 0) return;
     final next = [state[idx]];
@@ -133,12 +239,14 @@ class BrowserTabsNotifier extends Notifier<List<BrowserTabState>> {
 
   /// 关闭全部标签，并创建一个新的空白标签。
   void closeAll() {
+    _dirty = true;
     state = [BrowserTabState(id: _nextId++)];
     ref.read(activeBrowserTabIndexProvider.notifier).state = 0;
   }
 
   /// 更新某标签的运行时状态（URL / 标题 / favicon / loading）。
   void update(int id, BrowserTabState Function(BrowserTabState) fn) {
+    _dirty = true;
     final idx = state.indexWhere((t) => t.id == id);
     if (idx < 0) return;
     final next = [...state];

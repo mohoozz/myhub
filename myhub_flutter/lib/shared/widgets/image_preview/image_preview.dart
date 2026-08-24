@@ -1,12 +1,20 @@
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:myhub_flutter/core/api/api_exception.dart';
+import 'package:myhub_flutter/core/api/dio_client.dart';
 import 'package:myhub_flutter/core/api/file_api.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/shared/providers/auth_headers_provider.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
+import 'package:myhub_flutter/shared/utils/photo_saver.dart';
+import 'package:myhub_flutter/shared/utils/top_snack_bar.dart';
 import 'package:myhub_flutter/shared/widgets/window_title_bar.dart';
 
 /// 纯图片文件预览页（与漫画阅读器区分开）。
@@ -127,6 +135,35 @@ class _ImagePreviewPageState extends ConsumerState<ImagePreviewPage> {
   void _onZoomChanged() {
     final zoomed = _zoom.value.getMaxScaleOnAxis() > 1.001;
     if (zoomed != _zoomed) setState(() => _zoomed = zoomed);
+  }
+
+  /// 把当前图片保存到 iOS 系统相册（仅 iOS 显示入口）。
+  Future<void> _saveToPhotos() async {
+    final item = _images[_current];
+    showTopSnackBar(context, '正在保存到相册…');
+    try {
+      final dio = ref.read(dioProvider);
+      // 原图经 /api/files/image 加载，dio 拦截器自动附带 JWT
+      final url = ref.read(fileApiProvider).imageUrl(widget.sourceId, item.path);
+      final res = await dio.get<List<int>>(
+        url,
+        options: Options(
+          responseType: ResponseType.bytes,
+          followRedirects: true,
+          receiveTimeout: const Duration(minutes: 10),
+        ),
+      );
+      final data = res.data;
+      if (data == null || data.isEmpty) {
+        throw const ApiException(code: -1, message: '下载图片失败');
+      }
+      await PhotoSaver.saveImage(Uint8List.fromList(data));
+      if (!mounted) return;
+      showTopSnackBar(context, '已保存到相册');
+    } catch (e) {
+      if (!mounted) return;
+      showTopSnackBar(context, e is ApiException ? e.message : '保存到相册失败');
+    }
   }
 
   void _goTo(int index) {
@@ -294,6 +331,16 @@ class _ImagePreviewPageState extends ConsumerState<ImagePreviewPage> {
               '${_current + 1} / ${_images.length}',
               style: const TextStyle(color: _subtle, fontSize: 13),
             ),
+            if (!kIsWeb && Platform.isIOS)
+              IconButton(
+                icon: const Icon(
+                  LucideIcons.download,
+                  color: _foreground,
+                  size: 20,
+                ),
+                tooltip: '保存到相册',
+                onPressed: _saveToPhotos,
+              ),
             const SizedBox(width: 8),
           ],
         ),

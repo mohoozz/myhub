@@ -15,9 +15,13 @@ final dioProvider = Provider<Dio>(
     final baseUrl = ref.watch(apiBaseUrlProvider);
     return DioClient.create(
       baseUrl: baseUrl,
-      // 401 → 清除登录状态，路由守卫自动跳回登录页
-      onUnauthorized: () =>
-          ref.read(authStateProvider.notifier).markLoggedOut(),
+      // 401 → 清除登录状态，路由守卫自动跳回登录页。
+      // 仅当已登录时才登出：登录失败等未登录场景的 401 不应清状态
+      onUnauthorized: () async {
+        if (ref.read(authStateProvider).isAuthenticated) {
+          await ref.read(authStateProvider.notifier).markLoggedOut();
+        }
+      },
     );
   },
 );
@@ -80,8 +84,10 @@ class _ErrorInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    if (err.response?.statusCode == 401) {
-      // 登录接口自身的 401 也会走到这里；此时本就未登录，清理无副作用
+    // 登录接口自身的 401 说明凭证错误，由界面提示，不触发全局登出；
+    // 其余接口的 401 视为 Token 失效/过期，通知回调登出
+    if (err.response?.statusCode == 401 &&
+        !_isLoginRequest(err.requestOptions)) {
       onUnauthorized?.call();
     }
     handler.next(DioException(
@@ -90,5 +96,10 @@ class _ErrorInterceptor extends Interceptor {
       type: err.type,
       error: ApiException.fromDio(err),
     ));
+  }
+
+  /// 是否为登录接口请求（其 401 是凭证错误，不触发登出）。
+  static bool _isLoginRequest(RequestOptions options) {
+    return options.path.endsWith('/auth/login');
   }
 }

@@ -90,6 +90,24 @@ func (s *ReaderService) loadCachedIndex(sourceID uint, p string, fileSize int64)
 	return idx, chapters
 }
 
+// encodingStale 抽样复核文件当前编码是否与缓存索引记录一致。
+//
+// 旧版本编码检测不支持 UTF-16，可能把 UTF-16 文件误判为 GBK/Big5 并写入缓存；
+// 升级后复核发现不一致时返回 true（缓存视为失效、重建索引），
+// 避免用户重开这些文件仍显示乱码。读取失败时保守返回 false（复用缓存）。
+func (s *ReaderService) encodingStale(ctx context.Context, a adapter.IStorageAdapter, p, cached string) bool {
+	rc, err := a.ReadStream(ctx, p, 0, encodingSampleSize)
+	if err != nil {
+		return false
+	}
+	sample, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		return false
+	}
+	return parser.DetectEncoding(sample) != cached
+}
+
 // buildIndex 构建并缓存索引（同步执行）
 func (s *ReaderService) buildIndex(ctx context.Context, sourceID uint, p string, fileSize int64) ([]parser.Chapter, string, error) {
 	a, _, err := s.sourceSvc.GetAdapter(sourceID)
@@ -142,8 +160,9 @@ func (s *ReaderService) GetNovelChapters(ctx context.Context, sourceID uint, p s
 		return nil, adapter.ErrIsDirectory
 	}
 
-	// 缓存命中
-	if idx, chapters := s.loadCachedIndex(sourceID, p, fi.Size); idx != nil {
+	// 缓存命中（编码复核不一致时视为失效，走重建流程）
+	if idx, chapters := s.loadCachedIndex(sourceID, p, fi.Size); idx != nil &&
+		!s.encodingStale(ctx, a, p, idx.Encoding) {
 		return chaptersResult(chapters, idx.Encoding), nil
 	}
 

@@ -1,4 +1,6 @@
 import 'dart:async' show unawaited;
+import 'dart:collection' show UnmodifiableListView;
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -33,8 +35,17 @@ abstract class BrowserViewCallbacks {
   /// 页面加载完成（onLoadStop）→ 上层用于历史节流上报。
   void onPageFinished(String url);
 
+  /// 新页面开始加载（onLoadStart）→ 上层重置滚动基准等状态。
+  void onPageStarted();
+
   /// 起始页请求导航（搜索提交 / 快捷入口点击）→ 上层更新标签 URL。
   void onNavigateRequest(String url);
+
+  /// 页面滚动（iOS：用于滚动收起/展开底部操作栏，y 为纵向滚动偏移）。
+  void onScrollChanged(int y);
+
+  /// 网页内点击（iOS：操作栏收起后，点击页面重新展开）。
+  void onPageTap();
 }
 
 /// InAppWebView 封装（F-601）：平台初始化、错误页、新窗口、下载拦截。
@@ -48,6 +59,7 @@ class BrowserView extends StatefulWidget {
   const BrowserView({
     super.key,
     required this.url,
+    required this.navSeq,
     required this.callbacks,
     required this.keepAlive,
     this.onWebViewCreated,
@@ -56,6 +68,10 @@ class BrowserView extends StatefulWidget {
 
   /// 目标 URL；空串表示加载内置起始页。
   final String url;
+
+  /// 外部导航命令序号：变化时驱动 WebView 主动加载 [url]。
+  /// 页面内跳转只改 [url] 不改序号，避免重复 loadUrl 打断历史栈。
+  final int navSeq;
 
   final BrowserViewCallbacks callbacks;
 
@@ -90,8 +106,10 @@ class _BrowserViewState extends State<BrowserView> {
   @override
   void didUpdateWidget(covariant BrowserView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // URL 变更（如地址栏提交导航）时驱动 WebView 加载。
-    if (widget.url != oldWidget.url && widget.url.isNotEmpty) {
+    // 仅外部导航命令（navSeq 递增）驱动加载；页面内跳转（点击链接）
+    // 由 WebView 自身完成导航，重复 loadUrl 会打断导航历史栈导致
+    // 后退/前进失效。URL 变化但不递增 navSeq 时不干预。
+    if (widget.navSeq != oldWidget.navSeq && widget.url.isNotEmpty) {
       _error = false;
       _load(widget.url);
     }
@@ -106,6 +124,9 @@ class _BrowserViewState extends State<BrowserView> {
   InAppWebViewSettings _buildSettings() {
     return InAppWebViewSettings(
       javaScriptEnabled: true,
+      // 显式开启 HTTP 磁盘缓存（WebView2 由 userDataFolder 持久化，
+      // WKWebView / Android 默认持久化），重启后资源可复用
+      cacheEnabled: true,
       // 支持 window.open / target=_blank 触发 onCreateWindow
       supportMultipleWindows: true,
       // 拦截导航以处理下载链接
@@ -153,20 +174,52 @@ class _BrowserViewState extends State<BrowserView> {
             }),
           );
         }
+        // 注意：这里不能使用随 URL 变化的 key——否则每次导航都会
+        // 销毁重建 WebView，导航历史栈/页面状态全部丢失（后退失效、
+        // 每次跳转都从头加载）。同一标签的 WebView 实例必须保持稳定，
+        // 后续导航由 didUpdateWidget（navSeq 驱动）或页面内跳转完成。
         return InAppWebView(
-          key: ValueKey('browser-${widget.url}'),
           initialSettings: _buildSettings(),
+          // iOS：注入点击监听（捕获阶段、不拦截默认行为），操作栏收起后
+          // 点击页面任意位置 → callHandler('pageTap') → 重新展开操作栏
+          initialUserScripts: Platform.isIOS
+              ? UnmodifiableListView<UserScript>([
+                  UserScript(
+                    source: "document.addEventListener('click', function() {"
+                        'if (window.flutter_inappwebview) {'
+                        "window.flutter_inappwebview.callHandler('pageTap');"
+                        '}'
+                        '}, true);',
+                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
+                  ),
+                ])
+              : null,
           webViewEnvironment: snapshot.data,
           initialUrlRequest: URLRequest(url: WebUri(widget.url)),
           onWebViewCreated: (controller) {
             _controller = controller;
+            if (Platform.isIOS) {
+              // 注册网页点击 handler（与 initialUserScripts 注入的
+              // callHandler('pageTap') 配对），点击页面展开底部操作栏
+              controller.addJavaScriptHandler(
+                handlerName: 'pageTap',
+                callback: (args) {
+                  widget.callbacks.onPageTap();
+                  return null;
+                },
+              );
+            }
             widget.onWebViewCreated?.call(controller);
+          },
+          onScrollChanged: (controller, x, y) {
+            widget.callbacks.onScrollChanged(y);
           },
           onLoadStart: (controller, url) {
             setState(() {
               _currentUrl = url?.toString() ?? '';
               _error = false;
             });
+            widget.callbacks.onPageStarted();
             widget.callbacks.onUrlChanged(_currentUrl);
           },
           onLoadStop: (controller, url) async {

@@ -10,7 +10,6 @@ import 'package:myhub_flutter/core/models/comic.dart';
 import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/core/theme/app_theme.dart' show AppTheme;
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
-import 'package:myhub_flutter/features/reading/providers/reading_provider.dart';
 import 'package:myhub_flutter/shared/providers/auth_state_provider.dart';
 import 'package:myhub_flutter/shared/providers/media_player_provider.dart';
 import 'package:myhub_flutter/shared/widgets/comic_reader/comic_settings.dart';
@@ -229,9 +228,6 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
                     .clamp(0.0, 100.0)
                 : (_current + 1) / _pages.length * 100,
           );
-      // 阅读中保存后刷新"正在阅读"列表（dispose 中调用时 mounted=false，
-      // 跳过失效操作，避免使用已销毁的 ref）
-      if (mounted) ref.invalidate(readingListProvider);
     } catch (_) {
       // 进度保存失败静默，不打断阅读
     }

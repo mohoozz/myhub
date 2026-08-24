@@ -23,6 +23,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _obscurePassword = true;
   bool _rememberPassword = false;
 
+  /// 凭证恢复完成后的一次性监听（见 [_restoreCredentials]）。
+  ProviderSubscription<LoginCredentials>? _credentialsSub;
+
   @override
   void initState() {
     super.initState();
@@ -30,9 +33,28 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   /// 读取上次记住的登录凭证，回填到输入框并恢复「记住密码」勾选状态。
-  Future<void> _restoreCredentials() async {
-    final credentials = ref.read(loginCredentialsProvider);
-    if (credentials.username.isEmpty) return;
+  ///
+  /// [LoginCredentialsNotifier] 的恢复是异步的（build 先返回空状态），
+  /// 若首次读到的仍是空状态，则监听其完成后再回填一次，避免竞态导致
+  /// 看起来像「记住了的账号密码被清空」。
+  void _restoreCredentials() {
+    _applyCredentials(ref.read(loginCredentialsProvider));
+    if (ref.read(loginCredentialsProvider).username.isEmpty) {
+      _credentialsSub = ref.listenManual(
+        loginCredentialsProvider,
+        (previous, next) {
+          if (next.username.isEmpty) return;
+          _applyCredentials(next);
+          _credentialsSub?.close();
+        },
+      );
+    }
+  }
+
+  /// 将记住的凭证回填到输入框；用户已开始输入则不覆盖。
+  void _applyCredentials(LoginCredentials credentials) {
+    if (!mounted || credentials.username.isEmpty) return;
+    if (_usernameController.text.isNotEmpty) return;
     _usernameController.text = credentials.username;
     if (credentials.remember) {
       _passwordController.text = credentials.password;
@@ -42,6 +64,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   void dispose() {
+    _credentialsSub?.close();
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();

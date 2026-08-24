@@ -307,6 +307,15 @@ class NativePlayerController {
     final file = _file;
     if (sourceId == null || file == null) return;
     try {
+      // 音频恢复历史进度：open 之前先查好起始位置传给原生（startPositionMs），
+      // 原生在 item ready 后先 seek 到该位置再开始播放，避免「先从 0 开始
+      // 播放，再跳转到历史记录」。视频仍走 open 后 _restorePosition 的
+      // ready+seek 路径（HLS 转码流需在 ready 后才能可靠 seek）。
+      final epoch = _sessionEpoch;
+      final startPositionMs =
+          file.isAudio ? await _fetchStartPositionMs(sourceId, file.path) : 0;
+      // 会话守卫：查询进度期间可能已切换/停止会话
+      if (epoch != _sessionEpoch || !identical(file, _file)) return;
       final token =
           await const FlutterSecureStorage().read(key: kAccessTokenKey);
       final baseUrl = _ref.read(apiBaseUrlProvider);
@@ -314,7 +323,7 @@ class NativePlayerController {
           ? StreamApi.hlsPlaylistUrl(sourceId, file.path, baseUrl: baseUrl)
           : StreamApi.streamUrl(sourceId, file.path, baseUrl: baseUrl);
       debugPrint('[native-player] _open: useHls=$_useHls url=$url '
-          'knownDurationMs=$_knownDurationMs');
+          'knownDurationMs=$_knownDurationMs startPositionMs=$startPositionMs');
       await _channel.invokeMethod('open', {
         'url': url,
         'title': file.name,
@@ -324,6 +333,8 @@ class NativePlayerController {
         // 已知真实总时长（毫秒）：直链阶段拿到，切 HLS 后用于修正
         // 实时转码导致 seekable 范围渐进增长、时长偏小的问题。
         'knownDurationMs': _knownDurationMs,
+        // 音频历史进度起点（毫秒，0 = 从头播放）
+        'startPositionMs': startPositionMs,
         'headers': {
           if (token != null && token.isNotEmpty)
             'Authorization': 'Bearer $token',
@@ -358,9 +369,12 @@ class NativePlayerController {
       debugPrint('[native-player] _open: textureId=${textureId.value}');
       // 加载轨道
       unawaited(_refreshTracks());
-      // 恢复进度：completer 已在 play() 中创建（早于 open，确保 ready 事件
-      // 能被捕获），这里直接触发进度恢复即可。
-      unawaited(_restorePosition(sourceId, file.path));
+      // 恢复进度：音频已通过 open 的 startPositionMs 由原生在 ready 后
+      // seek 恢复；视频走此路径（completer 已在 play() 中创建，早于 open，
+      // 确保 ready 事件能被捕获）。
+      if (!file.isAudio) {
+        unawaited(_restorePosition(sourceId, file.path));
+      }
     } catch (e) {
       error.value = '$e';
       loading.value = false;
@@ -436,6 +450,26 @@ class NativePlayerController {
   /// `_onEvent` 收到 `state: ready` 后完成。
   Completer<void>? _restoreCompleter;
 
+  /// 查询音频历史进度，作为原生 open 的起始位置（毫秒）。
+  ///
+  /// 返回 0 表示无有效历史进度（从头播放）。原生收到 startPositionMs 后
+  /// 会在 item ready 后先 seek 再开始播放，避免「先从 0 播放再跳转到
+  /// 历史位置」。
+  Future<int> _fetchStartPositionMs(int sourceId, String path) async {
+    try {
+      final p = await _ref.read(progressRepositoryProvider).get(sourceId, path);
+      if (p == null || p.finished || p.progressJson.isEmpty) return 0;
+      final decoded = jsonDecode(p.progressJson);
+      if (decoded is Map && decoded['position'] is num) {
+        final sec = (decoded['position'] as num).toDouble();
+        if (sec >= 3) return (sec * 1000).round();
+      }
+    } catch (_) {
+      // 查询失败：从头播放
+    }
+    return 0;
+  }
+
   Future<void> _restorePosition(int sourceId, String path) async {
     // 捕获发起时的会话代际与文件：await 历史进度/ready 期间可能发生
     // 会话切换（stop 后 play 新文件）。完成后必须校验代际与文件是否
@@ -475,12 +509,8 @@ class NativePlayerController {
           debugPrint('[native-player] _restorePosition: 目标 $ms 超过已知时长 $_knownDurationMs，跳过');
           return;
         }
-        // 音频也需要恢复历史进度。此前曾因「音频 moov 在文件末尾、ready 时
-        // duration 未加载完」的顾虑跳过音频 seek，但这导致音频每次从头播放。
-        // 实际上 seek 已在 _restoreCompleter 上等待 ready，且目标秒数经过
-        // 上面的时长校验，即使 duration 稍后才就绪，AVPlayer 也会在 item
-        // 加载完成后执行 seek，不会卡住 loading（loading 由 ready/playing
-        // 事件驱动，与 seek 无关）。
+        // 注意：音频的进度恢复已改为 open 时传 startPositionMs，由原生在
+        // ready 后 seek+play 处理（避免先从 0 播放再跳转），此函数仅服务视频。
         debugPrint('[native-player] _restorePosition: seek 到 ${ms}ms');
         await _channel.invokeMethod('seek', {'positionMs': ms});
       }

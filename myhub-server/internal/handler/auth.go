@@ -27,7 +27,7 @@ type LoginRequest struct {
 }
 
 // Login POST /api/auth/login
-// 用户名密码验证（bcrypt），成功颁发 JWT（有效期取配置 jwt.expire_hours，默认 24h）
+// 用户名密码验证（bcrypt），成功颁发 JWT（有效期取配置 jwt.expire_hours，默认 72h）
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

@@ -128,6 +128,8 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     let isAudio = (args["isAudio"] as? Bool) ?? false
     // 已知真实总时长（毫秒）：直链阶段拿到，切 HLS 后用于修正时长显示。
     let knownDurationMs = (args["knownDurationMs"] as? NSNumber)?.int64Value ?? 0
+    // 音频历史进度起点（毫秒，0 = 从头播放）：原生在 ready 后先 seek 再播放
+    let startPositionMs = (args["startPositionMs"] as? NSNumber)?.int64Value ?? 0
     // 关键：texture 注册延迟到真正播放时（open），此时引擎渲染上下文已就绪，
     // registrar.textures() 返回的 relay 的 delegate 才有效，register 返回 >=1。
     let registry = registrar?.textures()
@@ -151,7 +153,7 @@ final class NativePlayerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
     controller.open(
       url: url, title: title, headers: headers, isAudio: isAudio,
-      knownDurationMs: knownDurationMs)
+      knownDurationMs: knownDurationMs, startPositionMs: startPositionMs)
     result(nil)
   }
 

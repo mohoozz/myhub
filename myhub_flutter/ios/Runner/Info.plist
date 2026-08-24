@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -35,6 +39,10 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>需要访问本地网络以连接你的 Myhub 服务器（192.168.0.103）。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要将图片保存到你的照片图库。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要访问照片图库以保存图片。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

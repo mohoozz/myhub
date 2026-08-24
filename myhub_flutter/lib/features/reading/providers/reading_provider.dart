@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/data/repositories/progress_repository.dart';
@@ -55,8 +57,19 @@ final readingListProvider =
 );
 
 class ReadingListNotifier extends AsyncNotifier<List<ReadingProgress>> {
+  /// 自动刷新防抖定时器（合并短时间内的连续进度上报）。
+  Timer? _refreshTimer;
+  bool _refreshing = false;
+  bool _refreshPending = false;
+
   @override
-  Future<List<ReadingProgress>> build() => _fetch();
+  Future<List<ReadingProgress>> build() {
+    // 每次进度上报（ProgressRepository.save）后自动刷新列表：
+    // 播放器等场景会周期性上报（如每 5 秒），防抖合并避免高频重复拉取。
+    ref.listen(progressRevisionProvider, (_, __) => _scheduleAutoRefresh());
+    ref.onDispose(() => _refreshTimer?.cancel());
+    return _fetch();
+  }
 
   ProgressRepository get _repo => ref.read(progressRepositoryProvider);
 
@@ -73,9 +86,34 @@ class ReadingListNotifier extends AsyncNotifier<List<ReadingProgress>> {
     return items;
   }
 
-  /// 下拉刷新。
+  /// 防抖调度自动刷新（每次进度上报后调用）。
+  void _scheduleAutoRefresh() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer(
+      const Duration(seconds: 2),
+      () => unawaited(refresh()),
+    );
+  }
+
+  /// 下拉刷新 / 手动刷新。
+  ///
+  /// 重入保护：刷新进行期间的新请求不并发执行，标记排队、
+  /// 本次完成后补跑一次，避免乱序覆盖最新数据。
   Future<void> refresh() async {
-    state = await AsyncValue.guard(_fetch);
+    if (_refreshing) {
+      _refreshPending = true;
+      return;
+    }
+    _refreshing = true;
+    try {
+      state = await AsyncValue.guard(_fetch);
+    } finally {
+      _refreshing = false;
+      if (_refreshPending) {
+        _refreshPending = false;
+        await refresh();
+      }
+    }
   }
 
   /// 删除阅读记录（即时从列表移除；离线时本地标记待同步删除）。

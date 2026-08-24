@@ -5,11 +5,28 @@ import 'package:myhub_flutter/core/api/progress_api.dart';
 import 'package:myhub_flutter/core/models/reading_progress.dart';
 import 'package:myhub_flutter/data/database/app_database.dart';
 
+/// 进度保存版本号：每次本地保存进度后 +1，驱动"正在阅读"页自动刷新。
+///
+/// NotifierProvider 默认 keepAlive，全程可被监听（F-502）。
+final progressRevisionProvider =
+    NotifierProvider<ProgressRevisionNotifier, int>(
+  ProgressRevisionNotifier.new,
+);
+
+class ProgressRevisionNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  /// 进度上报后调用：版本号自增，通知监听方刷新。
+  void bump() => state++;
+}
+
 /// 离线进度缓存仓库 Provider。
 final progressRepositoryProvider = Provider<ProgressRepository>(
   (ref) => ProgressRepository(
     ref.watch(appDatabaseProvider),
     ref.watch(progressApiProvider),
+    onSaved: () => ref.read(progressRevisionProvider.notifier).bump(),
   ),
 );
 
@@ -21,10 +38,13 @@ final progressRepositoryProvider = Provider<ProgressRepository>(
 ///
 /// 冲突处理：本地与后端记录比较 updated_at，以最新为准。
 class ProgressRepository {
-  ProgressRepository(this._db, this._api);
+  ProgressRepository(this._db, this._api, {this.onSaved});
 
   final AppDatabase _db;
   final ProgressApi _api;
+
+  /// 进度本地落库后的回调（驱动"正在阅读"页自动刷新）。
+  final void Function()? onSaved;
 
   /// 保存进度：本地优先，随后尝试上报后端。
   Future<void> save({
@@ -56,6 +76,8 @@ class ProgressRepository {
         updatedAt: Value(now),
       ),
     );
+    // 本地已落库：通知"正在阅读"页刷新（后端上传成败不影响本地展示）
+    onSaved?.call();
     try {
       await _api.save(
         sourceId: sourceId,

@@ -7,6 +7,7 @@ import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_cover.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_status_indicator.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
+import 'package:myhub_flutter/shared/widgets/breathe_border.dart';
 
 /// 文件列表视图（iOS Files 风格）。
 ///
@@ -157,7 +158,7 @@ class _FileRow extends StatelessWidget {
     // 行级 Material：ink（悬停高亮/水波纹）绘制在行自身表面，
     // 不再被浏览页外层卡片容器（不透明背景 + 裁剪）遮挡，
     // 与「正在阅读」列表的悬停效果保持一致。
-    return Material(
+    final row = Material(
       color: selected
           ? colorScheme.primary.withValues(alpha: 0.08)
           : Colors.transparent,
@@ -167,11 +168,6 @@ class _FileRow extends StatelessWidget {
         onSecondaryTapUp: onSecondaryTapUp,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            border: highlighted
-                ? Border.all(color: colorScheme.primary, width: 1.6)
-                : null,
-          ),
           child: Row(
             children: [
               if (selectionMode)
@@ -249,6 +245,9 @@ class _FileRow extends StatelessWidget {
         ),
       ),
     );
+    // 高亮定位：用呼吸灯边框包裹整行（提示由上层定时熄灭）。
+    if (highlighted) return BreathingBorder(child: row);
+    return row;
   }
 
   /// 文件类型短标签（用于副标题）。

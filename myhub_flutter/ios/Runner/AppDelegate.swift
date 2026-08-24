@@ -35,5 +35,11 @@ import AVFoundation
     } else {
       print("Myhub NativePlayer: 获取 registrar 返回 nil")
     }
+    // 注册图片保存到相册插件（纯图片预览页「保存到相册」）
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "PhotoSaverPlugin") {
+      PhotoSaverPlugin.register(with: registrar)
+    } else {
+      print("Myhub PhotoSaver: 获取 registrar 返回 nil")
+    }
   }
 }

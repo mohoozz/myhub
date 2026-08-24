@@ -47,6 +47,15 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   /// iOS 标签管理页是否展开。
   bool _showTabManager = false;
 
+  /// iOS 底部操作栏是否可见（下滑收起 / 上滑或点击页面展开）。
+  bool _toolbarVisible = true;
+
+  /// 上次页面纵向滚动偏移（iOS 滚动收起操作栏用）。
+  double _lastScrollY = 0;
+
+  /// 滚动方向判定阈值（px），小于该值不触发收起/展开，避免抖动。
+  static const double _kToolbarScrollThreshold = 12;
+
   @override
   void dispose() {
     _addressFocus.dispose();
@@ -87,9 +96,11 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     if (url.isEmpty) return;
     final tab = ref.read(activeBrowserTabProvider);
     if (tab == null) return;
-    ref
-        .read(browserTabsProvider.notifier)
-        .update(tab.id, (t) => t.copyWith(url: url));
+    // navSeq 递增：显式导航命令，驱动 BrowserView 主动加载
+    ref.read(browserTabsProvider.notifier).update(
+          tab.id,
+          (t) => t.copyWith(url: url, navSeq: t.navSeq + 1),
+        );
     _addressFocus.unfocus();
   }
 
@@ -136,12 +147,47 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
       _canGoForward = false;
       _loading = tab?.loading ?? false;
       _progress = 0;
+      // 切换标签后重置 iOS 操作栏为展开
+      _toolbarVisible = true;
     });
+    _lastScrollY = 0;
     // 异步查询该标签的导航栈状态（WebView 已存活，controller 应已就绪）
     final controller = tab == null ? null : _controllers[tab.id];
     if (controller != null) {
       _queryNavState(controller);
     }
+  }
+
+  // ---------- iOS 操作栏收起 / 展开 ----------
+
+  void _setToolbarVisible(bool visible) {
+    if (_toolbarVisible == visible) return;
+    setState(() => _toolbarVisible = visible);
+  }
+
+  /// 页面滚动：任意方向（上/下）滚动超过阈值都收起操作栏；
+  /// 仅点击页面（[_onPageTap]）重新展开。
+  void _onScrollChanged(int y) {
+    if (!Platform.isIOS) return;
+    final yDouble = y.toDouble();
+    final dy = (yDouble - _lastScrollY).abs();
+    if (dy > _kToolbarScrollThreshold) {
+      _setToolbarVisible(false);
+    }
+    _lastScrollY = yDouble;
+  }
+
+  /// 新页面开始加载：重置滚动基准，避免跨页面滚动偏移误触发收起
+  /// （例如点击链接后 WKWebView 滚动位置归零）。
+  void _onPageStarted() {
+    if (!Platform.isIOS) return;
+    _lastScrollY = 0;
+  }
+
+  /// 网页点击：操作栏收起时，点击页面重新展开。
+  void _onPageTap() {
+    if (!Platform.isIOS) return;
+    _setToolbarVisible(true);
   }
 
   Future<void> _queryNavState(InAppWebViewController controller) async {
@@ -218,35 +264,13 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     ref.listen(activeBrowserTabIndexProvider, (prev, next) {
       if (prev != next) _syncStateFromActiveTab();
     });
+    // 会话恢复等导致激活标签实例变化（id 不同）时，同步顶栏地址栏
+    ref.listen(activeBrowserTabProvider, (prev, next) {
+      if (prev?.id != next?.id) _syncStateFromActiveTab();
+    });
 
     final body = Scaffold(
-      body: Column(
-        children: [
-          // PC：Chrome 风格标签条
-          if (Platform.isWindows) _buildTabStrip(tabs, activeTab),
-          _buildTopBar(theme, colorScheme),
-          // 地址栏下方 2px 蓝色加载进度条
-          SizedBox(
-            height: 2,
-            child: _progress > 0 && _progress < 100
-                ? LinearProgressIndicator(
-                    value: _progress / 100,
-                    minHeight: 2,
-                    backgroundColor: Colors.transparent,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      colorScheme.primary,
-                    ),
-                  )
-                : null,
-          ),
-          // WebView 区（IndexedStack 保持所有标签存活）
-          Expanded(
-            child: tabs.isEmpty
-                ? const SizedBox.shrink()
-                : _buildWebViewStack(tabs, activeIndex),
-          ),
-        ],
-      ),
+      body: Platform.isIOS ? _buildIOSLayout(theme, colorScheme, tabs, activeIndex) : _buildDesktopLayout(theme, colorScheme, tabs, activeTab, activeIndex),
     );
 
     // PC 键盘快捷键
@@ -257,6 +281,92 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
       );
     }
     return body;
+  }
+
+  /// iOS 布局（F-601）：进度条在顶部，操作栏移到底部（Safari 风格），
+  /// 方便单手操作；键盘弹出时 Scaffold 自动把底栏抬升至键盘上方。
+  Widget _buildIOSLayout(
+    ThemeData theme,
+    ColorScheme colorScheme,
+    List<BrowserTabState> tabs,
+    int activeIndex,
+  ) {
+    return Column(
+      children: [
+        // 2px 蓝色加载进度条（网页内容之上）
+        SizedBox(
+          height: 2,
+          child: _progress > 0 && _progress < 100
+              ? LinearProgressIndicator(
+                  value: _progress / 100,
+                  minHeight: 2,
+                  backgroundColor: Colors.transparent,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    colorScheme.primary,
+                  ),
+                )
+              : null,
+        ),
+        // WebView 区（IndexedStack 保持所有标签存活）
+        Expanded(
+          child: tabs.isEmpty
+              ? const SizedBox.shrink()
+              : _buildWebViewStack(tabs, activeIndex),
+        ),
+        // 底部操作栏（Safari 风格滚动收起）：下滑收起为 0 高（保留
+        // home indicator 安全区），上滑 / 点击页面重新展开
+        SafeArea(
+          top: false,
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeInOutCubic,
+            alignment: Alignment.bottomCenter,
+            child: _toolbarVisible
+                ? Container(
+                    color: colorScheme.surfaceContainerLowest,
+                    child: _buildTopBar(theme, colorScheme, atBottom: true),
+                  )
+                : const SizedBox(width: double.infinity, height: 0),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// PC 布局：Chrome 风格标签条 + 顶部操作栏 + 进度条 + WebView。
+  Widget _buildDesktopLayout(
+    ThemeData theme,
+    ColorScheme colorScheme,
+    List<BrowserTabState> tabs,
+    BrowserTabState? activeTab,
+    int activeIndex,
+  ) {
+    return Column(
+      children: [
+        if (Platform.isWindows) _buildTabStrip(tabs, activeTab),
+        _buildTopBar(theme, colorScheme),
+        // 地址栏下方 2px 蓝色加载进度条
+        SizedBox(
+          height: 2,
+          child: _progress > 0 && _progress < 100
+              ? LinearProgressIndicator(
+                  value: _progress / 100,
+                  minHeight: 2,
+                  backgroundColor: Colors.transparent,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    colorScheme.primary,
+                  ),
+                )
+              : null,
+        ),
+        // WebView 区（IndexedStack 保持所有标签存活）
+        Expanded(
+          child: tabs.isEmpty
+              ? const SizedBox.shrink()
+              : _buildWebViewStack(tabs, activeIndex),
+        ),
+      ],
+    );
   }
 
   /// PC 标签条。
@@ -293,6 +403,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     return BrowserView(
       key: ValueKey(tab.id),
       url: tab.url,
+      navSeq: tab.navSeq,
       keepAlive: true,
       userAgent: ref.read(browserSettingsProvider).userAgentString,
       onWebViewCreated: (controller) => _controllers[tab.id] = controller,
@@ -340,9 +451,10 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
           // target=_blank / window.open → 新标签打开
           if (url.isNotEmpty) {
             final newTab = ref.read(browserTabsProvider.notifier).newTab();
-            ref
-                .read(browserTabsProvider.notifier)
-                .update(newTab.id, (t) => t.copyWith(url: url));
+            ref.read(browserTabsProvider.notifier).update(
+                  newTab.id,
+                  (t) => t.copyWith(url: url, navSeq: t.navSeq + 1),
+                );
             _syncStateFromActiveTab();
           } else {
             _newTab();
@@ -357,10 +469,21 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
         },
         onNavigateRequestCb: (url) {
           // 起始页请求导航（搜索 / 快捷入口）→ 更新标签 URL 触发加载
-          ref
-              .read(browserTabsProvider.notifier)
-              .update(tab.id, (t) => t.copyWith(url: url));
+          ref.read(browserTabsProvider.notifier).update(
+                tab.id,
+                (t) => t.copyWith(url: url, navSeq: t.navSeq + 1),
+              );
           if (_isActive(tab.id)) setState(() => _url = url);
+        },
+        onScrollChangedCb: (y) {
+          // 仅激活标签的滚动影响 iOS 操作栏收起/展开
+          if (_isActive(tab.id)) _onScrollChanged(y);
+        },
+        onPageTapCb: () {
+          if (_isActive(tab.id)) _onPageTap();
+        },
+        onPageStartedCb: () {
+          if (_isActive(tab.id)) _onPageStarted();
         },
       ),
     );
@@ -369,13 +492,18 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   /// 判断指定 id 是否为当前激活标签。
   bool _isActive(int id) => ref.read(activeBrowserTabProvider)?.id == id;
 
-  /// 顶栏：导航按钮（后退/前进/刷新/停止）+ 地址栏 + 新标签按钮。
-  Widget _buildTopBar(ThemeData theme, ColorScheme colorScheme) {
+  /// 操作栏：导航按钮（后退/前进/刷新/停止）+ 地址栏 + 新标签按钮。
+  ///
+  /// [atBottom] 为 true 时（iOS 底部操作栏）分隔线画在顶部，背景色由
+  /// 外层 Container 统一延伸到安全区。
+  Widget _buildTopBar(ThemeData theme, ColorScheme colorScheme, {bool atBottom = false}) {
     return Container(
       height: 44,
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLowest,
-        border: Border(bottom: BorderSide(color: colorScheme.outline)),
+        border: atBottom
+            ? Border(top: BorderSide(color: colorScheme.outline))
+            : Border(bottom: BorderSide(color: colorScheme.outline)),
       ),
       child: Row(
         children: [
@@ -447,6 +575,9 @@ class _BrowserCallbacksAdapter implements BrowserViewCallbacks {
     required this.onErrorCb,
     required this.onPageFinishedCb,
     required this.onNavigateRequestCb,
+    required this.onScrollChangedCb,
+    required this.onPageTapCb,
+    required this.onPageStartedCb,
   });
 
   final void Function(String) onUrlChangedCb;
@@ -459,6 +590,9 @@ class _BrowserCallbacksAdapter implements BrowserViewCallbacks {
   final void Function(String, String) onErrorCb;
   final void Function(String) onPageFinishedCb;
   final void Function(String) onNavigateRequestCb;
+  final void Function(int) onScrollChangedCb;
+  final void Function() onPageTapCb;
+  final void Function() onPageStartedCb;
 
   @override
   void onUrlChanged(String url) => onUrlChangedCb(url);
@@ -491,6 +625,15 @@ class _BrowserCallbacksAdapter implements BrowserViewCallbacks {
 
   @override
   void onNavigateRequest(String url) => onNavigateRequestCb(url);
+
+  @override
+  void onScrollChanged(int y) => onScrollChangedCb(y);
+
+  @override
+  void onPageTap() => onPageTapCb();
+
+  @override
+  void onPageStarted() => onPageStartedCb();
 }
 
 /// iOS 标签数按钮：点击打开标签管理页（Safari 风格）。

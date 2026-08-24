@@ -7,6 +7,7 @@ import 'package:myhub_flutter/core/models/file_item.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_cover.dart';
 import 'package:myhub_flutter/features/browse/widgets/file_status_indicator.dart';
 import 'package:myhub_flutter/shared/utils/format.dart';
+import 'package:myhub_flutter/shared/widgets/breathe_border.dart';
 
 /// 文件网格视图。
 class FileGridView extends StatelessWidget {
@@ -275,7 +276,7 @@ class _FileCard extends StatelessWidget {
 
     // 卡片级 Material：ink（悬停高亮/水波纹）绘制在卡片自身表面，
     // 不再被浏览页外层卡片容器遮挡，与「正在阅读」的悬停效果一致。
-    return Material(
+    final card = Material(
       color: theme.cardTheme.color ?? colorScheme.surfaceContainerHigh,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
@@ -287,9 +288,7 @@ class _FileCard extends StatelessWidget {
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            border: highlighted
-                ? Border.all(color: colorScheme.primary, width: 1.6)
-                : selected
+            border: selected
                 ? Border.all(color: colorScheme.primary, width: 1.5)
                 : null,
           ),
@@ -385,6 +384,14 @@ class _FileCard extends StatelessWidget {
         ),
       ),
     );
+    // 高亮定位：用呼吸灯边框包裹整张卡片（提示由上层定时熄灭）。
+    if (highlighted) {
+      return BreathingBorder(
+        borderRadius: BorderRadius.circular(12),
+        child: card,
+      );
+    }
+    return card;
   }
 
   /// 副标题（iOS Files 风格）：目录显示"目录"，文件显示格式字节数。

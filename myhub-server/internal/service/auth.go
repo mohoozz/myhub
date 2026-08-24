@@ -143,7 +143,7 @@ func (s *AuthService) AvatarVersion(userID uint) int64 {
 func (s *AuthService) GenerateToken(userID uint, username string) (string, error) {
 	expireHours := s.cfg.JWT.ExpireHours
 	if expireHours <= 0 {
-		expireHours = 24
+		expireHours = 72
 	}
 	now := time.Now()
 	claims := Claims{
