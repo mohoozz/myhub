@@ -90,7 +90,7 @@ struct BrowseHomeView: View {
                     Text(connection.name)
                         .font(.body.weight(.medium))
                         .foregroundStyle(AppColors.textPrimary)
-                    Text("\(connection.type.displayName) · \(connection.mountPoint)")
+                    Text(connection.type.displayName)
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
                 }

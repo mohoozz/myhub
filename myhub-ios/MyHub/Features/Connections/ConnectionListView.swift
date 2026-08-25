@@ -93,7 +93,7 @@ struct ConnectionListView: View {
                 Text(connection.name)
                     .font(.body)
                     .foregroundStyle(AppColors.textPrimary)
-                Text(connection.mountPoint)
+                Text(connection.type.displayName)
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -145,7 +145,7 @@ extension Connection {
     static func empty(type: ConnectionType = .webdav) -> Connection {
         Connection(
             id: nil, name: "", type: type, configJSON: "{}",
-            mountPoint: "/", enabled: true, createdAt: Date()
+            mountPoint: "", enabled: true, createdAt: Date()
         )
     }
 }

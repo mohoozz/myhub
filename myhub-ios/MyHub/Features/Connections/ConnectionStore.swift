@@ -60,6 +60,11 @@ final class ConnectionStore: ObservableObject {
         reload()
     }
 
+    /// 读取已保存凭据密码（编辑表单回填用）；无则返回 nil
+    func loadPassword(for connectionID: Int64) -> String? {
+        try? credentials.loadPassword(for: connectionID)
+    }
+
     // MARK: - 连接测试
 
     func testIfNeeded(_ connection: Connection) async {

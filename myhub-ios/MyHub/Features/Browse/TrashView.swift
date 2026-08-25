@@ -16,7 +16,7 @@ struct TrashConnectionListView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(connection.name)
                             .foregroundStyle(AppColors.textPrimary)
-                        Text(connection.mountPoint)
+                        Text(connection.type.displayName)
                             .font(.caption)
                             .foregroundStyle(AppColors.textSecondary)
                     }

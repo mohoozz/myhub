@@ -116,7 +116,9 @@ struct BrowseDirectoryView: View {
             content
         }
         .background(AppColors.pageBackground)
-        .navigationTitle(viewModel.isSelecting ? "已选 \(viewModel.selection?.count ?? 0) 项" : title)
+        // 普通浏览态隐藏导航栏标题：当前目录/路径已由正文顶部面包屑承载，避免与面包屑重复、令导航栏更清爽；
+        // 仅多选态保留「已选 N 项」作为操作状态反馈。
+        .navigationTitle(viewModel.isSelecting ? "已选 \(viewModel.selection?.count ?? 0) 项" : "")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $viewModel.searchText, prompt: "搜索当前目录")
         .toolbar { toolbar }
@@ -263,10 +265,6 @@ struct BrowseDirectoryView: View {
             await viewModel.loadIfNeeded()
             readingHistory.reload()   // 首次进入时预载阅读进度（后续经 .playbackProgressDidChange 自动刷新）
         }
-    }
-
-    private var title: String {
-        viewModel.path == "/" ? connection.name : StoragePath.fileName(of: viewModel.path)
     }
 
     private var availableConnections: [Connection] {

@@ -10,7 +10,6 @@ struct ConnectionFormView: View {
 
     @State private var type: ConnectionType
     @State private var name: String
-    @State private var mountPoint: String
     @State private var enabled: Bool
 
     // WebDAV
@@ -27,8 +26,9 @@ struct ConnectionFormView: View {
     @State private var localBookmark: Data?
     @State private var localFolderName: String?
     @State private var pickingFolder = false
-    // 凭据（仅输入态，保存写 Keychain）
-    @State private var password = ""
+    // 凭据（编辑时回填已存密码；保存写 Keychain）
+    @State private var password: String
+    @State private var showPassword = false
     // 状态
     @State private var testing = false
     @State private var testResult: ConnectionTestState?
@@ -40,7 +40,6 @@ struct ConnectionFormView: View {
         self.isNew = isNew
         _type = State(initialValue: connection.type)
         _name = State(initialValue: connection.name)
-        _mountPoint = State(initialValue: connection.mountPoint)
         _enabled = State(initialValue: connection.enabled)
         let webdav = connection.decodeConfig(WebDAVConfig.self)
         _webdavBaseURL = State(initialValue: webdav?.baseURL ?? "")
@@ -55,6 +54,9 @@ struct ConnectionFormView: View {
         let local = connection.decodeConfig(LocalConfig.self)
         _localBookmark = State(initialValue: local?.bookmarkData)
         _localFolderName = State(initialValue: local?.bookmarkData != nil ? "已选择共享文件夹" : nil)
+        // 编辑时回填 Keychain 中已保存的密码
+        let savedPassword: String? = isNew ? nil : connection.id.flatMap { store.loadPassword(for: $0) }
+        _password = State(initialValue: savedPassword ?? "")
     }
 
     var body: some View {
@@ -72,7 +74,6 @@ struct ConnectionFormView: View {
 
                 Section("基本信息") {
                     TextField("名称（如：家里 NAS）", text: $name)
-                    TextField("挂载点（如 /NAS，留空按名称生成）", text: $mountPoint)
                     if !isNew {
                         Toggle("启用", isOn: $enabled)
                     }
@@ -142,7 +143,7 @@ struct ConnectionFormView: View {
                 TextField("用户名（可空为匿名）", text: $webdavUsername)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                SecureField(isNew ? "密码" : "密码（留空保持不变）", text: $password)
+                passwordField
             }
         }
     }
@@ -164,12 +165,35 @@ struct ConnectionFormView: View {
                     TextField("用户名", text: $smbUsername)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    SecureField(isNew ? "密码" : "密码（留空保持不变）", text: $password)
+                    passwordField
                     TextField("域 / 工作组（可空）", text: $smbDomain)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
             }
+        }
+    }
+
+    // MARK: - 密码输入（带明文切换）
+
+    private var passwordField: some View {
+        HStack {
+            Group {
+                if showPassword {
+                    TextField(isNew ? "密码" : "密码（留空则不修改）", text: $password)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } else {
+                    SecureField(isNew ? "密码" : "密码（留空则不修改）", text: $password)
+                }
+            }
+            Button {
+                showPassword.toggle()
+            } label: {
+                Image(systemName: showPassword ? "eye.slash" : "eye")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
         }
     }
 
@@ -260,20 +284,11 @@ struct ConnectionFormView: View {
         var connection = original
         connection.name = name.trimmingCharacters(in: .whitespaces)
         connection.type = type
-        connection.mountPoint = normalizedMountPoint()
+        // 挂载点直接用名称，不再拼接前缀或做规范化
+        connection.mountPoint = name.trimmingCharacters(in: .whitespaces)
         connection.enabled = isNew ? true : enabled
         connection.configJSON = buildConfigJSON()
         return connection
-    }
-
-    private func normalizedMountPoint() -> String {
-        var point = mountPoint.trimmingCharacters(in: .whitespaces)
-        if point.isEmpty || point == "/" {
-            let base = name.trimmingCharacters(in: .whitespaces)
-            point = "/" + (base.isEmpty ? type.rawValue : base)
-        }
-        point = point.replacingOccurrences(of: "/", with: "-")
-        return "/" + point.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     private func buildConfigJSON() -> String {
