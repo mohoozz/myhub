@@ -16,6 +16,7 @@ struct PlaceholderView: View {
                     .foregroundStyle(.secondary)
             }
             .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

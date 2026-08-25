@@ -156,7 +156,14 @@ final class ComicReaderViewModel: ObservableObject {
             let key = ComicProgressStore.cacheCover(
                 data: data, connectionID: coverConnectionID, path: coverPath
             )
-            await MainActor.run { self.coverKey = key }
+            await MainActor.run {
+                self.coverKey = key
+                if let key {
+                    ComicProgressStore.updateCover(
+                        connectionID: coverConnectionID, path: coverPath, cover: key
+                    )
+                }
+            }
         }
 
         // 首屏页立即加载 + 预加载窗口

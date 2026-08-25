@@ -41,6 +41,7 @@ enum NovelProgressStore {
                 existing.percent = finished ? 1 : clamped
                 existing.finished = finished
                 existing.title = title
+                existing.mediaType = .novel
                 if let cover { existing.cover = cover }
                 existing.updatedAt = Date()
                 try existing.update(database)
@@ -61,5 +62,17 @@ enum NovelProgressStore {
             }
         }
         NotificationCenter.default.post(name: .playbackProgressDidChange, object: nil)
+    }
+
+    /// 封面提取完成后补写进度记录 cover（不依赖 reportNow 时机，防「正在阅读」封面时有时无）
+    static func updateCover(connectionID: Int64, path: String, cover: String) {
+        guard let db = AppDatabase.shared.dbQueue else { return }
+        try? db.write { database in
+            guard var existing = try ReadingProgress
+                .filter(Column("connectionID") == connectionID && Column("filePath") == path)
+                .fetchOne(database) else { return }
+            existing.cover = cover
+            try existing.update(database)
+        }
     }
 }

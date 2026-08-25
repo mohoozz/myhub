@@ -1,8 +1,10 @@
+import AVKit
 import SwiftUI
 
 /// 播放控制栏（IOS-201 / IOS-701）：
-/// 顶栏——退出（直接退出）/ 标题 + 引擎徽标 / 纯音频切换 / PiP / 进入 mini；
-/// 底栏——播放暂停、进度条（含缓冲段 + 拖动）、时间、倍速（0.5~3.0x）、字幕（内嵌 + 外挂）、音轨。
+/// 顶栏——圆形悬浮按钮：退出 / PiP / 音轨 / 更多（纯音频、小窗、解码方式）；
+/// 底栏——标题 + 深色圆角控制卡片：进度条（含缓冲段 + 拖动）+ 倍速、当前/剩余时间、
+///       AirPlay、快退/快进、播放暂停、字幕（内嵌 + 外挂）。
 struct PlayerControls: View {
     @ObservedObject var core: PlayerCore
     @ObservedObject var subtitles: SubtitleManager
@@ -20,11 +22,15 @@ struct PlayerControls: View {
         scrubbing ? scrubValue : core.currentTime
     }
 
+    private var remainingTime: Double {
+        max(core.duration - displayTime, 0)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             topBar
             Spacer()
-            bottomBar
+            bottomSection
         }
         .onAppear { scrubValue = core.currentTime }
         .onChange(of: core.currentTime) { newValue in
@@ -32,81 +38,120 @@ struct PlayerControls: View {
         }
     }
 
-    // MARK: - 顶栏
+    // MARK: - 顶栏（圆形悬浮按钮）
 
     private var topBar: some View {
-        HStack(spacing: 18) {
-            Button(action: onExit) {
-                Image(systemName: "xmark")
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item?.title ?? "")
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                if let kind = core.engineKind {
-                    Text("\(kind.displayName)解码")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.55))
+        HStack(spacing: 12) {
+            roundButton("xmark", label: "退出", action: onExit)
+            if pip.isSupported, !core.isAudioOnly, item?.isAudioOnly == false {
+                roundButton("pip.enter", label: "画中画") {
+                    pip.start()
+                    onInteraction()
                 }
             }
             Spacer()
-            if item?.isAudioOnly == false {
-                Button {
-                    core.setAudioOnly(!core.isAudioOnly)
-                    onInteraction()
-                } label: {
-                    Image(systemName: core.isAudioOnly ? "waveform.circle.fill" : "waveform.circle")
-                }
-                .accessibilityLabel("纯音频模式")
-            }
-            if pip.isSupported, !core.isAudioOnly, item?.isAudioOnly == false {
-                Button {
-                    pip.start()
-                    onInteraction()
-                } label: {
-                    Image(systemName: "pip.enter")
-                }
-            }
-            Button(action: onMini) {
-                Image(systemName: "chevron.down")
-            }
+            audioTrackMenu
+            moreMenu
         }
-        .font(.headline)
-        .foregroundStyle(.white)
-        .padding()
-        .background(topGradient)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
     }
 
-    // MARK: - 底栏
-
-    private var bottomBar: some View {
-        VStack(spacing: 12) {
-            // 进度条 + 缓冲段
-            HStack(spacing: 10) {
-                Text(DisplayFormatters.duration(displayTime))
-                progressBar
-                Text(DisplayFormatters.duration(core.duration))
-            }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.white.opacity(0.85))
-
-            // 控制按钮
-            HStack(spacing: 28) {
-                Button {
-                    core.togglePlayPause()
-                    onInteraction()
-                } label: {
-                    Image(systemName: core.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 44))
-                }
-                rateMenu
-                subtitleMenu
-                audioTrackMenu
-            }
-            .foregroundStyle(.white)
+    private func roundButton(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            roundIcon(systemName)
         }
-        .padding()
-        .background(bottomGradient)
+        .buttonStyle(.pressScale)
+        .accessibilityLabel(label)
+    }
+
+    private func roundIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.55))
+            .clipShape(Circle())
+    }
+
+    // MARK: - 底栏（标题 + 圆角控制卡片）
+
+    private var bottomSection: some View {
+        VStack(spacing: 10) {
+            Text(item?.title ?? "")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1)
+                .padding(.horizontal, 28)
+
+            VStack(spacing: 12) {
+                // 进度条 + 倍速
+                HStack(spacing: 10) {
+                    progressBar
+                    rateMenu
+                }
+
+                // 当前时间 / 剩余时间
+                HStack {
+                    Text(DisplayFormatters.duration(displayTime))
+                    Spacer()
+                    Text("-\(DisplayFormatters.duration(remainingTime))")
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.7))
+
+                // 播放控制：AirPlay / 快退 / 播放暂停 / 快进 / 字幕
+                HStack {
+                    AirPlayRoutePicker()
+                        .frame(width: 32, height: 32)
+                        .accessibilityLabel("AirPlay")
+                    Spacer()
+                    HStack(spacing: 40) {
+                        skipButton(systemName: "backward.end.fill",
+                                   delta: -AppSettings.Player.seekStepSeconds, label: "快退")
+                        playPauseButton
+                        skipButton(systemName: "forward.end.fill",
+                                   delta: AppSettings.Player.seekStepSeconds, label: "快进")
+                    }
+                    Spacer()
+                    subtitleMenu
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(.black.opacity(0.72))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .padding(.horizontal, 14)
+        }
+        .padding(.bottom, 6)
+    }
+
+    private func skipButton(systemName: String, delta: Double, label: String) -> some View {
+        Button {
+            core.seek(by: delta)
+            onInteraction()
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 24))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+        }
+        .buttonStyle(.pressScale)
+        .accessibilityLabel(label)
+    }
+
+    private var playPauseButton: some View {
+        Button {
+            core.togglePlayPause()
+            onInteraction()
+        } label: {
+            Image(systemName: core.isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 32))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.pressScale)
+        .accessibilityLabel(core.isPlaying ? "暂停" : "播放")
     }
 
     /// 自定义进度条：轨道 / 缓冲段 / 已播放 / 拖钮，支持点击定位与拖动
@@ -114,19 +159,21 @@ struct PlayerControls: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.22))
+                Capsule()
+                    .fill(.white.opacity(0.25))
+                    .frame(height: 5)
                 Capsule()
                     .fill(.white.opacity(0.4))
-                    .frame(width: width * bufferRatio)
+                    .frame(width: width * bufferRatio, height: 5)
                 Capsule()
-                    .fill(AppColors.primary)
-                    .frame(width: width * playedRatio)
+                    .fill(.white)
+                    .frame(width: width * playedRatio, height: 5)
                 Circle()
                     .fill(.white)
                     .frame(width: 12, height: 12)
-                    .offset(x: max(0, width * playedRatio - 6))
+                    .offset(x: min(max(0, width * playedRatio - 6), max(width - 12, 0)))
             }
-            .frame(height: 20)
+            .frame(height: 24)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -142,7 +189,7 @@ struct PlayerControls: View {
                     }
             )
         }
-        .frame(height: 20)
+        .frame(height: 24)
     }
 
     private var playedRatio: CGFloat {
@@ -160,7 +207,7 @@ struct PlayerControls: View {
         return min(max(x / width, 0), 1) * core.duration
     }
 
-    // MARK: - 倍速 / 字幕 / 音轨
+    // MARK: - 倍速 / 字幕 / 音轨 / 更多
 
     private var rateMenu: some View {
         Menu {
@@ -169,15 +216,24 @@ struct PlayerControls: View {
                     core.setRate(Float(option))
                     onInteraction()
                 } label: {
-                    checkLabel(String(format: "%gx", option),
+                    checkLabel(rateTitle(Float(option)),
                                checked: abs(core.rate - Float(option)) < 0.01)
                 }
             }
         } label: {
-            Text(String(format: "%gx", core.rate))
-                .font(.subheadline.weight(.medium).monospacedDigit())
-                .frame(minWidth: 44)
+            Text(rateTitle(core.rate))
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.white.opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
+    }
+
+    /// 整数倍速显示一位小数（1.0x），其余原样（0.75x）
+    private func rateTitle(_ rate: Float) -> String {
+        rate == rate.rounded() ? String(format: "%.1fx", rate) : String(format: "%gx", rate)
     }
 
     private var subtitleMenu: some View {
@@ -219,6 +275,9 @@ struct PlayerControls: View {
             }
         } label: {
             Image(systemName: "captions.bubble")
+                .font(.system(size: 20))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
         }
         .opacity(core.subtitleTracks.isEmpty && subtitles.externalTracks.isEmpty ? 0.35 : 1)
     }
@@ -234,10 +293,37 @@ struct PlayerControls: View {
                 }
             }
         } label: {
-            Image(systemName: "person.wave.2")
+            roundIcon("speaker.wave.2.fill")
         }
-        .opacity(core.audioTracks.count > 1 ? 1 : 0.35)
+        .opacity(core.audioTracks.count > 1 ? 1 : 0.5)
         .disabled(core.audioTracks.count <= 1)
+        .accessibilityLabel("音轨")
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            if item?.isAudioOnly == false {
+                Button {
+                    core.setAudioOnly(!core.isAudioOnly)
+                    onInteraction()
+                } label: {
+                    Label(core.isAudioOnly ? "退出纯音频模式" : "纯音频模式",
+                          systemImage: core.isAudioOnly ? "waveform.circle.fill" : "waveform.circle")
+                }
+            }
+            Button {
+                onMini()
+            } label: {
+                Label("小窗播放", systemImage: "chevron.down")
+            }
+            if let kind = core.engineKind {
+                Divider()
+                Text("\(kind.displayName)解码")
+            }
+        } label: {
+            roundIcon("ellipsis")
+        }
+        .accessibilityLabel("更多")
     }
 
     private func checkLabel(_ title: String, checked: Bool) -> some View {
@@ -246,22 +332,17 @@ struct PlayerControls: View {
             if checked { Image(systemName: "checkmark") }
         }
     }
+}
 
-    // MARK: - 渐变背景（保证白字可读性）
-
-    private var topGradient: some View {
-        LinearGradient(
-            colors: [.black.opacity(0.65), .clear],
-            startPoint: .top, endPoint: .bottom
-        )
-        .allowsHitTesting(false)
+/// AirPlay 路由选择器（AVRoutePickerView 桥接，投屏面板由系统弹出）
+private struct AirPlayRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.prioritizesVideoDevices = true
+        picker.tintColor = .white
+        picker.activeTintColor = .systemBlue
+        return picker
     }
 
-    private var bottomGradient: some View {
-        LinearGradient(
-            colors: [.clear, .black.opacity(0.65)],
-            startPoint: .top, endPoint: .bottom
-        )
-        .allowsHitTesting(false)
-    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }

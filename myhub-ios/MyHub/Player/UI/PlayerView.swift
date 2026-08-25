@@ -5,7 +5,9 @@ import SwiftUI
 /// - 手势层（GestureHandler）+ 中央悬浮数值胶囊；字幕 SwiftUI 浮层；
 /// - 控制栏 3s 自动隐藏（播放中），点击切换；
 /// - 中央「加载圈」与「大播放键」互斥不重叠；暂停/播放图标方向正确；
-/// - 「退出」直接退出，「进入 mini」为独立按钮（IOS-701）。
+/// - 「退出」直接退出，「进入 mini」为独立按钮（IOS-701）；
+/// - 下拉进 mini：固定黑底 + 内容层跟随手指（无透明度渐变）；过阈值封面瞬消（无系统滑出动画），
+///   避免拖动中透出下层界面、松手时画面跳回与 mini 滑入叠加产生残影。
 struct PlayerView: View {
     @EnvironmentObject private var player: PlayerPresenter
     @StateObject private var core = PlayerCore.shared
@@ -30,6 +32,41 @@ struct PlayerView: View {
 
     var body: some View {
         ZStack {
+            // 固定黑底（不跟随拖动）：下拉进 mini 时让出的区域保持纯黑，避免透出下层界面产生残影
+            Color.black.ignoresSafeArea()
+
+            // 内容层：下拉进 mini 时整体跟随手指偏移
+            contentStack
+                .offset(y: miniDragOffset)
+        }
+        .immersive()
+        .onAppear {
+            resetHideTimer()
+            Task {
+                await subtitles.discover(
+                    connectionID: player.current?.connectionID,
+                    mediaPath: player.current?.path ?? ""
+                )
+            }
+        }
+        .onDisappear {
+            hideTask?.cancel()
+            nextTask?.cancel()
+        }
+        .onChange(of: core.currentTime) { newValue in
+            subtitles.update(currentTime: newValue)
+        }
+        .onChange(of: core.state) { newState in
+            if newState == .playing { resetHideTimer() }
+            if newState == .ended { prepareNext() }
+            if newState == .playing, nextCandidate != nil { cancelNext() }
+        }
+        .onChange(of: player.current) { _ in cancelNext() }
+    }
+
+    /// 播放内容层（渲染 / 手势 / 字幕 / 中央状态 / 控制 / 锁定 / 推荐下一个）
+    private var contentStack: some View {
+        ZStack {
             Color.black.ignoresSafeArea()
 
             // 渲染层
@@ -49,7 +86,7 @@ struct PlayerView: View {
                 miniDragOffset: $miniDragOffset,
                 isLocked: $isInterfaceLocked,
                 onToggleControls: { toggleControls() },
-                onMini: { player.enterMini() },
+                onMini: { player.enterMini(instant: true) },
                 onLock: { lockInterface() }
             )
 
@@ -66,7 +103,7 @@ struct PlayerView: View {
                         .background(.black.opacity(0.55))
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .padding(.horizontal, 24)
-                        .padding(.bottom, showControls ? 132 : 48)
+                        .padding(.bottom, showControls ? 224 : 48)
                 }
                 .animation(.appQuick, value: showControls)
             }
@@ -129,36 +166,11 @@ struct PlayerView: View {
                         onPlay: { playNext() },
                         onCancel: { cancelNext() }
                     )
-                    .padding(.bottom, showControls ? 180 : 96)
+                    .padding(.bottom, showControls ? 262 : 96)
                 }
                 .animation(.appQuick, value: showControls)
             }
         }
-        .offset(y: miniDragOffset)   // 中央下拉跟随手指（进入 mini 过渡动画）
-        .opacity(1 - min(Double(miniDragOffset) / 1200, 0.35))
-        .immersive()
-        .onAppear {
-            resetHideTimer()
-            Task {
-                await subtitles.discover(
-                    connectionID: player.current?.connectionID,
-                    mediaPath: player.current?.path ?? ""
-                )
-            }
-        }
-        .onDisappear {
-            hideTask?.cancel()
-            nextTask?.cancel()
-        }
-        .onChange(of: core.currentTime) { newValue in
-            subtitles.update(currentTime: newValue)
-        }
-        .onChange(of: core.state) { newState in
-            if newState == .playing { resetHideTimer() }
-            if newState == .ended { prepareNext() }
-            if newState == .playing, nextCandidate != nil { cancelNext() }
-        }
-        .onChange(of: player.current) { _ in cancelNext() }
     }
 
     // MARK: - 播完推荐下一个（IOS-204）

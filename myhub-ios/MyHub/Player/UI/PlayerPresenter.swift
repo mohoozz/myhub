@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// 可播放媒体描述（与 FileEntry / 进度记录联动）
 struct PlayableItem: Equatable {
@@ -49,9 +50,17 @@ final class PlayerPresenter: ObservableObject {
     }
 
     /// 进入 mini（保留会话）
-    func enterMini() {
+    /// - Parameter instant: true 时全屏封面立即消失（无系统下滑动画）。
+    ///   用于下拉手势路径——封面已随手指给出位移反馈，再播系统滑出动画会出现画面跳回 + 双画面重影
+    func enterMini(instant: Bool = false) {
         guard current != nil else { return }
-        isFullscreen = false
+        if instant {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { isFullscreen = false }
+        } else {
+            isFullscreen = false
+        }
         isMini = true
     }
 

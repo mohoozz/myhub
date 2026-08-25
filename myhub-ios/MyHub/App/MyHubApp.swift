@@ -2,6 +2,9 @@ import SwiftUI
 
 @main
 struct MyHubApp: App {
+    init() {
+        _ = AppLogger.shared   // 尽早初始化日志 + 安装崩溃捕获（避免启动早期崩溃漏捕获）
+    }
     // 全局状态：主题 / 启动 / 播放呈现 / 弹出菜单 / 浏览器会话（§2.2.2 全局持有）
     @StateObject private var themeManager = ThemeManager()
     @StateObject private var appState = AppState()

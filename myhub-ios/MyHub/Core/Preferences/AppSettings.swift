@@ -108,7 +108,7 @@ enum AppSettings {
         @UserDefault("player.volumeStep", default: 0.05) static var volumeStep: Double   // iOS 音量步进，默认 5%
         @UserDefault("player.subtitleFontSize", default: 16) static var subtitleFontSize: Double
         @UserDefault("player.subtitleDelay", default: 0) static var subtitleDelay: Double
-        @UserDefault("player.seekStepSeconds", default: 10) static var seekStepSeconds: Double   // 双击快进/快退
+        @UserDefault("player.seekStepSeconds", default: 10) static var seekStepSeconds: Double   // 快进/快退步进
     }
 
     /// 浏览器偏好
@@ -142,7 +142,7 @@ enum AppSettings {
         @RawUserDefault("browse.viewMode", default: .grid) static var viewMode: BrowseViewMode
         /// 各连接源最后浏览路径（key = connectionID），二次进入恢复
         @UserDefault("browse.lastPaths", default: [:]) static var lastPaths: [String: String]
-        /// 网格卡片文件名显示行数（3~5），配合 reservesSpace 让卡片高度一致
+        /// 网格卡片文件名显示行数（1~5），配合 reservesSpace 让卡片高度一致
         @UserDefault("browse.fileNameLines", default: 3) static var fileNameLines: Int
     }
 

@@ -22,17 +22,24 @@ struct PopupMenuItem: Identifiable {
 // MARK: - 全局菜单呈现器
 
 /// 统一弹出菜单入口（TODO §1.1）：… 菜单 / 长按菜单 / 右键菜单（iPad·Mac 指针）
-/// 复用同一圆角卡片与弹出动画，由 RootView 顶层悬浮层承载。
+/// 由 RootView 顶层悬浮层承载；长按走底部抽屉，… 按钮 / 指针右键走锚点圆角卡片。
 final class PopupMenuPresenter: ObservableObject {
+    /// 菜单呈现样式
+    enum Style {
+        case popover   // 锚点圆角卡片：… 按钮 / iPad·Mac 指针右键
+        case drawer    // 底部抽屉：iOS 长按（参照 Flutter showModalBottomSheet）
+    }
+
     struct State {
         var items: [PopupMenuItem]
-        var anchor: CGRect   // 触发视图的全局坐标
+        var anchor: CGRect   // 触发视图的全局坐标（popover 定位用）
+        var style: Style
     }
 
     @Published var state: State?
 
-    func show(items: [PopupMenuItem], anchor: CGRect) {
-        state = State(items: items, anchor: anchor)
+    func show(items: [PopupMenuItem], anchor: CGRect = .zero, style: Style = .popover) {
+        state = State(items: items, anchor: anchor, style: style)
     }
 
     func dismiss() {
@@ -134,6 +141,129 @@ struct PopupMenuLayer: View {
     }
 }
 
+// MARK: - 底部抽屉菜单
+
+/// 底部滑出抽屉式菜单（参照 Flutter showModalBottomSheet，iOS 长按统一入口）：
+/// 顶部拖拽把手（可下拉关闭）+ 可滚动列表（超高时内部滚动）+ 点击蒙层关闭；
+/// iPad 上限宽居中，圆角顶边，与全局菜单同一悬浮层承载。
+struct BottomMenuDrawer: View {
+    let items: [PopupMenuItem]
+    let onDismiss: () -> Void
+
+    @State private var visible = false
+    @State private var dragOffset: CGFloat = 0
+
+    private let rowHeight: CGFloat = 50
+    private let handleHeight: CGFloat = 26   // 把手区（5 + 上 8 + 下 13）
+    private let bottomPadding: CGFloat = 8
+    private let maxHeightRatio: CGFloat = 0.75
+    private let cornerRadius: CGFloat = 16
+    private let maxWidth: CGFloat = 520      // iPad 限宽居中
+
+    var body: some View {
+        GeometryReader { geo in
+            let height = drawerHeight(in: geo)
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(visible ? 0.35 : 0)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismiss() }
+
+                VStack(spacing: 0) {
+                    // 拖拽把手（参照 Flutter showDragHandle，下拉关闭）
+                    Capsule()
+                        .fill(AppColors.textSecondary.opacity(0.35))
+                        .frame(width: 36, height: 5)
+                        .padding(.top, 8)
+                        .padding(.bottom, 13)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(dragToDismiss)
+
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(items) { item in
+                                Button {
+                                    dismiss()
+                                    item.action()
+                                } label: {
+                                    HStack(spacing: 14) {
+                                        if let icon = item.systemImage {
+                                            Image(systemName: icon)
+                                                .font(.system(size: 17))
+                                                .frame(width: 24)
+                                        }
+                                        Text(item.title)
+                                            .font(.body)
+                                        Spacer()
+                                    }
+                                    .foregroundStyle(item.destructive ? Color.red : AppColors.textPrimary)
+                                    .padding(.horizontal, 20)
+                                    .frame(height: rowHeight)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(DrawerRowStyle())
+                            }
+                        }
+                    }
+
+                    Color.clear.frame(height: bottomPadding)
+                }
+                .frame(height: height)
+                .frame(maxWidth: maxWidth)
+                .background(AppColors.cardBackground)
+                .clipShape(UnevenRoundedRectangle(
+                    topLeadingRadius: cornerRadius,
+                    topTrailingRadius: cornerRadius,
+                    style: .continuous
+                ))
+                .shadow(color: .black.opacity(0.15), radius: 16, y: -4)
+                .frame(maxWidth: .infinity)   // iPad 限宽后居中
+                .offset(y: visible ? max(0, dragOffset) : height)
+            }
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            withAnimation(.appQuick) { visible = true }
+        }
+    }
+
+    /// 抽屉高度：把手 + 列表 + 底部留白 + Home 指示条区；超过上限时列表内部滚动
+    private func drawerHeight(in geo: GeometryProxy) -> CGFloat {
+        let content = handleHeight + CGFloat(items.count) * rowHeight + bottomPadding + geo.safeAreaInsets.bottom
+        return min(content, geo.size.height * maxHeightRatio)
+    }
+
+    private var dragToDismiss: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                dragOffset = max(0, value.translation.height)
+            }
+            .onEnded { value in
+                if value.translation.height > 80 || value.predictedEndTranslation.height > 160 {
+                    dismiss()
+                } else {
+                    withAnimation(.appFast) { dragOffset = 0 }
+                }
+            }
+    }
+
+    private func dismiss() {
+        withAnimation(.appQuick) { visible = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            onDismiss()
+        }
+    }
+}
+
+/// 抽屉菜单行按压样式：浅蓝高亮（与单元格按压视觉一致）
+private struct DrawerRowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? AppColors.primary.opacity(0.10) : Color.clear)
+    }
+}
+
 // MARK: - 触发组件
 
 /// 「…」触发按钮：记录自身全局位置并弹出圆角菜单；symbol 可定制（默认「…」）
@@ -181,7 +311,7 @@ private struct PopupContextMenuModifier: ViewModifier {
         content
             .background(AnchorReader(anchor: $anchor))
             .onLongPressGesture(minimumDuration: 0.5) {
-                presenter.show(items: items, anchor: anchor)
+                presenter.show(items: items, anchor: anchor, style: .drawer)
             }
             .background(SecondaryClickBridge {
                 presenter.show(items: items, anchor: anchor)
@@ -190,12 +320,12 @@ private struct PopupContextMenuModifier: ViewModifier {
 }
 
 extension View {
-    /// 长按（iOS）/ 指针右键（iPad·Mac）弹出圆角菜单，与「…」按钮同一组件
+    /// 长按（iOS，底部抽屉）/ 指针右键（iPad·Mac，锚点卡片）弹出操作菜单
     func popupContextMenu(_ items: [PopupMenuItem]) -> some View {
         modifier(PopupContextMenuModifier(items: items))
     }
 
-    /// 仅指针右键（iPad·Mac）弹出圆角菜单；iOS 长按留给多选模式（TODO §3.2）
+    /// 仅指针右键（iPad·Mac）弹出锚点圆角菜单；iOS 长按请用 popupContextMenu（底部抽屉）
     func popupSecondaryMenu(_ items: [PopupMenuItem]) -> some View {
         modifier(PopupSecondaryMenuModifier(items: items))
     }
@@ -218,20 +348,14 @@ private struct PopupSecondaryMenuModifier: ViewModifier {
 
 // MARK: - 单元格按压交互
 
-/// 单元格按压交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单 / 长按多选无法触发）：
-/// - 点击 → onTap；长按 → 弹菜单或自定义动作（互斥：长按识别后松开不再触发点击）；
+/// 单元格按压交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单无法触发）：
+/// - 点击 → onTap；长按 → 底部抽屉菜单（互斥：长按识别后松开不再触发点击）；
 /// - 按压中浅蓝高亮 + 缩放 0.97（与原 SelectableCellStyle 视觉一致）；
-/// - secondaryMenuItems 非空时，iPad/Mac 指针右键弹圆角菜单。
+/// - iPad/Mac 指针右键弹锚点圆角菜单（与长按同一组菜单项）。
 private struct CellPressModifier: ViewModifier {
-    enum LongPressAction {
-        case menu([PopupMenuItem])
-        case custom(() -> Void)
-    }
-
     var cornerRadius: CGFloat = 12
-    var secondaryMenuItems: [PopupMenuItem] = []
+    let items: [PopupMenuItem]
     let onTap: () -> Void
-    let longPress: LongPressAction
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
     @GestureState private var isPressing = false
@@ -247,31 +371,23 @@ private struct CellPressModifier: ViewModifier {
             .scaleEffect(isPressing ? 0.97 : 1)
             .animation(.appFast, value: isPressing)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .gesture(
+            .onTapGesture { onTap() }
+            .simultaneousGesture(
                 LongPressGesture(minimumDuration: 0.5)
                     .updating($isPressing) { value, state, _ in state = value }
-                    .onEnded { _ in performLongPress() }
-                    .exclusively(before: TapGesture().onEnded { onTap() })
+                    .onEnded { _ in
+                        presenter.show(items: items, anchor: anchor, style: .drawer)
+                    }
             )
             .accessibilityAddTraits(.isButton)
             .background(SecondaryClickBridge {
-                guard !secondaryMenuItems.isEmpty else { return }
-                presenter.show(items: secondaryMenuItems, anchor: anchor)
+                presenter.show(items: items, anchor: anchor)
             })
-    }
-
-    private func performLongPress() {
-        switch longPress {
-        case .menu(let items):
-            presenter.show(items: items, anchor: anchor)
-        case .custom(let action):
-            action()
-        }
     }
 }
 
 extension View {
-    /// 单元格交互：点击 + 长按弹圆角菜单 + 指针右键同一菜单（修复 Button 吞长按）
+    /// 单元格交互：点击 + 长按弹底部抽屉菜单 + 指针右键弹锚点菜单（修复 Button 吞长按）
     func cellPressableMenu(
         cornerRadius: CGFloat = 12,
         items: [PopupMenuItem],
@@ -279,24 +395,8 @@ extension View {
     ) -> some View {
         modifier(CellPressModifier(
             cornerRadius: cornerRadius,
-            secondaryMenuItems: items,
-            onTap: onTap,
-            longPress: .menu(items)
-        ))
-    }
-
-    /// 单元格交互：点击 + 长按自定义动作（如进入多选）+ 可选指针右键菜单
-    func cellPressable(
-        cornerRadius: CGFloat = 12,
-        secondaryMenuItems: [PopupMenuItem] = [],
-        onTap: @escaping () -> Void,
-        onLongPress: @escaping () -> Void
-    ) -> some View {
-        modifier(CellPressModifier(
-            cornerRadius: cornerRadius,
-            secondaryMenuItems: secondaryMenuItems,
-            onTap: onTap,
-            longPress: .custom(onLongPress)
+            items: items,
+            onTap: onTap
         ))
     }
 }

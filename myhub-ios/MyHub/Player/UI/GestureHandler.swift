@@ -29,13 +29,12 @@ enum GestureFeedback: Equatable {
     case volume(percent: Int)
     case brightness(percent: Int)
     case speed(rate: Float)
-    case jump(seconds: TimeInterval)
 }
 
 /// 播放器手势层（IOS-201 / IOS-701，iPhone）：
 /// - 水平滑动调节进度（松手 seek）；右侧 1/3 竖滑调音量（系统联动，步进 5%）；左侧 1/3 竖滑调亮度；
 /// - **画面中央 1/3 向下拖动进入 mini（跟随手指偏移，松手过阈值进入，带过渡动画）**；
-/// - 双击左/右快退/快进（步进 AppSettings.Player.seekStepSeconds，默认 10s）；双击中央播放/暂停；
+/// - 双击播放/暂停；
 /// - 单击切换控制层；长按进入界面锁定。
 struct PlayerGestureLayer: View {
     @ObservedObject var core: PlayerCore
@@ -64,8 +63,8 @@ struct PlayerGestureLayer: View {
             Color.clear
                 .contentShape(Rectangle())
                 .gesture(dragGesture(in: geometry.size))
-                .onTapGesture(count: 2) { point in
-                    handleDoubleTap(at: point, in: geometry.size)
+                .onTapGesture(count: 2) {
+                    core.togglePlayPause()
                 }
                 .onTapGesture(count: 1) {
                     onToggleControls()
@@ -140,23 +139,6 @@ struct PlayerGestureLayer: View {
             }
     }
 
-    // MARK: - 双击
-
-    private func handleDoubleTap(at point: CGPoint, in size: CGSize) {
-        let step = AppSettings.Player.seekStepSeconds
-        if point.x < size.width / 3 {
-            core.seek(by: -step)
-            show(.jump(seconds: -step))
-        } else if point.x > size.width * 2 / 3 {
-            core.seek(by: step)
-            show(.jump(seconds: step))
-        } else {
-            core.togglePlayPause()
-            return
-        }
-        hideFeedbackLater()
-    }
-
     // MARK: - 反馈显示
 
     private func show(_ newFeedback: GestureFeedback) {
@@ -203,7 +185,6 @@ struct GestureFeedbackCapsule: View {
             return percent < 50 ? "speaker.wave.1.fill" : "speaker.wave.2.fill"
         case .brightness: return "sun.max.fill"
         case .speed: return "forward.fill"
-        case .jump(let seconds): return seconds >= 0 ? "goforward" : "gobackward"
         }
     }
 
@@ -217,8 +198,6 @@ struct GestureFeedbackCapsule: View {
             return "\(percent)%"
         case .speed(let rate):
             return String(format: "%gx", rate)
-        case .jump(let seconds):
-            return String(format: "%+ds", Int(seconds))
         }
     }
 }

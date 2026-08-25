@@ -55,6 +55,7 @@ struct BrowseHomeView: View {
         }
         .background(AppColors.pageBackground)
         .navigationTitle("浏览")
+        .navigationBarTitleDisplayMode(.inline)
         .overlay {
             if store.connections.filter(\.enabled).isEmpty {
                 VStack(spacing: 12) {

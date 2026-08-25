@@ -23,7 +23,7 @@ struct PlayerPreferencesView: View {
                         Text("\(speed, specifier: "%.2g")x").tag(speed)
                     }
                 }
-                Picker("双击快进/快退", selection: $seekStepSeconds) {
+                Picker("快进/快退步进", selection: $seekStepSeconds) {
                     ForEach(Self.seekStepOptions, id: \.self) { step in
                         Text("\(Int(step)) 秒").tag(step)
                     }

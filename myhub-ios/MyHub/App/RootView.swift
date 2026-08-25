@@ -62,10 +62,15 @@ struct RootView: View {
                     .padding(.bottom, 64)   // 避开底部 TabBar
             }
         }
-        // 全局圆角弹出菜单层
+        // 全局弹出菜单层：… 按钮 / 指针右键 → 锚点圆角卡片；iOS 长按 → 底部抽屉
         .overlay {
             if let state = popup.state {
-                PopupMenuLayer(state: state) { popup.dismiss() }
+                switch state.style {
+                case .popover:
+                    PopupMenuLayer(state: state) { popup.dismiss() }
+                case .drawer:
+                    BottomMenuDrawer(items: state.items) { popup.dismiss() }
+                }
             }
         }
         .animation(.appQuick, value: player.isMini)
@@ -80,15 +85,12 @@ struct RootView: View {
                 keepAliveDetail
             }
         } else {
-            TabView(selection: $router.selectedTab) {
-                ForEach(AppTab.phoneTabs) { tab in
-                    tab.makeView()
-                        // 参照旧版 Flutter 底栏：纯图标、无文字标签
-                        .tabItem { Image(systemName: tab.symbol).accessibilityLabel(tab.title) }
-                        .tag(tab)
-                }
+            // 自定义底部页签栏：系统 TabView 无法直接缩小图标，
+            // 改用 ZStack 保活 + 自绘 HStack 页签（纯图标、图标尺寸可控）
+            VStack(spacing: 0) {
+                keepAlivePhoneTabs
+                BottomTabBar(selection: $router.selectedTab, tabs: AppTab.phoneTabs)
             }
-            .tint(AppColors.primary)
         }
     }
 
@@ -123,6 +125,18 @@ struct RootView: View {
     private var keepAliveDetail: some View {
         ZStack {
             ForEach(AppTab.allCases) { tab in
+                tab.makeView()
+                    .opacity(selection == tab ? 1 : 0)
+                    .allowsHitTesting(selection == tab)
+                    .accessibilityHidden(selection != tab)
+            }
+        }
+    }
+
+    /// iPhone 底栏保活：手机端页签常驻，仅切换可见性（与 iPad 同策略，保状态）
+    private var keepAlivePhoneTabs: some View {
+        ZStack {
+            ForEach(AppTab.phoneTabs) { tab in
                 tab.makeView()
                     .opacity(selection == tab ? 1 : 0)
                     .allowsHitTesting(selection == tab)
@@ -173,5 +187,33 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .browser: BrowserHomeView()
         case .settings: SettingsHomeView()
         }
+    }
+}
+
+/// iPhone 底部页签栏：自绘以精确控制图标大小（系统 TabView 纯图标会过大）
+private struct BottomTabBar: View {
+    @Binding var selection: AppTab
+    let tabs: [AppTab]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(tabs) { tab in
+                let isSelected = selection == tab
+                Button {
+                    selection = tab
+                } label: {
+                    Image(systemName: tab.symbol)
+                        .font(.system(size: 20))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+            }
+        }
+        .background(AppColors.sidebarBackground.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) { Divider().opacity(0.4) }
     }
 }

@@ -15,12 +15,24 @@ enum DisplayFormatters {
         return formatter
     }()
 
+    private static let shortDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy/M/d"
+        return formatter
+    }()
+
     static func size(_ bytes: Int64) -> String {
         byteFormatter.string(fromByteCount: bytes)
     }
 
     static func modTime(_ date: Date) -> String {
         date == .distantPast ? "" : dateFormatter.string(from: date)
+    }
+
+    /// 短日期（列表副标题）：yyyy/M/d
+    static func shortDate(_ date: Date) -> String {
+        shortDateFormatter.string(from: date)
     }
 
     /// 相对时间（「正在阅读」最后阅读时间）：刚刚 / n 分钟前 / 昨天 / n 天前

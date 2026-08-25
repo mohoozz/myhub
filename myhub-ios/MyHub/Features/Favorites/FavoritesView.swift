@@ -33,6 +33,7 @@ struct FavoritesView: View {
             content
                 .background(AppColors.pageBackground)
                 .navigationTitle("收藏")
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button {

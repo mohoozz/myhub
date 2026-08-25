@@ -53,8 +53,10 @@ struct NovelReaderView: View {
             // 图集型 epub：默认直接以漫画阅读器打开（不再弹选择框）
             guard isComic else { return }
             if let handler = presenter.onOpenComic {
-                handler(context)
+                // 先关闭小说阅读器，再于下一 runloop 打开漫画阅读器：
+                // 两个全屏路由若在同一更新周期内同时 present/dismiss 会触发 SwiftUI 崩溃。
                 presenter.close()
+                DispatchQueue.main.async { handler(context) }
             } else {
                 viewModel.comicLikePrompt = false
                 viewModel.toast = "漫画阅读器将在后续版本接入"

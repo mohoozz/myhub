@@ -47,6 +47,10 @@ targets:
       properties:
         UILaunchScreen:
           UIColorName: LaunchBackground
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     entitlements:
       path: MyHub/MyHub.entitlements
     settings:

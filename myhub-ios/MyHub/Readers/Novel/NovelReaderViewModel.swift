@@ -196,7 +196,12 @@ final class NovelReaderViewModel: ObservableObject {
         // 封面异步提取缓存（「正在阅读」封面）
         Task.detached { [weak self, connectionID = self.connectionID, path = self.entry.path] in
             let key = await book.cacheCoverThumbnail(connectionID: connectionID, path: path)
-            await MainActor.run { self?.coverKey = key }
+            await MainActor.run {
+                self?.coverKey = key
+                if let key {
+                    NovelProgressStore.updateCover(connectionID: connectionID, path: path, cover: key)
+                }
+            }
         }
 
         // 一步定位：spine 序号 → 段落序号/段内偏移 → 组装文本字符位置

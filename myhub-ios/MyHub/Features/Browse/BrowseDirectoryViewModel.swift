@@ -200,12 +200,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 多选模式（长按进入，非仅弹菜单）
-
-    func beginSelection(with entry: FileEntry) {
-        guard selection == nil else { return }
-        selection = [entry.path]
-    }
+    // MARK: - 多选模式（菜单「多选」/ 右上角「…」→「选择」进入）
 
     func toggleSelection(_ entry: FileEntry) {
         guard var set = selection else { return }

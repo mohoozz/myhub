@@ -10,7 +10,7 @@ struct BrowseLocation: Hashable, Codable {
 
 /// 目录浏览页（IOS-102 浏览 + IOS-103~105 文件操作）：
 /// - 面包屑 + 搜索 + 视图切换 + 排序 + 上传（文件/相册）+ 下拉刷新 + 空/加载/错误状态；
-/// - 长按（iOS）/ 指针右键（iPad/PC）弹圆角操作菜单；多选经右上角「…」→「选择」进入，底部操作栏：移动/复制/重命名/下载/收藏/删除；
+/// - 长按（iOS，底部抽屉菜单）/ 指针右键（iPad/PC，锚点菜单）弹操作菜单；多选经菜单「多选」或右上角「…」→「选择」进入，底部操作栏：移动/复制/重命名/下载/收藏/删除；
 /// - NavigationStack 系统交互式 pop 返回上一级。
 struct BrowseDirectoryView: View {
     let connection: Connection
@@ -318,7 +318,7 @@ struct BrowseDirectoryView: View {
     }
 
     private func listView(_ items: [FileEntry], adapter: StorageAdapter) -> some View {
-        LazyVStack(spacing: 6) {
+        LazyVStack(spacing: 0) {
             ForEach(items, id: \.path) { entry in
                 FileListRow(
                     entry: entry,
@@ -336,7 +336,6 @@ struct BrowseDirectoryView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     // MARK: - 状态视图
@@ -623,7 +622,8 @@ struct BrowseDirectoryView: View {
                     }
                 }
             })
-            if type == .image || type == .video {
+            // 仅图片类型可保存到相册
+            if type == .image {
                 items.append(PopupMenuItem(title: "保存到相册", systemImage: "photo.on.rectangle") {
                     Task {
                         do {
@@ -635,6 +635,10 @@ struct BrowseDirectoryView: View {
                 })
             }
         }
+        // 多选：与右上角「…」→「选择」一致（进入多选，不预选）
+        items.append(PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
+            viewModel.selection = []
+        })
         items.append(PopupMenuItem(title: "删除", systemImage: "trash", destructive: true) {
             deletingPaths = [entry.path]
         })

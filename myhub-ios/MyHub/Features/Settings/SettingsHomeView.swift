@@ -37,7 +37,7 @@ struct SettingsHomeView: View {
 
             Section("显示") {
                 Picker(selection: fileNameLinesBinding) {
-                    ForEach(3...5, id: \.self) { lines in
+                    ForEach(1...5, id: \.self) { lines in
                         Text("\(lines) 行").tag(lines)
                     }
                 } label: {
@@ -91,6 +91,7 @@ struct SettingsHomeView: View {
             }
         }
         .navigationTitle("设置")
+        .navigationBarTitleDisplayMode(.inline)
         .tint(AppColors.primary)
         .sheet(isPresented: shareSheetBinding) {
             if let shareURL {
@@ -132,7 +133,7 @@ struct SettingsHomeView: View {
     private var fileNameLinesBinding: Binding<Int> {
         Binding(
             get: { AppSettings.Browse.fileNameLines },
-            set: { AppSettings.Browse.fileNameLines = min(max($0, 3), 5) }
+            set: { AppSettings.Browse.fileNameLines = min(max($0, 1), 5) }
         )
     }
 

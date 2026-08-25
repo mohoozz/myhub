@@ -4,7 +4,7 @@ import GRDB
 /// 正在阅读首页（TODO §7，IOS-209）：
 /// - 列表项：封面、标题、类型徽标、进度条、最后阅读时间；网格/列表两种视图（偏好持久化）；
 /// - 点击恢复进度进入对应阅读器/播放器（精准续播/锚点定位/页码恢复由各自内核完成）；
-/// - 长按进入多选模式（非仅弹菜单），底部操作栏「删除阅读记录」（已读完记录保留至手动删除）；
+/// - 长按弹底部抽屉菜单（含「多选」入口），多选时底部操作栏「删除阅读记录」（已读完记录保留至手动删除）；
 /// - 文案区分：视频「已看完」/ 音频「已听完」/ 漫画·小说「已读完」（默认「已读完」）；
 /// - 进度上报后自动刷新（ReadingHistoryStore 订阅 playbackProgressDidChange 广播）。
 struct ReadingHomeView: View {
@@ -12,7 +12,6 @@ struct ReadingHomeView: View {
     @EnvironmentObject private var player: PlayerPresenter
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
-    @EnvironmentObject private var txtReader: TxtReaderPresenter
 
     @State private var viewMode: BrowseViewMode = AppSettings.Reading.viewMode {
         didSet { AppSettings.Reading.viewMode = viewMode }
@@ -32,6 +31,7 @@ struct ReadingHomeView: View {
         NavigationStack {
             content
                 .background(AppColors.pageBackground)
+                .navigationTitle("阅读")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
                 .overlay(alignment: .bottom) { bottomOverlay }
@@ -92,13 +92,12 @@ struct ReadingHomeView: View {
                         }
                         .padding(12)
                     } else {
-                        LazyVStack(spacing: 6) {
+                        LazyVStack(spacing: 0) {
                             ForEach(history.records) { record in
                                 listRow(record)
                             }
                         }
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
                     }
                 }
                 .animation(.appQuick, value: viewMode)
@@ -187,11 +186,10 @@ struct ReadingHomeView: View {
                         lineWidth: isSelected ? 2 : 1)
         )
         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-        .cellPressable(
+        .cellPressableMenu(
             cornerRadius: 14,
-            secondaryMenuItems: menuItems(for: record),
-            onTap: { tap(record) },
-            onLongPress: { beginSelection(with: record) }   // 长按进入多选；右键弹菜单
+            items: menuItems(for: record),
+            onTap: { tap(record) }   // 长按弹底部抽屉菜单；指针右键弹锚点菜单
         )
     }
 
@@ -200,67 +198,66 @@ struct ReadingHomeView: View {
     private func listRow(_ record: ReadingProgress) -> some View {
         let entry = entry(for: record)
         let isSelected = isSelected(record)
-        return HStack(spacing: 12) {
-            ReadingCoverImage(
-                record: record, entry: entry,
-                connection: connections[record.connectionID],
-                adapter: adapters[record.connectionID]
-            )
-            .frame(width: 52, height: 52)
-            .background(AppColors.highlightBackground.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(alignment: .topLeading) {
-                if !isSelecting {
-                    MediaTypeBadge(type: record.mediaType)
-                        .padding(3)
-                        .scaleEffect(0.85, anchor: .topLeading)
+        return VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                ReadingCoverImage(
+                    record: record, entry: entry,
+                    connection: connections[record.connectionID],
+                    adapter: adapters[record.connectionID]
+                )
+                .frame(width: 44, height: 44)
+                .background(AppColors.highlightBackground.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title(of: record))
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                        .lineLimit(1)
+                    Text(subtitle(for: record))
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .lineLimit(1)
+                    progressLine(record)
+                }
+                Spacer(minLength: 8)
+                if isSelecting {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .hoverEffect(.highlight)
+            .background(
+                isSelected ? AppColors.primary.opacity(0.08) : Color.clear
+            )
+            .cellPressableMenu(
+                cornerRadius: 0,
+                items: menuItems(for: record),
+                onTap: { tap(record) }
+            )
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title(of: record))
-                    .font(.body)
-                    .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(1)
-                progressLine(record)
-            }
-            Spacer(minLength: 8)
-            if isSelecting {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
-            }
+            // 分割线（参照 Flutter iOS，缩进从封面右侧开始）
+            Rectangle()
+                .fill(AppColors.separator)
+                .frame(height: 0.5)
+                .padding(.leading, 68)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(AppColors.cardBackground)
-        .contentShape(Rectangle())
-        .hoverEffect(.highlight)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isSelected ? AppColors.primary : Color.clear, lineWidth: 2)
-        )
-        .cellPressable(
-            cornerRadius: 10,
-            secondaryMenuItems: menuItems(for: record),
-            onTap: { tap(record) },
-            onLongPress: { beginSelection(with: record) }
-        )
     }
 
-    /// 进度条 + 状态文案（已看完/已听完/已读完 或 百分比）+ 最后阅读时间
+    /// 进度条 + 状态文案（已看完/已听完/已读完 或 百分比）
     private func progressLine(_ record: ReadingProgress) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 8) {
             ProgressView(value: record.finished ? 1 : min(1, max(0, record.percent)))
                 .tint(AppColors.primary)
-            HStack {
-                Text(record.finished ? finishedText(record.mediaType) : percentText(record))
-                    .foregroundStyle(record.finished ? AppColors.primary : AppColors.textSecondary)
-                Spacer()
-                Text(DisplayFormatters.relative(record.updatedAt))
-                    .foregroundStyle(AppColors.textSecondary)
-            }
-            .font(.caption2)
+            Text(record.finished ? finishedText(record.mediaType) : percentText(record))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(record.finished ? AppColors.primary : AppColors.textSecondary)
+                .fixedSize()
         }
     }
 
@@ -293,6 +290,17 @@ struct ReadingHomeView: View {
         record.title.isEmpty ? StoragePath.fileName(of: record.filePath) : record.title
     }
 
+    /// 副标题：源名 · 类型 · 日期（参照 Flutter iOS）
+    private func subtitle(for record: ReadingProgress) -> String {
+        var parts: [String] = []
+        if let name = connections[record.connectionID]?.name, !name.isEmpty {
+            parts.append(name)
+        }
+        parts.append(record.mediaType.label)
+        parts.append(DisplayFormatters.shortDate(record.updatedAt))
+        return parts.joined(separator: " · ")
+    }
+
     // MARK: - 工具栏
 
     @ToolbarContentBuilder
@@ -312,19 +320,12 @@ struct ReadingHomeView: View {
                     .fontWeight(.semibold)
             }
         } else {
-            // 标题与右侧按钮同一行对齐（参照旧版 Flutter 头部：标题 + 条目数）
-            ToolbarItem(placement: .navigationBarLeading) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("阅读")
-                        .font(.title3.weight(.bold))
-                    if !history.records.isEmpty {
-                        Text("\(history.records.count) 项")
-                            .font(.caption)
-                            .foregroundStyle(AppColors.textSecondary)
-                    }
-                }
-            }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
+                if !history.records.isEmpty {
+                    Text("\(history.records.count) 项")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                }
                 Button {
                     viewMode = viewMode == .grid ? .list : .grid
                 } label: {
@@ -348,7 +349,7 @@ struct ReadingHomeView: View {
         ]
     }
 
-    /// 右键操作菜单（iPad/PC 指针；iOS 长按进入多选）
+    /// 长按（iOS，底部抽屉）/ 指针右键（iPad/PC，锚点卡片）操作菜单
     private func menuItems(for record: ReadingProgress) -> [PopupMenuItem] {
         [
             PopupMenuItem(
@@ -356,6 +357,10 @@ struct ReadingHomeView: View {
                 systemImage: "play.circle"
             ) {
                 open(record)
+            },
+            // 多选：与右上角「…」→「选择」一致（进入多选，不预选）
+            PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
+                selection = []
             },
             PopupMenuItem(title: "删除阅读记录", systemImage: "trash", destructive: true) {
                 if let id = record.id { confirmDeleteIDs = [id] }
@@ -415,11 +420,6 @@ struct ReadingHomeView: View {
         }
     }
 
-    private func beginSelection(with record: ReadingProgress) {
-        guard !isSelecting, let id = record.id else { return }
-        selection = [id]
-    }
-
     private func toggleSelection(_ record: ReadingProgress) {
         guard var set = selection, let id = record.id else { return }
         if set.contains(id) { set.remove(id) } else { set.insert(id) }
@@ -443,12 +443,10 @@ struct ReadingHomeView: View {
             // 精准续播：PlaybackSourceResolver 查历史进度直接从历史位置起播（TODO §4.2）
             player.play(connection: connection, entry: entry)
         case .novel:
-            // txt 默认走纯 txt 阅读器（全文滚动）；epub 走小说阅读器（章节/进度恢复）
-            if entry.ext == "txt" {
-                txtReader.open(connection: connection, entry: entry)
-            } else {
-                novelReader.open(connection: connection, entry: entry)
-            }
+            // 从阅读界面打开的小说（txt/epub 等）统一走小说阅读器：
+            // 阅读记录均由小说阅读器产生（含章节索引/进度锚点），恢复时才可精准续读；
+            // 纯 txt 阅读器仅用于浏览/收藏页的轻量全文滚动入口，不产生进度记录。
+            novelReader.open(connection: connection, entry: entry)
         case .comic:
             // 直接恢复到上次页码（TODO §6）
             comicReader.open(connection: connection, entry: entry)
@@ -576,6 +574,7 @@ private struct ReadingCoverImage: View {
         .clipped()
         .task(id: record.cover) {
             guard let name = record.cover else {
+                cachedImage = nil
                 probed = true
                 return
             }
@@ -583,6 +582,9 @@ private struct ReadingCoverImage: View {
             let image = await Task.detached(priority: .userInitiated) {
                 UIImage(contentsOfFile: url.path)
             }.value
+            if image != nil {
+                CacheManager.shared.touch(url)   // 刷新访问时间，防封面被 LRU 误淘汰
+            }
             withAnimation(.appQuick) {
                 cachedImage = image
                 probed = true
