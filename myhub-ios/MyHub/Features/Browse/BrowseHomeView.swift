@@ -54,8 +54,7 @@ struct BrowseHomeView: View {
             .padding(12)
         }
         .background(AppColors.pageBackground)
-        .navigationTitle("浏览")
-        .navigationBarTitleDisplayMode(.inline)
+        .leadingNavTitle("浏览")
         .overlay {
             if store.connections.filter(\.enabled).isEmpty {
                 VStack(spacing: 12) {
@@ -130,11 +129,10 @@ struct BrowseHomeView: View {
         store.connections.first { $0.id == id }
     }
 
-    /// 进入连接源：恢复最后浏览路径（路径显示偏好缓存）
+    /// 进入连接源：每次从第一级目录（根）开始，不恢复上次浏览目录
     private func openConnection(_ connection: Connection) {
         guard let id = connection.id else { return }
-        let target = StoragePath.normalize(AppSettings.Browse.lastPaths["\(id)"] ?? "/")
-        navPath = NavigationPath(locations(to: target, connectionID: id))
+        navPath = NavigationPath(locations(to: "/", connectionID: id))
     }
 
     /// 从连接根到目标路径的逐层导航位置（"/a/b" → ["/a", "/a/b"]）

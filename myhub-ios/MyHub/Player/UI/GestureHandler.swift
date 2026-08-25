@@ -95,6 +95,9 @@ struct PlayerGestureLayer: View {
                     .onTapGesture(count: 1) {
                         onToggleControls()
                     }
+                    // 长按 0.5s 松手锁定；与拖拽/单击/双击共存，不拦截其它手势。
+                    // 不用 LongPressGesture.onChanged（按下瞬间 value 即为 true 会误触发），
+                    // 也不用 UIKit 桥接 overlay（UIView 会拦截整层触摸，导致无法点击/滑动）。
                     .onLongPressGesture(minimumDuration: 0.5) {
                         onLock()
                     }
@@ -237,3 +240,5 @@ struct GestureFeedbackCapsule: View {
         }
     }
 }
+
+

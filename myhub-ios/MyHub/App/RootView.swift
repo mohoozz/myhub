@@ -34,7 +34,15 @@ struct RootView: View {
         }
         .task { await appState.launch() }
         // 播放器独立全屏路由：不随 Tab 切换销毁
-        .fullScreenCover(isPresented: $player.isFullscreen) {
+        .fullScreenCover(isPresented: $player.isFullscreen, onDismiss: {
+            player.isMinimizing = false   // 全屏封面 dismiss 完成后重置瞬消标志，避免下次展开内容仍透明
+            // dismiss 转场已结束，此时恢复竖屏是安全的：requestGeometryUpdate 不与转场并发。
+            // onDisappear 在转场「进行中」触发，若在那一刻旋转会与 dismiss 并发，导致 iOS 16 崩溃。
+            AppLogger.shared.log("fullScreenCover onDismiss isLandscape=\(OrientationController.shared.isLandscape)", module: "player")
+            if OrientationController.shared.isLandscape {
+                OrientationController.shared.lockPortrait()
+            }
+        }) {
             PlayerView()
         }
         // 小说阅读器独立全屏路由（TODO §5）

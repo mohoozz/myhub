@@ -31,9 +31,9 @@ struct ReadingHomeView: View {
         NavigationStack {
             content
                 .background(AppColors.pageBackground)
-                .navigationTitle("阅读")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
+                .toolbarRole(isSelecting ? .navigationStack : .editor)
                 .overlay(alignment: .bottom) { bottomOverlay }
         }
         .confirmationDialog(
@@ -320,6 +320,13 @@ struct ReadingHomeView: View {
                     .fontWeight(.semibold)
             }
         } else {
+            ToolbarItem(placement: .principal) {
+                Text("阅读")
+                    .font(.title.bold())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if !history.records.isEmpty {
                     Text("\(history.records.count) 项")

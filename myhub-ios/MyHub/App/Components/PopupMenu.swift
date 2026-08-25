@@ -358,7 +358,7 @@ private struct CellPressModifier: ViewModifier {
     let onTap: () -> Void
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
-    @GestureState private var isPressing = false
+    @State private var isPressing = false
     @State private var anchor: CGRect = .zero
 
     func body(content: Content) -> some View {
@@ -369,16 +369,22 @@ private struct CellPressModifier: ViewModifier {
                     .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
             )
             .scaleEffect(isPressing ? 0.97 : 1)
-            .animation(.appFast, value: isPressing)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .onTapGesture { onTap() }
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.5)
-                    .updating($isPressing) { value, state, _ in state = value }
-                    .onEnded { _ in
-                        presenter.show(items: items, anchor: anchor, style: .drawer)
+            .overlay(PressBridge(
+                onTap: onTap,
+                onPressing: { pressing in
+                    if pressing {
+                        // 按下：瞬时切换（无动画），保证跟手；不用 easeOut 渐变，避免按下瞬间延迟
+                        var transaction = Transaction()
+                        transaction.animation = nil
+                        withTransaction(transaction) { isPressing = true }
+                    } else {
+                        // 松开：动画平滑恢复
+                        withAnimation(.appFast) { isPressing = false }
                     }
-            )
+                },
+                onLongPress: { presenter.show(items: items, anchor: anchor, style: .drawer) }
+            ))
             .accessibilityAddTraits(.isButton)
             .background(SecondaryClickBridge {
                 presenter.show(items: items, anchor: anchor)
@@ -401,10 +407,108 @@ extension View {
     }
 }
 
+// MARK: - 按压桥接（点击 + 长按）
+
+/// UIKit 桥接的「点击 + 长按」手势，替代 SwiftUI 的 `onTapGesture` + `LongPressGesture`。
+///
+/// SwiftUI 的 `LongPressGesture` 底层 `UILongPressGestureRecognizer` 默认
+/// `delaysTouchesBegan = true`，在 ScrollView 内会延迟触摸事件传递，导致 iPhone
+/// 真机手指滑动失效（滚动无法及时接管）；而 Mac 的 iPhone 镜像里触摸板滑动走的是
+/// 滚轮/间接滚动事件、不经过触摸手势，所以能正常滚动——这正是「真机手指滑不动、
+/// 镜像触摸板能滑」的根因。这里显式关闭 `delaysTouchesBegan` 与 `cancelsTouchesInView`，
+/// 让长按不再干扰滚动。
+private struct PressBridge: UIViewRepresentable {
+    let onTap: () -> Void
+    let onPressing: (Bool) -> Void
+    let onLongPress: () -> Void
+
+    func makeUIView(context: Context) -> PressBridgeView {
+        PressBridgeView(onTap: onTap, onPressing: onPressing, onLongPress: onLongPress)
+    }
+
+    // 让桥接视图填满 cell（overlay 内容默认按自身理想大小居中，需显式铺满）
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: PressBridgeView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: .zero)
+    }
+
+    func updateUIView(_ uiView: PressBridgeView, context: Context) {
+        uiView.onTap = onTap
+        uiView.onPressing = onPressing
+        uiView.onLongPress = onLongPress
+    }
+}
+
+private final class PressBridgeView: UIView {
+    var onTap: () -> Void
+    var onPressing: (Bool) -> Void
+    var onLongPress: () -> Void
+
+    private let longPress = UILongPressGestureRecognizer()
+
+    init(onTap: @escaping () -> Void,
+         onPressing: @escaping (Bool) -> Void,
+         onLongPress: @escaping () -> Void) {
+        self.onTap = onTap
+        self.onPressing = onPressing
+        self.onLongPress = onLongPress
+        super.init(frame: .zero)
+        isUserInteractionEnabled = true
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        longPress.minimumPressDuration = 0.5
+        longPress.delaysTouchesBegan = false       // 关键：不延迟触摸传递，保证滚动流畅
+        longPress.cancelsTouchesInView = false
+        longPress.allowableMovement = 10
+        longPress.addTarget(self, action: #selector(handleLongPress))
+        tap.require(toFail: longPress)             // 长按成功则抑制点击，二者互斥
+        addGestureRecognizer(tap)
+        addGestureRecognizer(longPress)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        if recognizer.state == .ended { onTap() }
+    }
+
+    // 手指按下立即进入按压态（高亮 + 缩放跟手），不等长按阈值；
+    // 抬起 / 取消（滚动接管）时复位。长按菜单仍由 longPress 的 .began（0.5s）触发，职责分离。
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        onPressing(true)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        onPressing(false)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        onPressing(false)
+    }
+
+    @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            onLongPress()          // 达到长按阈值触发菜单，不等松手
+        case .ended, .cancelled, .failed:
+            onPressing(false)      // 兜底复位：长按后松手 / 移动超限 / 被取消
+        default:
+            break
+        }
+    }
+}
+
 // MARK: - 右键桥接
 
 /// 窗口级 `.secondary`（右键）手势桥接：不拦截普通触摸，命中本视图区域时回调。
 /// 供 iPad / Mac Catalyst 指针右键触发与长按一致的自定义菜单。
+///
+/// 实现为「每个 window 一个共享 recognizer」（见 SecondaryClickCoordinator），
+/// 而不是每个单元格各挂一个 recognizer 到 window——后者在大目录下会随单元格
+/// 出现/消失高频 add/remove，导致 window 上累积大量手势识别器、拖垮手势系统，
+/// 表现为滚动滑动卡死（文件越少越正常）。
 private struct SecondaryClickBridge: UIViewRepresentable {
     let onSecondaryClick: () -> Void
 
@@ -419,35 +523,72 @@ private struct SecondaryClickBridge: UIViewRepresentable {
 
 private final class SecondaryClickBridgeView: UIView {
     var onSecondaryClick: () -> Void
-    private weak var recognizer: UITapGestureRecognizer?
+    private weak var registeredWindow: UIWindow?
 
     init(onSecondaryClick: @escaping () -> Void) {
         self.onSecondaryClick = onSecondaryClick
         super.init(frame: .zero)
-        isUserInteractionEnabled = false   // 不参与命中测试，手势挂在 window 上
+        isUserInteractionEnabled = false   // 不参与命中测试，右键命中由共享 recognizer 派发
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if let recognizer {
-            recognizer.view?.removeGestureRecognizer(recognizer)
-            self.recognizer = nil
+        if let registeredWindow {
+            SecondaryClickCoordinator.shared.unregister(self, from: registeredWindow)
+            self.registeredWindow = nil
         }
-        guard let window else { return }
-        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleSecondary(_:)))
-        recognizer.buttonMaskRequired = .secondary
-        recognizer.cancelsTouchesInView = false
-        window.addGestureRecognizer(recognizer)
-        self.recognizer = recognizer
+        guard let window, Self.supportsPointer else { return }
+        SecondaryClickCoordinator.shared.register(self, in: window)
+        registeredWindow = window
+    }
+
+    /// 仅指针设备支持右键；iPhone 无 secondary button，跳过挂载以省去无谓开销
+    private static var supportsPointer: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad || ProcessInfo.processInfo.isiOSAppOnMac
+    }
+}
+
+/// 每个 window 只挂一个右键 recognizer，弱引用所有桥接视图，命中后按坐标派发。
+private final class SecondaryClickCoordinator: NSObject {
+    static let shared = SecondaryClickCoordinator()
+
+    private var recognizerByWindow: [ObjectIdentifier: UITapGestureRecognizer] = [:]
+    private var targetsByWindow: [ObjectIdentifier: NSHashTable<SecondaryClickBridgeView>] = [:]
+
+    func register(_ view: SecondaryClickBridgeView, in window: UIWindow) {
+        let key = ObjectIdentifier(window)
+
+        if targetsByWindow[key] == nil {
+            targetsByWindow[key] = NSHashTable<SecondaryClickBridgeView>.weakObjects()
+        }
+        targetsByWindow[key]?.add(view)
+
+        if recognizerByWindow[key] == nil {
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleSecondary(_:)))
+            recognizer.buttonMaskRequired = .secondary
+            recognizer.cancelsTouchesInView = false
+            window.addGestureRecognizer(recognizer)
+            recognizerByWindow[key] = recognizer
+        }
+    }
+
+    func unregister(_ view: SecondaryClickBridgeView, from window: UIWindow) {
+        targetsByWindow[ObjectIdentifier(window)]?.remove(view)
     }
 
     @objc private func handleSecondary(_ recognizer: UITapGestureRecognizer) {
-        guard recognizer.state == .ended else { return }
-        let location = recognizer.location(in: self)
-        if bounds.contains(location) {
-            onSecondaryClick()
+        guard recognizer.state == .ended,
+              let window = recognizer.view as? UIWindow else { return }
+        let location = recognizer.location(in: nil)
+        let targets = targetsByWindow[ObjectIdentifier(window)]?.allObjects ?? []
+        for case let view as SecondaryClickBridgeView in targets {
+            let point = view.convert(location, from: window)
+            if view.bounds.contains(point) {
+                view.onSecondaryClick()
+                break
+            }
         }
     }
 }

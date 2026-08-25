@@ -28,38 +28,43 @@ fetch_simulator() {
 }
 
 fetch_device() {
-    local udid="${1:-}" identifier tmp src
+    local udid="${1:-}" identifier tmp
 
-    # ---------- 设备解析（与 install-myhub-ios.sh 保持一致） ----------
+    # devicectl 使用 coredevice identifier（UUID 格式）；也可接受设备名/UDID/hostname。
     if [[ -n "$udid" ]]; then
-        log "使用指定 UDID: $udid"
+        identifier="$udid"
+        log "使用指定设备标识: $identifier"
     else
-        udid="$(xcrun xctrace list devices 2>/dev/null \
-            | sed -n '/^== Devices ==$/,/^== /p' \
-            | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}' \
+        identifier="$(xcrun devicectl list devices 2>/dev/null \
+            | grep -E '\bconnected\b' \
+            | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' \
             | head -n1 || true)"
-        [[ -n "$udid" ]] || { log "错误: 未检测到已连接的真机" >&2; return 1; }
+        [[ -n "$identifier" ]] || { log "错误: 未检测到已连接的真机" >&2; return 1; }
     fi
 
-    # devicectl 使用 coredevice identifier（UUID 格式），同 install 脚本的 DEVICE_IDENTIFIER
-    identifier="$(xcrun devicectl list devices 2>/dev/null \
-        | grep -E '\bconnected\b' \
-        | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' \
-        | head -n1 || true)"
-    [[ -n "$identifier" ]] || { log "错误: 未获取到 devicectl 设备标识" >&2; return 1; }
-
     tmp="$(mktemp -d)"
-    log "从真机下载应用容器（较慢，含缓存）..."
-    # 参数名（--udid / --device）随 Xcode 版本可能不同，以 `xcrun devicectl app download-container --help` 为准
-    xcrun devicectl app download-container \
-        --udid "$identifier" \
-        --bundle-id "$BUNDLE_ID" \
-        --output "$tmp/c.zip"
-    unzip -oq "$tmp/c.zip" -d "$tmp/c" || true
-    src="$(find "$tmp/c" -type d -path '*/Documents/Logs' | head -n1 || true)"
-    [[ -n "$src" ]] || { log "容器中无 Documents/Logs（应用尚未产生日志）" >&2; rm -rf "$tmp"; return 1; }
+    log "从真机复制 Documents/Logs ..."
+    # 新版 devicectl（Xcode 15+）已移除 `app download-container`，改用 `device copy from`。
+    # appDataContainer domain 的根即应用容器根，source 用相对路径 Documents/Logs。
+    if ! xcrun devicectl device copy from \
+        --device "$identifier" \
+        --source "Documents/Logs" \
+        --destination "$tmp" \
+        --domain-type appDataContainer \
+        --domain-identifier "$BUNDLE_ID"; then
+        log "拉取失败：设备容器中可能无 Documents/Logs（应用尚未产生日志）" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    [[ -n "$(ls -A "$tmp" 2>/dev/null)" ]] || {
+        log "设备容器中无日志文件" >&2
+        rm -rf "$tmp"
+        return 1
+    }
+
     rm -rf "$OUT_DIR"/*
-    cp -R "$src"/. "$OUT_DIR"/
+    cp -R "$tmp"/. "$OUT_DIR"/
     rm -rf "$tmp"
     log "已从真机拉取 -> $OUT_DIR"
 }

@@ -8,6 +8,36 @@ struct BrowseLocation: Hashable, Codable {
     var path: String
 }
 
+/// 搜索栏跨版本适配：iOS 26 起 `.searchable` 默认把搜索栏挪到屏幕底部（常驻显示），
+/// 与 `.refreshable` 叠加后会导致内容区无法上下滚动（TODO 283）。这里在 iOS 26 上显式
+/// 用 `.navigationBarDrawer(displayMode: .automatic)` 把搜索栏放回导航栏抽屉——默认收起、
+/// 上滑到顶部才动画展开、再上滑才触发刷新（TODO 284）；iOS 26 以下维持系统默认的顶部搜索栏。
+private extension View {
+    @ViewBuilder
+    func browseSearchable(text: Binding<String>) -> some View {
+        if #available(iOS 26.0, *) {
+            self.searchable(
+                text: text,
+                placement: .navigationBarDrawer(displayMode: .automatic),
+                prompt: "搜索当前目录"
+            )
+        } else {
+            self.searchable(text: text, prompt: "搜索当前目录")
+        }
+    }
+
+    /// 下拉刷新跨版本适配：iOS 26 上 `.refreshable` 与 `.searchable` 叠加会导致内容区无法上下滚动
+    /// （TODO 283/284），因此 iOS 26 不挂下拉刷新（刷新功能仍由右上角「…」菜单里的「刷新」提供）。
+    @ViewBuilder
+    func browseRefreshable(_ action: @escaping @Sendable () async -> Void) -> some View {
+        if #available(iOS 26.0, *) {
+            self
+        } else {
+            self.refreshable { await action() }
+        }
+    }
+}
+
 /// 目录浏览页（IOS-102 浏览 + IOS-103~105 文件操作）：
 /// - 面包屑 + 搜索 + 视图切换 + 排序 + 上传（文件/相册）+ 下拉刷新 + 空/加载/错误状态；
 /// - 长按（iOS，底部抽屉菜单）/ 指针右键（iPad/PC，锚点菜单）弹操作菜单；多选经菜单「多选」或右上角「…」→「选择」进入，底部操作栏：移动/复制/重命名/下载/收藏/删除；
@@ -62,6 +92,10 @@ struct BrowseDirectoryView: View {
     }
 
     private var connectionID: Int64 { connection.id ?? 0 }
+
+    /// 诊断：body 求值频率（限流日志，用于排查「文件多无法滑动」）
+    private static var renderCount = 0
+    private static var renderLogLast = Date.distantPast
 
     /// 当前连接源下 `filePath -> percent(0~1)` 进度映射（无记录的文件取不到即为 nil）
     private var progressByPath: [String: Double] {
@@ -120,7 +154,7 @@ struct BrowseDirectoryView: View {
         // 仅多选态保留「已选 N 项」作为操作状态反馈。
         .navigationTitle(viewModel.isSelecting ? "已选 \(viewModel.selection?.count ?? 0) 项" : "")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $viewModel.searchText, prompt: "搜索当前目录")
+        .browseSearchable(text: $viewModel.searchText)
         .toolbar { toolbar }
         .overlay(alignment: .bottom) { bottomOverlay }
         .fileImporter(
@@ -289,11 +323,22 @@ struct BrowseDirectoryView: View {
                 }
             }
         }
-        .refreshable { await viewModel.refresh() }
+        .browseRefreshable { await viewModel.refresh() }
     }
 
     private func fileCollection(adapter: StorageAdapter) -> some View {
         let items = viewModel.displayedEntries
+        // 诊断：统计 body 求值频率，帮助定位滑动卡顿是否来自频繁重绘
+        Self.renderCount += 1
+        let now = Date()
+        if now.timeIntervalSince(Self.renderLogLast) >= 1 {
+            AppLogger.shared.log(
+                "BrowseDirectoryView 重绘 \(Self.renderCount) 次/秒, 条目 \(viewModel.entries.count), 展示 \(items.count)",
+                module: "browse"
+            )
+            Self.renderCount = 0
+            Self.renderLogLast = now
+        }
         return Group {
             if items.isEmpty {
                 VStack(spacing: 12) {

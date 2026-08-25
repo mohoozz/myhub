@@ -15,9 +15,17 @@ final class PiPState: ObservableObject {
         isSupported = true
     }
 
+    /// 运行期清理（硬解→软解引擎切换时调用）：视图仍存活，需同步更新 isSupported 通知 UI。
     func detach() {
         controller = nil
         isSupported = false
+    }
+
+    /// 视图拆除期清理（dismantleUIView）：视图正在被 SwiftUI 销毁。
+    /// 绝不能在此同步修改 @Published（会触发 Combine send 与视图拆除事务并发，
+    /// 导致 exclusivity violation → abort）。本对象随 PlayerView 一起释放，无需再通知 UI。
+    func teardown() {
+        controller = nil
     }
 
     func start() {
@@ -47,7 +55,7 @@ struct VideoRenderView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: PlayerRenderUIView, coordinator: Coordinator) {
-        coordinator.detach()
+        coordinator.teardown()
     }
 
     @MainActor
@@ -81,6 +89,16 @@ struct VideoRenderView: UIViewRepresentable {
         }
 
         func detach() {
+            cleanup()
+            pip.detach()
+        }
+
+        func teardown() {
+            cleanup()
+            pip.teardown()
+        }
+
+        private func cleanup() {
             if let mediaPlayer = attachedOutput as? VLCMediaPlayer,
                mediaPlayer.drawable as? PlayerRenderUIView != nil {
                 mediaPlayer.drawable = nil
@@ -88,7 +106,6 @@ struct VideoRenderView: UIViewRepresentable {
             playerLayer?.removeFromSuperlayer()
             playerLayer = nil
             attachedOutput = nil
-            pip.detach()
         }
     }
 }

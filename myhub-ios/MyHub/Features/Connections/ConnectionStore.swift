@@ -11,14 +11,29 @@ enum ConnectionTestState: Equatable {
 
 @MainActor
 final class ConnectionStore: ObservableObject {
+    /// 连接源数据变更广播：设置页新增/编辑/删除/启停后，浏览页等其它实例自动刷新（无需重启 App）
+    static let didChangeNotification = Notification.Name("ConnectionDidChange")
+
     @Published private(set) var connections: [Connection] = []
     @Published private(set) var testStates: [Int64: ConnectionTestState] = [:]
 
     private let database: AppDatabase
     private let credentials = CredentialStore()
+    private var changeObserver: NSObjectProtocol?
 
     init(database: AppDatabase = .shared) {
         self.database = database
+        changeObserver = NotificationCenter.default.addObserver(
+            forName: Self.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reload() }
+        }
+    }
+
+    deinit {
+        if let changeObserver {
+            NotificationCenter.default.removeObserver(changeObserver)
+        }
     }
 
     func reload() {
@@ -28,12 +43,18 @@ final class ConnectionStore: ObservableObject {
         }) ?? []
     }
 
+    /// 数据变更后：刷新自身并广播，让其它实例（浏览页等）同步刷新
+    private func reloadAndNotify() {
+        reload()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+    }
+
     func setEnabled(_ connection: Connection, _ enabled: Bool) {
         guard let db = database.dbQueue, connection.id != nil else { return }
         var item = connection
         item.enabled = enabled
         try? db.write { try item.update($0) }
-        reload()
+        reloadAndNotify()
     }
 
     func delete(_ connection: Connection) {
@@ -41,7 +62,7 @@ final class ConnectionStore: ObservableObject {
         _ = try? db.write { try connection.delete($0) }
         credentials.deletePassword(for: id)
         testStates[id] = nil
-        reload()
+        reloadAndNotify()
     }
 
     /// 新增/更新；password 非空时写入 Keychain（编辑留空则保持原密码）
@@ -57,7 +78,7 @@ final class ConnectionStore: ObservableObject {
         if let id = connection.id, let password, !password.isEmpty {
             try credentials.savePassword(password, for: id)
         }
-        reload()
+        reloadAndNotify()
     }
 
     /// 读取已保存凭据密码（编辑表单回填用）；无则返回 nil

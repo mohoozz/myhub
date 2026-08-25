@@ -33,6 +33,7 @@ final class OrientationController: ObservableObject {
         mask = .landscape
         isLandscape = true
         apply(.landscapeRight)
+        AppLogger.shared.log("lockLandscape -> requestGeometryUpdate(.landscapeRight)", module: "orientation")
     }
 
     /// 锁定竖屏并请求旋转回竖屏（退出播放页调用）。
@@ -40,6 +41,7 @@ final class OrientationController: ObservableObject {
         mask = .portrait
         isLandscape = false
         apply(.portrait)
+        AppLogger.shared.log("lockPortrait -> requestGeometryUpdate(.portrait)", module: "orientation")
     }
 
     /// 下发方向掩码更新，并请求几何旋转到目标方向。
@@ -47,7 +49,7 @@ final class OrientationController: ObservableObject {
         guard let scene = activeWindowScene else { return }
         // 通知系统重新询问 supportedInterfaceOrientations（返回最新 mask）
         if #available(iOS 16.0, *) {
-            let prefs = UIWindowSceneGeometryPreferencesIOS(
+            let prefs = UIWindowScene.GeometryPreferences.iOS(
                 interfaceOrientations: mask
             )
             scene.requestGeometryUpdate(prefs) { _ in }

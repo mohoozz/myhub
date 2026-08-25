@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 /// 设置首页（TODO §10，IOS-501 ~ 504）
 struct SettingsHomeView: View {
     @EnvironmentObject private var themeManager: ThemeManager
+    @AppStorage("browse.fileNameLines") private var fileNameLines = 3
     @State private var shareURL: URL?
     @State private var showImporter = false
     @State private var notice: Notice?
@@ -36,7 +37,7 @@ struct SettingsHomeView: View {
             }
 
             Section("显示") {
-                Picker(selection: fileNameLinesBinding) {
+                Picker(selection: $fileNameLines) {
                     ForEach(1...5, id: \.self) { lines in
                         Text("\(lines) 行").tag(lines)
                     }
@@ -90,8 +91,7 @@ struct SettingsHomeView: View {
                 }
             }
         }
-        .navigationTitle("设置")
-        .navigationBarTitleDisplayMode(.inline)
+        .leadingNavTitle("设置")
         .tint(AppColors.primary)
         .sheet(isPresented: shareSheetBinding) {
             if let shareURL {
@@ -127,13 +127,6 @@ struct SettingsHomeView: View {
         Binding(
             get: { themeManager.mode },
             set: { themeManager.mode = $0 }
-        )
-    }
-
-    private var fileNameLinesBinding: Binding<Int> {
-        Binding(
-            get: { AppSettings.Browse.fileNameLines },
-            set: { AppSettings.Browse.fileNameLines = min(max($0, 1), 5) }
         )
     }
 

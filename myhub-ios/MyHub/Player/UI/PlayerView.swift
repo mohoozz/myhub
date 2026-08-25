@@ -38,9 +38,10 @@ struct PlayerView: View {
             // 固定黑底（不跟随拖动）：下拉进 mini 时让出的区域保持纯黑，避免透出下层界面产生残影
             Color.black.ignoresSafeArea()
 
-            // 内容层：下拉进 mini 时整体跟随手指偏移
+            // 内容层：下拉进 mini 时整体跟随手指偏移；瞬消时内容透明（黑底保留）
             contentStack
                 .offset(y: miniDragOffset)
+                .opacity(player.isMinimizing ? 0 : 1)
         }
         .immersive()
         .onAppear {
@@ -57,8 +58,10 @@ struct PlayerView: View {
         .onDisappear {
             hideTask?.cancel()
             nextTask?.cancel()
-            // 退出播放页（关闭 / 进 mini / 系统关闭）统一恢复竖屏
-            orientation.lockPortrait()
+            AppLogger.shared.log("PlayerView onDisappear isLandscape=\(orientation.isLandscape)", module: "player")
+            // 方向恢复移到 RootView 的 fullScreenCover(onDismiss:)。
+            // onDisappear 在 dismiss 转场「进行中」触发，此刻调用 requestGeometryUpdate
+            // 会与全屏封面 dismiss 并发，导致 iOS 16 崩溃（横屏退出/进 mini 都会闪退）。
         }
         .onChange(of: core.currentTime) { newValue in
             subtitles.update(currentTime: newValue)
@@ -97,7 +100,9 @@ struct PlayerView: View {
                 miniDragOffset: $miniDragOffset,
                 isLocked: $isInterfaceLocked,
                 onToggleControls: { toggleControls() },
-                onMini: { player.enterMini(instant: true) },
+                onMini: {
+                    player.enterMini(instant: true)
+                },
                 onLock: { lockInterface() },
                 onWakeWhileLocked: { wakeLockIcon() }
             )
@@ -286,8 +291,9 @@ struct PlayerView: View {
 
     private func lockInterface() {
         hideTask?.cancel()
-        // 长按锁定触发一次震动反馈
-        let generator = UIImpactFeedbackGenerator(style: .medium)
+        // 长按锁定触发一次震动反馈（prepare 预唤醒触觉引擎，确保即时可靠触发）
+        let generator = UIImpactFeedbackGenerator(style: .heavy)
+        generator.prepare()
         generator.impactOccurred()
         withAnimation(.appQuick) {
             isInterfaceLocked = true

@@ -59,24 +59,28 @@ final class LocalAdapter: StorageAdapter {
     func list(_ dir: String) async throws -> [FileEntry] {
         try await withAccess {
             let url = try fileURL(for: dir)
-            let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .nameKey]
-            let urls = try FileManager.default.contentsOfDirectory(
-                at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
-            )
             let base = StoragePath.normalize(dir)
-            return try urls.map { item in
-                let values = try item.resourceValues(forKeys: Set(keys))
-                let name = values.name ?? item.lastPathComponent
-                let isDir = values.isDirectory ?? false
-                return FileEntry(
-                    name: name,
-                    path: StoragePath.joining(base, name),
-                    isDir: isDir,
-                    size: Int64(values.fileSize ?? 0),
-                    modTime: values.contentModificationDate ?? .distantPast,
-                    ext: isDir ? "" : StoragePath.ext(of: name)
+            // FileManager 同步遍历（尤其大目录逐项 resourceValues）可能耗时数百毫秒，
+            // 必须移到后台线程执行，否则会在调用者（MainActor）上阻塞主线程导致界面卡死。
+            return try await Task.detached(priority: .utility) {
+                let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .nameKey]
+                let urls = try FileManager.default.contentsOfDirectory(
+                    at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
                 )
-            }
+                return try urls.map { item in
+                    let values = try item.resourceValues(forKeys: Set(keys))
+                    let name = values.name ?? item.lastPathComponent
+                    let isDir = values.isDirectory ?? false
+                    return FileEntry(
+                        name: name,
+                        path: StoragePath.joining(base, name),
+                        isDir: isDir,
+                        size: Int64(values.fileSize ?? 0),
+                        modTime: values.contentModificationDate ?? .distantPast,
+                        ext: isDir ? "" : StoragePath.ext(of: name)
+                    )
+                }
+            }.value
         }
     }
 

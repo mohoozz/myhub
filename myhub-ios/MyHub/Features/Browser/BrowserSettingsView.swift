@@ -35,7 +35,7 @@ struct BrowserSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            Section("隐私") {
+            Section {
                 Button(role: .destructive) {
                     showingClearConfirm = true
                 } label: {
@@ -48,6 +48,8 @@ struct BrowserSettingsView: View {
                     }
                 }
                 .disabled(clearingData)
+            } header: {
+                Text("隐私")
             } footer: {
                 Text("清除缓存、Cookie 与浏览历史。")
             }

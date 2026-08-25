@@ -16,21 +16,6 @@ struct SelectableCellStyle: ButtonStyle {
     }
 }
 
-/// 视频时长角标（黑底白字胶囊）
-struct DurationBadge: View {
-    let seconds: Double
-
-    var body: some View {
-        Text(DisplayFormatters.duration(seconds))
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(.black.opacity(0.65))
-            .clipShape(Capsule())
-    }
-}
-
 /// 漫画徽标
 struct ComicBadge: View {
     var body: some View {
@@ -79,6 +64,7 @@ struct FileGridCell: View {
 
     @State private var duration: Double?
     @State private var hovering = false
+    @AppStorage("browse.fileNameLines") private var fileNameLines = 3
 
     private var mediaType: MediaType { MediaType.detect(ext: entry.ext) }
 
@@ -90,7 +76,7 @@ struct FileGridCell: View {
                     .font(.subheadline)
                     .fontWeight(isPlaying ? .semibold : .regular)
                     .foregroundStyle(isPlaying ? AppColors.primary : AppColors.textPrimary)
-                    .lineLimit(AppSettings.Browse.fileNameLines, reservesSpace: true)
+                    .lineLimit(fileNameLines, reservesSpace: true)
                     .multilineTextAlignment(.leading)
                 Text(caption)
                     .font(.caption)
@@ -126,11 +112,6 @@ struct FileGridCell: View {
         .aspectRatio(1.35, contentMode: .fit)
         .background(AppColors.highlightBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(alignment: .bottomTrailing) {
-            if let duration, !isSelecting {
-                DurationBadge(seconds: duration).padding(6)
-            }
-        }
         .overlay(alignment: .topLeading) {
             if mediaType == .comic, !isSelecting {
                 ComicBadge().padding(6)
@@ -153,10 +134,10 @@ struct FileGridCell: View {
         if entry.isDir {
             return childCount.map { "\($0) 项" } ?? "文件夹"
         }
-        let time = DisplayFormatters.modTime(entry.modTime)
-        return time.isEmpty
-            ? DisplayFormatters.size(entry.size)
-            : "\(DisplayFormatters.size(entry.size)) · \(time)"
+        var parts: [String] = []
+        if let duration { parts.append(DisplayFormatters.duration(duration)) }
+        parts.append(DisplayFormatters.size(entry.size))
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -194,13 +175,6 @@ struct FileListRow: View {
                 .frame(width: 44, height: 44)
                 .background(AppColors.highlightBackground.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(alignment: .bottomTrailing) {
-                    if let duration, !isSelecting {
-                        DurationBadge(seconds: duration)
-                            .padding(3)
-                            .scaleEffect(0.85, anchor: .bottomTrailing)
-                    }
-                }
                 .overlay(alignment: .topLeading) {
                     if mediaType == .comic, !isSelecting {
                         ComicBadge().padding(3).scaleEffect(0.85, anchor: .topLeading)
@@ -257,9 +231,9 @@ struct FileListRow: View {
             let count = childCount.map { "\($0) 项" } ?? "文件夹"
             return "目录 · \(count)"
         }
-        let time = DisplayFormatters.modTime(entry.modTime)
-        var parts = [mediaType.label, DisplayFormatters.size(entry.size)]
-        if !time.isEmpty { parts.append(time) }
+        var parts = [mediaType.label]
+        if let duration { parts.append(DisplayFormatters.duration(duration)) }
+        parts.append(DisplayFormatters.size(entry.size))
         return parts.joined(separator: " · ")
     }
 }

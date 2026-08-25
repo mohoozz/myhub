@@ -6,7 +6,7 @@ import WebKit
 /// （back/forward）不因标签切换或 URL 重建而丢失；无痕标签使用独立的 `nonPersistent`
 /// 数据存储，不落盘。
 @MainActor
-final class BrowserTab: ObservableObject, Identifiable {
+final class BrowserTab: NSObject, ObservableObject, Identifiable {
     let id: UUID
     let isIncognito: Bool
     let webView: WKWebView
@@ -40,7 +40,6 @@ final class BrowserTab: ObservableObject, Identifiable {
     init(id: UUID = UUID(), url: URL?, isIncognito: Bool) {
         self.id = id
         self.isIncognito = isIncognito
-        self.currentURL = url
 
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
@@ -52,6 +51,9 @@ final class BrowserTab: ObservableObject, Identifiable {
         webView.customUserAgent = Self.userAgentString()
         self.webView = webView
 
+        super.init()
+
+        self.currentURL = url
         webView.navigationDelegate = self
         webView.uiDelegate = self
         observe()
@@ -144,7 +146,7 @@ final class BrowserTab: ObservableObject, Identifiable {
         hasError = true
         isSSLError = isSSL
         errorMessage = isSSL ? "连接不安全，证书校验失败" : (error.localizedDescription)
-        AppLogger.shared.log("浏览器标签加载失败: \(nsError.domain) \(nsError.code) \(error.localizedDescription)", level: .warning, module: "browser")
+        AppLogger.shared.log("浏览器标签加载失败: \(nsError.domain) \(nsError.code) \(error.localizedDescription)", level: .warn, module: "browser")
     }
 
     private func clearError() {

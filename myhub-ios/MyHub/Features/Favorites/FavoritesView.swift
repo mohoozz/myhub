@@ -15,6 +15,7 @@ struct FavoritesView: View {
     @State private var viewMode: BrowseViewMode = AppSettings.Favorites.viewMode {
         didSet { AppSettings.Favorites.viewMode = viewMode }
     }
+    @AppStorage("browse.fileNameLines") private var fileNameLines = 3
     @State private var connections: [Int64: Connection] = [:]
     @State private var resolved: [Int64: FileEntry] = [:]   // stat 后的真实条目（含 isDir）
     @State private var resolving: Set<Int64> = []
@@ -32,8 +33,7 @@ struct FavoritesView: View {
         NavigationStack {
             content
                 .background(AppColors.pageBackground)
-                .navigationTitle("收藏")
-                .navigationBarTitleDisplayMode(.inline)
+                .leadingNavTitle("收藏")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button {
@@ -118,7 +118,7 @@ struct FavoritesView: View {
                 Text(entry.name)
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(AppSettings.Browse.fileNameLines, reservesSpace: true)
+                    .lineLimit(fileNameLines, reservesSpace: true)
                     .multilineTextAlignment(.leading)
                 Text(connections[favorite.connectionID]?.name ?? "")
                     .font(.caption)

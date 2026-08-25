@@ -17,6 +17,9 @@ final class PlayerPresenter: ObservableObject {
     @Published private(set) var current: PlayableItem?
     @Published var isFullscreen = false
     @Published private(set) var isMini = false
+    /// 下拉进 mini 的瞬消标志：置 true 让全屏内容层立即透明（视觉瞬消），
+    /// 配合正常 dismiss 动画；不再用 disablesAnimations 强制禁用系统 dismiss 动画（iOS 26 会崩溃）
+    @Published var isMinimizing = false
     /// 数据源解析失败信息（PlayerView §4.3 呈现失败态）
     @Published var lastError: String?
 
@@ -50,32 +53,33 @@ final class PlayerPresenter: ObservableObject {
     }
 
     /// 进入 mini（保留会话）
-    /// - Parameter instant: true 时全屏封面立即消失（无系统下滑动画）。
-    ///   用于下拉手势路径——封面已随手指给出位移反馈，再播系统滑出动画会出现画面跳回 + 双画面重影
+    /// - Parameter instant: true 时全屏封面「瞬消」。实现为：先把内容层置透明（视觉瞬消），
+    ///   再用正常动画 dismiss。不再用 disablesAnimations 强制禁用系统 dismiss 动画（会崩溃）。
     func enterMini(instant: Bool = false) {
         guard current != nil else { return }
+        AppLogger.shared.log("enterMini instant=\(instant)", module: "player")
         if instant {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { isFullscreen = false }
-        } else {
-            isFullscreen = false
+            isMinimizing = true   // 内容层立即透明，视觉瞬消，避免画面跳回 + 双画面重影
         }
+        isFullscreen = false
         isMini = true
     }
 
     /// 从 mini 展开回全屏（复用同一会话）
     func expand() {
         guard current != nil else { return }
+        AppLogger.shared.log("expand", module: "player")
         isMini = false
         isFullscreen = true
     }
 
     /// 直接退出（不进入 mini，同时停止播放内核）
     func close() {
+        AppLogger.shared.log("close", module: "player")
         current = nil
         isMini = false
         isFullscreen = false
+        isMinimizing = false
         lastError = nil
         Task { await PlayerCore.shared.close() }
     }

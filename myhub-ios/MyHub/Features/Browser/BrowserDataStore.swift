@@ -66,7 +66,7 @@ final class BrowserDataStore: ObservableObject {
 
     func removeBookmark(_ bookmark: Bookmark) {
         guard let db = AppDatabase.shared.dbQueue, let id = bookmark.id else { return }
-        _ = try? db.write { try db.execute(sql: "DELETE FROM bookmark WHERE id = ?", arguments: [id]) }
+        _ = try? db.write { try $0.execute(sql: "DELETE FROM bookmark WHERE id = ?", arguments: [id]) }
         reloadBookmarks()
     }
 
@@ -100,7 +100,7 @@ final class BrowserDataStore: ObservableObject {
 
     func removeHistory(_ record: BrowserHistory) {
         guard let db = AppDatabase.shared.dbQueue, let id = record.id else { return }
-        _ = try? db.write { try db.execute(sql: "DELETE FROM browserHistory WHERE id = ?", arguments: [id]) }
+        _ = try? db.write { try $0.execute(sql: "DELETE FROM browserHistory WHERE id = ?", arguments: [id]) }
         reloadHistory()
     }
 
@@ -122,7 +122,7 @@ final class BrowserDataStore: ObservableObject {
 
     func removeShortcut(_ shortcut: BrowserShortcut) {
         guard let db = AppDatabase.shared.dbQueue, let id = shortcut.id else { return }
-        _ = try? db.write { try db.execute(sql: "DELETE FROM browserShortcut WHERE id = ?", arguments: [id]) }
+        _ = try? db.write { try $0.execute(sql: "DELETE FROM browserShortcut WHERE id = ?", arguments: [id]) }
         reloadShortcuts()
     }
 

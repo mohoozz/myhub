@@ -140,10 +140,6 @@ enum AppSettings {
         @RawUserDefault("browse.sortKey", default: .name) static var sortKey: BrowseSortKey
         @UserDefault("browse.sortAscending", default: true) static var sortAscending: Bool
         @RawUserDefault("browse.viewMode", default: .grid) static var viewMode: BrowseViewMode
-        /// 各连接源最后浏览路径（key = connectionID），二次进入恢复
-        @UserDefault("browse.lastPaths", default: [:]) static var lastPaths: [String: String]
-        /// 网格卡片文件名显示行数（1~5），配合 reservesSpace 让卡片高度一致
-        @UserDefault("browse.fileNameLines", default: 3) static var fileNameLines: Int
     }
 
     /// 收藏页偏好（IOS-107）

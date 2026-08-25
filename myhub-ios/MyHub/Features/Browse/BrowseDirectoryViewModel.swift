@@ -40,10 +40,14 @@ final class BrowseDirectoryViewModel: ObservableObject {
     let connection: Connection
     let path: String
 
-    @Published private(set) var entries: [FileEntry] = []
+    @Published private(set) var entries: [FileEntry] = [] {
+        didSet { displayedEntriesCache = nil }
+    }
     @Published private(set) var state: State = .loading
     @Published private(set) var isRefreshing = false
-    @Published var searchText = ""
+    @Published var searchText = "" {
+        didSet { displayedEntriesCache = nil }
+    }
     @Published private(set) var childCounts: [String: Int] = [:]
     @Published var transfer: TransferProgress?
     @Published var operationError: String?
@@ -59,10 +63,10 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
     /// 排序与视图模式：读写均落到 UserDefaults（排序与路径显示偏好缓存）
     @Published var sortKey: BrowseSortKey {
-        didSet { AppSettings.Browse.sortKey = sortKey }
+        didSet { displayedEntriesCache = nil; AppSettings.Browse.sortKey = sortKey }
     }
     @Published var sortAscending: Bool {
-        didSet { AppSettings.Browse.sortAscending = sortAscending }
+        didSet { displayedEntriesCache = nil; AppSettings.Browse.sortAscending = sortAscending }
     }
     @Published var viewMode: BrowseViewMode {
         didSet { AppSettings.Browse.viewMode = viewMode }
@@ -77,6 +81,9 @@ final class BrowseDirectoryViewModel: ObservableObject {
     private var childCountAttempted: Set<String> = []
     private var toastTask: Task<Void, Never>?
     private var favoritesObserver: NSObjectProtocol?
+    /// displayedEntries 排序结果缓存：文件多时 localizedStandardCompare 排序很慢，
+    /// 若每次 body 求值都重排会阻塞主线程导致滑动卡死，这里在数据变化时重算一次并复用。
+    private var displayedEntriesCache: [FileEntry]?
 
     init(connection: Connection, path: String) {
         self.connection = connection
@@ -102,6 +109,8 @@ final class BrowseDirectoryViewModel: ObservableObject {
     // MARK: - 展示数据（搜索过滤 + 排序，文件夹在前）
 
     var displayedEntries: [FileEntry] {
+        if let cached = displayedEntriesCache { return cached }
+        let start = CFAbsoluteTimeGetCurrent()
         var list = entries
         let query = searchText.trimmingCharacters(in: .whitespaces)
         if !query.isEmpty {
@@ -109,7 +118,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
         let ascending = sortAscending
         let key = sortKey
-        return list.sorted { a, b in
+        let sorted = list.sorted { a, b in
             if a.isDir != b.isDir { return a.isDir }
             let result: ComparisonResult
             switch key {
@@ -125,6 +134,15 @@ final class BrowseDirectoryViewModel: ObservableObject {
             }
             return ascending ? (result == .orderedAscending) : (result == .orderedDescending)
         }
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        if elapsedMs > 30 {
+            AppLogger.shared.log(
+                "displayedEntries 排序耗时 \(String(format: "%.1f", elapsedMs))ms, 条目 \(sorted.count), key=\(key.rawValue)",
+                level: .warn, module: "browse"
+            )
+        }
+        displayedEntriesCache = sorted
+        return sorted
     }
 
     func entry(for path: String) -> FileEntry? {
@@ -163,10 +181,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
             entries = list
             state = list.isEmpty ? .empty : .loaded
             DirectoryCache.shared.save(connectionID: connectionID, path: path, entries: list)
-            // 路径显示偏好：记录该连接源最后浏览目录，二次进入恢复
-            if let id = connection.id {
-                AppSettings.Browse.lastPaths["\(id)"] = path
-            }
             reloadFavorites()
         } catch {
             // 有缓存/旧数据则静默保留，仅首载失败显示错误态
@@ -192,10 +206,18 @@ final class BrowseDirectoryViewModel: ObservableObject {
         childCountAttempted.insert(entry.path)
         childCountInFlight.insert(entry.path)
         Task {
+            let start = CFAbsoluteTimeGetCurrent()
             let count = try? await adapter.list(entry.path).count
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
             childCountInFlight.remove(entry.path)
             if let count {
                 childCounts[entry.path] = count   // 会话内缓存，不重复请求
+            }
+            if elapsedMs > 50 {
+                AppLogger.shared.log(
+                    "loadChildCount \(entry.path) 耗时 \(String(format: "%.1f", elapsedMs))ms, count=\(count ?? -1)",
+                    level: .warn, module: "browse"
+                )
             }
         }
     }
