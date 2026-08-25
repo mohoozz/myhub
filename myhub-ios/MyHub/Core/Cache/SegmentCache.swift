@@ -87,6 +87,59 @@ actor SegmentCache {
             .first
     }
 
+    // MARK: - 前缀复用（封面抽帧 ⇄ 播放边下边播互通，IOS-203）
+
+    /// 读取从 0 起的连续前缀数据（供封面抽帧复用播放已缓存分片；遇缺口即止）。
+    /// 命中的分片刷新访问时间。返回 nil 表示第 0 分片都未缓存。
+    func prefix(file: FileIdentity, maxBytes: Int64) -> Data? {
+        loadIndexIfNeeded()
+        let key = file.key
+        var result = Data()
+        var index: Int64 = 0
+        while Int64(result.count) < maxBytes {
+            guard let data = try? Data(contentsOf: segmentURL(key: key, index: index)) else { break }
+            result.append(data)
+            metas[key]?.lastAccess = Date()
+            if data.count < Int(Self.segmentLength) { break }   // 末尾分片，文件已到尾
+            index += 1
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    /// 将从 0 起的前缀数据切片写入缓存（封面抽帧顺带填充播放前缀，播放时直接命中）。
+    /// 仅补写尚未缓存的分片，不覆盖已有分片；末尾统一更新索引与执行淘汰（避免逐片写索引）。
+    func storePrefix(file: FileIdentity, data: Data) {
+        loadIndexIfNeeded()
+        let key = file.key
+        let dir = directory(for: key)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let segLen = Int(Self.segmentLength)
+        var offset = 0
+        var index: Int64 = 0
+        var added: Int64 = 0
+        while offset < data.count {
+            let upper = min(offset + segLen, data.count)
+            let url = segmentURL(key: key, index: index)
+            if !FileManager.default.fileExists(atPath: url.path) {
+                let chunk = data.subdata(in: offset..<upper)
+                try? chunk.write(to: url, options: .atomic)
+                added += Int64(chunk.count)
+            }
+            offset = upper
+            index += 1
+        }
+        guard added > 0 else { return }
+        var meta = metas[key] ?? FileMeta(lastAccess: Date(), totalBytes: 0)
+        meta.lastAccess = Date()
+        meta.identity = file
+        meta.totalBytes += added
+        metas[key] = meta
+        // 前缀从 0 起，以头部为中心保留（首片最关键，勿被单文件上限误删）
+        enforceFileCap(key: key, aroundIndex: 0)
+        saveIndex()
+        evictIfNeeded()
+    }
+
     // MARK: - LRU / 容量
 
     private var totalLimitBytes: Int64 {

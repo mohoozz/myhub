@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 全屏播放器（TODO §4.3，沉浸纯黑）：
 /// - 渲染层：视频画面（VideoRenderView）/ 纯音频唱片封面（AudioCoverView）；
@@ -13,6 +14,8 @@ struct PlayerView: View {
     @StateObject private var core = PlayerCore.shared
     @StateObject private var subtitles = SubtitleManager()
     @StateObject private var pip = PiPState()
+    /// 屏幕方向控制（横竖屏切换，退出/进 mini 时恢复竖屏）
+    @StateObject private var orientation = OrientationController.shared
 
     @State private var showControls = true
     /// 界面锁定（长按进入；锁定后手势层失效）
@@ -42,6 +45,8 @@ struct PlayerView: View {
         .immersive()
         .onAppear {
             resetHideTimer()
+            // 预安装系统音量滑杆，确保进入播放页后手势调音量能可靠写系统音量（音量始终与系统同步）
+            SystemVolume.prepare()
             Task {
                 await subtitles.discover(
                     connectionID: player.current?.connectionID,
@@ -52,6 +57,8 @@ struct PlayerView: View {
         .onDisappear {
             hideTask?.cancel()
             nextTask?.cancel()
+            // 退出播放页（关闭 / 进 mini / 系统关闭）统一恢复竖屏
+            orientation.lockPortrait()
         }
         .onChange(of: core.currentTime) { newValue in
             subtitles.update(currentTime: newValue)
@@ -62,6 +69,10 @@ struct PlayerView: View {
             if newState == .playing, nextCandidate != nil { cancelNext() }
         }
         .onChange(of: player.current) { _ in cancelNext() }
+        // 切到纯音频时恢复竖屏（纯音频不提供横竖屏切换，避免卡在横屏）
+        .onChange(of: isAudioPresentation) { audio in
+            if audio, orientation.isLandscape { orientation.lockPortrait() }
+        }
     }
 
     /// 播放内容层（渲染 / 手势 / 字幕 / 中央状态 / 控制 / 锁定 / 推荐下一个）
@@ -87,7 +98,8 @@ struct PlayerView: View {
                 isLocked: $isInterfaceLocked,
                 onToggleControls: { toggleControls() },
                 onMini: { player.enterMini(instant: true) },
-                onLock: { lockInterface() }
+                onLock: { lockInterface() },
+                onWakeWhileLocked: { wakeLockIcon() }
             )
 
             // 字幕浮层
@@ -111,14 +123,37 @@ struct PlayerView: View {
             // 中央状态（加载圈 / 大播放键互斥）
             centerOverlay
 
+            // 屏幕左中：横竖屏切换按钮（视频 + 控制层可见时显示；锁定/纯音频不显示）
+            if showControls, !isInterfaceLocked, !isAudioPresentation {
+                HStack {
+                    Button {
+                        orientation.toggle()
+                        resetHideTimer()
+                    } label: {
+                        Image(systemName: orientation.isLandscape
+                              ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(.black.opacity(0.55))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.pressScale)
+                    .accessibilityLabel(orientation.isLandscape ? "切换竖屏" : "切换横屏")
+                    .padding(.leading, 16)
+                    Spacer()
+                }
+                .transition(.opacity)
+            }
+
             // 中央悬浮数值胶囊
             if let feedback {
                 GestureFeedbackCapsule(feedback: feedback)
                     .transition(.opacity)
             }
 
-            // 控制层
-            if showControls {
+            // 控制层（锁定态隐藏，防止误触）
+            if showControls, !isInterfaceLocked {
                 PlayerControls(
                     core: core,
                     subtitles: subtitles,
@@ -131,28 +166,21 @@ struct PlayerView: View {
                 .transition(.opacity)
             }
 
-            // 界面锁定（长按进入；锁定后手势层失效，仅显示解锁入口）
-            if isInterfaceLocked {
-                VStack {
-                    Button {
-                        unlockInterface()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("已锁定，点击解锁")
-                                .font(.footnote.weight(.semibold))
-                        }
-                        .foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
+            // 界面锁定（长按进入）：中央显示锁图标，点击解锁。
+            // 锁图标跟随 showControls 自动隐藏（3s 无操作）；锁定态点击屏幕唤醒重新显示。
+            if isInterfaceLocked, showControls {
+                Button {
+                    unlockInterface()
+                } label: {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 60, height: 60)
                         .background(.black.opacity(0.55))
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.pressScale)
-                    .padding(.top, 56)
-                    Spacer()
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.pressScale)
+                .accessibilityLabel("解锁")
                 .transition(.opacity)
             }
 
@@ -213,7 +241,7 @@ struct PlayerView: View {
                 .progressViewStyle(.circular)
                 .tint(.white)
                 .scaleEffect(1.5)
-        case .paused where showControls:
+        case .paused where showControls && !isInterfaceLocked:
             Button {
                 core.play()
             } label: {
@@ -258,15 +286,32 @@ struct PlayerView: View {
 
     private func lockInterface() {
         hideTask?.cancel()
+        // 长按锁定触发一次震动反馈
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
         withAnimation(.appQuick) {
             isInterfaceLocked = true
+            // 进入锁定后先隐藏所有控制层，再单独显示中央锁图标
             showControls = false
         }
+        // 锁定后短暂显示锁图标，随后自动隐藏
+        wakeLockIcon()
     }
 
     private func unlockInterface() {
         withAnimation(.appQuick) { isInterfaceLocked = false }
         resetHideTimer()
+    }
+
+    /// 锁定态下点击屏幕 / 刚进入锁定：显示中央锁图标并在 3s 后自动隐藏
+    private func wakeLockIcon() {
+        hideTask?.cancel()
+        withAnimation(.appQuick) { showControls = true }
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled, core.isPlaying else { return }
+            withAnimation(.appQuick) { showControls = false }
+        }
     }
 
     private func resetHideTimer() {

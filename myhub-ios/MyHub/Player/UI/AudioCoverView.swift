@@ -1,10 +1,11 @@
 import AVFoundation
-import GRDB
 import SwiftUI
 
 /// 音频唱片封面模式（IOS-201 播放能力 / 纯音频模式 UI）：
 /// - 播放时封面旋转、暂停停止（30fps 计时器驱动，暂停即冻结角度）；
-/// - 封面来源：同目录同名图片 / cover / folder / front → ID3 内嵌 albumart（兜底占位图标）；
+/// - 封面来源统一走 `CoverService`（内存 + 磁盘缓存，与浏览页/锁屏同源，命中免重复网络拉取）：
+///   同目录同名图片 / cover / folder / front → ID3 内嵌 albumart（兜底占位图标）；
+/// - 加载完成后回填锁屏封面（`NowPlaying`），避免锁屏重复加载；
 /// - 标题/作者按「作者 - 标题」文件名解析。
 struct AudioCoverView: View {
     let item: PlayableItem
@@ -61,59 +62,16 @@ struct AudioCoverView: View {
             .padding(.horizontal, 32)
             Spacer()
         }
-        .task { await loadCover() }
+        .task(id: item.path) { await loadCover() }
     }
 
-    // MARK: - 封面加载
+    // MARK: - 封面加载（统一 CoverService 缓存 + 回填锁屏）
 
-    /// 同目录约定优先，ID3 内嵌兜底
     private func loadCover() async {
-        if let siblingCover = await loadSiblingCover() {
-            cover = siblingCover
-            return
-        }
-        await loadEmbeddedCover()
-    }
-
-    /// 同目录同名图 / cover / folder / front（复用 CoverService 约定匹配）
-    private func loadSiblingCover() async -> UIImage? {
-        guard let connectionID = item.connectionID,
-              let db = AppDatabase.shared.dbQueue,
-              let connection = try? await db.read({ try Connection.fetchOne($0, id: connectionID) }),
-              let adapter = try? AdapterFactory.makeAdapter(for: connection) else { return nil }
-
-        let parent = StoragePath.parent(of: item.path)
-        guard let siblings = try? await adapter.list(parent) else { return nil }
-
-        let selfEntry = FileEntry(
-            name: item.title, path: item.path, isDir: false,
-            size: 0, modTime: Date(), ext: StoragePath.ext(of: item.path)
-        )
-        guard let coverEntry = CoverService.audioCoverEntry(in: siblings, for: selfEntry),
-              let data = try? await readAll(adapter: adapter, path: coverEntry.path) else { return nil }
-        return UIImage(data: data)
-    }
-
-    /// ID3 内嵌封面（经当前播放 URL 读取，本地/代理串流均可）
-    private func loadEmbeddedCover() async {
-        guard let url = await PlayerCore.shared.request?.url else { return }
-        let asset = AVURLAsset(url: url)
-        guard let metadata = try? await asset.load(.commonMetadata) else { return }
-        for element in metadata where element.commonKey == AVMetadataKey.commonKeyArtwork {
-            if let data = try? await element.load(.dataValue), let image = UIImage(data: data) {
-                cover = image
-                return
-            }
-        }
-    }
-
-    private func readAll(adapter: StorageAdapter, path: String) async throws -> Data {
-        let stream = try await adapter.readStream(path, range: nil)
-        var data = Data()
-        for try await chunk in stream {
-            data.append(chunk)
-            if data.count > 24 * 1024 * 1024 { break }
-        }
-        return data
+        let result = await CoverService.shared.cover(forItem: item)
+        guard let image = result.image else { return }
+        cover = image
+        // 回填锁屏封面，避免 NowPlaying 再次加载同一封面
+        NowPlaying.shared.setArtwork(image, for: item.path)
     }
 }

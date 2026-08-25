@@ -26,6 +26,10 @@ struct BrowseDirectoryView: View {
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
     @EnvironmentObject private var txtReader: TxtReaderPresenter
+    /// 阅读进度记录（用于文件项进度环，参考 Flutter 浏览界面）
+    @ObservedObject private var readingHistory = ReadingHistoryStore.shared
+    /// 播放引擎状态（区分播放中/暂停，仅播放中才高亮）
+    @ObservedObject private var playerCore = PlayerCore.shared
 
     @State private var sheet: SheetRoute?
     @State private var imagePreview: ImagePreviewContext?
@@ -58,6 +62,23 @@ struct BrowseDirectoryView: View {
     }
 
     private var connectionID: Int64 { connection.id ?? 0 }
+
+    /// 当前连接源下 `filePath -> percent(0~1)` 进度映射（无记录的文件取不到即为 nil）
+    private var progressByPath: [String: Double] {
+        var map: [String: Double] = [:]
+        for record in readingHistory.records where record.connectionID == connectionID {
+            map[record.filePath] = record.percent
+        }
+        return map
+    }
+
+    /// 该文件项是否正在（mini）播放器播放：来源连接匹配 + 路径匹配 + 引擎处于播放态
+    private func isPlaying(_ entry: FileEntry) -> Bool {
+        guard let current = player.current else { return false }
+        return current.connectionID == connection.id
+            && current.path == entry.path
+            && playerCore.isPlaying
+    }
 
     private enum SheetRoute: Identifiable {
         case move(Set<String>)
@@ -238,7 +259,10 @@ struct BrowseDirectoryView: View {
         } message: {
             Text(viewModel.operationError ?? "")
         }
-        .task { await viewModel.loadIfNeeded() }
+        .task {
+            await viewModel.loadIfNeeded()
+            readingHistory.reload()   // 首次进入时预载阅读进度（后续经 .playbackProgressDidChange 自动刷新）
+        }
     }
 
     private var title: String {
@@ -294,7 +318,8 @@ struct BrowseDirectoryView: View {
     }
 
     private func gridView(_ items: [FileEntry], adapter: StorageAdapter) -> some View {
-        LazyVGrid(
+        let progressMap = progressByPath
+        return LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 110, maximum: 160), spacing: 12)],
             spacing: 12
         ) {
@@ -308,6 +333,8 @@ struct BrowseDirectoryView: View {
                     highlighted: entry.path == highlightPath,
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
+                    progress: entry.isDir ? nil : progressMap[entry.path],
+                    isPlaying: isPlaying(entry),
                     menuItems: contextMenuItems(for: entry),
                     onTap: { tap(entry) }
                 )
@@ -318,7 +345,8 @@ struct BrowseDirectoryView: View {
     }
 
     private func listView(_ items: [FileEntry], adapter: StorageAdapter) -> some View {
-        LazyVStack(spacing: 0) {
+        let progressMap = progressByPath
+        return LazyVStack(spacing: 0) {
             ForEach(items, id: \.path) { entry in
                 FileListRow(
                     entry: entry,
@@ -329,6 +357,8 @@ struct BrowseDirectoryView: View {
                     highlighted: entry.path == highlightPath,
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
+                    progress: entry.isDir ? nil : progressMap[entry.path],
+                    isPlaying: isPlaying(entry),
                     menuItems: contextMenuItems(for: entry),
                     onTap: { tap(entry) }
                 )

@@ -70,6 +70,10 @@ struct FileGridCell: View {
     let highlighted: Bool
     let isSelecting: Bool
     let isSelected: Bool
+    /// 阅读进度 0~1；nil 表示无历史记录
+    let progress: Double?
+    /// 是否正在（mini）播放器播放
+    let isPlaying: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
 
@@ -84,7 +88,8 @@ struct FileGridCell: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name)
                     .font(.subheadline)
-                    .foregroundStyle(AppColors.textPrimary)
+                    .fontWeight(isPlaying ? .semibold : .regular)
+                    .foregroundStyle(isPlaying ? AppColors.primary : AppColors.textPrimary)
                     .lineLimit(AppSettings.Browse.fileNameLines, reservesSpace: true)
                     .multilineTextAlignment(.leading)
                 Text(caption)
@@ -134,6 +139,12 @@ struct FileGridCell: View {
         .overlay(alignment: .topTrailing) {
             if isSelecting {
                 SelectionCheckmark(isSelected: isSelected)
+            } else if isPlaying || progress != nil {
+                FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
+                    .padding(6)
+                    .background(
+                        Circle().fill(.black.opacity(0.35)).padding(2)
+                    )
             }
         }
     }
@@ -161,6 +172,10 @@ struct FileListRow: View {
     let highlighted: Bool
     let isSelecting: Bool
     let isSelected: Bool
+    /// 阅读进度 0~1；nil 表示无历史记录
+    let progress: Double?
+    /// 是否正在（mini）播放器播放
+    let isPlaying: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
 
@@ -194,8 +209,8 @@ struct FileListRow: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.name)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
+                        .font(.body.weight(isPlaying ? .bold : .semibold))
+                        .foregroundStyle(isPlaying ? AppColors.primary : AppColors.textPrimary)
                         .lineLimit(1)
                     Text(caption)
                         .font(.caption)
@@ -207,6 +222,8 @@ struct FileListRow: View {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
+                } else if isPlaying || progress != nil {
+                    FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
                 } else if entry.isDir {
                     Image(systemName: "chevron.right")
                         .font(.caption)

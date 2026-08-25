@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct MyHubApp: App {
+    // 界面方向回调宿主：播放页横竖屏切换依赖动态方向掩码（App 平时锁竖屏）
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() {
         _ = AppLogger.shared   // 尽早初始化日志 + 安装崩溃捕获（避免启动早期崩溃漏捕获）
     }
@@ -19,6 +21,7 @@ struct MyHubApp: App {
     @StateObject private var comicReader = ComicReaderPresenter()     // 漫画阅读器全屏路由（TODO §6）
     @StateObject private var txtReader = TxtReaderPresenter()         // 纯 txt 阅读器全屏路由（txt 默认打开）
     @StateObject private var appLock = AppLockManager.shared          // 应用锁（TODO §10 安全）
+    @StateObject private var browserDataStore = BrowserDataStore.shared   // 浏览器书签/历史/快捷入口唯一数据源（TODO §8.3）
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -46,6 +49,7 @@ struct MyHubApp: App {
                 .environmentObject(comicReader)
                 .environmentObject(txtReader)
                 .environmentObject(appLock)
+                .environmentObject(browserDataStore)
                 // 进入后台时按设置上锁，返回前台显示锁定遮罩（TODO §10 安全）
                 .onChange(of: scenePhase) { phase in
                     if phase == .background { appLock.lockForBackground() }

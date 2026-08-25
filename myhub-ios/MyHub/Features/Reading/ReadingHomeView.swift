@@ -600,7 +600,10 @@ private struct ReadingCoverImage: View {
 
     @ViewBuilder
     private var fallback: some View {
-        if let connection, let adapter {
+        // entry.size == 0 表示 stat 尚未完成（媒体文件恒 > 0），此时缓存键（含 size/modTime）
+        // 与浏览页不一致，会错过已存封面并触发重复加载。先显示占位，待真实 entry 就绪后
+        // 视图重建再加载，确保命中浏览页磁盘缓存。
+        if let connection, let adapter, entry.size > 0 {
             RemoteCoverImage(
                 entry: entry, connection: connection, adapter: adapter,
                 immersivePlaceholder: immersive

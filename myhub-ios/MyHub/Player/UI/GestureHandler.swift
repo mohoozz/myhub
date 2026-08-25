@@ -3,23 +3,45 @@ import MediaPlayer
 import SwiftUI
 import UIKit
 
-/// 系统音量联动（IOS-201）：读经 AVAudioSession，写经 MPVolumeView 隐藏滑杆（步进 5% 由手势层量化）
+/// 系统音量联动（IOS-201）：读经 AVAudioSession，写经 MPVolumeView 隐藏滑杆（步进 5% 由手势层量化）。
+/// 持久持有 MPVolumeView，避免「新建即取 slider」时 slider 尚未加载导致写系统音量失败，
+/// 从而出现播放器显示音量与系统音量不同步的问题。
 enum SystemVolume {
+    /// 常驻隐藏 MPVolumeView（挂到 keyWindow 保持引用，确保内部 UISlider 完成加载）
+    private static var volumeView: MPVolumeView?
+
+    private static var slider: UISlider? {
+        volumeView?.subviews.compactMap { $0 as? UISlider }.first
+    }
+
+    /// 当前系统音量（真实输出音量；手势起点 / 进入播放页均以此为基准）
     static var current: Float {
         AVAudioSession.sharedInstance().outputVolume
     }
 
+    /// 进入播放页时预安装，确保手势阶段 slider 已就绪（同时保持视图引用不释放）
+    static func prepare() {
+        DispatchQueue.main.async { installIfNeeded() }
+    }
+
+    /// 设置系统音量（0~1）。播放器不维护独立内部音量，统一以系统音量为唯一来源，故写系统音量即同步。
     static func set(_ value: Float) {
         DispatchQueue.main.async {
-            let volumeView = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
-            guard let window = UIApplication.shared.connectedScenes
-                .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
-                .first else { return }
-            window.addSubview(volumeView)
-            let slider = volumeView.subviews.compactMap { $0 as? UISlider }.first
-            slider?.value = min(max(value, 0), 1)
-            volumeView.removeFromSuperview()
+            installIfNeeded()
+            let clamped = min(max(value, 0), 1)
+            slider?.value = clamped
         }
+    }
+
+    private static func installIfNeeded() {
+        if volumeView == nil {
+            volumeView = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
+        }
+        guard let view = volumeView, view.superview == nil else { return }
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
+            .first else { return }
+        window.addSubview(view)
     }
 }
 
@@ -48,6 +70,8 @@ struct PlayerGestureLayer: View {
     let onMini: () -> Void
     /// 长按进入界面锁定
     let onLock: () -> Void
+    /// 锁定态单击屏幕：唤醒锁图标（重新显示并重置自动隐藏计时）
+    let onWakeWhileLocked: () -> Void
 
     @State private var dragMode: DragMode?
     @State private var seekBase: TimeInterval = 0
@@ -60,20 +84,32 @@ struct PlayerGestureLayer: View {
 
     var body: some View {
         GeometryReader { geometry in
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(dragGesture(in: geometry.size))
-                .onTapGesture(count: 2) {
-                    core.togglePlayPause()
+            ZStack {
+                // 常规手势层（锁定态失效）
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(dragGesture(in: geometry.size))
+                    .onTapGesture(count: 2) {
+                        core.togglePlayPause()
+                    }
+                    .onTapGesture(count: 1) {
+                        onToggleControls()
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5) {
+                        onLock()
+                    }
+                    .allowsHitTesting(!isLocked)
+
+                // 锁定态专用层：仅响应单击，用于唤醒中央锁图标
+                if isLocked {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onWakeWhileLocked()
+                        }
                 }
-                .onTapGesture(count: 1) {
-                    onToggleControls()
-                }
-                .onLongPressGesture(minimumDuration: 0.5) {
-                    onLock()
-                }
+            }
         }
-        .allowsHitTesting(!isLocked)
     }
 
     // MARK: - 拖动手势（进度 / 音量 / 亮度）

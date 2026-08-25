@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import MediaPlayer
+import UIKit
 
 /// 后台音频播放 + 锁屏/控制中心（IOS-602）：
 /// - `AVAudioSession(.playback)`：锁屏/后台继续播放音频；
@@ -13,6 +14,9 @@ final class NowPlaying {
 
     private var cancellables = Set<AnyCancellable>()
     private var sessionConfigured = false
+    /// 当前条目的锁屏封面（由播放页/封面服务回填，随条目切换清空）
+    private var artwork: MPMediaItemArtwork?
+    private var artworkPath: String?
 
     private init() {}
 
@@ -29,10 +33,42 @@ final class NowPlaying {
             .store(in: &cancellables)
 
         core.$currentItem
-            .sink { _ in Task { @MainActor [weak self] in self?.updateInfo() } }
+            .sink { item in
+                Task { @MainActor [weak self] in
+                    self?.handleItemChange(item)
+                }
+            }
             .store(in: &cancellables)
 
         setupRemoteCommands()
+    }
+
+    // MARK: - 封面（与播放页共享 CoverService 缓存）
+
+    /// 条目切换：清空旧封面并异步加载（复用 CoverService 内存/磁盘缓存，与浏览/播放页同源）
+    private func handleItemChange(_ item: PlayableItem?) {
+        updateInfo()
+        guard let item, item.path != artworkPath else {
+            if item == nil { artwork = nil; artworkPath = nil }
+            return
+        }
+        artwork = nil
+        artworkPath = item.path
+        Task { [weak self] in
+            let result = await CoverService.shared.cover(forItem: item)
+            await MainActor.run {
+                guard let self, self.artworkPath == item.path, let image = result.image else { return }
+                self.setArtwork(image, for: item.path)
+            }
+        }
+    }
+
+    /// 由播放页在已加载封面时回填，避免锁屏重复加载
+    func setArtwork(_ image: UIImage, for path: String) {
+        guard PlayerCore.shared.currentItem?.path == path else { return }
+        artworkPath = path
+        artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        updateInfo()
     }
 
     // MARK: - 会话与信息
@@ -48,6 +84,8 @@ final class NowPlaying {
             try? session.setActive(true)
         case .idle, .ended, .failed:
             try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            artwork = nil
+            artworkPath = nil
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         case .paused:
             break
@@ -70,6 +108,9 @@ final class NowPlaying {
         ]
         if let author = parsed.author {
             info[MPMediaItemPropertyArtist] = author
+        }
+        if let artwork {
+            info[MPMediaItemPropertyArtwork] = artwork
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }

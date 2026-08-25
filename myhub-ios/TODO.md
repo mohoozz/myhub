@@ -188,25 +188,25 @@
 
 ### 8.1 核心与多标签
 
-- [ ] `BrowserView`：`WKWebView` 封装（配置、KVO 进度、favicon/标题）
-- [ ] `AddressBar`：URL 智能识别、域名 + HTTPS 图标、聚焦全选
-- [ ] 2px 加载进度条；错误页（失败/SSL）+ 重试
-- [ ] `TabManager`：Safari 卡片网格标签，新建/关闭/切换、无痕开关、全局保活
-- [ ] `target=_blank`/`window.open` → 新标签
-- [ ] **标签会话持久化**：退出保存标签列表 + 激活标签，启动恢复；保持导航历史栈不因 URL 重建丢失
+- [x] `BrowserView`：`WKWebView` 封装（配置、KVO 进度、favicon/标题）
+- [x] `AddressBar`：URL 智能识别、域名 + HTTPS 图标、聚焦全选
+- [x] 2px 加载进度条；错误页（失败/SSL）+ 重试
+- [x] `TabManager`：Safari 卡片网格标签，新建/关闭/切换、无痕开关、全局保活
+- [x] `target=_blank`/`window.open` → 新标签
+- [x] **标签会话持久化**：退出保存标签列表 + 激活标签，启动恢复；保持导航历史栈不因 URL 重建丢失
 
 ### 8.2 iOS 交互
 
-- [ ] **操作栏放到底部**（后退/前进/刷新/标签/菜单）
-- [ ] **进入新网页后后退按钮可用；侧滑返回上一页生效**（历史栈空退出页签）
-- [ ] **滚动收起操作栏（收为 0 高），点击页面展开（动画），切标签重置展开**
+- [x] **操作栏放到底部**（后退/前进/刷新/标签/菜单）
+- [x] **进入新网页后后退按钮可用；侧滑返回上一页生效**（历史栈空退出页签）
+- [x] **滚动收起操作栏（收为 0 高），点击页面展开（动画），切标签重置展开**
 
 ### 8.3 起始页 / 书签 / 历史 / 设置
 
-- [ ] `StartPage`：搜索框 + 快捷入口网格（增删改 + 拖拽排序 + 首启预置），本地持久化
-- [ ] 书签：地址栏星标收藏，管理页列表/搜索/编辑/删除
-- [ ] 历史：自动记录、按日分组、搜索、单条删除、清空；无痕不记录
-- [ ] 浏览器设置：默认搜索引擎、默认 UA、清除缓存/Cookie/历史
+- [x] `StartPage`：搜索框 + 快捷入口网格（增删改 + 拖拽排序 + 首启预置），本地持久化
+- [x] 书签：地址栏星标收藏，管理页列表/搜索/编辑/删除
+- [x] 历史：自动记录、按日分组、搜索、单条删除、清空；无痕不记录
+- [x] 浏览器设置：默认搜索引擎、默认 UA、清除缓存/Cookie/历史
 
 ---
 
@@ -271,3 +271,10 @@
 - [x] 漫画打开后直接闪退了，并且在阅读界面上，显示的还是小说标签
 - [x] 阅读界面，封面有时候显示，有时候不显示，看看是不是bug，封面应该是会缓存的，直接读取就行
 - [x] 目前底部的页签栏，按钮太大了，调小一点
+- [x] 视频播放内部音量，和系统音量不同步，需要进入播放页时，使用系统音量，并且在内部音量变化时，系统音量同步变化，同时检查下亮度是否同步
+- [x] 参考flutter的视频播放页面UI，在屏幕左中的地方，增加一个按钮用于切换横竖屏
+- [x] 视频播放界面锁屏的时候，目前是在屏幕的上方点击解锁，参考flutter的视频播放页面UI，改为在屏幕正中央显示一个锁，这个锁会自动消失，用户点击其他地方会显示锁的图标，点击锁的图标会解锁，并且长按锁定时候，触发一次震动
+- [x] 参考 Flutter 浏览界面，为文件浏览列表（`Features/Browse/FileCellViews.swift` 的 `FileGridCell` / `FileListRow`）增加「阅读进度」与「正在播放」两种状态指示，逻辑与 Flutter 端 `file_status_indicator.dart` 对齐。实现：新增 `Features/Browse/FileStatusIndicator.swift`（`FileStatusIndicator` / `ReadingProgressRing` / `PlayingBarsIndicator`）；`BrowseDirectoryView` 注入 `ReadingHistoryStore` + `PlayerCore` 提供进度字典与播放判断。
+  - [x] 进度环：文件在 `readingProgress` 表有记录时，右上角(网格)/尾部(列表)显示 18pt 环形进度（`ReadingProgressRing`，`percent` 0~1，从 12 点顺时针，100% 满环）；无记录不显示；目录不显示。
+  - [x] 正在播放：`player.current.connectionID == connection.id && current.path == entry.path && PlayerCore.isPlaying` 时，文件名变主色+加粗，并显示三竖条均衡器动画（`PlayingBarsIndicator`）。
+  - [x] 优先级：正在播放 > 进度环 >（无标识），与 Flutter 端一致。

@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import AVFoundation
 import CryptoKit
+import GRDB
 import UnrarKit
 
 /// 封面结果：图片 + 可选媒体时长（视频抽帧时顺带探测，供时长角标）
@@ -35,6 +36,11 @@ actor CoverService {
 
     private let memory = NSCache<NSString, Box>()
     private var inflight: [String: Task<CoverResult, Never>] = [:]
+    /// 失败冷却（IOS-702）：加载失败的封面在冷却期内不重试，直接返回占位；
+    /// 冷却期过后（滚动重新可见触发 .task）自动重试，避免弱网抖动导致「一次失败永久占位」。
+    private var failedAt: [String: Date] = [:]
+    /// 失败冷却时长（秒）：期间返回占位不重试；期满允许重新加载
+    private let failureCooldown: TimeInterval = 30
     private var running = 0
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private let maxConcurrent = 4
@@ -52,12 +58,23 @@ actor CoverService {
         adapter: StorageAdapter,
         siblings: [FileEntry] = []
     ) async -> CoverResult {
+        // 恒无封面的类型提前短路：txt 小说 / 字幕 / 其它文件（epub 有内嵌封面，不短路）。
+        // 省去缓存查找、并发许可与 actor 调度，浏览大目录时更省。
+        if Self.hasNoCover(entry) { return CoverResult(image: nil, duration: nil) }
+
         let key = cacheKey(for: entry, connection: connection)
 
         if let hit = memory.object(forKey: key as NSString) { return hit.result }
         if let disk = loadFromDisk(key: key) {
             memory.setObject(Box(disk), forKey: key as NSString)
             return disk
+        }
+        // 失败冷却期内不重试，直接返回占位（期满则清除标记，走正常加载）
+        if let failedTime = failedAt[key] {
+            if Date().timeIntervalSince(failedTime) < failureCooldown {
+                return CoverResult(image: nil, duration: nil)
+            }
+            failedAt[key] = nil
         }
         if let task = inflight[key] { return await task.value }
 
@@ -67,9 +84,15 @@ actor CoverService {
                 for: entry, connection: connection, adapter: adapter, siblings: siblings
             )
             self.releasePermit()
-            self.memory.setObject(Box(result), forKey: key as NSString)
             if result.image != nil || result.duration != nil {
+                // 成功：写内存 + 磁盘缓存，清除失败标记
+                self.memory.setObject(Box(result), forKey: key as NSString)
+                self.failedAt[key] = nil
                 self.saveToDisk(key: key, result: result)
+            } else {
+                // 失败：不写内存（否则本会话永不重试），仅记冷却时间供限流
+                self.failedAt[key] = Date()
+                self.trimFailedIfNeeded()
             }
             return result
         }
@@ -77,6 +100,31 @@ actor CoverService {
         let result = await task.value
         inflight[key] = nil
         return result
+    }
+
+    /// 按播放条目取封面（音频播放页 / 锁屏共用）：
+    /// 内部经 connectionID 解析连接与适配器，构造条目并复用 `cover(for:)` 全套内存/磁盘缓存与去重。
+    /// 播放页与浏览页命中同一磁盘缓存键（连接 + 路径 + 指纹），避免重复网络拉取。
+    func cover(forItem item: PlayableItem) async -> CoverResult {
+        guard let connectionID = item.connectionID,
+              let db = AppDatabase.shared.dbQueue,
+              let connection = try? await db.read({ try Connection.fetchOne($0, id: connectionID) }),
+              let adapter = try? AdapterFactory.makeAdapter(for: connection) else {
+            return CoverResult(image: nil, duration: nil)
+        }
+        // 同目录兄弟条目（音频封面约定：同名 / cover / folder / front）
+        let parent = StoragePath.parent(of: item.path)
+        let siblings = (try? await adapter.list(parent)) ?? []
+        // 指纹信息不便获取时，从兄弟列表回填自身条目（size/modTime 参与缓存键，命中浏览页缓存）
+        let entry = siblings.first(where: { $0.path == item.path }) ?? FileEntry(
+            name: (item.path as NSString).lastPathComponent,
+            path: item.path,
+            isDir: false,
+            size: 0,
+            modTime: Date(timeIntervalSince1970: 0),
+            ext: StoragePath.ext(of: item.path)
+        )
+        return await cover(for: entry, connection: connection, adapter: adapter, siblings: siblings)
     }
 
     // MARK: - 并发许可
@@ -95,6 +143,13 @@ actor CoverService {
         } else {
             waiters.removeFirst().resume()
         }
+    }
+
+    /// 失败冷却表容量控制：超过阈值时清除已过冷却期的条目（过期即可重试，无需保留）
+    private func trimFailedIfNeeded() {
+        guard failedAt.count > 500 else { return }
+        let now = Date()
+        failedAt = failedAt.filter { now.timeIntervalSince($0.value) < failureCooldown }
     }
 
     // MARK: - 缓存
@@ -140,6 +195,19 @@ actor CoverService {
     }
 
     // MARK: - 按类型产出
+
+    /// 恒无封面（`CoverService` 视角）：目录、字幕、其它文件、小说。
+    /// 注：epub 封面由 `EpubBook.cacheCoverThumbnail` 单独提取写入缩略图分区，
+    /// 不经本服务的 `produce`（`.novel` 分支恒返回 nil），故 txt/epub 均可短路。
+    private static func hasNoCover(_ entry: FileEntry) -> Bool {
+        if entry.isDir { return true }
+        switch MediaType.detect(ext: entry.ext) {
+        case .novel, .subtitle, .other:
+            return true
+        case .video, .audio, .comic, .image:
+            return false
+        }
+    }
 
     private func produce(
         for entry: FileEntry,
@@ -189,21 +257,34 @@ actor CoverService {
                 try await Self.probeVideo(url: url)
             }
         }
-        // 远程：下载前缀到临时文件再抽帧（moov 前置格式可成；失败返回占位）
+        // 远程：抽帧需 moov 前置格式的前缀。IOS-203 与边下边播共享分片缓存：
+        // 播放已缓存前缀时零下载；未命中下载后写入分片缓存，播放时直接命中，互不重复。
+        let identity = SegmentCache.FileIdentity(
+            connectionID: connection.id ?? 0,
+            path: entry.path,
+            size: entry.size,
+            modTime: entry.modTime.timeIntervalSince1970
+        )
+        let cachingEnabled = AppSettings.Cache.contentCachingEnabled
+        let probeBytes = min(videoProbeBytes, max(entry.size, 1))
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("cover-\(UUID().uuidString).\(entry.ext.isEmpty ? "bin" : entry.ext)")
-        do {
-            let data = try await readAll(
-                adapter: adapter, path: entry.path,
-                range: 0..<min(videoProbeBytes, max(entry.size, 1))
-            )
-            try data.write(to: temp)
-            defer { try? FileManager.default.removeItem(at: temp) }
-            return try await Self.probeVideo(url: temp)
-        } catch {
-            try? FileManager.default.removeItem(at: temp)
-            throw error
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        // 1. 优先复用播放已缓存的前缀分片（抽帧成功即返回，前缀不足则回退下载）
+        if cachingEnabled,
+           let cached = await SegmentCache.shared.prefix(file: identity, maxBytes: probeBytes) {
+            try? cached.write(to: temp)
+            if let result = try? await Self.probeVideo(url: temp) { return result }
         }
+
+        // 2. 下载前缀抽帧，并回填分片缓存供播放复用
+        let data = try await readAll(adapter: adapter, path: entry.path, range: 0..<probeBytes)
+        try data.write(to: temp)
+        if cachingEnabled {
+            await SegmentCache.shared.storePrefix(file: identity, data: data)
+        }
+        return try await Self.probeVideo(url: temp)
     }
 
     /// 抽首帧 + 读时长（本地/临时文件 URL）
@@ -227,6 +308,14 @@ actor CoverService {
     private func comicCover(
         entry: FileEntry, connection: Connection, adapter: StorageAdapter
     ) async throws -> UIImage? {
+        // 首页原始解压数据顺带写入漫画页缓存（对齐阅读器键：entry 指纹 + 页名），
+        // 阅读器打开时首页直接命中，免重复 Range 下载/解压（隐患5）。
+        let cacheIdentity = SegmentCache.FileIdentity(
+            connectionID: connection.id ?? 0,
+            path: entry.path,
+            size: entry.size,
+            modTime: entry.modTime.timeIntervalSince1970
+        )
         switch entry.ext {
         case "zip", "cbz":
             let reader = RangeZipReader(totalSize: entry.size) { range in
@@ -234,12 +323,15 @@ actor CoverService {
             }
             guard let first = try await reader.firstImageEntry() else { return nil }
             let data = try await reader.extract(first)
+            Task.detached(priority: .utility) {
+                await Self.cacheComicFirstPage(data, name: first.name, identity: cacheIdentity)
+            }
             return await Task.detached { ImageDownsampler.downsample(data: data) }.value
         case "rar", "cbr":
             // 本地源直接 UnrarKit；远程源整文件下载后解析（设上限，超大归档跳过）
             if let local = adapter as? LocalAdapter, let url = local.localFileURL(for: entry.path) {
                 return try await local.withLocalAccess {
-                    try Self.unrarCover(url: url)
+                    try Self.unrarCover(url: url, identity: cacheIdentity)
                 }
             }
             let temp = FileManager.default.temporaryDirectory
@@ -248,7 +340,7 @@ actor CoverService {
                 let data = try await readAll(adapter: adapter, path: entry.path, limit: rarCoverMaxBytes)
                 try data.write(to: temp)
                 defer { try? FileManager.default.removeItem(at: temp) }
-                return try Self.unrarCover(url: temp)
+                return try Self.unrarCover(url: temp, identity: cacheIdentity)
             } catch {
                 try? FileManager.default.removeItem(at: temp)
                 return nil
@@ -258,14 +350,24 @@ actor CoverService {
         }
     }
 
-    /// rar/cbr 抽取首个图片条目（本地/临时文件 URL 通用）
-    private static func unrarCover(url: URL) throws -> UIImage? {
+    /// rar/cbr 抽取首个图片条目（本地/临时文件 URL 通用），首页原始数据顺带写页缓存
+    private static func unrarCover(url: URL, identity: SegmentCache.FileIdentity) throws -> UIImage? {
         let archive = try URKArchive(url: url)
         let names = try archive.listFilenames()
             .filter { ["jpg", "jpeg", "png", "gif", "webp", "bmp"].contains(StoragePath.ext(of: $0)) }
         guard let first = names.naturalSorted().first else { return nil }
         let data = try archive.extractData(fromFile: first)
+        Task.detached(priority: .utility) {
+            await CoverService.cacheComicFirstPage(data, name: first, identity: identity)
+        }
         return ImageDownsampler.downsample(data: data)
+    }
+
+    /// 首页原始解压数据写入漫画页缓存（与阅读器同键，打开首页直接命中；受内容缓存开关约束）
+    fileprivate static func cacheComicFirstPage(
+        _ data: Data, name: String, identity: SegmentCache.FileIdentity
+    ) async {
+        await ComicPageCache.storePage(data, file: identity, name: name)
     }
 
     // MARK: - 音频：同目录封面约定
