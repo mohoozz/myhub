@@ -1,6 +1,7 @@
 import SwiftUI
+import UIKit
 
-/// 纯 txt 阅读器（全屏）：编码自动检测 + 全文滚动阅读 + 文本可选择复制；
+/// 纯 txt 阅读器（全屏）：编码自动检测 + 全文滚动阅读（懒加载）+ 一键复制全文；
 /// 阅读排版（字号 / 行距 / 主题 / 衬线）实时生效并持久化；
 /// 不建章节索引、不追踪进度，与小说阅读器区分（需要章节/进度走「以小说阅读器打开」）。
 struct TxtReaderView: View {
@@ -9,6 +10,7 @@ struct TxtReaderView: View {
     @EnvironmentObject private var presenter: TxtReaderPresenter
     @StateObject private var viewModel: TxtReaderViewModel
     @State private var showSettings = false
+    @State private var justCopied = false
 
     init(context: TxtOpenContext) {
         self.context = context
@@ -60,20 +62,22 @@ struct TxtReaderView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if viewModel.truncated {
-                        Label("文件过大，仅显示前 \(Int(TextFileLoader.readerLimit) / (1024 * 1024))MB",
+                        Label("文件过大，仅显示部分内容",
                               systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .padding(.bottom, 12)
                     }
-                    Text(viewModel.text)
-                        .font(bodyFont)
-                        .foregroundStyle(viewModel.themeSpec.text)
-                        .lineSpacing(CGFloat(viewModel.appearance.fontSize * (viewModel.appearance.lineSpacing - 1)))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(0..<viewModel.lines.count, id: \.self) { index in
+                        let line = viewModel.lines[index]
+                        Text(line.isEmpty ? " " : line)
+                            .font(bodyFont)
+                            .foregroundStyle(viewModel.themeSpec.text)
+                            .lineSpacing(CGFloat(viewModel.appearance.fontSize * (viewModel.appearance.lineSpacing - 1)))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
@@ -116,6 +120,22 @@ struct TxtReaderView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+
+            Button {
+                UIPasteboard.general.string = viewModel.text
+                withAnimation(.appQuick) { justCopied = true }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    withAnimation(.appQuick) { justCopied = false }
+                }
+            } label: {
+                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(viewModel.themeSpec.text)
+                    .frame(width: 36, height: 36)
+                    .background(viewModel.themeSpec.controlBackground.opacity(0.92))
+                    .clipShape(Circle())
+            }
 
             Button {
                 withAnimation(.appQuick) { showSettings.toggle() }
@@ -278,8 +298,13 @@ final class TxtReaderViewModel: ObservableObject {
 
     @Published private(set) var state: State = .loading
     @Published private(set) var text = ""
+    /// 按换行拆分后的行数组，正文用 LazyVStack 懒加载渲染（见 TxtReaderView），避免单 Text 渲染全文
+    @Published private(set) var lines: [String] = []
     @Published private(set) var encodingName = ""
     @Published private(set) var truncated = false
+
+    /// 懒加载渲染的行数上限：防止极端文本（如每行仅 1 字符）时 LazyVStack 子视图数量爆炸
+    private static let maxRenderLines = 200_000
 
     /// 阅读排版（改动即持久化，与小说阅读器共享 Reader 偏好）
     @Published var appearance: ReaderAppearance {
@@ -323,8 +348,12 @@ final class TxtReaderViewModel: ObservableObject {
                 adapter: adapter, path: entry.path, limit: TextFileLoader.readerLimit
             )
             text = loaded.text
+            // 按换行拆分（保留空行）并缓存；正文用 LazyVStack 懒加载渲染，避免单 Text 渲染全文触发整段排版/文本选择索引
+            let allLines = loaded.text.components(separatedBy: "\n")
+            let overLineLimit = allLines.count > Self.maxRenderLines
+            lines = overLineLimit ? Array(allLines.prefix(Self.maxRenderLines)) : allLines
             encodingName = loaded.encodingName
-            truncated = loaded.truncated
+            truncated = loaded.truncated || overLineLimit
             state = .ready
         } catch is CancellationError {
         } catch {

@@ -61,6 +61,8 @@ struct BrowseDirectoryView: View {
     /// 播放引擎状态（区分播放中/暂停，仅播放中才高亮）
     @ObservedObject private var playerCore = PlayerCore.shared
 
+    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
+
     @State private var sheet: SheetRoute?
     @State private var imagePreview: ImagePreviewContext?
     @State private var unsupportedEntry: FileEntry?
@@ -156,6 +158,8 @@ struct BrowseDirectoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .browseSearchable(text: $viewModel.searchText)
         .toolbar { toolbar }
+        // 液体玻璃模式开：工具栏按钮带 Liquid Glass 玻璃背景；关：.editor 角色不触发玻璃背景
+        .toolbarRole(viewModel.isSelecting || liquidGlassMode ? .navigationStack : .editor)
         .overlay(alignment: .bottom) { bottomOverlay }
         .fileImporter(
             isPresented: $showImporter,
@@ -539,11 +543,22 @@ struct BrowseDirectoryView: View {
             }
         }
         .padding(.vertical, 8)
-        .background(AppColors.cardBackground)
+        .background(selectionBarBackground)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColors.separator, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
         .padding(.horizontal, 12)
+    }
+
+    /// 多选操作栏背景：液体玻璃模式开 → 毛玻璃材质；关 → 当前实色卡片背景
+    @ViewBuilder
+    private var selectionBarBackground: some View {
+        if liquidGlassMode {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+        } else {
+            AppColors.cardBackground
+        }
     }
 
     private func selectionButton(

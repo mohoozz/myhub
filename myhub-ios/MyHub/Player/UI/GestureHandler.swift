@@ -95,12 +95,19 @@ struct PlayerGestureLayer: View {
                     .onTapGesture(count: 1) {
                         onToggleControls()
                     }
-                    // 长按 0.5s 松手锁定；与拖拽/单击/双击共存，不拦截其它手势。
-                    // 不用 LongPressGesture.onChanged（按下瞬间 value 即为 true 会误触发），
-                    // 也不用 UIKit 桥接 overlay（UIView 会拦截整层触摸，导致无法点击/滑动）。
-                    .onLongPressGesture(minimumDuration: 0.5) {
-                        onLock()
-                    }
+                    // 长按 0.5s 立即锁定（按住满阈值即触发，不等松手）；与拖拽/单击/双击共存，不拦截其它手势。
+                    // onLongPressGesture 要松手才回调，故改用 LongPressGesture.sequenced(before:)：
+                    // 其 onChanged 的 .first(true) 在按住满 0.5s 瞬间触发（此时手指仍按下），
+                    // 后接的 DragGesture 仅作占位、不参与判定，也不会拦截整层触摸。震动在 lockInterface 内触发。
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.5)
+                            .sequenced(before: DragGesture(minimumDistance: 0))
+                            .onChanged { value in
+                                if case .first(true) = value {
+                                    onLock()
+                                }
+                            }
+                    )
                     .allowsHitTesting(!isLocked)
 
                 // 锁定态专用层：仅响应单击，用于唤醒中央锁图标
@@ -142,7 +149,11 @@ struct PlayerGestureLayer: View {
                 case .seek:
                     guard core.duration > 0 else { return }
                     let ratio = value.translation.width / max(size.width, 1)
-                    seekTarget = min(max(0, seekBase + core.duration * ratio), core.duration)
+                    // 固定跨度（随滑动距离 5s~60s）：满屏滑动对应 60s，不再随视频总时长放大。
+                    // 限制 ratio 在 [-1, 1] 内，避免滑出屏幕范围导致跨度超过 60s。
+                    let maxDelta: TimeInterval = 60
+                    let delta = maxDelta * Double(min(max(ratio, -1), 1))
+                    seekTarget = min(max(0, seekBase + delta), core.duration)
                     show(.seek(target: seekTarget, duration: core.duration))
                 case .volume:
                     let delta = Float(-value.translation.height / max(size.height, 1))

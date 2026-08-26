@@ -61,6 +61,9 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        # 视频画中画 / 后台音频播放必需（无此项 AVPictureInPictureController 启动会静默失败）
+        UIBackgroundModes:
+          - audio
     entitlements:
       path: MyHub/MyHub.entitlements
     settings:

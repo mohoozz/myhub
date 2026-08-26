@@ -7,29 +7,67 @@ import SwiftUI
 @MainActor
 final class PiPState: ObservableObject {
     @Published private(set) var isSupported = false
+    /// 画中画是否处于激活状态（由 delegate 回调同步，UI 据此切换按钮图标）
+    @Published private(set) var isActive = false
+    /// 启动失败原因（PlayerView 据此弹出提示，避免点击无反馈）
+    @Published var lastError: String?
     private var controller: AVPictureInPictureController?
 
     func attach(layer: AVPlayerLayer) {
         guard AVPictureInPictureController.isPictureInPictureSupported() else { return }
-        controller = AVPictureInPictureController(playerLayer: layer)
+        let controller = AVPictureInPictureController(playerLayer: layer)
+        controller.delegate = self
+        if #available(iOS 15.0, *) {
+            // App 退后台时自动进入画中画（需 Info.plist 声明 UIBackgroundModes = audio）
+            controller.canStartPictureInPictureAutomaticallyFromInline = true
+        }
+        self.controller = controller
         isSupported = true
     }
 
     /// 运行期清理（硬解→软解引擎切换时调用）：视图仍存活，需同步更新 isSupported 通知 UI。
     func detach() {
+        controller?.stopPictureInPicture()
+        controller?.delegate = nil
         controller = nil
         isSupported = false
+        isActive = false
     }
 
     /// 视图拆除期清理（dismantleUIView）：视图正在被 SwiftUI 销毁。
     /// 绝不能在此同步修改 @Published（会触发 Combine send 与视图拆除事务并发，
     /// 导致 exclusivity violation → abort）。本对象随 PlayerView 一起释放，无需再通知 UI。
     func teardown() {
+        controller?.stopPictureInPicture()
+        controller?.delegate = nil
         controller = nil
     }
 
-    func start() {
-        controller?.startPictureInPicture()
+    /// 切换画中画：激活中点击则退出，未激活则启动
+    func toggle() {
+        guard let controller else { return }
+        if controller.isPictureInPictureActive {
+            controller.stopPictureInPicture()
+        } else {
+            lastError = nil
+            controller.startPictureInPicture()
+        }
+    }
+}
+
+extension PiPState: AVPictureInPictureControllerDelegate {
+    func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        isActive = true
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
+        isActive = false
+    }
+
+    func pictureInPictureController(_ controller: AVPictureInPictureController,
+                                    failedToStartPictureInPictureWithError error: Error) {
+        isActive = false
+        lastError = "画中画启动失败：\(error.localizedDescription)"
     }
 }
 
@@ -62,6 +100,9 @@ struct VideoRenderView: UIViewRepresentable {
     final class Coordinator {
         private let pip: PiPState
         private weak var attachedOutput: AnyObject?
+        /// 自己挂载的宿主（VLC 软解路径：全屏收起瞬间 mini 可能已接管 drawable，
+        /// 清理时必须只断自己，避免误清 mini 封面画面）
+        private weak var hostView: PlayerRenderUIView?
         private var playerLayer: AVPlayerLayer?
 
         init(pip: PiPState) {
@@ -85,6 +126,7 @@ struct VideoRenderView: UIViewRepresentable {
             } else if let mediaPlayer = object as? VLCMediaPlayer {
                 mediaPlayer.drawable = view
                 attachedOutput = mediaPlayer
+                hostView = view
             }
         }
 
@@ -100,12 +142,14 @@ struct VideoRenderView: UIViewRepresentable {
 
         private func cleanup() {
             if let mediaPlayer = attachedOutput as? VLCMediaPlayer,
-               mediaPlayer.drawable as? PlayerRenderUIView != nil {
+               let host = hostView,
+               mediaPlayer.drawable as? PlayerRenderUIView === host {
                 mediaPlayer.drawable = nil
             }
             playerLayer?.removeFromSuperlayer()
             playerLayer = nil
             attachedOutput = nil
+            hostView = nil
         }
     }
 }

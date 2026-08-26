@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct SettingsHomeView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @AppStorage("browse.fileNameLines") private var fileNameLines = 3
+    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
     @State private var shareURL: URL?
     @State private var showImporter = false
     @State private var notice: Notice?
@@ -43,6 +44,9 @@ struct SettingsHomeView: View {
                     }
                 } label: {
                     Label("文件名行数", systemImage: "text.alignleft")
+                }
+                Toggle(isOn: $liquidGlassMode) {
+                    Label("液体玻璃模式", systemImage: "circle.hexagongrid")
                 }
             }
 

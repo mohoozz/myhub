@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 内置浏览器主页（TODO §8.1/§8.2，IOS-401）：
-/// 顶部地址栏 + 标签内容保活区 + 底部操作栏（滚动收起/点击展开）。
+/// 标签内容保活区 + 底部操作栏（含居中地址栏，滚动收起/点击展开）。
 /// Safari 风格卡片网格标签管理（新建/关闭/切换 + 无痕开关）。
 struct BrowserHomeView: View {
     @EnvironmentObject private var session: BrowserSessionStore
@@ -15,14 +15,14 @@ struct BrowserHomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
             contentArea
             if !toolbarCollapsed, let tab = session.activeTab {
                 BrowserToolbar(
                     tab: tab,
                     tabCount: session.visibleTabs.count,
                     menuItems: menuItems,
-                    onTabs: { showingTabs = true }
+                    onTabs: { showingTabs = true },
+                    onSubmitAddress: { url in session.open(url) }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -44,20 +44,6 @@ struct BrowserHomeView: View {
         .sheet(isPresented: $showingSettings) {
             BrowserSettingsView()
         }
-    }
-
-    // MARK: - 顶部栏（仅地址栏）
-
-    private var topBar: some View {
-        HStack(spacing: 8) {
-            if let tab = session.activeTab {
-                AddressBar(tab: tab) { url in
-                    session.open(url)
-                }
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
     }
 
     // MARK: - 标签内容区（ZStack 保活，切换不销毁，保持导航历史栈）

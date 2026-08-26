@@ -9,6 +9,16 @@ enum ConnectionTestState: Equatable {
     case failure(message: String)
 }
 
+extension ConnectionTestState {
+    /// 列表绿点旁的路径标签：（内网）/（外网）；仅成功态且含路径提示时返回
+    var routeBadge: String? {
+        guard case .success(let message) = self else { return nil }
+        if message.contains("内网") { return "（内网）" }
+        if message.contains("外网") { return "（外网）" }
+        return nil
+    }
+}
+
 @MainActor
 final class ConnectionStore: ObservableObject {
     /// 连接源数据变更广播：设置页新增/编辑/删除/启停后，浏览页等其它实例自动刷新（无需重启 App）
@@ -47,6 +57,11 @@ final class ConnectionStore: ObservableObject {
     private func reloadAndNotify() {
         reload()
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+    }
+
+    /// 将表单「连接测试」的结果同步到指定连接，供列表绿/红点即时刷新（无需重启 App）
+    func applyTestResult(_ state: ConnectionTestState, for connectionID: Int64) {
+        testStates[connectionID] = state
     }
 
     func setEnabled(_ connection: Connection, _ enabled: Bool) {
@@ -88,9 +103,13 @@ final class ConnectionStore: ObservableObject {
 
     // MARK: - 连接测试
 
+    /// 列表出现时自动测试：成功/测试中的不重测；未知或失败的重试，便于连接恢复后立即变绿
     func testIfNeeded(_ connection: Connection) async {
-        guard let id = connection.id, connection.enabled, testStates[id] == nil else { return }
-        await test(connection)
+        guard let id = connection.id, connection.enabled else { return }
+        switch testStates[id] {
+        case .success, .testing: return
+        case .unknown, .failure, .none: await test(connection)
+        }
     }
 
     func test(_ connection: Connection) async {
@@ -99,20 +118,27 @@ final class ConnectionStore: ObservableObject {
         do {
             let adapter = try AdapterFactory.makeAdapter(for: connection)
             try await adapter.testConnection()
-            testStates[id] = .success(message: Self.reachabilityMessage(for: connection))
+            let route = (adapter as? RoutedWebDAVAdapter)?.activeRoute
+            testStates[id] = .success(message: Self.reachabilityMessage(for: connection, activeRoute: route))
         } catch {
             testStates[id] = .failure(message: error.localizedDescription)
         }
     }
 
     /// 测试成功提示：区分内网 / 外网可达（IOS-101）
-    static func reachabilityMessage(for connection: Connection) -> String {
+    static func reachabilityMessage(for connection: Connection, activeRoute: ConnectionRoute? = nil) -> String {
         switch connection.type {
         case .local:
             return "本地连接正常"
         case .smb:
             return "连接成功（内网可达）"   // SMB 面向局域网
         case .webdav:
+            // 配置了内网地址时，以实际测试路由为准；否则按地址启发式判定
+            if let activeRoute {
+                return activeRoute == .internalNetwork
+                    ? "连接成功（内网可达）"
+                    : "连接成功（外网可达）"
+            }
             let host = connection.decodeConfig(WebDAVConfig.self)
                 .flatMap { URL(string: $0.baseURL)?.host } ?? ""
             return NetworkHeuristics.isPrivateHost(host)

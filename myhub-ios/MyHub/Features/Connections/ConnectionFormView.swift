@@ -13,7 +13,8 @@ struct ConnectionFormView: View {
     @State private var enabled: Bool
 
     // WebDAV
-    @State private var webdavBaseURL: String
+    @State private var webdavBaseURL: String       // 外网地址
+    @State private var webdavInternalURL: String   // 内网地址（可选，优先直连，不通回退外网）
     @State private var webdavRootPath: String
     @State private var webdavUsername: String
     // SMB
@@ -43,6 +44,7 @@ struct ConnectionFormView: View {
         _enabled = State(initialValue: connection.enabled)
         let webdav = connection.decodeConfig(WebDAVConfig.self)
         _webdavBaseURL = State(initialValue: webdav?.baseURL ?? "")
+        _webdavInternalURL = State(initialValue: webdav?.internalBaseURL ?? "")
         _webdavRootPath = State(initialValue: webdav?.rootPath ?? "/")
         _webdavUsername = State(initialValue: webdav?.username ?? "")
         let smb = connection.decodeConfig(SMBConfig.self)
@@ -131,13 +133,19 @@ struct ConnectionFormView: View {
     private var webdavSection: some View {
         Group {
             Section("WebDAV 服务器") {
-                TextField("地址（https://host:port）", text: $webdavBaseURL)
+                TextField("外网地址（https://host:port）", text: $webdavBaseURL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("内网地址（可选，https://192.168.x.x）", text: $webdavInternalURL)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 TextField("根路径（如 /dav，默认 /）", text: $webdavRootPath)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+            } footer: {
+                Text("填写内网地址后，App 会优先连接内网，不通时自动切换到外网。")
             }
             Section("凭据") {
                 TextField("用户名（可空为匿名）", text: $webdavUsername)
@@ -245,7 +253,11 @@ struct ConnectionFormView: View {
                     passwordOverride: password.isEmpty ? nil : password
                 )
                 try await adapter.testConnection()
-                testResult = .success(message: ConnectionStore.reachabilityMessage(for: previewConnection()))
+                let route = (adapter as? RoutedWebDAVAdapter)?.activeRoute
+                testResult = .success(message: ConnectionStore.reachabilityMessage(
+                    for: previewConnection(),
+                    activeRoute: route
+                ))
             } catch {
                 testResult = .failure(message: error.localizedDescription)
             }
@@ -261,7 +273,15 @@ struct ConnectionFormView: View {
         case .local:
             return true
         case .webdav:
-            return !webdavBaseURL.trimmingCharacters(in: .whitespaces).isEmpty
+            let external = webdavBaseURL.trimmingCharacters(in: .whitespaces)
+            guard !external.isEmpty else { return false }
+            // 内网地址可选；填写时须为合法的 http/https 地址
+            let internalURL = webdavInternalURL.trimmingCharacters(in: .whitespaces)
+            if internalURL.isEmpty { return true }
+            guard let url = URL(string: internalURL),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https" else { return false }
+            return true
         case .smb:
             return !smbHost.isEmpty && !smbShare.isEmpty && (smbGuest || !smbUsername.isEmpty)
         case .ftp, .sftp, .nfs:
@@ -274,6 +294,10 @@ struct ConnectionFormView: View {
         connection.createdAt = isNew ? Date() : original.createdAt
         do {
             try store.save(&connection, password: password.isEmpty ? nil : password)
+            // 编辑已有连接且做过连接测试时，把最新结果同步到列表绿/红点（避免红点残留到重启）
+            if let id = original.id, let testResult {
+                store.applyTestResult(testResult, for: id)
+            }
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -296,10 +320,12 @@ struct ConnectionFormView: View {
         case .local:
             return Connection.makeConfigJSON(LocalConfig(path: nil, bookmarkData: localBookmark))
         case .webdav:
+            let internalURL = webdavInternalURL.trimmingCharacters(in: .whitespaces)
             return Connection.makeConfigJSON(WebDAVConfig(
                 baseURL: webdavBaseURL.trimmingCharacters(in: .whitespaces),
                 username: webdavUsername.trimmingCharacters(in: .whitespaces),
-                rootPath: webdavRootPath.isEmpty ? "/" : webdavRootPath
+                rootPath: webdavRootPath.isEmpty ? "/" : webdavRootPath,
+                internalBaseURL: internalURL.isEmpty ? nil : internalURL
             ))
         case .smb:
             return Connection.makeConfigJSON(SMBConfig(

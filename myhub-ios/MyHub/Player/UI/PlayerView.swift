@@ -28,6 +28,9 @@ struct PlayerView: View {
     @State private var nextCandidate: (connection: Connection, entry: FileEntry)?
     @State private var nextCountdown = 5
     @State private var nextTask: Task<Void, Never>?
+    /// 画中画失败等操作提示（短暂胶囊，自动消失）
+    @State private var pipNotice: String?
+    @State private var pipNoticeTask: Task<Void, Never>?
 
     private var isAudioPresentation: Bool {
         core.isAudioOnly || player.current?.isAudioOnly == true
@@ -58,6 +61,7 @@ struct PlayerView: View {
         .onDisappear {
             hideTask?.cancel()
             nextTask?.cancel()
+            pipNoticeTask?.cancel()
             AppLogger.shared.log("PlayerView onDisappear isLandscape=\(orientation.isLandscape)", module: "player")
             // 方向恢复移到 RootView 的 fullScreenCover(onDismiss:)。
             // onDisappear 在 dismiss 转场「进行中」触发，此刻调用 requestGeometryUpdate
@@ -72,6 +76,17 @@ struct PlayerView: View {
             if newState == .playing, nextCandidate != nil { cancelNext() }
         }
         .onChange(of: player.current) { _ in cancelNext() }
+        // 画中画启动失败提示（避免点击按钮后无任何反馈）
+        .onChange(of: pip.lastError) { message in
+            guard let message else { return }
+            pipNoticeTask?.cancel()
+            withAnimation(.appQuick) { pipNotice = message }
+            pipNoticeTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.appQuick) { pipNotice = nil }
+            }
+        }
         // 切到纯音频时恢复竖屏（纯音频不提供横竖屏切换，避免卡在横屏）
         .onChange(of: isAudioPresentation) { audio in
             if audio, orientation.isLandscape { orientation.lockPortrait() }
@@ -127,6 +142,22 @@ struct PlayerView: View {
 
             // 中央状态（加载圈 / 大播放键互斥）
             centerOverlay
+
+            // 画中画等操作提示（短时胶囊）
+            if let pipNotice {
+                VStack {
+                    Text(pipNotice)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.7))
+                        .clipShape(Capsule())
+                        .padding(.top, 96)
+                    Spacer()
+                }
+                .transition(.opacity)
+            }
 
             // 屏幕左中：横竖屏切换按钮（视频 + 控制层可见时显示；锁定/纯音频不显示）
             if showControls, !isInterfaceLocked, !isAudioPresentation {

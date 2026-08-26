@@ -88,6 +88,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         BrowserTabSnapshot(id: id, urlString: currentURL?.absoluteString, title: title)
     }
 
+    /// 是否显示起始页（空白标签：未加载 URL 且无错误）
+    var isShowingStartPage: Bool {
+        currentURL == nil && !isLoading && !hasError
+    }
+
     // MARK: - KVO
 
     private func observe() {
@@ -213,6 +218,10 @@ extension BrowserTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        // 忽略用户主动取消（回退/停止/刷新会取消旧导航，触发 -999 NSURLErrorCancelled），
+        // 避免把正常的回退误判为加载失败而弹出错误页
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
         handleError(error)
     }
 
@@ -314,6 +323,8 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            // 点击页面任意处（含空白）：先收起键盘/退出地址栏编辑，再展开操作栏
+            Keyboard.dismiss()
             parent.onTap?()
         }
 

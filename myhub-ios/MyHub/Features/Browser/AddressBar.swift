@@ -19,7 +19,8 @@ struct AddressBar: View {
                 SelectableTextField(
                     text: $text,
                     placeholder: "搜索或输入网址",
-                    onSubmit: submit
+                    onSubmit: submit,
+                    onEndEditing: { isEditing = false }
                 )
                 .focused($focused)
                 .font(.subheadline)
@@ -148,6 +149,8 @@ private struct SelectableTextField: UIViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var onSubmit: () -> Void
+    /// 结束编辑（失去焦点/键盘收起）回调：用于同步退出编辑模式
+    var onEndEditing: () -> Void = {}
 
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField()
@@ -189,6 +192,11 @@ private struct SelectableTextField: UIViewRepresentable {
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
             parent.onSubmit()
             return true
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            // 外部收起键盘（点页面/切搜索框/滚动）时同步退出编辑模式
+            parent.onEndEditing()
         }
     }
 }

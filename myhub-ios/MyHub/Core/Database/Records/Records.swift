@@ -37,9 +37,10 @@ struct Connection: Codable, FetchableRecord, PersistableRecord, Identifiable {
 
 /// WebDAV 连接配置（密码不入库）
 struct WebDAVConfig: Codable {
-    var baseURL: String         // https://host:port
+    var baseURL: String            // 外网地址 https://host:port
     var username: String
     var rootPath: String = "/"
+    var internalBaseURL: String?   // 可选内网地址：优先直连内网，不通自动回退外网
 }
 
 /// SMB 连接配置（密码不入库）

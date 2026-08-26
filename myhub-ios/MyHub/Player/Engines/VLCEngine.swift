@@ -1,6 +1,23 @@
 import Foundation
 import MobileVLCKit
 
+/// VLC delegate 回调跨线程触发的线程安全时间节流器：
+/// 软解时间回报回调可达数十次/秒，若全部派发到主线程会放大发热，限制到约 4 次/秒。
+private final class VLCTimeThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: TimeInterval = 0
+
+    func shouldPass(interval: TimeInterval, now: TimeInterval) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard now - last >= interval else { return false }
+        last = now
+        return true
+    }
+}
+
+private let vlcTimeThrottle = VLCTimeThrottle()
+
 /// 软解引擎：MobileVLCKit 兜底全格式（mkv/rmvb/avi/flv/wmv/ts…）。
 /// 状态/时间经 VLCMediaPlayerDelegate 回报；UI 将 `player.drawable` 指向宿主视图渲染（TODO §4.3）。
 @MainActor
@@ -53,7 +70,10 @@ final class VLCEngine: NSObject, PlaybackEngine {
         pendingStartAt = startAt
         didApplyStartAt = false
         didEmitReady = false
-        player.media = VLCMedia(url: url)
+        let media = VLCMedia(url: url)
+        // 优先硬件解码（VideoToolbox）降低软解 CPU 发热；不支持的编码由 avcodec 自动回退软解
+        media.addOption(":avcodec-hw=videotoolbox")
+        player.media = media
         onEvent?(.stateChanged(.loading))
         // VLCKit 异步起播：opening/buffering/playing 状态经 delegate 回报
     }
@@ -172,6 +192,8 @@ extension VLCEngine: VLCMediaPlayerDelegate {
     }
 
     nonisolated func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard vlcTimeThrottle.shouldPass(interval: 0.25, now: now) else { return }
         Task { @MainActor in self.handleTimeChanged() }
     }
 }

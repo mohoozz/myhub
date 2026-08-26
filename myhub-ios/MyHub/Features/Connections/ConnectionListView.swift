@@ -107,23 +107,31 @@ struct ConnectionListView: View {
         }
     }
 
-    /// 测试状态点：正常绿点 / 异常红点 / 测试中转圈（出现即自动测试一次）
+    /// 测试状态点：正常绿点 / 异常红点 / 测试中转圈（出现即自动测试一次）；
+    /// 成功后旁侧显示（内网）/（外网）实际生效路径提示
     @ViewBuilder
     private func statusDot(_ connection: Connection) -> some View {
         let state = connection.id.flatMap { store.testStates[$0] } ?? .unknown
-        Group {
-            switch state {
-            case .testing:
-                ProgressView().controlSize(.mini)
-            case .success:
-                Circle().fill(.green)
-            case .failure:
-                Circle().fill(.red)
-            case .unknown:
-                Circle().fill(.gray.opacity(0.4))
+        HStack(spacing: 4) {
+            Group {
+                switch state {
+                case .testing:
+                    ProgressView().controlSize(.mini)
+                case .success:
+                    Circle().fill(.green)
+                case .failure:
+                    Circle().fill(.red)
+                case .unknown:
+                    Circle().fill(.gray.opacity(0.4))
+                }
+            }
+            .frame(width: 10, height: 10)
+            if let badge = state.routeBadge {
+                Text(badge)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textSecondary)
             }
         }
-        .frame(width: 10, height: 10)
         .task { await store.testIfNeeded(connection) }
     }
 

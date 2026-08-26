@@ -12,7 +12,7 @@ struct BrowserView: View {
             BrowserWebView(tab: tab, onEdgeSwipeBack: onEdgeSwipeBack, onTap: onTap)
 
             // 起始页：空白标签（未加载 URL）时显示
-            if tab.currentURL == nil && !tab.isLoading && !tab.hasError {
+            if tab.isShowingStartPage {
                 StartPage { url in
                     tab.load(url)
                 }

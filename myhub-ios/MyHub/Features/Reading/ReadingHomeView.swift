@@ -13,6 +13,8 @@ struct ReadingHomeView: View {
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
 
+    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
+
     @State private var viewMode: BrowseViewMode = AppSettings.Reading.viewMode {
         didSet { AppSettings.Reading.viewMode = viewMode }
     }
@@ -33,7 +35,8 @@ struct ReadingHomeView: View {
                 .background(AppColors.pageBackground)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
-                .toolbarRole(isSelecting ? .navigationStack : .editor)
+                // 液体玻璃模式开：工具栏按钮带 Liquid Glass 玻璃背景；关：.editor 角色不触发玻璃背景
+                .toolbarRole(isSelecting || liquidGlassMode ? .navigationStack : .editor)
                 .overlay(alignment: .bottom) { bottomOverlay }
         }
         .confirmationDialog(
@@ -199,13 +202,13 @@ struct ReadingHomeView: View {
         let entry = entry(for: record)
         let isSelected = isSelected(record)
         return VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 ReadingCoverImage(
                     record: record, entry: entry,
                     connection: connections[record.connectionID],
                     adapter: adapters[record.connectionID]
                 )
-                .frame(width: 44, height: 44)
+                .frame(width: 52, height: 52)
                 .background(AppColors.highlightBackground.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
@@ -220,6 +223,7 @@ struct ReadingHomeView: View {
                         .lineLimit(1)
                     progressLine(record)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
                 if isSelecting {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -228,7 +232,7 @@ struct ReadingHomeView: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .hoverEffect(.highlight)
@@ -245,7 +249,7 @@ struct ReadingHomeView: View {
             Rectangle()
                 .fill(AppColors.separator)
                 .frame(height: 0.5)
-                .padding(.leading, 68)
+                .padding(.leading, 76)
         }
     }
 
@@ -410,11 +414,22 @@ struct ReadingHomeView: View {
             .disabled(count == 0)
         }
         .padding(.vertical, 8)
-        .background(AppColors.cardBackground)
+        .background(selectionBarBackground)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColors.separator, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
         .padding(.horizontal, 12)
+    }
+
+    /// 多选操作栏背景：液体玻璃模式开 → 毛玻璃材质；关 → 当前实色卡片背景
+    @ViewBuilder
+    private var selectionBarBackground: some View {
+        if liquidGlassMode {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+        } else {
+            AppColors.cardBackground
+        }
     }
 
     // MARK: - 交互

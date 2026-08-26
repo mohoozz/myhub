@@ -6,8 +6,9 @@ enum TextFileLoader {
     static let viewLimit: Int64 = 4 * 1024 * 1024
     /// 编辑上限 10MB
     static let editLimit: Int64 = 10 * 1024 * 1024
-    /// 纯 txt 阅读器上限 50MB（超出截断提示；小说阅读器走字节级索引无此限制）
-    static let readerLimit: Int64 = 50 * 1024 * 1024
+    /// 纯 txt 阅读器上限 4MB（超出截断提示；小说阅读器走字节级索引无此限制）。
+    /// 阅读器用单个 SwiftUI Text 渲染全文，上限过大（如 50MB）会触发整段排版/文本选择索引，CPU/内存暴涨导致真机发热。
+    static let readerLimit: Int64 = 4 * 1024 * 1024
 
     struct Loaded {
         var text: String

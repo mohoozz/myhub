@@ -2,7 +2,7 @@ import AVKit
 import SwiftUI
 
 /// 播放控制栏（IOS-201 / IOS-701）：
-/// 顶栏——圆形悬浮按钮：退出 / PiP / 音轨 / 更多（纯音频、小窗、解码方式）；
+/// 顶栏——圆形悬浮按钮：退出 / PiP / 音量（多音轨时面板内附带音轨切换）/ 更多（纯音频、小窗、解码方式）；
 /// 底栏——标题 + 深色圆角控制卡片：进度条（含缓冲段 + 拖动）+ 倍速、当前/剩余时间、
 ///       AirPlay、快退/快进、播放暂停、字幕（内嵌 + 外挂）。
 struct PlayerControls: View {
@@ -17,6 +17,10 @@ struct PlayerControls: View {
 
     @State private var scrubValue: Double = 0
     @State private var scrubbing = false
+    /// 顶栏音量面板展开状态
+    @State private var showVolumePanel = false
+    /// 面板滑杆值（与系统音量联动）
+    @State private var volume: Double = 0
 
     private var displayTime: Double {
         scrubbing ? scrubValue : core.currentTime
@@ -32,9 +36,15 @@ struct PlayerControls: View {
             Spacer()
             bottomSection
         }
-        .onAppear { scrubValue = core.currentTime }
+        .onAppear {
+            scrubValue = core.currentTime
+            volume = Double(SystemVolume.current)
+        }
         .onChange(of: core.currentTime) { newValue in
             if !scrubbing { scrubValue = newValue }
+        }
+        .onChange(of: volume) { newValue in
+            SystemVolume.set(Float(newValue))
         }
     }
 
@@ -44,17 +54,25 @@ struct PlayerControls: View {
         HStack(spacing: 12) {
             roundButton("xmark", label: "退出", action: onExit)
             if pip.isSupported, !core.isAudioOnly, item?.isAudioOnly == false {
-                roundButton("pip.enter", label: "画中画") {
-                    pip.start()
+                roundButton(pip.isActive ? "pip.exit" : "pip.enter", label: "画中画") {
+                    pip.toggle()
                     onInteraction()
                 }
             }
             Spacer()
-            audioTrackMenu
+            volumeButton
             moreMenu
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
+        .overlay(alignment: .topTrailing) {
+            if showVolumePanel {
+                volumePanel
+                    .padding(.top, 48)
+                    .padding(.trailing, 8)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
+            }
+        }
     }
 
     private func roundButton(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
@@ -145,10 +163,18 @@ struct PlayerControls: View {
             core.togglePlayPause()
             onInteraction()
         } label: {
-            Image(systemName: core.isPlaying ? "pause.fill" : "play.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
+            Group {
+                // seek 等待 / 缓冲 / 加载中显示菊花，避免「实际卡住却显示暂停图标」的误导
+                if core.isSeeking || core.state == .loading || core.state == .buffering {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Image(systemName: core.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 44, height: 44)
         }
         .buttonStyle(.pressScale)
         .accessibilityLabel(core.isPlaying ? "暂停" : "播放")
@@ -282,22 +308,87 @@ struct PlayerControls: View {
         .opacity(core.subtitleTracks.isEmpty && subtitles.externalTracks.isEmpty ? 0.35 : 1)
     }
 
-    private var audioTrackMenu: some View {
-        Menu {
-            ForEach(core.audioTracks) { track in
-                Button {
-                    core.selectAudioTrack(track.id)
-                    onInteraction()
-                } label: {
-                    checkLabel(track.name, checked: core.selectedAudioTrackID == track.id)
+    // MARK: - 音量按钮与音量面板
+
+    private var volumeButton: some View {
+        Button {
+            // 打开前同步一次真实系统音量（手势层可能刚调过音量）
+            volume = Double(SystemVolume.current)
+            withAnimation(.appQuick) { showVolumePanel.toggle() }
+            onInteraction()
+        } label: {
+            roundIcon(volumeIcon)
+        }
+        .buttonStyle(.pressScale)
+        .accessibilityLabel("音量")
+    }
+
+    private var volumeIcon: String {
+        if volume < 0.01 { return "speaker.slash.fill" }
+        if volume < 0.5 { return "speaker.wave.1.fill" }
+        return "speaker.wave.2.fill"
+    }
+
+    /// 音量面板：系统音量滑杆（步进 5%，与手势层一致）；多音轨时附带音轨切换
+    private var volumePanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: volumeIcon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22)
+                Text("音量")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text("\(Int((volume * 100).rounded()))%")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+
+            Slider(value: $volume, in: 0...1, step: 0.05) { editing in
+                if editing { onInteraction() }
+            }
+            .tint(.white)
+            .frame(height: 20)
+
+            if core.audioTracks.count > 1 {
+                Divider()
+                    .overlay(.white.opacity(0.15))
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(core.audioTracks) { track in
+                        Button {
+                            core.selectAudioTrack(track.id)
+                            onInteraction()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(track.name)
+                                    .font(.footnote)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                    .lineLimit(1)
+                                Spacer()
+                                if core.selectedAudioTrackID == track.id {
+                                    Image(systemName: "checkmark")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
-        } label: {
-            roundIcon("speaker.wave.2.fill")
         }
-        .opacity(core.audioTracks.count > 1 ? 1 : 0.5)
-        .disabled(core.audioTracks.count <= 1)
-        .accessibilityLabel("音轨")
+        .padding(16)
+        .frame(width: 240)
+        .background(.black.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
     }
 
     private var moreMenu: some View {

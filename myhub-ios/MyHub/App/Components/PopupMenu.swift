@@ -350,7 +350,8 @@ private struct PopupSecondaryMenuModifier: ViewModifier {
 
 /// 单元格按压交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单无法触发）：
 /// - 点击 → onTap；长按 → 底部抽屉菜单（互斥：长按识别后松开不再触发点击）；
-/// - 按压中浅蓝高亮 + 缩放 0.97（与原 SelectableCellStyle 视觉一致）；
+/// - 按压中内容缩放 0.97（保留按压反馈），高亮基于原始 frame 铺满整行/卡片，
+///   缩放时不漏出直角空隙，与 hover/选中高亮保持一致；
 /// - iPad/Mac 指针右键弹锚点圆角菜单（与长按同一组菜单项）。
 private struct CellPressModifier: ViewModifier {
     var cornerRadius: CGFloat = 12
@@ -364,11 +365,13 @@ private struct CellPressModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(AnchorReader(anchor: $anchor))
+            // 先缩放内容（保留 0.97 按压反馈），高亮 overlay 叠加在其后：
+            // 高亮基于原始 frame 铺满整行，内容缩放时不会漏出四周直角空隙
+            .scaleEffect(isPressing ? 0.97 : 1)
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
             )
-            .scaleEffect(isPressing ? 0.97 : 1)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(PressBridge(
                 onTap: onTap,
@@ -383,7 +386,13 @@ private struct CellPressModifier: ViewModifier {
                         withAnimation(.appFast) { isPressing = false }
                     }
                 },
-                onLongPress: { presenter.show(items: items, anchor: anchor, style: .drawer) }
+                onLongPress: {
+                    // 长按触发轻微震动（prepare 预唤醒触觉引擎，确保即时可靠触发）
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.prepare()
+                    generator.impactOccurred()
+                    presenter.show(items: items, anchor: anchor, style: .drawer)
+                }
             ))
             .accessibilityAddTraits(.isButton)
             .background(SecondaryClickBridge {

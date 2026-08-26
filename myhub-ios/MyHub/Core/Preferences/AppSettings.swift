@@ -151,6 +151,13 @@ enum AppSettings {
     enum Reading {
         @RawUserDefault("reading.viewMode", default: .grid) static var viewMode: BrowseViewMode
     }
+
+    /// 界面外观偏好
+    enum UI {
+        /// 液体玻璃模式（iOS 26 Liquid Glass）：开启后阅读/浏览界面右上角按钮与底部多选操作栏
+        /// 使用液体玻璃样式；关闭则右上角不使用毛玻璃背景、底部操作栏沿用当前实色样式。
+        @UserDefault("ui.liquidGlassMode", default: true) static var liquidGlassMode: Bool
+    }
 }
 
 /// 浏览排序键

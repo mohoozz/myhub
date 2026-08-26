@@ -45,6 +45,9 @@ final class PlayerCore: ObservableObject {
     @Published private(set) var subtitleTracks: [TrackOption] = []
     @Published private(set) var selectedAudioTrackID: Int?
     @Published private(set) var selectedSubtitleTrackID: Int?
+    /// 进行中的 seek 目标（秒）。网络差时 seek 到未缓冲位置引擎会进入缓冲等待，
+    /// 期间引擎时间回调仍回报旧位置；UI 进度条吸附在目标值不回跳，待引擎实际到达后解除
+    @Published private(set) var seekTarget: TimeInterval?
 
     /// 进度上报回调：播放中每 5s 节流上报，暂停 / seek / 结束 / 退出强制上报
     var onProgressReport: ((PlaybackProgressReport) -> Void)?
@@ -53,10 +56,15 @@ final class PlayerCore: ObservableObject {
     private var pendingRequest: PlaybackRequest?
     private var didBecomeReady = false
     private var lastReportAt: TimeInterval = 0
+    /// 时间刷新节流：软解引擎（VLC）时间回调可达数十次/秒，限制 UI 时间刷新到约 4 次/秒，避免高频重绘发热
+    private var lastTimeRefreshAt: TimeInterval = 0
 
     private init() {}
 
     var isPlaying: Bool { state == .playing }
+
+    /// 是否处于 seek 等待（目标位置尚未缓冲到），UI 据此显示加载菊花
+    var isSeeking: Bool { seekTarget != nil }
 
     /// 渲染输出（AVPlayer / VLCMediaPlayer），§4.3 渲染层接管
     var videoOutput: Any? { engine?.videoOutput }
@@ -81,6 +89,7 @@ final class PlayerCore: ObservableObject {
             || (request.mediaType == .video && AppSettings.Player.audioOnlyByDefault)
         rate = Float(min(3.0, max(0.5, AppSettings.Player.defaultSpeed)))
         lastReportAt = 0
+        lastTimeRefreshAt = 0
         state = .loading
 
         let kind = await EngineRouter.resolve(url: request.url, preference: request.decodePreference ?? .auto)
@@ -113,8 +122,10 @@ final class PlayerCore: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval) {
-        currentTime = max(0, seconds)
-        engine?.seek(to: max(0, seconds))
+        let target = max(0, seconds)
+        currentTime = target
+        seekTarget = target
+        engine?.seek(to: target)
         report(force: true)
     }
 
@@ -184,11 +195,33 @@ final class PlayerCore: ObservableObject {
             }
             state = newState
             if newState == .ended {
+                seekTarget = nil
                 report(finished: true, force: true)
+            } else if newState == .paused {
+                // 暂停会中断进行中的 seek（引擎在暂停态不会完成跳转），解除吸附并把进度条同步到实际位置
+                if seekTarget != nil {
+                    seekTarget = nil
+                    currentTime = engine?.currentTime ?? currentTime
+                }
             }
         case .timeUpdated(let current, let duration):
-            currentTime = current
             if duration > 0 { self.duration = duration }
+            // 节流：仅约每 0.25s 刷新一次 currentTime，避免软解引擎高频回调驱动整棵视图树重绘
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastTimeRefreshAt >= 0.25 else { return }
+            lastTimeRefreshAt = now
+            // seek 吸附：目标位置尚未缓冲到时引擎回调仍回报旧位置，进度条保持在目标值，
+            // 待引擎实际播放到达目标附近（或越过）后解除并跟随真实位置
+            if let target = seekTarget {
+                if current >= target - 0.5 {
+                    seekTarget = nil
+                    currentTime = current
+                } else {
+                    currentTime = target
+                }
+            } else {
+                currentTime = current
+            }
             bufferedTime = engine?.bufferedTime ?? 0
             report()
         case .tracksChanged:
@@ -216,6 +249,7 @@ final class PlayerCore: ObservableObject {
     private func teardownSession() {
         engine?.stop()
         engine = nil
+        seekTarget = nil
         audioTracks = []
         subtitleTracks = []
         selectedAudioTrackID = nil

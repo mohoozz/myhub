@@ -28,6 +28,17 @@ enum AdapterFactory {
             guard let config = connection.decodeConfig(WebDAVConfig.self) else {
                 throw StorageError.invalidConfig("WebDAV 配置缺失")
             }
+            // 内外网双地址：配置了合法内网地址时启用路由适配器（内网优先、失败回退外网），
+            // 否则退化为单地址适配器
+            let internalURL = config.internalBaseURL?.trimmingCharacters(in: .whitespaces) ?? ""
+            if !internalURL.isEmpty {
+                var internalConfig = config
+                internalConfig.baseURL = internalURL
+                if let internalAdapter = try? WebDAVAdapter(config: internalConfig, password: password) {
+                    let externalAdapter = try WebDAVAdapter(config: config, password: password)
+                    return RoutedWebDAVAdapter(internalAdapter: internalAdapter, externalAdapter: externalAdapter)
+                }
+            }
             return try WebDAVAdapter(config: config, password: password)
 
         case .smb:

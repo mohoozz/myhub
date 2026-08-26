@@ -10,6 +10,7 @@ struct StartPage: View {
     @State private var editing = false
     @State private var showingAdd = false
     @State private var editingShortcut: BrowserShortcut?
+    @FocusState private var searchFocused: Bool
 
     private let columns = [GridItem(.adaptive(minimum: 72), spacing: 16)]
 
@@ -20,7 +21,12 @@ struct StartPage: View {
                 shortcutSection
             }
             .padding(16)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { Keyboard.dismiss() }
         }
+        .scrollDismissesKeyboard(.immediately)
+        .onTapGesture { Keyboard.dismiss() }
         .background(AppColors.pageBackground)
         .sheet(isPresented: $showingAdd) {
             ShortcutEditorView(title: "", url: "") { title, url in
@@ -48,6 +54,7 @@ struct StartPage: View {
                 .keyboardType(.webSearch)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .focused($searchFocused)
                 .onSubmit(submit)
             if !query.isEmpty {
                 Button {
@@ -72,6 +79,7 @@ struct StartPage: View {
     private func submit() {
         guard let url = BrowserAddress.resolve(query) else { return }
         query = ""
+        Keyboard.dismiss()
         onNavigate(url)
     }
 
@@ -122,6 +130,7 @@ struct StartPage: View {
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
+            Keyboard.dismiss()
             if let url = URL(string: shortcut.url) { onNavigate(url) }
         }
     }
@@ -146,7 +155,10 @@ struct StartPage: View {
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
-        .onTapGesture { showingAdd = true }
+        .onTapGesture {
+            Keyboard.dismiss()
+            showingAdd = true
+        }
     }
 
     private var shortcutList: some View {
@@ -168,6 +180,7 @@ struct StartPage: View {
                 .padding(.vertical, 10)
                 .contentShape(Rectangle())
                 .onTapGesture {
+                    Keyboard.dismiss()
                     if let url = URL(string: shortcut.url) { onNavigate(url) }
                 }
                 Divider().overlay(AppColors.separator)

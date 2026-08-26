@@ -71,19 +71,19 @@ struct FileGridCell: View {
     var body: some View {
         VStack(spacing: 6) {
             cover
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .center, spacing: 2) {
                 Text(entry.name)
                     .font(.subheadline)
                     .fontWeight(isPlaying ? .semibold : .regular)
                     .foregroundStyle(isPlaying ? AppColors.primary : AppColors.textPrimary)
                     .lineLimit(fileNameLines, reservesSpace: true)
-                    .multilineTextAlignment(.leading)
+                    .multilineTextAlignment(.center)
                 Text(caption)
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding(8)
         .background(AppColors.cardBackground)
@@ -167,12 +167,12 @@ struct FileListRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 RemoteCoverImage(
                     entry: entry, connection: connection, adapter: adapter,
                     siblings: siblings, duration: $duration
                 )
-                .frame(width: 44, height: 44)
+                .frame(width: 52, height: 52)
                 .background(AppColors.highlightBackground.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(alignment: .topLeading) {
@@ -191,6 +191,7 @@ struct FileListRow: View {
                         .foregroundStyle(AppColors.textSecondary)
                         .lineLimit(1)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
                 if isSelecting {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -205,7 +206,7 @@ struct FileListRow: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
@@ -222,7 +223,7 @@ struct FileListRow: View {
             Rectangle()
                 .fill(AppColors.separator)
                 .frame(height: 0.5)
-                .padding(.leading, 68)
+                .padding(.leading, 76)
         }
     }
 
