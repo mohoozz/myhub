@@ -73,6 +73,9 @@ final class NovelReaderViewModel: ObservableObject {
     private var lastAnchorCharOffset = 0   // 重排前锚点（设置/旋转变化恢复用）
     private var systemBrightness: CGFloat = -1
     private var loadTask: Task<Void, Never>?
+    private var paginationTask: Task<Void, Never>?          // 当前分页任务：设置连续变化时取消旧任务，防堆积发热
+    private var repaginateDebounceTask: Task<Void, Never>?  // 设置连续变化防抖（合并为最后一次重排）
+    private var paginationGeneration = 0                    // 分页代数：丢弃过期分页结果
 
     init(connection: Connection, entry: FileEntry) {
         self.connection = connection
@@ -89,6 +92,8 @@ final class NovelReaderViewModel: ObservableObject {
         reportTask?.cancel()
         toastTask?.cancel()
         scrollIntentTask?.cancel()
+        paginationTask?.cancel()
+        repaginateDebounceTask?.cancel()
     }
 
     // MARK: - 加载与锚点一步定位
@@ -225,8 +230,17 @@ final class NovelReaderViewModel: ObservableObject {
         repaginate(anchorCharOffset: preserved)
     }
 
+    /// 设置（字号/行距等）变化触发的重排：防抖合并。滑块连续拖动时每个 step 都触发
+    /// `didSet`，若逐次立即分页会堆积大量整章 CoreText 排版任务 → CPU 打满发热、卡死。
+    /// 这里把连续变化合并为最后一次（150ms 窗口内重置计时），只在停顿后分页一次。
     private func repaginatePreservingAnchor() {
-        repaginate(anchorCharOffset: currentCharOffset())
+        let target = currentCharOffset()
+        repaginateDebounceTask?.cancel()
+        repaginateDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.repaginate(anchorCharOffset: target)
+        }
     }
 
     private func repaginate(anchorCharOffset: Int) {
@@ -236,13 +250,22 @@ final class NovelReaderViewModel: ObservableObject {
         let textColor = UIColor(themeSpec.text)
         let size = pageSize
         let chapterSnapshot = chapter
+        // 取消上一次未完成的分页任务：并发堆积的分页任务是发热/卡死根源。
+        // 用代数校验丢弃过期结果，避免旧字号的分页覆盖最新设置。
+        paginationTask?.cancel()
+        paginationGeneration += 1
+        let generation = paginationGeneration
         // 排版放后台，避免大章阻塞主线程
-        Task.detached(priority: .userInitiated) { [weak self] in
+        paginationTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard !Task.isCancelled else { return }
             let result = TextPaginator.paginate(
                 blocks: blocks, appearance: appearance, pageSize: size, textColor: textColor
             )
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self, self.chapter == chapterSnapshot, self.blocks == blocks else { return }
+                guard let self, !Task.isCancelled,
+                      generation == self.paginationGeneration,
+                      self.chapter == chapterSnapshot else { return }
                 self.pagination = result
                 var offset = anchorCharOffset
                 // epub 首次定位：段落锚点换算为组装文本字符位置（需分页产物的块位置映射）
@@ -567,6 +590,8 @@ final class NovelReaderViewModel: ObservableObject {
         report(force: true)
         loadTask?.cancel()
         preloadTask?.cancel()
+        paginationTask?.cancel()
+        repaginateDebounceTask?.cancel()
         if systemBrightness >= 0 {
             UIScreen.main.brightness = systemBrightness
         }
@@ -598,12 +623,10 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     /// 分页结果中某一页的富文本（保留 NSParagraphStyle 行距/段距，供 UILabel 渲染）
+    /// 使用 ChapterPagination 构建时预切片的缓存，避免 UI 每帧重建时反复深拷贝整章文本
     func pageContent(_ target: Int) -> NSAttributedString {
-        guard let pagination, pagination.pages.indices.contains(target) else { return NSAttributedString() }
-        let range = pagination.pages[target]
-        return pagination.attributedText.attributedSubstring(
-            from: NSRange(location: range.lowerBound, length: range.count)
-        )
+        guard let pagination else { return NSAttributedString() }
+        return pagination.pageContent(target)
     }
 
     private func showToast(_ message: String) {

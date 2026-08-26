@@ -9,6 +9,26 @@ struct ChapterPagination {
     let pages: [Range<Int>]
     /// 每个 ReaderBlock 在 attributedText 中的起始字符位置（epub 段落锚点换算）
     let blockStarts: [Int]
+    /// 每页预切片富文本（构建时一次性生成）。
+    /// 避免 UI 每帧重建时反复 `attributedSubstring` 深拷贝（大章几百页时主线程卡顿）。
+    private let pageStrings: [NSAttributedString]
+
+    init(attributedText: NSAttributedString, pages: [Range<Int>], blockStarts: [Int]) {
+        self.attributedText = attributedText
+        self.pages = pages
+        self.blockStarts = blockStarts
+        self.pageStrings = pages.map {
+            attributedText.attributedSubstring(
+                from: NSRange(location: $0.lowerBound, length: $0.count)
+            )
+        }
+    }
+
+    /// 指定页的富文本（O(1)，预切片缓存）
+    func pageContent(_ index: Int) -> NSAttributedString {
+        guard pageStrings.indices.contains(index) else { return NSAttributedString() }
+        return pageStrings[index]
+    }
 
     /// 字符位置 → 页下标（最后一个 start <= pos 的页）
     func pageIndex(forCharOffset offset: Int) -> Int {
