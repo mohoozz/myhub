@@ -63,13 +63,7 @@ struct RootView: View {
                 }
             )
         }
-        // mini 播放器全局悬浮（跨页面保持）
-        .overlay(alignment: .bottom) {
-            if player.isMini {
-                MiniPlayer()
-                    .padding(.bottom, 64)   // 避开底部 TabBar
-            }
-        }
+        // mini 播放器：iPhone 贴底部页签栏（见 mainShell），iPad 悬浮底部
         // 全局弹出菜单层：… 按钮 / 指针右键 → 锚点圆角卡片；iOS 长按 → 底部抽屉
         .overlay {
             if let state = popup.state {
@@ -81,7 +75,6 @@ struct RootView: View {
                 }
             }
         }
-        .animation(.appQuick, value: player.isMini)
     }
 
     @ViewBuilder
@@ -92,11 +85,21 @@ struct RootView: View {
             } detail: {
                 keepAliveDetail
             }
+            .overlay(alignment: .bottom) {
+                if player.isMini {
+                    MiniPlayer()
+                }
+            }
         } else {
             // 自定义底部页签栏：系统 TabView 无法直接缩小图标，
             // 改用 ZStack 保活 + 自绘 HStack 页签（纯图标、图标尺寸可控）
+            // mini 播放器贴底页签栏上方（对齐 Flutter 移动端 bottomNavigationBar）
             VStack(spacing: 0) {
                 keepAlivePhoneTabs
+                if player.isMini {
+                    MiniPlayer()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 BottomTabBar(selection: $router.selectedTab, tabs: AppTab.phoneTabs)
             }
         }

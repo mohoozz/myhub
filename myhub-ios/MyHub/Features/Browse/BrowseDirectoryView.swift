@@ -635,7 +635,7 @@ struct BrowseDirectoryView: View {
                     viewModel.sortKey = key
                 }
             }
-        }
+        })
         items.append(PopupMenuItem(
             title: viewModel.sortAscending ? "✓ 升序" : "✓ 降序",
             systemImage: viewModel.sortAscending ? "chevron.up" : "chevron.down"

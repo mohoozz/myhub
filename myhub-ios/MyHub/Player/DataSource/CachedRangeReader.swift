@@ -10,16 +10,33 @@ final class CachedRangeReader: @unchecked Sendable {
     let cachingEnabled: Bool
     /// 离线模式（IOS-605）：stat 失败后以缓存身份起播——未命中分片快速抛错，不重试不预取
     let offlineMode: Bool
+    /// 预读开关：封面抽帧等一次性按需读取场景关闭，避免每次 read 向后预取 15MB
+    /// 造成大量并发 NAS 请求（3 个视频 × 16 分片 = 48 并发）打爆连接导致文件头读取超时
+    let prefetchEnabled: Bool
 
     private let inFlight = InFlightSegments()
+    /// 预取并发信号量：限制同时在飞的分片预取数量，避免 seek/播放时大量并发请求打爆远端存储（Connection reset by peer）
+    private let prefetchLimiter = PrefetchLimiter(limit: 3)
+    /// 线程安全的网络拉取字节累计（跨分片/Task）
+    private let networkBytes = NetworkByteCounter()
 
     var contentLength: Int64 { source.contentLength }
 
-    init(source: RangeDataSource, identity: SegmentCache.FileIdentity, cachingEnabled: Bool, offlineMode: Bool = false) {
+    /// 本 reader 生命周期内实际从数据源（网络）拉取的字节数（不含分片缓存命中）
+    var networkBytesFetched: Int64 { networkBytes.total }
+
+    init(source: RangeDataSource, identity: SegmentCache.FileIdentity, cachingEnabled: Bool, offlineMode: Bool = false, prefetchEnabled: Bool = true) {
         self.source = source
         self.identity = identity
         self.cachingEnabled = cachingEnabled
         self.offlineMode = offlineMode
+        self.prefetchEnabled = prefetchEnabled
+    }
+
+    /// 取消所有 in-flight 分片拉取（播放器关闭 / 会话注销时调用），
+    /// 阻止后台预取与未完成的 NAS 请求继续占用连接
+    func cancel() {
+        Task { await inFlight.cancelAll() }
     }
 
     /// 读取 [lowerBound, upperBound)：按分片装配，命中缓存的分片不再走网络
@@ -56,10 +73,11 @@ final class CachedRangeReader: @unchecked Sendable {
         if offlineMode {
             throw StorageError.offline("该时段视频")
         }
-        return try await inFlight.value(for: index) { [source, identity, cachingEnabled] in
+        return try await inFlight.value(for: index) { [source, identity, cachingEnabled, networkBytes] in
             let lower = index * SegmentCache.segmentLength
             let upper = min(lower + SegmentCache.segmentLength, source.contentLength)
             let data = try await source.read(range: lower..<upper)
+            networkBytes.add(Int64(data.count))
             if cachingEnabled {
                 await SegmentCache.shared.store(file: identity, segment: index, data: data)
             }
@@ -70,14 +88,17 @@ final class CachedRangeReader: @unchecked Sendable {
     /// 预读窗口：当前位置向后预取（秒数 × 估算码率，AppSettings.Player.preloadSeconds 可配）；
     /// 弱网抖动时窗口内分片已就绪，保证平滑播放；离线模式不预取
     private func prefetch(afterSegment index: Int64) {
-        guard !offlineMode else { return }
+        guard prefetchEnabled, !offlineMode else { return }
         let count = max(1, Int(ceil(Double(Self.readaheadBytes) / Double(SegmentCache.segmentLength))))
         let maxSegment = (contentLength - 1) / SegmentCache.segmentLength
         for offset in 1...Int64(count) {
             let next = index + offset
             guard next <= maxSegment else { break }
             Task.detached(priority: .utility) { [weak self] in
-                _ = try? await self?.segment(next)
+                guard let self else { return }
+                await self.prefetchLimiter.acquire()
+                _ = try? await self.segment(next)
+                await self.prefetchLimiter.release()
             }
         }
     }
@@ -100,5 +121,56 @@ private actor InFlightSegments {
         tasks[key] = task
         defer { tasks[key] = nil }
         return try await task.value
+    }
+
+    /// 取消所有 in-flight 分片拉取：终止其底层 NAS 请求并释放连接（会话注销时调用）
+    func cancelAll() {
+        for task in tasks.values {
+            task.cancel()
+        }
+        tasks.removeAll()
+    }
+}
+
+/// 预取并发信号量：限制同时在飞的分片预取数量（避免 seek/拖动时向后 15 个分片并发拉取打爆远端存储连接）
+private actor PrefetchLimiter {
+    private let limit: Int
+    private var running = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) { self.limit = max(1, limit) }
+
+    func acquire() async {
+        if running < limit {
+            running += 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            running -= 1
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
+/// 线程安全的字节计数器（跨 Task / 分片累计实际网络拉取量）
+private final class NetworkByteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int64 = 0
+
+    func add(_ bytes: Int64) {
+        lock.lock()
+        value += bytes
+        lock.unlock()
+    }
+
+    var total: Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }

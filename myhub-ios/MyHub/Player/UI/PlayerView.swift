@@ -312,6 +312,7 @@ struct PlayerView: View {
     // MARK: - 控制层自动隐藏
 
     private func toggleControls() {
+        AppLogger.shared.log("toggleControls showControls=\(showControls) isInterfaceLocked=\(isInterfaceLocked)", module: "player")
         withAnimation(.appQuick) { showControls.toggle() }
         if showControls {
             resetHideTimer()
@@ -321,6 +322,7 @@ struct PlayerView: View {
     }
 
     private func lockInterface() {
+        AppLogger.shared.log("lockInterface 触发锁定 isInterfaceLocked=\(isInterfaceLocked)", module: "player")
         hideTask?.cancel()
         // 长按锁定触发一次震动反馈（prepare 预唤醒触觉引擎，确保即时可靠触发）
         let generator = UIImpactFeedbackGenerator(style: .heavy)
@@ -336,12 +338,14 @@ struct PlayerView: View {
     }
 
     private func unlockInterface() {
+        AppLogger.shared.log("unlockInterface", module: "player")
         withAnimation(.appQuick) { isInterfaceLocked = false }
         resetHideTimer()
     }
 
     /// 锁定态下点击屏幕 / 刚进入锁定：显示中央锁图标并在 3s 后自动隐藏
     private func wakeLockIcon() {
+        AppLogger.shared.log("wakeLockIcon showControls=\(showControls)", module: "player")
         hideTask?.cancel()
         withAnimation(.appQuick) { showControls = true }
         hideTask = Task { @MainActor in

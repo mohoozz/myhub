@@ -132,7 +132,7 @@ struct ConnectionFormView: View {
 
     private var webdavSection: some View {
         Group {
-            Section("WebDAV 服务器") {
+            Section {
                 TextField("外网地址（https://host:port）", text: $webdavBaseURL)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
@@ -144,6 +144,8 @@ struct ConnectionFormView: View {
                 TextField("根路径（如 /dav，默认 /）", text: $webdavRootPath)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+            } header: {
+                Text("WebDAV 服务器")
             } footer: {
                 Text("填写内网地址后，App 会优先连接内网，不通时自动切换到外网。")
             }

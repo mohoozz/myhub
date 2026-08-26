@@ -38,6 +38,21 @@ final class LocalStreamProxy {
         return url
     }
 
+    /// 注销串流会话，返回该会话累计网络拉取字节数（封面抽帧等一次性读取后统计下载量）。
+    @discardableResult
+    func unregister(_ url: URL) -> Int64 {
+        let rawPath = url.path
+        guard rawPath.hasPrefix(Self.pathPrefix) else { return 0 }
+        let sessionID = rawPath.dropFirst(Self.pathPrefix.count)
+            .split(separator: "/").first.map(String.init) ?? ""
+        guard !sessionID.isEmpty else { return 0 }
+        lock.lock()
+        let session = sessions.removeValue(forKey: sessionID)
+        lock.unlock()
+        session?.reader.cancel()
+        return session?.reader.networkBytesFetched ?? 0
+    }
+
     // MARK: - 服务生命周期
 
     private func startIfNeeded() throws {
@@ -52,14 +67,32 @@ final class LocalStreamProxy {
         let semaphore = DispatchSemaphore(value: 0)
         var readyPort: UInt16?
         var startError: Error?
-        listener.stateUpdateHandler = { state in
+        listener.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
                 readyPort = listener.port?.rawValue
                 semaphore.signal()
+                AppLogger.shared.log(
+                    "listener ready port=\(readyPort ?? 0)",
+                    level: .info, module: "stream"
+                )
             case .failed(let error):
                 startError = error
                 semaphore.signal()
+                AppLogger.shared.log(
+                    "listener failed error=\(String(describing: error))",
+                    level: .error, module: "stream"
+                )
+                // 运行中失败自愈：清引用，下次 register 由 startIfNeeded 重建监听
+                self?.lock.lock()
+                self?.listener = nil
+                self?.port = 0
+                self?.lock.unlock()
+            case .cancelled:
+                AppLogger.shared.log(
+                    "listener cancelled",
+                    level: .warn, module: "stream"
+                )
             default:
                 break
             }
@@ -166,6 +199,7 @@ final class LocalStreamProxy {
         response += "Connection: close\r\n\r\n"
 
         Task {
+            var sentBytes: Int64 = 0
             do {
                 try await send(Data(response.utf8), on: connection)
                 if method != "HEAD" {
@@ -180,9 +214,18 @@ final class LocalStreamProxy {
                         try await send(data, on: connection)
                         offset += Int64(data.count)
                     }
+                    sentBytes = offset - start
                 }
+                AppLogger.shared.log(
+                    "stream 完成 range=\(start)-\(end)/\(total) 发送=\(sentBytes)B",
+                    level: .debug, module: "stream"
+                )
             } catch {
-                // 客户端中断（seek 取消旧请求）或读取失败：关闭连接
+                // 客户端中断（seek 取消旧请求）或底层读取失败：记录真实错误，定位封面抽帧超时/断连
+                AppLogger.shared.log(
+                    "stream 中断 range=\(start)-\(end)/\(total) 已发送=\(sentBytes)B error=\(String(describing: error))",
+                    level: .warn, module: "stream"
+                )
             }
             connection.cancel()
         }

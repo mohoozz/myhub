@@ -33,6 +33,10 @@ final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
                     try await self.collect(range: range)
                 }
             } catch {
+                // 任务取消（播放器关闭 / 会话注销）快速失败，不再重试发起新的 NAS 请求
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
                 lastError = error
                 if attempt < maxAttempts {
                     try? await Task.sleep(nanoseconds: UInt64(attempt) * 400_000_000)

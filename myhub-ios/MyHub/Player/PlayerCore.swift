@@ -247,6 +247,11 @@ final class PlayerCore: ObservableObject {
     }
 
     private func teardownSession() {
+        // 注销边下边播串流会话：释放 CachedRangeReader 并取消其 in-flight / 预取任务，
+        // 避免播放器关闭后后台预取继续占用 NAS 连接，拖垮后续封面抽帧
+        if let url = pendingRequest?.url {
+            LocalStreamProxy.shared.unregister(url)
+        }
         engine?.stop()
         engine = nil
         seekTarget = nil

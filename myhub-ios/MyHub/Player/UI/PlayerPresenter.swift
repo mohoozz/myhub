@@ -62,18 +62,21 @@ final class PlayerPresenter: ObservableObject {
             isMinimizing = true   // 内容层立即透明，视觉瞬消，避免画面跳回 + 双画面重影
         }
         isFullscreen = false
-        isMini = true
+        withAnimation(.appQuick) { isMini = true }
     }
 
     /// 从 mini 展开回全屏（复用同一会话）
     func expand() {
         guard current != nil else { return }
         AppLogger.shared.log("expand", module: "player")
-        isMini = false
-        isFullscreen = true
+        withAnimation(.appQuick) {
+            isMini = false
+            isFullscreen = true
+        }
     }
 
-    /// 直接退出（不进入 mini，同时停止播放内核）
+    /// 直接退出（不进入 mini，同时停止播放内核）。
+    /// 不加 withAnimation：让 mini 立即消失，避免停内核时图标先切换再淡出的闪烁。
     func close() {
         AppLogger.shared.log("close", module: "player")
         current = nil

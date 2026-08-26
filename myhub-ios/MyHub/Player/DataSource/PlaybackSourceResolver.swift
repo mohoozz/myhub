@@ -15,14 +15,25 @@ enum PlaybackSourceResolver {
         )
         let startAt = resumePosition(connectionID: connection.id, path: entry.path, mediaType: mediaType)
 
+        let url: URL
+        if let remote = try await makeRemoteStreamURL(connection: connection, entry: entry) {
+            url = remote
+        } else if let adapter = try AdapterFactory.makeAdapter(for: connection) as? LocalAdapter,
+                  let fileURL = adapter.localFileURL(for: entry.path) {
+            url = fileURL
+        } else {
+            throw StorageError.invalidPath(entry.path)
+        }
+        return PlaybackRequest(item: item, url: url, mediaType: mediaType, startAt: startAt)
+    }
+
+    /// 远程源（WebDAV/SMB）注册边下边播回环串流 URL，供播放器与封面抽帧按需 Range 读取；
+    /// 本地源返回 nil（封面走 withLocalAccess 直读 file://）。FTP/SFTP/NFS 暂不支持，抛错。
+    /// - Parameter enablePrefetch: 播放传 true（边下边播预读）；封面抽帧传 false（只读首帧，避免预读并发打爆 NAS）
+    static func makeRemoteStreamURL(connection: Connection, entry: FileEntry, enablePrefetch: Bool = true) async throws -> URL? {
         switch connection.type {
         case .local:
-            guard let adapter = try AdapterFactory.makeAdapter(for: connection) as? LocalAdapter,
-                  let url = adapter.localFileURL(for: entry.path) else {
-                throw StorageError.invalidPath(entry.path)
-            }
-            return PlaybackRequest(item: item, url: url, mediaType: mediaType, startAt: startAt)
-
+            return nil
         case .webdav, .smb:
             let adapter = try AdapterFactory.makeAdapter(for: connection)
             var identity = SegmentCache.FileIdentity(
@@ -50,11 +61,10 @@ enum PlaybackSourceResolver {
                 source: source,
                 identity: identity,
                 cachingEnabled: AppSettings.Cache.contentCachingEnabled,
-                offlineMode: offline
+                offlineMode: offline,
+                prefetchEnabled: enablePrefetch
             )
-            let url = try LocalStreamProxy.shared.register(reader: reader, fileName: entry.name)
-            return PlaybackRequest(item: item, url: url, mediaType: mediaType, startAt: startAt)
-
+            return try LocalStreamProxy.shared.register(reader: reader, fileName: entry.name)
         // 预留：FTP / SFTP / NFS
         case .ftp, .sftp, .nfs:
             throw StorageError.unsupportedProtocol(connection.type.rawValue.uppercased())

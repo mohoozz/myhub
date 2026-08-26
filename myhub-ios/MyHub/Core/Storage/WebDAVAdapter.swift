@@ -8,7 +8,21 @@ final class WebDAVAdapter: StorageAdapter {
     /// baseURL + rootPath 合成的连接根
     private let rootURL: URL
 
-    init(config: WebDAVConfig, password: String?, session: URLSession = .shared) throws {
+    /// 串流专用共享 URLSession：与 `URLSession.shared` 隔离，避免边下边播的高频 Range 请求
+    /// 与频繁取消污染全局共享连接池（僵尸连接导致后续请求 30s 超时）。
+    /// 提升单主机并发上限、关闭 URL 缓存（视频流不缓存）。
+    private static let streamSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 16
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
+
+    init(config: WebDAVConfig, password: String?, session: URLSession = WebDAVAdapter.streamSession) throws {
         guard let base = URL(string: config.baseURL),
               let scheme = base.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             throw StorageError.invalidConfig("地址需为 http(s)://host[:port]，当前：\(config.baseURL)")
@@ -147,21 +161,14 @@ final class WebDAVAdapter: StorageAdapter {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (bytes, response) = try await session.bytes(for: request)
+                    // 用 data(for:) 一次性读完整 range：AsyncBytes 逐字节迭代性能极差
+                    // （1MB ≈ 100 万次 await），弱网下分片/moov 读取极易超时，封面抽帧与播放均受影响。
+                    // 当前所有调用方（1MB 分片、moov、封面图片）均为读完整 range，无流式增量消费需求。
+                    let (data, response) = try await session.data(for: request)
                     try validate(response)
-                    // AsyncBytes 逐字节迭代，64KB 缓冲成块输出
-                    // 边下边播分片拉取见 Player/DataSource/（RangeDataSource + SegmentCache）
-                    var buffer = Data()
-                    buffer.reserveCapacity(64 * 1024)
-                    for try await byte in bytes {
-                        if Task.isCancelled { break }
-                        buffer.append(byte)
-                        if buffer.count >= 64 * 1024 {
-                            continuation.yield(buffer)
-                            buffer.removeAll(keepingCapacity: true)
-                        }
+                    if !data.isEmpty {
+                        continuation.yield(data)
                     }
-                    if !buffer.isEmpty { continuation.yield(buffer) }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

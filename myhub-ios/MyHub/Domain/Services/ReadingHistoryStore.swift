@@ -81,7 +81,7 @@ final class ReadingHistoryStore: ObservableObject {
                     WHERE connectionID = ?
                       AND (filePath = ? OR filePath LIKE ?)
                     """,
-                arguments: StatementArguments([newPath, oldPath, connectionID, oldPath, "\(oldPath)/%"])
+                arguments: StatementArguments([newPath, oldPath, connectionID, oldPath, "\(oldPath)/%"] as [DatabaseValueConvertible?])
             )
         }
         reload()

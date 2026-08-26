@@ -79,6 +79,8 @@ struct PlayerGestureLayer: View {
     @State private var gestureStartVolume: Float = 0
     @State private var gestureStartBrightness: CGFloat = 0
     @State private var hideTask: Task<Void, Never>?
+    /// 最近一次单击时间戳，用于区分单击/双击（单击立即响应，不等待双击识别超时）
+    @State private var lastTapAt: Date?
 
     private enum DragMode { case seek, volume, brightness, mini }
 
@@ -89,23 +91,22 @@ struct PlayerGestureLayer: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .gesture(dragGesture(in: geometry.size))
-                    .onTapGesture(count: 2) {
-                        core.togglePlayPause()
-                    }
-                    .onTapGesture(count: 1) {
-                        onToggleControls()
+                    .onTapGesture {
+                        handleTap()
                     }
                     // 长按 0.5s 立即锁定（按住满阈值即触发，不等松手）；与拖拽/单击/双击共存，不拦截其它手势。
-                    // onLongPressGesture 要松手才回调，故改用 LongPressGesture.sequenced(before:)：
-                    // 其 onChanged 的 .first(true) 在按住满 0.5s 瞬间触发（此时手指仍按下），
-                    // 后接的 DragGesture 仅作占位、不参与判定，也不会拦截整层触摸。震动在 lockInterface 内触发。
-                    .gesture(
+                    // onChanged 的 value 在手指「按下瞬间」即为 true（并非按住满 0.5s 才变 true），
+                    // 故不能用 onChanged 触发锁定（否则单击也会误触发）。正确做法：用 onEnded——
+                    // 它只在按住满 minimumDuration(0.5s) 时触发，且无需松手；单击/双击提前松手不会触发。
+                    // 用 simultaneousGesture 共存，避免覆盖前面的拖拽手势。震动在 lockInterface 内触发。
+                    .simultaneousGesture(
                         LongPressGesture(minimumDuration: 0.5)
-                            .sequenced(before: DragGesture(minimumDistance: 0))
                             .onChanged { value in
-                                if case .first(true) = value {
-                                    onLock()
-                                }
+                                AppLogger.shared.log("gesture longPress changed value=\(value)", module: "player-gesture")
+                            }
+                            .onEnded { _ in
+                                AppLogger.shared.log("gesture longPress ended → onLock", module: "player-gesture")
+                                onLock()
                             }
                     )
                     .allowsHitTesting(!isLocked)
@@ -119,6 +120,25 @@ struct PlayerGestureLayer: View {
                         }
                 }
             }
+        }
+    }
+
+    // MARK: - 单击 / 双击（单击立即响应）
+
+    /// 单击立即切换控制层；短时间内第二次点击视为双击（播放/暂停）。
+    /// 不能同时用 onTapGesture(count: 1) 与 onTapGesture(count: 2)：SwiftUI 会让
+    /// 单击等待双击手势超时（约 0.3s）才触发，导致「点击后控制层延迟显示」。
+    /// 这里改用单击 + 时间戳自行区分，保证单击零延迟。
+    private func handleTap() {
+        let now = Date()
+        if let last = lastTapAt, now.timeIntervalSince(last) < 0.3 {
+            lastTapAt = nil
+            AppLogger.shared.log("gesture tap(2) isLocked=\(isLocked)", module: "player-gesture")
+            core.togglePlayPause()
+        } else {
+            lastTapAt = now
+            AppLogger.shared.log("gesture tap(1) isLocked=\(isLocked)", module: "player-gesture")
+            onToggleControls()
         }
     }
 
@@ -144,6 +164,7 @@ struct PlayerGestureLayer: View {
                             dragMode = .mini   // 画面中央下拉进入 mini
                         }
                     }
+                    AppLogger.shared.log("gesture drag start mode=\(String(describing: dragMode)) isLocked=\(isLocked)", module: "player-gesture")
                 }
                 switch dragMode {
                 case .seek:

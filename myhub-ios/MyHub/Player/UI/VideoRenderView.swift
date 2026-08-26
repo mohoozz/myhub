@@ -5,7 +5,7 @@ import SwiftUI
 
 /// 画中画持有（硬解路径生效；AVPictureInPictureController 依赖 AVPlayerLayer）
 @MainActor
-final class PiPState: ObservableObject {
+final class PiPState: NSObject, ObservableObject {
     @Published private(set) var isSupported = false
     /// 画中画是否处于激活状态（由 delegate 回调同步，UI 据此切换按钮图标）
     @Published private(set) var isActive = false
@@ -14,13 +14,11 @@ final class PiPState: ObservableObject {
     private var controller: AVPictureInPictureController?
 
     func attach(layer: AVPlayerLayer) {
-        guard AVPictureInPictureController.isPictureInPictureSupported() else { return }
-        let controller = AVPictureInPictureController(playerLayer: layer)
+        guard AVPictureInPictureController.isPictureInPictureSupported(),
+              let controller = AVPictureInPictureController(playerLayer: layer) else { return }
         controller.delegate = self
-        if #available(iOS 15.0, *) {
-            // App 退后台时自动进入画中画（需 Info.plist 声明 UIBackgroundModes = audio）
-            controller.canStartPictureInPictureAutomaticallyFromInline = true
-        }
+        // App 退后台时自动进入画中画（需 Info.plist 声明 UIBackgroundModes = audio）
+        controller.canStartPictureInPictureAutomaticallyFromInline = true
         self.controller = controller
         isSupported = true
     }
@@ -38,8 +36,11 @@ final class PiPState: ObservableObject {
     /// 绝不能在此同步修改 @Published（会触发 Combine send 与视图拆除事务并发，
     /// 导致 exclusivity violation → abort）。本对象随 PlayerView 一起释放，无需再通知 UI。
     func teardown() {
-        controller?.stopPictureInPicture()
+        // 先断开 delegate 再 stop：防止 stopPictureInPicture 触发
+        // pictureInPictureControllerDidStopPictureInPicture → isActive = false（改 @Published）
+        // 与 dismantleUIView 拆除事务并发 → exclusivity violation → abort。
         controller?.delegate = nil
+        controller?.stopPictureInPicture()
         controller = nil
     }
 
