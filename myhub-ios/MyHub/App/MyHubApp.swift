@@ -22,6 +22,7 @@ struct MyHubApp: App {
     @StateObject private var txtReader = TxtReaderPresenter()         // 纯 txt 阅读器全屏路由（txt 默认打开）
     @StateObject private var appLock = AppLockManager.shared          // 应用锁（TODO §10 安全）
     @StateObject private var browserDataStore = BrowserDataStore.shared   // 浏览器书签/历史/快捷入口唯一数据源（TODO §8.3）
+    @StateObject private var browseDisplaySettings = BrowseDisplaySettings.shared   // 浏览显示偏好（文件名行数等，IOS-102）
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -50,6 +51,7 @@ struct MyHubApp: App {
                 .environmentObject(txtReader)
                 .environmentObject(appLock)
                 .environmentObject(browserDataStore)
+                .environmentObject(browseDisplaySettings)
                 // 进入后台时按设置上锁，返回前台显示锁定遮罩（TODO §10 安全）
                 .onChange(of: scenePhase) { phase in
                     if phase == .background { appLock.lockForBackground() }

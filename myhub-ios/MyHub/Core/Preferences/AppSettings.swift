@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// UserDefaults 属性包装
@@ -182,5 +183,29 @@ enum BrowseViewMode: String, CaseIterable, Codable {
         case .grid: return "square.grid.2x2"
         case .list: return "list.bullet"
         }
+    }
+}
+
+// MARK: - 浏览显示偏好（即时响应版）
+
+/// 文件名行数等浏览显示偏好的集中发布源（IOS-102）。
+///
+/// 说明：仅用 `@AppStorage` 时值会正常写入 UserDefaults，但在部分系统版本下
+/// 已存活的视图（如常驻的浏览/收藏网格、设置页 Picker）不会收到刷新，
+/// 需切换主题等操作触发整体重绘后才生效；改用 `@Published` 统一发布后，
+/// 设置页标签与网格标题行数可即时更新。
+final class BrowseDisplaySettings: ObservableObject {
+    static let shared = BrowseDisplaySettings()
+
+    /// 文件名标题行数（1~5）
+    @Published var fileNameLines: Int {
+        didSet {
+            guard fileNameLines != oldValue else { return }
+            UserDefaults.standard.set(fileNameLines, forKey: "browse.fileNameLines")
+        }
+    }
+
+    private init() {
+        fileNameLines = UserDefaults.standard.object(forKey: "browse.fileNameLines") as? Int ?? 3
     }
 }

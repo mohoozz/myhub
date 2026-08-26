@@ -11,11 +11,11 @@ struct FavoritesView: View {
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
     @EnvironmentObject private var txtReader: TxtReaderPresenter
+    @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
     @State private var viewMode: BrowseViewMode = AppSettings.Favorites.viewMode {
         didSet { AppSettings.Favorites.viewMode = viewMode }
     }
-    @AppStorage("browse.fileNameLines") private var fileNameLines = 3
     @State private var connections: [Int64: Connection] = [:]
     @State private var resolved: [Int64: FileEntry] = [:]   // stat 后的真实条目（含 isDir）
     @State private var resolving: Set<Int64> = []
@@ -36,12 +36,7 @@ struct FavoritesView: View {
                 .leadingNavTitle("收藏")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button {
-                            viewMode = viewMode == .grid ? .list : .grid
-                        } label: {
-                            Image(systemName: viewMode == .grid
-                                  ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol)
-                        }
+                        PopupMenuButton(items: overflowItems)
                     }
                 }
         }
@@ -62,6 +57,20 @@ struct FavoritesView: View {
             resolveAll()
         }
         .onReceive(favoritesStore.$favorites) { _ in resolveAll() }
+    }
+
+    // MARK: - 工具栏
+
+    /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）
+    private var overflowItems: [PopupMenuItem] {
+        [
+            PopupMenuItem(
+                title: viewMode == .grid ? "列表视图" : "网格视图",
+                systemImage: viewMode == .grid ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol
+            ) {
+                viewMode = viewMode == .grid ? .list : .grid
+            },
+        ]
     }
 
     // MARK: - 内容
@@ -118,7 +127,7 @@ struct FavoritesView: View {
                 Text(entry.name)
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(fileNameLines, reservesSpace: true)
+                    .lineLimit(browseDisplaySettings.fileNameLines, reservesSpace: true)
                     .multilineTextAlignment(.leading)
                 Text(connections[favorite.connectionID]?.name ?? "")
                     .font(.caption)

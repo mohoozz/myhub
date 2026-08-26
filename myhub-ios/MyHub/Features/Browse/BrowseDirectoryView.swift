@@ -593,14 +593,6 @@ struct BrowseDirectoryView: View {
         } else {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 PopupMenuButton(items: addItems, symbol: "plus")
-
-                Button {
-                    viewModel.viewMode = viewModel.viewMode == .grid ? .list : .grid
-                } label: {
-                    Image(systemName: viewModel.viewMode == .grid
-                          ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol)
-                }
-
                 PopupMenuButton(items: overflowItems)
             }
         }
@@ -622,9 +614,17 @@ struct BrowseDirectoryView: View {
         ]
     }
 
-    /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）：排序 / 升降序 / 多选 / 刷新
+    /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）：视图切换 / 排序 / 升降序 / 多选 / 刷新
     private var overflowItems: [PopupMenuItem] {
-        var items: [PopupMenuItem] = BrowseSortKey.allCases.map { key in
+        var items: [PopupMenuItem] = [
+            PopupMenuItem(
+                title: viewModel.viewMode == .grid ? "列表视图" : "网格视图",
+                systemImage: viewModel.viewMode == .grid ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol
+            ) {
+                viewModel.viewMode = viewModel.viewMode == .grid ? .list : .grid
+            },
+        ]
+        items.append(contentsOf: BrowseSortKey.allCases.map { key in
             PopupMenuItem(
                 title: (viewModel.sortKey == key ? "✓ " : "") + "按" + key.displayName,
                 systemImage: "arrow.up.arrow.down"

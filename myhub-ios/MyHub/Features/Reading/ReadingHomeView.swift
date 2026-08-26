@@ -4,7 +4,7 @@ import GRDB
 /// 正在阅读首页（TODO §7，IOS-209）：
 /// - 列表项：封面、标题、类型徽标、进度条、最后阅读时间；网格/列表两种视图（偏好持久化）；
 /// - 点击恢复进度进入对应阅读器/播放器（精准续播/锚点定位/页码恢复由各自内核完成）；
-/// - 长按弹底部抽屉菜单（含「多选」入口），多选时底部操作栏「删除阅读记录」（已读完记录保留至手动删除）；
+/// - 长按弹底部抽屉菜单（含「多选」入口），多选时底部操作栏「删除阅读记录」（不影响源文件）/「删除源文件」（优先移入回收站，回收站不可用时彻底删除）；
 /// - 文案区分：视频「已看完」/ 音频「已听完」/ 漫画·小说「已读完」（默认「已读完」）；
 /// - 进度上报后自动刷新（ReadingHistoryStore 订阅 playbackProgressDidChange 广播）。
 struct ReadingHomeView: View {
@@ -12,6 +12,8 @@ struct ReadingHomeView: View {
     @EnvironmentObject private var player: PlayerPresenter
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
+    @EnvironmentObject private var router: AppRouter
+    @EnvironmentObject private var locator: BrowseLocator
 
     @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
 
@@ -25,7 +27,12 @@ struct ReadingHomeView: View {
     @State private var resolved: [Int64: FileEntry] = [:]   // stat 后的最新条目（供文件指纹校验）
     @State private var resolving: Set<Int64> = []
     @State private var confirmDeleteIDs: [Int64]?
+    /// 「删除源文件」确认：优先移入回收站；回收站不可用时降级「彻底删除」确认（与浏览界面一致）
+    @State private var deletingSourceIDs: [Int64]?
+    @State private var forceDeletingSourceIDs: [Int64]?
     @State private var message: String?
+    /// 长按菜单 →「属性」：当前展示属性页的记录
+    @State private var infoRecord: ReadingProgress?
 
     private var isSelecting: Bool { selection != nil }
 
@@ -58,6 +65,51 @@ struct ReadingHomeView: View {
         } message: {
             Text("将删除 \(confirmDeleteIDs?.count ?? 0) 条阅读记录（不影响源文件）")
         }
+        .confirmationDialog(
+            "删除源文件",
+            isPresented: Binding(
+                get: { deletingSourceIDs != nil },
+                set: { if !$0 { deletingSourceIDs = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("移入回收站", role: .destructive) {
+                if let ids = deletingSourceIDs {
+                    Task {
+                        do {
+                            let moved = try await deleteSourceFiles(ids: ids)
+                            message = moved == ids.count
+                                ? "已将 \(ids.count) 个源文件移入回收站，并清理阅读记录"
+                                : "已将 \(moved) 个源文件移入回收站（\(ids.count - moved) 个源文件已不存在），并清理阅读记录"
+                        } catch {
+                            forceDeletingSourceIDs = ids   // 回收站不可用 → 降级为彻底删除确认
+                        }
+                    }
+                }
+                deletingSourceIDs = nil
+            }
+            Button("取消", role: .cancel) { deletingSourceIDs = nil }
+        } message: {
+            Text("将删除 \(deletingSourceIDs?.count ?? 0) 个源文件及对应阅读记录（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）")
+        }
+        .confirmationDialog(
+            "无法使用回收站",
+            isPresented: Binding(
+                get: { forceDeletingSourceIDs != nil },
+                set: { if !$0 { forceDeletingSourceIDs = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("彻底删除", role: .destructive) {
+                if let ids = forceDeletingSourceIDs {
+                    Task { await forceDeleteSourceFiles(ids: ids) }
+                }
+                forceDeletingSourceIDs = nil
+            }
+            Button("取消", role: .cancel) { forceDeletingSourceIDs = nil }
+        } message: {
+            Text("连接源不支持回收站，将彻底删除 \(forceDeletingSourceIDs?.count ?? 0) 个源文件及其阅读记录，不可恢复。")
+        }
         .alert("提示", isPresented: Binding(
             get: { message != nil },
             set: { if !$0 { message = nil } }
@@ -65,6 +117,13 @@ struct ReadingHomeView: View {
             Button("知道了", role: .cancel) { message = nil }
         } message: {
             Text(message ?? "")
+        }
+        .sheet(item: $infoRecord) { record in
+            ReadingFileInfoView(
+                record: record,
+                connection: connections[record.connectionID],
+                adapter: adapters[record.connectionID]
+            )
         }
         .onAppear {
             history.reload()
@@ -162,13 +221,15 @@ struct ReadingHomeView: View {
                     .multilineTextAlignment(.leading)
                     .padding(.top, 4)
                 Spacer(minLength: 8)
-                Text("\(record.finished ? finishedText(record.mediaType) : percentText(record)) · \(DisplayFormatters.relative(record.updatedAt))")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(1)
-                    .padding(.bottom, 6)
-                if record.finished || record.percent > 0 {
-                    thinProgress(record)
+                HStack(alignment: .center, spacing: 8) {
+                    Text(DisplayFormatters.relative(record.updatedAt))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if record.finished || record.percent > 0 {
+                        progressRing(record, textColor: .white, emphasizedColor: .white)
+                    }
                 }
             }
             .padding(10)
@@ -209,7 +270,6 @@ struct ReadingHomeView: View {
                     adapter: adapters[record.connectionID]
                 )
                 .frame(width: 52, height: 52)
-                .background(AppColors.highlightBackground.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -221,7 +281,6 @@ struct ReadingHomeView: View {
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
                         .lineLimit(1)
-                    progressLine(record)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
@@ -229,6 +288,8 @@ struct ReadingHomeView: View {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
+                } else if record.finished || record.percent > 0 {
+                    progressRing(record)
                 }
             }
             .padding(.horizontal, 12)
@@ -253,32 +314,24 @@ struct ReadingHomeView: View {
         }
     }
 
-    /// 进度条 + 状态文案（已看完/已听完/已读完 或 百分比）
-    private func progressLine(_ record: ReadingProgress) -> some View {
-        HStack(spacing: 8) {
-            ProgressView(value: record.finished ? 1 : min(1, max(0, record.percent)))
-                .tint(AppColors.primary)
+    /// 饼状图进度条（参考浏览界面的饼状图进度条）：环形进度从 12 点方向顺时针填充，
+    /// 百分比/状态文案（已看完/已听完/已读完 或 百分比）显示在饼状图下面。
+    private func progressRing(
+        _ record: ReadingProgress,
+        textColor: Color = AppColors.textSecondary,
+        emphasizedColor: Color = AppColors.primary
+    ) -> some View {
+        VStack(spacing: 3) {
+            ReadingProgressRing(percent: record.finished ? 1 : record.percent, size: 22)
             Text(record.finished ? finishedText(record.mediaType) : percentText(record))
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(record.finished ? AppColors.primary : AppColors.textSecondary)
+                .foregroundStyle(record.finished ? emphasizedColor : textColor)
                 .fixedSize()
         }
     }
 
     private func percentText(_ record: ReadingProgress) -> String {
         "\(Int((min(1, max(0, record.percent)) * 100).rounded()))%"
-    }
-
-    /// 网格卡底部白色细进度条（参照旧版 Flutter：3pt 圆角，轨道为半透明白）
-    private func thinProgress(_ record: ReadingProgress) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.25))
-                Capsule().fill(.white)
-                    .frame(width: geo.size.width * (record.finished ? 1 : min(1, max(0, record.percent))))
-            }
-        }
-        .frame(height: 3)
     }
 
     /// 已读完文案：视频「已看完」/ 音频「已听完」/ 漫画·小说「已读完」（默认「已读完」）
@@ -337,12 +390,6 @@ struct ReadingHomeView: View {
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
                 }
-                Button {
-                    viewMode = viewMode == .grid ? .list : .grid
-                } label: {
-                    Image(systemName: viewMode == .grid
-                          ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol)
-                }
                 PopupMenuButton(items: overflowItems)
             }
         }
@@ -351,6 +398,12 @@ struct ReadingHomeView: View {
     /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）
     private var overflowItems: [PopupMenuItem] {
         [
+            PopupMenuItem(
+                title: viewMode == .grid ? "列表视图" : "网格视图",
+                systemImage: viewMode == .grid ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol
+            ) {
+                viewMode = viewMode == .grid ? .list : .grid
+            },
             PopupMenuItem(title: "选择", systemImage: "checkmark.circle") {
                 selection = []
             },
@@ -373,6 +426,17 @@ struct ReadingHomeView: View {
             PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
                 selection = []
             },
+            // 定位到源路径位置：切到浏览页并呼吸灯高亮源文件所在目录（参照 Flutter 端与收藏页「在浏览中定位」）
+            PopupMenuItem(title: "定位到源路径位置", systemImage: "scope") {
+                locate(record)
+            },
+            // 属性：展示文件信息（长按菜单 → 属性）
+            PopupMenuItem(title: "属性", systemImage: "info.circle") {
+                infoRecord = record
+            },
+            PopupMenuItem(title: "删除源文件", systemImage: "trash.slash", destructive: true) {
+                if let id = record.id { deletingSourceIDs = [id] }
+            },
             PopupMenuItem(title: "删除阅读记录", systemImage: "trash", destructive: true) {
                 if let id = record.id { confirmDeleteIDs = [id] }
             },
@@ -393,7 +457,7 @@ struct ReadingHomeView: View {
         .animation(.appQuick, value: isSelecting)
     }
 
-    /// 多选操作栏：删除阅读记录（「标记已读完」已改为手动删除）
+    /// 多选操作栏：删除阅读记录（不影响源文件）/ 删除源文件（优先移入回收站，不可用时彻底删除）
     private var selectionBar: some View {
         let count = selection?.count ?? 0
         return HStack(spacing: 0) {
@@ -406,6 +470,26 @@ struct ReadingHomeView: View {
                     Image(systemName: "trash")
                         .font(.body)
                     Text("删除阅读记录")
+                        .font(.caption2)
+                }
+                .foregroundStyle(count > 0 ? Color.red : AppColors.textSecondary.opacity(0.5))
+                .frame(maxWidth: .infinity)
+            }
+            .disabled(count == 0)
+
+            Rectangle()
+                .fill(AppColors.separator)
+                .frame(width: 0.5, height: 34)
+
+            Button {
+                if let selection, !selection.isEmpty {
+                    deletingSourceIDs = Array(selection)
+                }
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "trash.slash")
+                        .font(.body)
+                    Text("删除源文件")
                         .font(.caption2)
                 }
                 .foregroundStyle(count > 0 ? Color.red : AppColors.textSecondary.opacity(0.5))
@@ -477,6 +561,12 @@ struct ReadingHomeView: View {
         }
     }
 
+    /// 定位到源路径位置：跳浏览页并呼吸灯定位（IOS-704，参照收藏页「在浏览中定位」）
+    private func locate(_ record: ReadingProgress) {
+        locator.locate(connectionID: record.connectionID, filePath: record.filePath)
+        router.selectedTab = .browse
+    }
+
     // MARK: - 数据解析
 
     /// 记录 → FileEntry（stat 成功用最新值——文件指纹校验依赖准确的 size/modTime；否则按记录构造兜底）
@@ -523,6 +613,92 @@ struct ReadingHomeView: View {
                 resolveAll()   // 继续下一批
             }
         }
+    }
+
+    // MARK: - 删除源文件
+
+    /// 删除源文件（回收站优先，与浏览界面同机制）：
+    /// 按连接分组，将文件移动到挂载点下 `.trash/时间戳-原名` 并写 `.meta.json` 还原元数据；
+    /// 源文件已不存在 / 连接不可用的记录只清理阅读记录；返回实际移入回收站数量。
+    @discardableResult
+    private func deleteSourceFiles(ids: [Int64]) async throws -> Int {
+        let records = history.records.filter { ids.contains($0.id ?? -1) }
+        var moved = 0
+        let groups = Dictionary(grouping: records, by: \.connectionID)
+        for (connectionID, group) in groups {
+            guard let adapter = adapters[connectionID] else { continue }   // 连接不可用：仅清理记录
+            do {
+                try await adapter.mkdir("/.trash")
+            } catch {
+                // 目录已存在或创建失败均继续尝试移动
+            }
+            let stamp = Self.trashStamp()
+            for record in group {
+                // 现场 stat 确认源文件仍在（记录可能残留/源已被外部删除），不存在则跳过移动
+                let fileEntry: FileEntry?
+                do {
+                    fileEntry = try await adapter.stat(record.filePath)
+                } catch {
+                    fileEntry = nil
+                }
+                guard let fileEntry else { continue }
+                let trashPath = "/.trash/\(stamp)-\(fileEntry.name)"
+                try await adapter.move(fileEntry.path, trashPath)
+                await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: fileEntry)
+                moved += 1
+            }
+        }
+        // 无论文件删除是否全部成功，对应阅读记录一并清理（源文件没了 / 连接没了，记录失去意义）
+        history.remove(ids: ids)
+        selection = nil
+        return moved
+    }
+
+    /// 彻底删除源文件（回收站不可用时的降级路径）：按连接分组直接删除，已不存在的文件忽略
+    private func forceDeleteSourceFiles(ids: [Int64]) async {
+        let records = history.records.filter { ids.contains($0.id ?? -1) }
+        let groups = Dictionary(grouping: records, by: \.connectionID)
+        for (connectionID, group) in groups {
+            guard let adapter = adapters[connectionID] else { continue }
+            for record in group {
+                try? await adapter.delete(record.filePath)
+            }
+        }
+        history.remove(ids: ids)
+        selection = nil
+        message = "已彻底删除 \(ids.count) 个源文件，并清理阅读记录"
+    }
+
+    /// 写回收站还原元数据（与浏览界面 `BrowseDirectoryViewModel.TrashMeta` 一致，供回收站页还原）
+    private func writeTrashMeta(adapter: StorageAdapter, trashPath: String, entry: FileEntry) async {
+        let meta = TrashMeta(
+            originalPath: entry.path,
+            name: entry.name,
+            isDir: entry.isDir,
+            deletedAt: Date()
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(meta) else { return }
+        let stream = AsyncThrowingStream<Data, Error> { continuation in
+            continuation.yield(data)
+            continuation.finish()
+        }
+        try? await adapter.writeStream(trashPath + ".meta.json", data: stream)
+    }
+
+    private struct TrashMeta: Codable {
+        var originalPath: String
+        var name: String
+        var isDir: Bool
+        var deletedAt: Date
+    }
+
+    private static func trashStamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
     }
 }
 
@@ -575,8 +751,6 @@ private struct ReadingCoverImage: View {
         ZStack {
             if immersive {
                 entry.coverPlaceholderGradient
-            } else {
-                AppColors.cardBackground
             }
             if let cachedImage {
                 Color.clear
@@ -615,9 +789,13 @@ private struct ReadingCoverImage: View {
     }
 
     private var placeholderIcon: some View {
-        Image(systemName: entry.placeholderSymbol)
-            .font(immersive ? .system(size: 40) : .title2)
-            .foregroundStyle(immersive ? Color.white.opacity(0.9) : AppColors.textSecondary)
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            Image(systemName: entry.placeholderSymbol)
+                .font(.system(size: immersive ? 40 : max(30, side * 0.55)))
+                .foregroundStyle(immersive ? Color.white.opacity(0.9) : AppColors.textSecondary)
+                .frame(width: geo.size.width, height: geo.size.height)
+        }
     }
 
     @ViewBuilder

@@ -36,8 +36,6 @@ struct RemoteCoverImage: View {
         ZStack {
             if immersivePlaceholder {
                 entry.coverPlaceholderGradient
-            } else {
-                AppColors.cardBackground
             }
             if let image = result?.image {
                 // 用 Color.clear 撑满容器，图片仅作为 overlay 填充，避免图片原始分辨率
@@ -52,13 +50,7 @@ struct RemoteCoverImage: View {
                     .clipped()
                     .transition(.opacity)
             } else {
-                Image(systemName: entry.placeholderSymbol)
-                    .font(immersivePlaceholder ? .system(size: 40) : .title2)
-                    .foregroundStyle(
-                        immersivePlaceholder
-                            ? Color.white.opacity(0.9)
-                            : (entry.isDir ? AppColors.primary : AppColors.textSecondary)
-                    )
+                placeholderIcon
             }
         }
         .clipped()
@@ -69,6 +61,22 @@ struct RemoteCoverImage: View {
             )
             withAnimation(.appQuick) { result = loaded }
             duration = loaded.duration
+        }
+    }
+
+    /// 无封面时的占位：去掉白底，仅显示放大后的类型/目录图标，尺寸随容器自适应
+    /// （列表小缩略图与网格大卡都能得到足够大的图标）。
+    private var placeholderIcon: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            Image(systemName: entry.placeholderSymbol)
+                .font(.system(size: immersivePlaceholder ? 40 : max(30, side * 0.55)))
+                .foregroundStyle(
+                    immersivePlaceholder
+                        ? Color.white.opacity(0.9)
+                        : (entry.isDir ? AppColors.primary : AppColors.textSecondary)
+                )
+                .frame(width: geo.size.width, height: geo.size.height)
         }
     }
 }

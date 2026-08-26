@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// 设置首页（TODO §10，IOS-501 ~ 504）
 struct SettingsHomeView: View {
     @EnvironmentObject private var themeManager: ThemeManager
-    @AppStorage("browse.fileNameLines") private var fileNameLines = 3
+    @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
     @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
     @State private var shareURL: URL?
     @State private var showImporter = false
@@ -38,7 +38,7 @@ struct SettingsHomeView: View {
             }
 
             Section("显示") {
-                Picker(selection: $fileNameLines) {
+                Picker(selection: $browseDisplaySettings.fileNameLines) {
                     ForEach(1...5, id: \.self) { lines in
                         Text("\(lines) 行").tag(lines)
                     }

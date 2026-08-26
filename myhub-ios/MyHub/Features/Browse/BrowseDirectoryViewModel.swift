@@ -259,7 +259,10 @@ final class BrowseDirectoryViewModel: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard let adapter, !trimmed.isEmpty, !trimmed.contains("/"), trimmed != entry.name else { return }
         do {
-            try await adapter.move(entry.path, StoragePath.joining(StoragePath.parent(of: entry.path), trimmed))
+            let newPath = StoragePath.joining(StoragePath.parent(of: entry.path), trimmed)
+            try await adapter.move(entry.path, newPath)
+            // 重命名：同步更新阅读记录 filePath（目录重命名时内部文件前缀一并更新，TODO §7.309）
+            ReadingHistoryStore.shared.updatePath(connectionID: connection.id ?? 0, from: entry.path, to: newPath)
             await invalidateAndRefresh()
         } catch {
             operationError = "重命名失败：\(error.localizedDescription)"
@@ -283,6 +286,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
         let sameConnection = destination.id == connection.id
         var failed: [String] = []
+        var movedPaths: [String] = []
         for sourcePath in paths.sorted() {
             guard let entry = entry(for: sourcePath) else { continue }
             let destPath = StoragePath.joining(destDir, entry.name)
@@ -290,16 +294,24 @@ final class BrowseDirectoryViewModel: ObservableObject {
                 if sameConnection {
                     if isMove {
                         try await adapter.move(sourcePath, destPath)
+                        movedPaths.append(sourcePath)
                     } else {
                         try await adapter.copy(sourcePath, destPath)
                     }
                 } else {
                     try await streamingCopy(from: adapter, source: entry, to: destAdapter, destination: destPath)
-                    if isMove { try await adapter.delete(sourcePath) }
+                    if isMove {
+                        try await adapter.delete(sourcePath)
+                        movedPaths.append(sourcePath)
+                    }
                 }
             } catch {
                 failed.append(entry.name)
             }
+        }
+        // 移动成功：同步删除源连接下的阅读记录（TODO §7.309，路径已变更，记录不再指向原文件）
+        if isMove, !movedPaths.isEmpty {
+            ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
         }
         if sameConnection {
             await invalidateAndRefresh()
@@ -347,17 +359,27 @@ final class BrowseDirectoryViewModel: ObservableObject {
             // 目录已存在或创建失败均继续尝试移动
         }
         let stamp = Self.trashStamp()
+        var movedPaths: [String] = []
         do {
             for sourcePath in paths.sorted() {
                 guard let entry = entry(for: sourcePath) else { continue }
                 let trashName = "\(stamp)-\(entry.name)"
                 let trashPath = "/.trash/\(trashName)"
                 try await adapter.move(sourcePath, trashPath)
+                movedPaths.append(sourcePath)
                 // 记录原路径元数据（§3.3 回收站还原用）
                 await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: entry)
             }
         } catch {
+            // 已移入回收站的文件同样清理阅读记录（回收站还原不还原记录，见 TODO §7.309 决策）
+            if !movedPaths.isEmpty {
+                ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
+            }
             throw TrashError.unsupported
+        }
+        // 移入回收站即删除对应阅读记录（还原后无需还原记录，TODO §7.309）
+        if !movedPaths.isEmpty {
+            ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
         }
         await invalidateAndRefresh()
         endSelection()
@@ -368,12 +390,18 @@ final class BrowseDirectoryViewModel: ObservableObject {
     func forceDelete(paths: Set<String>) async {
         guard let adapter else { return }
         var failed: [String] = []
+        var deletedPaths: [String] = []
         for sourcePath in paths.sorted() {
             do {
                 try await adapter.delete(sourcePath)
+                deletedPaths.append(sourcePath)
             } catch {
                 failed.append(StoragePath.fileName(of: sourcePath))
             }
+        }
+        // 彻底删除：同步清理阅读记录（TODO §7.309）
+        if !deletedPaths.isEmpty {
+            ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(deletedPaths))
         }
         await invalidateAndRefresh()
         endSelection()

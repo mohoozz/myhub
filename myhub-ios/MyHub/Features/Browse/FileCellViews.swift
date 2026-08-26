@@ -64,7 +64,7 @@ struct FileGridCell: View {
 
     @State private var duration: Double?
     @State private var hovering = false
-    @AppStorage("browse.fileNameLines") private var fileNameLines = 3
+    @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
     private var mediaType: MediaType { MediaType.detect(ext: entry.ext) }
 
@@ -76,7 +76,7 @@ struct FileGridCell: View {
                     .font(.subheadline)
                     .fontWeight(isPlaying ? .semibold : .regular)
                     .foregroundStyle(isPlaying ? AppColors.primary : AppColors.textPrimary)
-                    .lineLimit(fileNameLines, reservesSpace: true)
+                    .lineLimit(browseDisplaySettings.fileNameLines, reservesSpace: true)
                     .multilineTextAlignment(.center)
                 Text(caption)
                     .font(.caption)
@@ -110,7 +110,6 @@ struct FileGridCell: View {
         )
         .frame(maxWidth: .infinity)
         .aspectRatio(1.35, contentMode: .fit)
-        .background(AppColors.highlightBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .topLeading) {
             if mediaType == .comic, !isSelecting {
@@ -173,7 +172,6 @@ struct FileListRow: View {
                     siblings: siblings, duration: $duration
                 )
                 .frame(width: 52, height: 52)
-                .background(AppColors.highlightBackground.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(alignment: .topLeading) {
                     if mediaType == .comic, !isSelecting {
