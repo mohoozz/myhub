@@ -28,7 +28,7 @@ extension ConnectionType {
 
 /// 连接源管理（IOS-101）：列表（类型图标/挂载点/开关）、测试状态绿/红点、删除确认
 struct ConnectionListView: View {
-    @StateObject private var store = ConnectionStore()
+    @EnvironmentObject private var store: ConnectionStore
     @State private var editing: EditingContext?
     @State private var deleting: Connection?
 
@@ -107,31 +107,37 @@ struct ConnectionListView: View {
         }
     }
 
-    /// 测试状态点：正常绿点 / 异常红点 / 测试中转圈（出现即自动测试一次）；
-    /// 成功后旁侧显示（内网）/（外网）实际生效路径提示
+    /// 测试状态点：正常绿点 / 异常红点 / 测试中转圈（仅首次自动测试）；
+    /// 成功后旁侧显示（内网）/（外网）实际生效路径提示；点击状态点可手动重新测试
     @ViewBuilder
     private func statusDot(_ connection: Connection) -> some View {
         let state = connection.id.flatMap { store.testStates[$0] } ?? .unknown
-        HStack(spacing: 4) {
-            Group {
-                switch state {
-                case .testing:
-                    ProgressView().controlSize(.mini)
-                case .success:
-                    Circle().fill(.green)
-                case .failure:
-                    Circle().fill(.red)
-                case .unknown:
-                    Circle().fill(.gray.opacity(0.4))
+        Button {
+            Task { await store.test(connection) }
+        } label: {
+            HStack(spacing: 4) {
+                Group {
+                    switch state {
+                    case .testing:
+                        ProgressView().controlSize(.mini)
+                    case .success:
+                        Circle().fill(.green)
+                    case .failure:
+                        Circle().fill(.red)
+                    case .unknown:
+                        Circle().fill(.gray.opacity(0.4))
+                    }
+                }
+                .frame(width: 10, height: 10)
+                if let badge = state.routeBadge {
+                    Text(badge)
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textSecondary)
                 }
             }
-            .frame(width: 10, height: 10)
-            if let badge = state.routeBadge {
-                Text(badge)
-                    .font(.caption2)
-                    .foregroundStyle(AppColors.textSecondary)
-            }
         }
+        .buttonStyle(.plain)
+        .accessibilityHint("点击重新测试连接")
         .task { await store.testIfNeeded(connection) }
     }
 

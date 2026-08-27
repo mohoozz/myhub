@@ -14,6 +14,7 @@ struct RootView: View {
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
     @EnvironmentObject private var txtReader: TxtReaderPresenter
+    @EnvironmentObject private var connectionStore: ConnectionStore
     private var selection: AppTab { router.selectedTab }
 
     /// 漫画阅读器路由绑定（下滑/系统关闭时联动 presenter）
@@ -32,7 +33,11 @@ struct RootView: View {
                 LaunchLoadingView()
             }
         }
-        .task { await appState.launch() }
+        .task {
+            await appState.launch()
+            // 内外网路由锁定：启动后探测一次全部已启用连接源，后续操作复用本次判定
+            await connectionStore.probeOnLaunch()
+        }
         // 播放器独立全屏路由：不随 Tab 切换销毁
         .fullScreenCover(isPresented: $player.isFullscreen, onDismiss: {
             player.isMinimizing = false   // 全屏封面 dismiss 完成后重置瞬消标志，避免下次展开内容仍透明
@@ -206,6 +211,9 @@ private struct BottomTabBar: View {
     @Binding var selection: AppTab
     let tabs: [AppTab]
 
+    /// 液体玻璃模式：开启时页签栏使用 Liquid Glass 背景，关闭时用实色背景
+    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
+
     var body: some View {
         HStack(spacing: 0) {
             ForEach(tabs) { tab in
@@ -224,7 +232,23 @@ private struct BottomTabBar: View {
                 .accessibilityLabel(tab.title)
             }
         }
-        .background(AppColors.sidebarBackground.ignoresSafeArea(edges: .bottom))
+        .background(barBackground.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) { Divider().opacity(0.4) }
+    }
+
+    /// 页签栏背景：液体玻璃开 → Liquid Glass（iOS 26）/ 毛玻璃回退；关 → 实色
+    @ViewBuilder
+    private var barBackground: some View {
+        if liquidGlassMode {
+            if #available(iOS 26.0, *) {
+                Rectangle()
+                    .fill(Color.clear)
+                    .glassEffect(.regular, in: Rectangle())
+            } else {
+                Rectangle().fill(.ultraThinMaterial)
+            }
+        } else {
+            Rectangle().fill(AppColors.sidebarBackground)
+        }
     }
 }

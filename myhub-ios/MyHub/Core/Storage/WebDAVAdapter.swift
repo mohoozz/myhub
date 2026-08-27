@@ -5,8 +5,13 @@ final class WebDAVAdapter: StorageAdapter {
     private let config: WebDAVConfig
     private let password: String?
     private let session: URLSession
+    /// 普通请求超时（内网探测用短超时，见 RoutedWebDAVAdapter 注释）
+    private let timeoutInterval: TimeInterval
     /// baseURL + rootPath 合成的连接根
     private let rootURL: URL
+
+    /// 连接根 URL 字符串：作为内外网路由共享冷却的 key（RoutedWebDAVAdapter 使用）
+    var rootURLString: String { rootURL.absoluteString }
 
     /// 串流专用共享 URLSession：与 `URLSession.shared` 隔离，避免边下边播的高频 Range 请求
     /// 与频繁取消污染全局共享连接池（僵尸连接导致后续请求 30s 超时）。
@@ -22,7 +27,12 @@ final class WebDAVAdapter: StorageAdapter {
         return URLSession(configuration: config)
     }()
 
-    init(config: WebDAVConfig, password: String?, session: URLSession = WebDAVAdapter.streamSession) throws {
+    init(
+        config: WebDAVConfig,
+        password: String?,
+        session: URLSession = WebDAVAdapter.streamSession,
+        timeoutInterval: TimeInterval = 30
+    ) throws {
         guard let base = URL(string: config.baseURL),
               let scheme = base.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             throw StorageError.invalidConfig("地址需为 http(s)://host[:port]，当前：\(config.baseURL)")
@@ -30,6 +40,7 @@ final class WebDAVAdapter: StorageAdapter {
         self.config = config
         self.password = password
         self.session = session
+        self.timeoutInterval = timeoutInterval
         var url = base
         let rootPath = config.rootPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if !rootPath.isEmpty {
@@ -57,7 +68,7 @@ final class WebDAVAdapter: StorageAdapter {
     ) -> URLRequest {
         var request = URLRequest(url: url(for: path))
         request.httpMethod = method
-        request.timeoutInterval = 30
+        request.timeoutInterval = timeoutInterval
         if let authorization = authorizationHeader {
             request.setValue(authorization, forHTTPHeaderField: "Authorization")
         }
@@ -235,7 +246,7 @@ final class WebDAVAdapter: StorageAdapter {
             "Content-Type": "application/xml; charset=utf-8",
         ])
         request.httpBody = Data(Self.propfindBody.utf8)
-        request.timeoutInterval = 10
+        request.timeoutInterval = min(timeoutInterval, 10)
         let (_, response) = try await session.data(for: request)
         try validate(response)
     }

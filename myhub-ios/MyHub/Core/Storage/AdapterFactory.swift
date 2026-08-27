@@ -29,12 +29,18 @@ enum AdapterFactory {
                 throw StorageError.invalidConfig("WebDAV 配置缺失")
             }
             // 内外网双地址：配置了合法内网地址时启用路由适配器（内网优先、失败回退外网），
-            // 否则退化为单地址适配器
+            // 否则退化为单地址适配器。
+            // 内网探测用 5s 短超时：外网环境下快速失败回退，而不是每个目录页都干等 30s
+            //（配合 RoutedWebDAVAdapter 的进程级冷却，见 TODO 324）。
             let internalURL = config.internalBaseURL?.trimmingCharacters(in: .whitespaces) ?? ""
             if !internalURL.isEmpty {
                 var internalConfig = config
                 internalConfig.baseURL = internalURL
-                if let internalAdapter = try? WebDAVAdapter(config: internalConfig, password: password) {
+                if let internalAdapter = try? WebDAVAdapter(
+                    config: internalConfig,
+                    password: password,
+                    timeoutInterval: 5
+                ) {
                     let externalAdapter = try WebDAVAdapter(config: config, password: password)
                     return RoutedWebDAVAdapter(internalAdapter: internalAdapter, externalAdapter: externalAdapter)
                 }

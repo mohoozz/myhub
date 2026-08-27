@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 回收站连接源选择页（IOS-106）：回收站为各挂载点下 `.trash` 目录
 struct TrashConnectionListView: View {
-    @StateObject private var store = ConnectionStore()
+    @EnvironmentObject private var store: ConnectionStore
 
     var body: some View {
         List(store.connections.filter(\.enabled)) { connection in

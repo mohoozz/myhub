@@ -6,77 +6,82 @@ enum ConnectionRoute: Equatable {
     case externalNetwork
 }
 
-/// WebDAV 内外网双地址适配器（路径源优化，IOS-101）：
-/// - 进入连接源时优先走内网地址，内网不可达自动回退外网；
-/// - 内网失败进入冷却期（默认 3 分钟），冷却期内直接走外网，避免每次操作都重复超时；
-/// - `testConnection()` 总是先探测内网，成功后在 `activeRoute` 上报告实际生效路径（内网/外网），
-///   供列表绿点旁提示、表单测试结果展示。
+/// WebDAV 内外网双地址适配器（路径源优化，IOS-101 / TODO 324）：
+/// - 启动时 / 用户手动「测试连接」时探测一次内网地址，成功即锁定生效路由（内网/外网），
+///   后续所有操作一直使用锁定地址，不再重复探测；
+/// - 锁定结果按「内网根 URL」进程级共享：目录浏览每进入一级目录都会新建适配器实例，
+///   共享后各实例复用同一份判定结论，外网环境下不再出现每次进目录都等待内网超时的问题；
+/// - 尚未判定（锁定前）的业务请求按内网优先探测式回退，首次成功即完成锁定；
+/// - 重新判定时机只有两个：用户手动「测试连接」、重启 App。
 final class RoutedWebDAVAdapter: StorageAdapter {
-    /// 内网失败后的冷却时长：期间不再尝试内网
-    static let internalRetryInterval: TimeInterval = 180
+    /// 进程级路由锁定表：key = 内网根 URL，缺省 = 尚未判定
+    private static let sharedLock = NSLock()
+    private static var lockedRouteByURL: [String: ConnectionRoute] = [:]
 
     private let internalAdapter: WebDAVAdapter
     private let externalAdapter: WebDAVAdapter
 
+    /// 内网根 URL：作为共享锁定的 key（不同连接源的内网地址互不干扰）
+    private let routeKey: String
+
     /// 最近一次 testConnection 生效的路径（nil = 尚未测试）
     private(set) var activeRoute: ConnectionRoute?
-
-    private struct State {
-        var internalFailedAt: Date?
-    }
-    private var state = State()
-    private let lock = NSLock()
 
     init(internalAdapter: WebDAVAdapter, externalAdapter: WebDAVAdapter) {
         self.internalAdapter = internalAdapter
         self.externalAdapter = externalAdapter
+        self.routeKey = internalAdapter.rootURLString
     }
 
-    // MARK: - 路由决策
+    // MARK: - 路由锁定
 
-    /// 是否应走内网：无失败记录，或已过冷却期则重试内网
+    private var lockedRoute: ConnectionRoute? {
+        Self.sharedLock.lock(); defer { Self.sharedLock.unlock() }
+        return Self.lockedRouteByURL[routeKey]
+    }
+
+    private func lockRoute(_ route: ConnectionRoute) {
+        Self.sharedLock.lock(); defer { Self.sharedLock.unlock() }
+        Self.lockedRouteByURL[routeKey] = route
+    }
+
+    /// 是否应走内网：已锁定按锁定结果；未锁定则内网优先（内网用 5s 短超时兜底回退）
     private var shouldUseInternal: Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard let failedAt = state.internalFailedAt else { return true }
-        return Date().timeIntervalSince(failedAt) >= Self.internalRetryInterval
+        lockedRoute != .externalNetwork
     }
 
-    private func markInternalFailed() {
-        lock.lock(); defer { lock.unlock() }
-        state.internalFailedAt = Date()
+    /// 未锁定时按内网优先探测，首次成功即锁定生效路由；已锁定时直接走锁定地址。
+    /// 内网失败、外网也失败时保持未锁定，交由下次判定（测试连接/重启）重新探测。
+    private func route<T>(
+        _ internalOp: () async throws -> T,
+        externalOp: () async throws -> T
+    ) async throws -> T {
+        if let lockedRoute {
+            return lockedRoute == .internalNetwork
+                ? try await internalOp()
+                : try await externalOp()
+        }
+        do {
+            let value = try await internalOp()
+            lockRoute(.internalNetwork)
+            return value
+        } catch {
+            let value = try await externalOp()
+            lockRoute(.externalNetwork)
+            return value
+        }
     }
 
-    private func markInternalOK() {
-        lock.lock(); defer { lock.unlock() }
-        state.internalFailedAt = nil
-    }
-
-    // MARK: - StorageAdapter（内网优先，失败回退外网）
+    // MARK: - StorageAdapter
 
     func list(_ dir: String) async throws -> [FileEntry] {
-        if shouldUseInternal {
-            do {
-                let entries = try await internalAdapter.list(dir)
-                markInternalOK()
-                return entries
-            } catch {
-                markInternalFailed()
-            }
-        }
-        return try await externalAdapter.list(dir)
+        try await route({ try await internalAdapter.list(dir) },
+                        externalOp: { try await externalAdapter.list(dir) })
     }
 
     func stat(_ path: String) async throws -> FileEntry {
-        if shouldUseInternal {
-            do {
-                let entry = try await internalAdapter.stat(path)
-                markInternalOK()
-                return entry
-            } catch {
-                markInternalFailed()
-            }
-        }
-        return try await externalAdapter.stat(path)
+        try await route({ try await internalAdapter.stat(path) },
+                        externalOp: { try await externalAdapter.stat(path) })
     }
 
     func readStream(_ path: String, range: Range<Int64>?) async throws -> AsyncThrowingStream<Data, Error> {
@@ -89,14 +94,14 @@ final class RoutedWebDAVAdapter: StorageAdapter {
 
     func writeStream(_ path: String, data: AsyncThrowingStream<Data, Error>) async throws {
         // 数据流只能消费一次，内网失败后无法完整回退外网重写：直接抛出，由用户重试
-        // （此时内网已进入冷却，下次重试会直接走外网）
+        // （未锁定时内网失败记为外网生效，重试直接走外网）
         if shouldUseInternal {
             do {
                 try await internalAdapter.writeStream(path, data: data)
-                markInternalOK()
+                lockRoute(.internalNetwork)
                 return
             } catch {
-                markInternalFailed()
+                lockRoute(.externalNetwork)
                 throw error
             }
         }
@@ -104,68 +109,36 @@ final class RoutedWebDAVAdapter: StorageAdapter {
     }
 
     func move(_ src: String, _ dest: String) async throws {
-        if shouldUseInternal {
-            do {
-                try await internalAdapter.move(src, dest)
-                markInternalOK()
-                return
-            } catch {
-                markInternalFailed()
-            }
-        }
-        try await externalAdapter.move(src, dest)
+        try await route({ try await internalAdapter.move(src, dest) },
+                        externalOp: { try await externalAdapter.move(src, dest) })
     }
 
     func copy(_ src: String, _ dest: String) async throws {
-        if shouldUseInternal {
-            do {
-                try await internalAdapter.copy(src, dest)
-                markInternalOK()
-                return
-            } catch {
-                markInternalFailed()
-            }
-        }
-        try await externalAdapter.copy(src, dest)
+        try await route({ try await internalAdapter.copy(src, dest) },
+                        externalOp: { try await externalAdapter.copy(src, dest) })
     }
 
     func delete(_ path: String) async throws {
-        if shouldUseInternal {
-            do {
-                try await internalAdapter.delete(path)
-                markInternalOK()
-                return
-            } catch {
-                markInternalFailed()
-            }
-        }
-        try await externalAdapter.delete(path)
+        try await route({ try await internalAdapter.delete(path) },
+                        externalOp: { try await externalAdapter.delete(path) })
     }
 
     func mkdir(_ path: String) async throws {
-        if shouldUseInternal {
-            do {
-                try await internalAdapter.mkdir(path)
-                markInternalOK()
-                return
-            } catch {
-                markInternalFailed()
-            }
-        }
-        try await externalAdapter.mkdir(path)
+        try await route({ try await internalAdapter.mkdir(path) },
+                        externalOp: { try await externalAdapter.mkdir(path) })
     }
 
     func testConnection() async throws {
-        // 测试总是先探测内网，让用户明确看到当前哪条路径可用
+        // 手动测试 / 启动探测：总是重新判定一次，成功即锁定生效地址
+        activeRoute = nil
         do {
             try await internalAdapter.testConnection()
-            markInternalOK()
+            lockRoute(.internalNetwork)
             activeRoute = .internalNetwork
-            return
         } catch {
-            markInternalFailed()
+            try await externalAdapter.testConnection()
+            lockRoute(.externalNetwork)
+            activeRoute = .externalNetwork
         }
-        try await externalAdapter.testConnection()
-        activeRoute = .externalNetwork
     }
 }

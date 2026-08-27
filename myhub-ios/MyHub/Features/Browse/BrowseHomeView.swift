@@ -4,7 +4,7 @@ import SwiftUI
 /// 连接源选择器（启用状态 / 绿·红点）+ 目录导航栈（NavigationStack 自带左侧边缘交互式 pop 返回上一级）。
 /// 处理「定位到原路径」（BrowseLocator）：重建目录栈并呼吸灯高亮目标约 10s。
 struct BrowseHomeView: View {
-    @StateObject private var store = ConnectionStore()
+    @EnvironmentObject private var store: ConnectionStore
     @EnvironmentObject private var locator: BrowseLocator
 
     @State private var navPath = NavigationPath()
@@ -107,19 +107,32 @@ struct BrowseHomeView: View {
         .buttonStyle(SelectableCellStyle())
     }
 
-    /// 连接状态点（绿/红，复用连接测试体系）
+    /// 连接状态点（绿/红，复用连接测试体系）；成功后旁侧显示（内网）/（外网）路径提示。
+    /// 仅首次自动测试；点击状态点可手动重新测试（不进入目录）
     @ViewBuilder
     private func statusDot(_ connection: Connection) -> some View {
         let state = connection.id.flatMap { store.testStates[$0] } ?? .unknown
-        Group {
-            switch state {
-            case .testing: ProgressView().controlSize(.mini)
-            case .success: Circle().fill(.green)
-            case .failure: Circle().fill(.red)
-            case .unknown: Circle().fill(.gray.opacity(0.4))
+        HStack(spacing: 4) {
+            Group {
+                switch state {
+                case .testing: ProgressView().controlSize(.mini)
+                case .success: Circle().fill(.green)
+                case .failure: Circle().fill(.red)
+                case .unknown: Circle().fill(.gray.opacity(0.4))
+                }
+            }
+            .frame(width: 10, height: 10)
+            if let badge = state.routeBadge {
+                Text(badge)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textSecondary)
             }
         }
-        .frame(width: 10, height: 10)
+        .contentShape(Rectangle())
+        .highPriorityGesture(TapGesture().onEnded {
+            Task { await store.test(connection) }
+        })
+        .accessibilityHint("点击重新测试连接")
         .task { await store.testIfNeeded(connection) }
     }
 

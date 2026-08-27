@@ -84,8 +84,7 @@ struct PopupMenuLayer: View {
         VStack(spacing: 0) {
             ForEach(state.items) { item in
                 Button {
-                    dismiss()
-                    item.action()
+                    dismiss(item.action)
                 } label: {
                     HStack(spacing: 10) {
                         if let icon = item.systemImage {
@@ -133,10 +132,14 @@ struct PopupMenuLayer: View {
         return CGPoint(x: x, y: y)
     }
 
-    private func dismiss() {
+    /// 关闭菜单：先播退出动画，动画结束后移除悬浮层并执行可选动作。
+    /// 动作延迟到悬浮层移除后再执行——避免菜单还在顶层 overlay 时立即触发
+    /// 系统 confirmationDialog/alert，导致确认框在奇怪位置弹出。
+    private func dismiss(_ action: (() -> Void)? = nil) {
         withAnimation(.appQuick) { visible = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             onDismiss()
+            action?()
         }
     }
 }
@@ -184,8 +187,7 @@ struct BottomMenuDrawer: View {
                         VStack(spacing: 0) {
                             ForEach(items) { item in
                                 Button {
-                                    dismiss()
-                                    item.action()
+                                    dismiss(item.action)
                                 } label: {
                                     HStack(spacing: 14) {
                                         if let icon = item.systemImage {
@@ -248,10 +250,14 @@ struct BottomMenuDrawer: View {
             }
     }
 
-    private func dismiss() {
+    /// 关闭菜单：先播退出动画，动画结束后移除悬浮层并执行可选动作。
+    /// 动作延迟到悬浮层移除后再执行——避免菜单还在顶层 overlay 时立即触发
+    /// 系统 confirmationDialog/alert，导致确认框在奇怪位置弹出。
+    private func dismiss(_ action: (() -> Void)? = nil) {
         withAnimation(.appQuick) { visible = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             onDismiss()
+            action?()
         }
     }
 }
@@ -267,24 +273,45 @@ private struct DrawerRowStyle: ButtonStyle {
 // MARK: - 触发组件
 
 /// 「…」触发按钮：记录自身全局位置并弹出圆角菜单；symbol 可定制（默认「…」）
+///
+/// 按压反馈由 `PressBridge` 真实触摸驱动，而非系统 Button 的 `isPressed`：
+/// NavigationStack 左滑返回手势期间，系统为返回按钮高亮时会误把导航栏 trailing
+/// 按钮的 `isPressed` 置为 true、手势结束复位，导致 `.pressScale` 播放缩放动画，
+/// 表现为「左滑返回 / 进入下一级目录后右上角图标像被点击一样弹一下」。改用
+/// `PressBridge` 后仅在手指真实按下按钮时才反馈，彻底消除该误触。
 struct PopupMenuButton: View {
     let items: [PopupMenuItem]
     var symbol: String = "ellipsis"
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
+    @State private var isPressing = false
     @State private var anchor: CGRect = .zero
 
     var body: some View {
-        Button {
-            presenter.show(items: items, anchor: anchor)
-        } label: {
-            Image(systemName: symbol)
-                .font(.body.weight(.medium))
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressScale)
-        .background(AnchorReader(anchor: $anchor))
+        Image(systemName: symbol)
+            .font(.body.weight(.medium))
+            .foregroundStyle(.tint)
+            .frame(width: 32, height: 32)
+            .contentShape(Rectangle())
+            .scaleEffect(isPressing ? 0.97 : 1)
+            .background(AnchorReader(anchor: $anchor))
+            .overlay(PressBridge(
+                onTap: { presenter.show(items: items, anchor: anchor) },
+                onPressing: { pressing in
+                    if pressing {
+                        // 按下：瞬时切换（无动画），保证跟手；不用 easeOut 渐变，避免按下瞬间延迟
+                        var transaction = Transaction()
+                        transaction.animation = nil
+                        withTransaction(transaction) { isPressing = true }
+                    } else {
+                        // 松开：动画平滑恢复
+                        withAnimation(.appFast) { isPressing = false }
+                    }
+                },
+                onLongPress: {}
+            ))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(symbol == "plus" ? "添加" : "更多操作")
     }
 }
 

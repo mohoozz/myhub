@@ -28,3 +28,18 @@ extension View {
         modifier(LeadingNavTitleModifier(title: title))
     }
 }
+
+extension ToolbarContent {
+    /// 液体玻璃开关联动的工具栏项背景（iOS 26 起工具栏按钮默认带 Liquid Glass 胶囊背景）：
+    /// - `enabled == true`：保持系统默认玻璃背景；
+    /// - `enabled == false`：隐藏共享玻璃背景，按钮直接显示图标（无玻璃胶囊）。
+    /// iOS 26 以下无此效果，原样返回。
+    @ToolbarContentBuilder
+    func liquidGlassToolbar(_ enabled: Bool) -> some ToolbarContent {
+        if #available(iOS 26.0, *) {
+            self.sharedBackgroundVisibility(enabled ? .automatic : .hidden)
+        } else {
+            self
+        }
+    }
+}

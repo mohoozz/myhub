@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import PhotosUI
 
@@ -157,9 +158,10 @@ struct BrowseDirectoryView: View {
         .navigationTitle(viewModel.isSelecting ? "已选 \(viewModel.selection?.count ?? 0) 项" : "")
         .navigationBarTitleDisplayMode(.inline)
         .browseSearchable(text: $viewModel.searchText)
+        // 液体玻璃关闭时隐藏系统返回按钮，改用无玻璃自定义返回（见 toolbar）
+        .navigationBarBackButtonHidden(showsPlainBack)
         .toolbar { toolbar }
-        // 液体玻璃模式开：工具栏按钮带 Liquid Glass 玻璃背景；关：.editor 角色不触发玻璃背景
-        .toolbarRole(viewModel.isSelecting || liquidGlassMode ? .navigationStack : .editor)
+        .background(swipeBackEnabler)
         .overlay(alignment: .bottom) { bottomOverlay }
         .fileImporter(
             isPresented: $showImporter,
@@ -580,21 +582,48 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 工具栏
 
+    /// 液体玻璃关闭且非多选时，使用无玻璃自定义返回按钮
+    private var showsPlainBack: Bool { !liquidGlassMode && !viewModel.isSelecting }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         if viewModel.isSelecting {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("全选") { viewModel.selectAll() }
             }
+            .liquidGlassToolbar(liquidGlassMode)
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("完成") { viewModel.endSelection() }
                     .fontWeight(.semibold)
             }
+            .liquidGlassToolbar(liquidGlassMode)
         } else {
+            if showsPlainBack {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        if !navPath.isEmpty { navPath.removeLast() }
+                    } label: {
+                        Image(systemName: "chevron.backward")
+                            .font(.body.weight(.semibold))
+                    }
+                    .tint(AppColors.primary)
+                    .accessibilityLabel("返回")
+                }
+                .liquidGlassToolbar(false)
+            }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 PopupMenuButton(items: addItems, symbol: "plus")
                 PopupMenuButton(items: overflowItems)
             }
+            .liquidGlassToolbar(liquidGlassMode)
+        }
+    }
+
+    /// 隐藏系统返回按钮后恢复左缘交互式返回手势（仅在无玻璃返回态挂载）
+    @ViewBuilder
+    private var swipeBackEnabler: some View {
+        if showsPlainBack {
+            InteractiveSwipeBackEnabler()
         }
     }
 
@@ -821,6 +850,60 @@ private struct BreadcrumbBar: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+        }
+    }
+}
+
+// MARK: - 交互式返回手势恢复
+
+/// 隐藏系统返回按钮（`.navigationBarBackButtonHidden(true)`）后，SwiftUI 会默认关闭
+/// NavigationStack 的左缘侧滑返回手势。此桥接接管 `interactivePopGestureRecognizer` 的
+/// delegate 并将其重新启用，delegate 逻辑与系统默认一致（仅在存在可返回层级时允许），
+/// 因此即便后续切回系统返回按钮也不会产生副作用。
+private struct InteractiveSwipeBackEnabler: UIViewControllerRepresentable {
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        EnablerController(coordinator: context.coordinator)
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var navigationController: UINavigationController?
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            (navigationController?.viewControllers.count ?? 0) > 1
+        }
+    }
+
+    final class EnablerController: UIViewController {
+        private let coordinator: Coordinator
+
+        init(coordinator: Coordinator) {
+            self.coordinator = coordinator
+            super.init(nibName: nil, bundle: nil)
+            view.backgroundColor = .clear
+            view.isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            restoreGesture()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            restoreGesture()
+        }
+
+        private func restoreGesture() {
+            guard let gesture = navigationController?.interactivePopGestureRecognizer else { return }
+            coordinator.navigationController = navigationController
+            gesture.isEnabled = true
+            gesture.delegate = coordinator
         }
     }
 }

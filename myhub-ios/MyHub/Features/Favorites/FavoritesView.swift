@@ -13,6 +13,8 @@ struct FavoritesView: View {
     @EnvironmentObject private var txtReader: TxtReaderPresenter
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
+    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
+
     @State private var viewMode: BrowseViewMode = AppSettings.Favorites.viewMode {
         didSet { AppSettings.Favorites.viewMode = viewMode }
     }
@@ -38,6 +40,7 @@ struct FavoritesView: View {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         PopupMenuButton(items: overflowItems)
                     }
+                    .liquidGlassToolbar(liquidGlassMode)
                 }
         }
         .fullScreenCover(item: $imagePreview) { context in

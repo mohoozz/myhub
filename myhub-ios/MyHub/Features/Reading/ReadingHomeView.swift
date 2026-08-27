@@ -42,8 +42,9 @@ struct ReadingHomeView: View {
                 .background(AppColors.pageBackground)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
-                // 液体玻璃模式开：工具栏按钮带 Liquid Glass 玻璃背景；关：.editor 角色不触发玻璃背景
-                .toolbarRole(isSelecting || liquidGlassMode ? .navigationStack : .editor)
+                // 多选态标题居中；常态用 .editor 令「阅读」大标题左对齐（与其余标签一致）。
+                // 液体玻璃按钮背景由工具栏项各自的 .liquidGlassToolbar 控制。
+                .toolbarRole(isSelecting ? .navigationStack : .editor)
                 .overlay(alignment: .bottom) { bottomOverlay }
         }
         .confirmationDialog(
@@ -321,7 +322,7 @@ struct ReadingHomeView: View {
         textColor: Color = AppColors.textSecondary,
         emphasizedColor: Color = AppColors.primary
     ) -> some View {
-        VStack(spacing: 3) {
+        VStack(spacing: 6) {
             ReadingProgressRing(percent: record.finished ? 1 : record.percent, size: 22)
             Text(record.finished ? finishedText(record.mediaType) : percentText(record))
                 .font(.caption2.weight(.semibold))
@@ -368,6 +369,7 @@ struct ReadingHomeView: View {
                     selection = Set(history.records.compactMap(\.id))
                 }
             }
+            .liquidGlassToolbar(liquidGlassMode)
             ToolbarItem(placement: .principal) {
                 Text("已选 \(selection?.count ?? 0) 项")
                     .font(.headline)
@@ -376,6 +378,7 @@ struct ReadingHomeView: View {
                 Button("完成") { selection = nil }
                     .fontWeight(.semibold)
             }
+            .liquidGlassToolbar(liquidGlassMode)
         } else {
             ToolbarItem(placement: .principal) {
                 Text("阅读")
@@ -392,6 +395,7 @@ struct ReadingHomeView: View {
                 }
                 PopupMenuButton(items: overflowItems)
             }
+            .liquidGlassToolbar(liquidGlassMode)
         }
     }
 

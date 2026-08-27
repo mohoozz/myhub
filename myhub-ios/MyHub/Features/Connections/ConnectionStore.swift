@@ -19,6 +19,14 @@ extension ConnectionTestState {
     }
 }
 
+/// 连接测试结果本地快照（UserDefaults 缓存，避免每次进入列表页重复检查内外网）
+private struct PersistedTestState: Codable {
+    var isSuccess: Bool
+    var message: String
+}
+
+private let testStateCacheKey = "connectionTestStates.v1"
+
 @MainActor
 final class ConnectionStore: ObservableObject {
     /// 连接源数据变更广播：设置页新增/编辑/删除/启停后，浏览页等其它实例自动刷新（无需重启 App）
@@ -62,6 +70,7 @@ final class ConnectionStore: ObservableObject {
     /// 将表单「连接测试」的结果同步到指定连接，供列表绿/红点即时刷新（无需重启 App）
     func applyTestResult(_ state: ConnectionTestState, for connectionID: Int64) {
         testStates[connectionID] = state
+        saveCachedState(state, for: connectionID)
     }
 
     func setEnabled(_ connection: Connection, _ enabled: Bool) {
@@ -77,6 +86,7 @@ final class ConnectionStore: ObservableObject {
         _ = try? db.write { try connection.delete($0) }
         credentials.deletePassword(for: id)
         testStates[id] = nil
+        clearCachedState(for: id)
         reloadAndNotify()
     }
 
@@ -93,6 +103,11 @@ final class ConnectionStore: ObservableObject {
         if let id = connection.id, let password, !password.isEmpty {
             try credentials.savePassword(password, for: id)
         }
+        // 配置变更后旧测试结果失效：清除缓存，首次展示时自动重测一次
+        if connection.id != nil, let id = connection.id {
+            testStates[id] = nil
+            clearCachedState(for: id)
+        }
         reloadAndNotify()
     }
 
@@ -103,12 +118,31 @@ final class ConnectionStore: ObservableObject {
 
     // MARK: - 连接测试
 
-    /// 列表出现时自动测试：成功/测试中的不重测；未知或失败的重试，便于连接恢复后立即变绿
+    /// 列表出现时自动测试：仅在从未测试过（内存与本地缓存均无结果）时自动测试一次；
+    /// 已有结果（成功/失败/测试中）直接复用；重新检查只由用户手动触发（点击状态点 / 表单测试）
     func testIfNeeded(_ connection: Connection) async {
         guard let id = connection.id, connection.enabled else { return }
         switch testStates[id] {
-        case .success, .testing: return
-        case .unknown, .failure, .none: await test(connection)
+        case .success, .testing, .failure:
+            return
+        case .none:
+            if let cached = loadCachedState(for: id) {
+                testStates[id] = cached
+                return
+            }
+            await test(connection)
+        }
+    }
+
+    /// App 启动时对全部已启用连接源探测一次内外网路由（TODO 324）：
+    /// 结果同时写入 UI 测试缓存与 `RoutedWebDAVAdapter` 的进程级路由锁定。
+    /// 之后所有操作一直使用锁定地址，只有用户手动「测试连接」或重启 App 才会重新判定。
+    func probeOnLaunch() async {
+        reload()
+        await withTaskGroup(of: Void.self) { group in
+            for connection in connections where connection.enabled {
+                group.addTask { await self.test(connection) }
+            }
         }
     }
 
@@ -119,9 +153,57 @@ final class ConnectionStore: ObservableObject {
             let adapter = try AdapterFactory.makeAdapter(for: connection)
             try await adapter.testConnection()
             let route = (adapter as? RoutedWebDAVAdapter)?.activeRoute
-            testStates[id] = .success(message: Self.reachabilityMessage(for: connection, activeRoute: route))
+            let state = ConnectionTestState.success(message: Self.reachabilityMessage(for: connection, activeRoute: route))
+            testStates[id] = state
+            saveCachedState(state, for: id)
         } catch {
-            testStates[id] = .failure(message: error.localizedDescription)
+            let state = ConnectionTestState.failure(message: error.localizedDescription)
+            testStates[id] = state
+            saveCachedState(state, for: id)
+        }
+    }
+
+    // MARK: - 测试结果缓存（UserDefaults，避免每次进入列表重复检查）
+
+    /// 读取本地缓存的测试结果；无则 nil
+    private func loadCachedState(for id: Int64) -> ConnectionTestState? {
+        guard let data = UserDefaults.standard.data(forKey: testStateCacheKey),
+              let dict = try? JSONDecoder().decode([String: PersistedTestState].self, from: data),
+              let item = dict[String(id)] else { return nil }
+        return item.isSuccess
+            ? .success(message: item.message)
+            : .failure(message: item.message)
+    }
+
+    private func saveCachedState(_ state: ConnectionTestState, for id: Int64) {
+        var dict = cachedTestStateDict()
+        switch state {
+        case .success(let message):
+            dict[String(id)] = PersistedTestState(isSuccess: true, message: message)
+        case .failure(let message):
+            dict[String(id)] = PersistedTestState(isSuccess: false, message: message)
+        case .testing, .unknown:
+            return
+        }
+        persistTestStateDict(dict)
+    }
+
+    private func clearCachedState(for id: Int64) {
+        var dict = cachedTestStateDict()
+        guard dict.removeValue(forKey: String(id)) != nil else { return }
+        persistTestStateDict(dict)
+    }
+
+    private func cachedTestStateDict() -> [String: PersistedTestState] {
+        guard let data = UserDefaults.standard.data(forKey: testStateCacheKey),
+              let dict = try? JSONDecoder().decode([String: PersistedTestState].self, from: data)
+        else { return [:] }
+        return dict
+    }
+
+    private func persistTestStateDict(_ dict: [String: PersistedTestState]) {
+        if let data = try? JSONEncoder().encode(dict) {
+            UserDefaults.standard.set(data, forKey: testStateCacheKey)
         }
     }
 
