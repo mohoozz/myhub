@@ -53,10 +53,17 @@ enum TxtNovelIndexer {
            cached.fileSize == entry.size,
            abs(cached.modTime.timeIntervalSince1970 - entry.modTime.timeIntervalSince1970) < 2 {
             // 编码复核自愈：抽样解码首章，替换符过多说明缓存编码错误 → 重建
-            if await verifyEncoding(cached, adapter: adapter, path: entry.path) {
+            if await verifyEncoding(cached, adapter: adapter, path: entry.path),
+               await verifyFirstChapterConsistency(cached, adapter: adapter, path: entry.path) {
+                AppLogger.shared.log(
+                    "TXT索引缓存命中 name=\(entry.name) path=\(entry.path) chapters=\(cached.chapters.count) first=\"\(cached.chapters.first?.title ?? "无")\" second=\"\(cached.chapters.count > 1 ? cached.chapters[1].title : "无")\"",
+                    module: "novel-index"
+                )
                 return cached
             }
+            AppLogger.shared.log("TXT索引缓存复核未通过，触发重建 name=\(entry.name)", level: .warn, module: "novel-index")
         }
+        AppLogger.shared.log("TXT索引重建开始 name=\(entry.name)", module: "novel-index")
         let fresh = try await rebuild(adapter: adapter, entry: entry, progress: progress)
         saveCachedIndex(fresh, connectionID: connectionID, path: entry.path)
         return fresh
@@ -75,6 +82,11 @@ enum TxtNovelIndexer {
         let detected = TextEncodingDetector.decode(head)
         let encoding = detected.encoding
 
+        AppLogger.shared.log(
+            "TXT索引重建 name=\(entry.name) size=\(entry.size) encoding=\(detected.encodingName)",
+            module: "novel-index"
+        )
+
         // 2. 字节级行扫描（分块流式，跨块行拼接），正则识别章节标题
         let isUTF16 = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
         var chapters: [ChapterInfo] = []
@@ -82,6 +94,7 @@ enum TxtNovelIndexer {
         var pendingGlobalStart: Int64 = 0
         var offset: Int64 = 0
         let chunkSize: Int64 = 512 * 1024
+        var scannedLines = 0
 
         while offset < entry.size {
             try Task.checkCancellation()
@@ -96,11 +109,29 @@ enum TxtNovelIndexer {
             let newline = Self.newlineScanner(isUTF16: isUTF16, littleEndian: encoding == .utf16LittleEndian)
             while let hit = newline(buffer, cursor) {
                 let lineData = Data(buffer[cursor..<hit.lineEnd])
-                if let chapter = matchChapterTitle(lineData: lineData, encoding: encoding) {
-                    let global = bufferGlobalStart + Int64(cursor - buffer.startIndex)
+                let global = bufferGlobalStart + Int64(cursor - buffer.startIndex)
+                let matched = matchChapterTitle(lineData: lineData, encoding: encoding)
+
+                // 排查分章漏检：前 15 行打日志（含不可见字符转义，定位 BOM/编码/格式）
+                if scannedLines < 15 {
+                    let decoded = String(data: lineData, encoding: encoding) ?? "<decode-fail>"
+                    AppLogger.shared.log(
+                        "TXT行[\(scannedLines)] offset=\(global) hit=\(matched != nil) text=\(Self.visible(decoded))",
+                        module: "novel-index"
+                    )
+                }
+                scannedLines += 1
+
+                if let chapter = matched {
                     // 同偏移去重（个别书重复标题行）
                     if chapters.last?.startOffset != global {
                         chapters.append(ChapterInfo(title: chapter, startOffset: global))
+                        if chapters.count <= 12 {
+                            AppLogger.shared.log(
+                                "TXT章节[\(chapters.count - 1)] offset=\(global) title=\(chapter)",
+                                module: "novel-index"
+                            )
+                        }
                     }
                 }
                 cursor = hit.nextStart
@@ -123,6 +154,11 @@ enum TxtNovelIndexer {
             chapters = [ChapterInfo(title: "正文", startOffset: 0)]
         }
         progress?(1)
+
+        AppLogger.shared.log(
+            "TXT索引完成 name=\(entry.name) chapters=\(chapters.count) first=\"\(chapters.first?.title ?? "无")\" second=\"\(chapters.count > 1 ? chapters[1].title : "无")\" last=\"\(chapters.last?.title ?? "无")\"",
+            module: "novel-index"
+        )
         return IndexData(
             encoding: encoding,
             encodingName: detected.encodingName,
@@ -143,10 +179,31 @@ enum TxtNovelIndexer {
         return patterns.compactMap { try? NSRegularExpression(pattern: $0) }
     }()
 
+    /// 将不可见字符转义，便于在日志中排查 BOM / 零宽字符导致的漏检
+    private static func visible(_ text: String) -> String {
+        var out = ""
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0xFEFF: out += "\\u{FEFF}"          // BOM
+            case 0x200B: out += "\\u{200B}"          // 零宽空格
+            case 0x200C: out += "\\u{200C}"          // 零宽不连字
+            case 0x200D: out += "\\u{200D}"          // 零宽连字
+            case 0x00A0: out += "\\u{00A0}"          // 不换行空格
+            case 0x0A: out += "\\n"
+            case 0x0D: out += "\\r"
+            case 0x09: out += "\\t"
+            default: out += String(scalar)
+            }
+        }
+        return out
+    }
+
     /// 行字节 → 解码 → trim → 正则匹配；标题行长度受限且不以句号收尾（过滤正文）
     private static func matchChapterTitle(lineData: Data, encoding: String.Encoding) -> String? {
         guard lineData.count <= 140, !lineData.isEmpty else { return nil }
         guard var text = String(data: lineData, encoding: encoding) else { return nil }
+        // 去掉文件头 BOM：UTF-8/UTF-16 BOM 解码后为 \u{FEFF}，会挡住正则 ^第 导致第一章漏检
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= 42 else { return nil }
         if text.hasSuffix("。") || text.hasSuffix("，") || text.hasSuffix("；") { return nil }
@@ -271,6 +328,40 @@ enum TxtNovelIndexer {
         guard !scalars.isEmpty else { return true }
         let replaced = scalars.filter { $0.value == 0xFFFD }.count
         return Double(replaced) / Double(scalars.count) <= 0.01
+    }
+
+    /// 首章一致性自愈：从文件头扫描第一个章节标题行，与缓存首章 startOffset 比对。
+    /// 旧缓存若漏检第一章（如 BOM 未 strip），偏移不一致 → 返回 false 触发重建。
+    private static func verifyFirstChapterConsistency(
+        _ data: IndexData, adapter: StorageAdapter, path: String
+    ) async -> Bool {
+        guard let first = data.chapters.first else { return true }
+        let headRange = 0..<min(data.fileSize, 8 * 1024)
+        guard headRange.upperBound > 0,
+              let head = try? await readAll(adapter: adapter, path: path, range: headRange),
+              !head.isEmpty else { return true }
+
+        let encoding = data.encoding
+        let isUTF16 = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
+        let newline = newlineScanner(isUTF16: isUTF16, littleEndian: encoding == .utf16LittleEndian)
+
+        var cursor = head.startIndex
+        while let hit = newline(head, cursor) {
+            let lineData = Data(head[cursor..<hit.lineEnd])
+            if matchChapterTitle(lineData: lineData, encoding: encoding) != nil {
+                let global = Int64(cursor - head.startIndex)
+                if global != first.startOffset {
+                    AppLogger.shared.log(
+                        "TXT索引首章不一致：文件首标题 offset=\(global) vs 缓存首章 offset=\(first.startOffset) title=\"\(first.title)\"，触发重建 path=\(path)",
+                        level: .warn, module: "novel-index"
+                    )
+                    return false
+                }
+                return true
+            }
+            cursor = hit.nextStart
+        }
+        return true
     }
 
     // MARK: - 工具

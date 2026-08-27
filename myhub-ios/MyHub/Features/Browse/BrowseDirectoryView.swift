@@ -39,6 +39,7 @@ struct BrowseDirectoryView: View {
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
     @EnvironmentObject private var txtReader: TxtReaderPresenter
+    @EnvironmentObject private var popupMenu: PopupMenuPresenter
     /// 阅读进度记录（用于文件项进度环，参考 Flutter 浏览界面）
     @ObservedObject private var readingHistory = ReadingHistoryStore.shared
     /// 播放引擎状态（区分播放中/暂停，仅播放中才高亮）
@@ -48,7 +49,6 @@ struct BrowseDirectoryView: View {
 
     @State private var sheet: SheetRoute?
     @State private var imagePreview: ImagePreviewContext?
-    @State private var unsupportedEntry: FileEntry?
     @State private var renaming: FileEntry?
     @State private var renameText = ""
     @State private var showNewFolder = false
@@ -105,7 +105,6 @@ struct BrowseDirectoryView: View {
         case move(Set<String>)
         case copy(Set<String>)
         case editText(FileEntry)
-        case viewText(FileEntry)
         case share(URL)
 
         var id: String {
@@ -113,7 +112,6 @@ struct BrowseDirectoryView: View {
             case .move: return "move"
             case .copy: return "copy"
             case .editText(let entry): return "edit-\(entry.path)"
-            case .viewText(let entry): return "view-\(entry.path)"
             case .share(let url): return "share-\(url.absoluteString)"
             }
         }
@@ -196,10 +194,6 @@ struct BrowseDirectoryView: View {
                         Task { await viewModel.refresh() }
                     }
                 }
-            case .viewText(let entry):
-                if let adapter = viewModel.storageAdapter {
-                    TextFileViewer(entry: entry, adapter: adapter)
-                }
             case .share(let url):
                 ActivityView(url: url)
                     .onDisappear { try? FileManager.default.removeItem(at: url) }
@@ -209,23 +203,6 @@ struct BrowseDirectoryView: View {
             if let adapter = viewModel.storageAdapter {
                 ImagePreviewView(images: context.images, initialIndex: context.index, adapter: adapter)
             }
-        }
-        .confirmationDialog(
-            unsupportedEntry?.name ?? "",
-            isPresented: Binding(get: { unsupportedEntry != nil }, set: { if !$0 { unsupportedEntry = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("纯文本查看") {
-                if let entry = unsupportedEntry { sheet = .viewText(entry) }
-                unsupportedEntry = nil
-            }
-            Button("下载到本地") {
-                if let entry = unsupportedEntry {
-                    Task { await viewModel.downloadToLocal(paths: [entry.path]) }
-                }
-                unsupportedEntry = nil
-            }
-            Button("取消", role: .cancel) { unsupportedEntry = nil }
         }
         .confirmationDialog(
             "删除确认",
@@ -752,7 +729,7 @@ struct BrowseDirectoryView: View {
         }
         if !entry.isDir, type == .subtitle || type == .other {
             items.append(PopupMenuItem(title: "纯文本查看", systemImage: "doc.plaintext") {
-                sheet = .viewText(entry)
+                txtReader.open(connection: connection, entry: entry)
             })
         }
         items.append(PopupMenuItem(
@@ -854,9 +831,21 @@ struct BrowseDirectoryView: View {
             // 漫画阅读器（TODO §6）：先展示加载 UI，再后台解析归档（弱网不卡顿）+ 点击防抖
             comicReader.open(connection: connection, entry: entry)
         case .subtitle, .other:
-            // 不支持预览的文件：底部菜单 → 纯文本查看 / 下载
-            unsupportedEntry = entry
+            showUnsupportedMenu(entry)
         }
+    }
+
+    /// 不支持直接预览的文件（如 .ini）：底部抽屉菜单 → 纯文本查看 / 下载（与长按菜单同款）
+    private func showUnsupportedMenu(_ entry: FileEntry) {
+        let items = [
+            PopupMenuItem(title: "纯文本查看", systemImage: "doc.plaintext") {
+                txtReader.open(connection: connection, entry: entry)
+            },
+            PopupMenuItem(title: "下载到本地", systemImage: "arrow.down.circle") {
+                Task { await viewModel.downloadToLocal(paths: [entry.path]) }
+            },
+        ]
+        popupMenu.show(items: items, style: .drawer)
     }
 }
 

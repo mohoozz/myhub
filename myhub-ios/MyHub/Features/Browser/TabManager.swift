@@ -114,14 +114,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func goForward() { webView.goForward() }
 
-    /// 回退到起始页：清空 URL 展示起始页，并清空 webView 导航历史，
-    /// 使下一次从起始页的导航成为新的历史根，避免残留旧历史
+    /// 回退到起始页：清空 URL 展示起始页
     private func showStartPage() {
         startedFromStartPage = false
         currentURL = nil
-        if #available(iOS 15.0, *) {
-            webView.backForwardList.removeAllItems()
-        }
+        // 注：WKBackForwardList 无公开的清空历史栈 API（不存在 removeAllItems），
+        // 故这里只重置 UI 状态；webView 的历史栈会保留，从起始页重新导航后「回退」可能多退一页。
     }
 
     /// 展示标签卡片网格所需的快照（用于持久化）

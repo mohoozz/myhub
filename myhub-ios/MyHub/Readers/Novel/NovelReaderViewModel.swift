@@ -1,6 +1,13 @@
 import Foundation
 import SwiftUI
 
+/// 滚动模式连续页流中的一页（跨章节全局唯一标识，用于 ScrollView 无缝拼接相邻章节）
+struct ScrollPage: Identifiable, Equatable, Hashable {
+    let chapter: Int
+    let page: Int
+    var id: String { "\(chapter)-\(page)" }
+}
+
 /// 小说阅读器状态机（TODO §5）：
 /// - 加载：txt 建索引（编码检测 + 字节级行扫描）/ epub 解包 → **排版无关锚点一步定位**；
 /// - 分页：`TextPaginator` 行边界分页，翻页/滚动双模式；
@@ -31,8 +38,13 @@ final class NovelReaderViewModel: ObservableObject {
     /// epub 图集型检测信号：为 true 时 View 层自动转交漫画阅读器（不再弹选择框）
     @Published var comicLikePrompt = false
     @Published var toast: String?
-    /// 滚动模式：程序滚动目标页（ScrollViewReader 消费；滚动期间忽略可见页回写）
-    @Published var scrollIntent: Int?
+    /// 滚动模式：程序滚动目标页 id（ScrollViewReader 消费；滚动期间忽略可见页回写）
+    @Published var scrollIntent: String?
+    /// 滚动模式：滚动意图版本号。每次 armScrollIntent 递增，供 View 的 onChange 消费，
+    /// 以解决「连续两次目标 id 相同时 @Published 值不变、onChange 不触发」的问题。
+    @Published private(set) var scrollIntentRevision: Int = 0
+    /// 滚动模式：连续页流（相邻章节页拼接，跨章无缝滚动）
+    @Published private(set) var scrollStream: [ScrollPage] = []
 
     /// 阅读设置（改动即持久化并重排，锚点保持）
     @Published var appearance: ReaderAppearance {
@@ -64,6 +76,10 @@ final class NovelReaderViewModel: ObservableObject {
 
     private let adapter: StorageAdapter?
     private var chapterCache: [Int: LoadedChapter] = [:]
+    /// 滚动模式：下一章预分页缓存（滚到底自动翻章时直接切换，避免「章节加载中」闪屏）
+    private var paginationCache: [Int: ChapterPagination] = [:]
+    /// 滚动模式：正在分页中的章节，用于并发去重（scrollVisiblePage 与 scrollReachTop/End 可能同时触发同章预分页）
+    private var paginatingInFlight: Set<Int> = []
     private var preloadTask: Task<Void, Never>?
     private var reportTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
@@ -227,6 +243,7 @@ final class NovelReaderViewModel: ObservableObject {
         guard size.width > 20, size.height > 20, size != pageSize, !blocks.isEmpty else { return }
         let preserved = pageSize == .zero ? lastAnchorCharOffset : currentCharOffset()
         pageSize = size
+        paginationCache.removeAll()   // 尺寸变化，预分页结果全部失效
         repaginate(anchorCharOffset: preserved)
     }
 
@@ -234,6 +251,7 @@ final class NovelReaderViewModel: ObservableObject {
     /// `didSet`，若逐次立即分页会堆积大量整章 CoreText 排版任务 → CPU 打满发热、卡死。
     /// 这里把连续变化合并为最后一次（150ms 窗口内重置计时），只在停顿后分页一次。
     private func repaginatePreservingAnchor() {
+        paginationCache.removeAll()   // 字号/行距等变化，预分页结果全部失效
         let target = currentCharOffset()
         repaginateDebounceTask?.cancel()
         repaginateDebounceTask = Task { [weak self] in
@@ -267,6 +285,7 @@ final class NovelReaderViewModel: ObservableObject {
                       generation == self.paginationGeneration,
                       self.chapter == chapterSnapshot else { return }
                 self.pagination = result
+                self.paginationCache[chapterSnapshot] = result
                 var offset = anchorCharOffset
                 // epub 首次定位：段落锚点换算为组装文本字符位置（需分页产物的块位置映射）
                 if let pending = self.pendingEpubParagraph {
@@ -280,15 +299,16 @@ final class NovelReaderViewModel: ObservableObject {
                 let maxOffset = max(result.attributedText.length - 1, 0)
                 self.page = result.pageIndex(forCharOffset: min(offset, maxOffset))
                 if self.appearance.pageMode == .scrolling {
-                    self.armScrollIntent(self.page)
+                    self.rebuildScrollStream(anchorPage: self.page)
                 }
             }
         }
     }
 
     /// 设置程序滚动目标并在滚动窗口期后自动清除（期间忽略可见页回写）
-    private func armScrollIntent(_ target: Int?) {
+    private func armScrollIntent(_ target: String?) {
         scrollIntent = target
+        scrollIntentRevision += 1
         scrollIntentTask?.cancel()
         guard target != nil else { return }
         scrollIntentTask = Task {
@@ -319,6 +339,22 @@ final class NovelReaderViewModel: ObservableObject {
     func goToChapter(_ target: Int, toLastPage: Bool = false) {
         guard toc.indices.contains(target), target != chapter || pagination == nil else { return }
         report(force: true)
+        // 命中预分页缓存直接切换上下文并重建滚动流，不闪「章节加载中」加载画面
+        if let cachedPagination = paginationCache[target],
+           let cached = chapterCache[target] {
+            chapter = target
+            page = toLastPage ? max(0, cachedPagination.pages.count - 1) : 0
+            txtChapter = cached.txtChapter
+            blocks = cached.blocks
+            pagination = cachedPagination
+            chapterLoading = false
+            if appearance.pageMode == .scrolling {
+                rebuildScrollStream(anchorPage: page)
+            }
+            reportThrottled()
+            checkFinished()
+            return
+        }
         chapter = target
         page = 0
         pagination = nil
@@ -330,19 +366,8 @@ final class NovelReaderViewModel: ObservableObject {
                 txtChapter = loaded.txtChapter
                 blocks = loaded.blocks
                 chapterLoading = false
-                repaginate(anchorCharOffset: 0)
-                if toLastPage {
-                    // 等分页完成后跳最后一页（上限 2s 防异常死等）
-                    Task {
-                        for _ in 0..<40 {
-                            if self.pagination != nil || Task.isCancelled { break }
-                            try? await Task.sleep(nanoseconds: 50_000_000)
-                        }
-                        if let count = self.pagination?.pages.count {
-                            self.page = max(0, count - 1)
-                        }
-                    }
-                }
+                // toLastPage 用超大锚点定位到末页（repaginate 内 min(offset, maxOffset) 收敛）
+                repaginate(anchorCharOffset: toLastPage ? Int.max : 0)
             } catch is CancellationError {
             } catch {
                 chapterLoading = false
@@ -351,13 +376,76 @@ final class NovelReaderViewModel: ObservableObject {
         }
     }
 
-    /// 滚动模式上报可见页（程序滚动期间不回写）
-    func scrollVisiblePage(_ index: Int) {
-        guard appearance.pageMode == .scrolling, scrollIntent == nil,
-              index != page, index >= 0, index < pageCount else { return }
-        page = index
+    /// 滚动模式上报可见页（多章节连续页流；程序滚动期间不回写）
+    func scrollVisiblePage(_ p: ScrollPage) {
+        guard appearance.pageMode == .scrolling else { return }
+        guard scrollIntent == nil else { return }
+        if p.chapter != chapter {
+            activateChapter(p.chapter)
+        }
+        if p.page != page {
+            page = p.page
+        }
+        // 滚动到流边界附近：预分页并增量拼入更远的章节，实现双向无缝
+        if let last = scrollStream.last, p.chapter == last.chapter, p.page >= last.page - 1 {
+            prepaginate(last.chapter + 1)
+        }
+        if let first = scrollStream.first, p.chapter == first.chapter, p.page <= 0 {
+            prepaginate(first.chapter - 1)
+        }
         reportThrottled()
         checkFinished()
+    }
+
+    /// 滚动模式：滚动到底（兜底）预分页下一章；正常扩展由 scrollVisiblePage 驱动
+    func scrollReachEnd(_ reachEnd: Bool) {
+        guard appearance.pageMode == .scrolling else { return }
+        guard reachEnd, scrollIntent == nil, !chapterLoading else { return }
+        if let last = scrollStream.last, last.chapter + 1 < toc.count {
+            prepaginate(last.chapter + 1)
+        }
+    }
+
+    /// 滚动模式：滚动到顶（兜底）预分页上一章；正常扩展由 scrollVisiblePage 驱动
+    func scrollReachTop(_ reachTop: Bool) {
+        guard appearance.pageMode == .scrolling else { return }
+        guard reachTop, scrollIntent == nil, !chapterLoading else { return }
+        if let first = scrollStream.first, first.chapter - 1 >= 0 {
+            prepaginate(first.chapter - 1)
+        }
+    }
+
+    /// 滚动模式：预分页下一章（后台分页后缓存，翻章时直接切换实现无缝续读）
+    private func prepaginate(_ target: Int) {
+        guard appearance.pageMode == .scrolling else { return }
+        guard toc.indices.contains(target), paginationCache[target] == nil,
+              !paginatingInFlight.contains(target), pageSize != .zero else { return }
+        paginatingInFlight.insert(target)
+        let appearance = self.appearance
+        let textColor = UIColor(themeSpec.text)
+        let size = pageSize
+        let targetChapter = target
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.paginatingInFlight.remove(targetChapter) }
+            guard let loaded = try? await self.loadChapter(targetChapter) else { return }
+            let blocks = loaded.blocks
+            // 分页放后台，避免大章阻塞主线程
+            let result = await Task.detached(priority: .userInitiated) {
+                TextPaginator.paginate(
+                    blocks: blocks, appearance: appearance, pageSize: size, textColor: textColor
+                )
+            }.value
+            // 设置/尺寸在分页期间变化则丢弃过期结果
+            guard self.appearance == appearance, self.pageSize == size else { return }
+            self.paginationCache[targetChapter] = result
+            // LRU：保留当前 ±2 与滚动流正在渲染的章节
+            var keep: Set<Int> = [self.chapter - 2, self.chapter - 1, self.chapter, self.chapter + 1, self.chapter + 2]
+            keep.formUnion(self.scrollStream.map(\.chapter))
+            self.paginationCache = self.paginationCache.filter { keep.contains($0.key) }
+            // 增量拼入滚动流（向下追加 / 向上插入并补偿滚动位置）
+            self.insertChapterIntoStream(targetChapter)
+        }
     }
 
     /// 滚动模式点击分区翻页：先改页码，View 层 ScrollViewReader 消费 scrollIntent 滚动
@@ -368,9 +456,84 @@ final class NovelReaderViewModel: ObservableObject {
             return
         }
         page = target
-        armScrollIntent(target)
+        armScrollIntent(ScrollPage(chapter: chapter, page: target).id)
         reportThrottled()
         checkFinished()
+    }
+
+    // MARK: - 滚动模式连续页流（多章节无缝拼接）
+
+    /// 取滚动流中某页的富文本内容
+    func scrollPageContent(_ p: ScrollPage) -> NSAttributedString {
+        if p.chapter == chapter, let pagination, pagination.pages.indices.contains(p.page) {
+            return pagination.pageContent(p.page)
+        }
+        guard let pag = paginationCache[p.chapter], pag.pages.indices.contains(p.page) else {
+            return NSAttributedString()
+        }
+        return pag.pageContent(p.page)
+    }
+
+    /// 重建滚动页流：把当前章及已缓存相邻章节拼成连续列表，并定位到锚点页
+    private func rebuildScrollStream(anchorPage: Int) {
+        guard appearance.pageMode == .scrolling else { return }
+        var stream: [ScrollPage] = []
+        var c = chapter
+        while c >= 0 {
+            let pag = (c == chapter) ? pagination : paginationCache[c]
+            guard let pag else { break }
+            stream.insert(contentsOf: (0..<pag.pages.count).map { ScrollPage(chapter: c, page: $0) }, at: 0)
+            c -= 1
+        }
+        c = chapter + 1
+        while c < toc.count, let pag = paginationCache[c] {
+            stream.append(contentsOf: (0..<pag.pages.count).map { ScrollPage(chapter: c, page: $0) })
+            c += 1
+        }
+        scrollStream = stream
+        armScrollIntent(ScrollPage(chapter: chapter, page: anchorPage).id)
+        prepaginate(chapter - 1)
+        prepaginate(chapter + 1)
+    }
+
+    /// 把某章（已分页缓存）增量拼入滚动流：向下追加 / 向上插入并补偿滚动位置
+    private func insertChapterIntoStream(_ chapterIndex: Int) {
+        guard appearance.pageMode == .scrolling,
+              let pag = paginationCache[chapterIndex] else { return }
+        let pages = (0..<pag.pages.count).map { ScrollPage(chapter: chapterIndex, page: $0) }
+        let existing = Set(scrollStream.map(\.id))
+        let newPages = pages.filter { !existing.contains($0.id) }
+        guard !newPages.isEmpty else { return }
+        if let first = scrollStream.first, chapterIndex < first.chapter {
+            scrollStream.insert(contentsOf: newPages, at: 0)
+            if scrollIntent == nil {
+                armScrollIntent(first.id)
+            }
+        } else if let last = scrollStream.last, chapterIndex > last.chapter {
+            scrollStream.append(contentsOf: newPages)
+        } else {
+            // 中间补章（stream 应保持连续，此分支为防御）：按位置插入保持有序，
+            // 避免全量 sort 触发 LazyVStack 大面积重建与视觉跳动。
+            if let insertAt = scrollStream.firstIndex(where: { $0.chapter > chapterIndex }) {
+                scrollStream.insert(contentsOf: newPages, at: insertAt)
+            } else {
+                scrollStream.append(contentsOf: newPages)
+            }
+        }
+    }
+
+    /// 滚动跨章时切换当前章上下文（更新进度基准，不动滚动流）
+    private func activateChapter(_ target: Int) {
+        guard target != chapter, toc.indices.contains(target) else { return }
+        guard let cached = chapterCache[target], let pag = paginationCache[target] else { return }
+        report(force: true)
+        chapter = target
+        txtChapter = cached.txtChapter
+        blocks = cached.blocks
+        pagination = pag
+        chapterLoading = false
+        prepaginate(target - 1)
+        prepaginate(target + 1)
     }
 
     // MARK: - 章节加载（缓存 ±1 预加载）
@@ -445,8 +608,11 @@ final class NovelReaderViewModel: ObservableObject {
                 _ = try? await self.loadChapter(neighbor)
             }
             await MainActor.run {
-                // LRU：只保留当前 ±1
-                let keep: Set<Int> = [target - 1, target, target + 1]
+                // LRU：保留当前 ±1；滚动模式下额外保留连续页流正在渲染的章节。
+                // chapterCache 必须与 paginationCache 的保留范围对齐，否则跨章回滚时
+                // activateChapter 因 blocks/txtChapter 缺失而失败，导致 chapter 与 page 错位。
+                var keep: Set<Int> = [target - 1, target, target + 1]
+                keep.formUnion(self.scrollStream.map(\.chapter))
                 self.chapterCache = self.chapterCache.filter { keep.contains($0.key) }
             }
         }

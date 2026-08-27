@@ -65,7 +65,7 @@ struct NovelAnchor: Codable {
     }
 }
 
-// MARK: - 阅读器主题配色（IOS-502：日间 / 夜间 / 护眼）
+// MARK: - 阅读器主题配色（IOS-502：跟随系统 / 日间 / 夜间 / 护眼）
 
 struct ReaderThemeSpec {
     let background: Color
@@ -75,6 +75,14 @@ struct ReaderThemeSpec {
 
     static func spec(for theme: ReaderTheme) -> ReaderThemeSpec {
         switch theme {
+        case .auto:
+            // 跟随 App 主题（浅色/深色），与页面背景对齐
+            return ReaderThemeSpec(
+                background: AppColors.pageBackground,
+                text: AppColors.textPrimary,
+                secondaryText: AppColors.textSecondary,
+                controlBackground: AppColors.cardBackground
+            )
         case .day:
             return ReaderThemeSpec(
                 background: Color(hex: 0xFAF7F2),

@@ -160,30 +160,26 @@ enum TextPaginator {
         guard attributed.length > 0, pageSize.width > 20, pageSize.height > 20 else {
             return [0..<attributed.length]
         }
+        // 逐屏排版：CTFramesetterCreateFrame 传入 length=0 表示“从 currentIndex 起排满 path 为止”，
+        // CTFrameGetVisibleStringRange 返回本屏完整可见（不截断行）的字符范围，游标推进到下一页起点。
+        // 参照 Legado（gedoor/legado）PageSplitter 的分页算法，避免单帧取行导致整章只出 1 页。
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
-        let path = CGPath(rect: CGRect(origin: .zero, size: pageSize), transform: nil)
-        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: attributed.length), path, nil)
-        guard let lines = CTFrameGetLines(frame) as? [CTLine], !lines.isEmpty else {
-            return [0..<attributed.length]
-        }
-        var origins = [CGPoint](repeating: .zero, count: lines.count)
-        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
-
         var pages: [Range<Int>] = []
-        var pageStart = 0
-        var pageTopY = origins[0].y
-        for (index, line) in lines.enumerated() {
-            let range = CTLineGetStringRange(line)
-            // CoreText 坐标自下而上：origin.y 越小越靠下；行超出页底则切页
-            let lineBottom = origins[index].y
-            if pageTopY - lineBottom > pageSize.height + 1, range.location > pageStart {
-                pages.append(pageStart..<range.location)
-                pageStart = range.location
-                pageTopY = origins[index].y
-            }
-        }
-        if pageStart < attributed.length {
-            pages.append(pageStart..<attributed.length)
+        var currentIndex = 0
+        let totalLength = attributed.length
+        while currentIndex < totalLength {
+            let path = CGPath(rect: CGRect(origin: .zero, size: pageSize), transform: nil)
+            let frame = CTFramesetterCreateFrame(
+                framesetter,
+                CFRange(location: currentIndex, length: 0),
+                path,
+                nil
+            )
+            let visible = CTFrameGetVisibleStringRange(frame)
+            guard visible.length > 0 else { break }
+            let pageEnd = currentIndex + visible.length
+            pages.append(currentIndex..<pageEnd)
+            currentIndex = pageEnd
         }
         return pages.isEmpty ? [0..<attributed.length] : pages
     }

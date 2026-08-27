@@ -125,7 +125,7 @@ final class ConnectionStore: ObservableObject {
         switch testStates[id] {
         case .success, .testing, .failure:
             return
-        case .none:
+        case .none, .unknown:
             if let cached = loadCachedState(for: id) {
                 testStates[id] = cached
                 return

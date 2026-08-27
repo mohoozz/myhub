@@ -53,7 +53,7 @@ struct PreferencesSnapshot: Codable {
     func apply() {
         AppSettings.Reader.fontSize = readerFontSize
         AppSettings.Reader.lineSpacing = readerLineSpacing
-        AppSettings.Reader.theme = ReaderTheme(rawValue: readerTheme) ?? .day
+        AppSettings.Reader.theme = ReaderTheme(rawValue: readerTheme) ?? .auto
         AppSettings.Reader.pageMode = ReaderPageMode(rawValue: readerPageMode) ?? .paging
         AppSettings.Reader.comicDirection = ComicReadingDirection(rawValue: comicDirection) ?? .auto
         AppSettings.Player.defaultSpeed = playerDefaultSpeed

@@ -6,6 +6,7 @@ struct MyHubApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() {
         _ = AppLogger.shared   // 尽早初始化日志 + 安装崩溃捕获（避免启动早期崩溃漏捕获）
+        AppSettings.Reader.migrateReaderThemeToAutoIfNeeded()   // 旧版固定主题 → 跟随系统（一次性迁移）
     }
     // 全局状态：主题 / 启动 / 播放呈现 / 弹出菜单 / 浏览器会话（§2.2.2 全局持有）
     @StateObject private var themeManager = ThemeManager()

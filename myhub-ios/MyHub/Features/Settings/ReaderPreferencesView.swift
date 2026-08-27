@@ -22,6 +22,7 @@ struct ReaderPreferencesView: View {
             }
             Section {
                 Picker("阅读主题", selection: $theme) {
+                    Text("跟随系统").tag(ReaderTheme.auto)
                     Text("日间").tag(ReaderTheme.day)
                     Text("护眼").tag(ReaderTheme.eyeCare)
                     Text("夜间").tag(ReaderTheme.night)

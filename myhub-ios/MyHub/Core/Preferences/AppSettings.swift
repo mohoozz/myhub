@@ -41,7 +41,7 @@ struct RawUserDefault<Value: RawRepresentable> where Value.RawValue == String {
 // MARK: - 偏好枚举
 
 enum ReaderTheme: String, CaseIterable, Codable {
-    case day, night, eyeCare   // 日间 / 夜间 / 护眼
+    case auto, day, night, eyeCare   // 跟随系统 / 日间 / 夜间 / 护眼
 }
 
 enum ReaderPageMode: String, CaseIterable, Codable {
@@ -93,11 +93,20 @@ enum AppSettings {
     enum Reader {
         @UserDefault("reader.fontSize", default: 17) static var fontSize: Double
         @UserDefault("reader.lineSpacing", default: 1.6) static var lineSpacing: Double
-        @RawUserDefault("reader.theme", default: .day) static var theme: ReaderTheme
+        @RawUserDefault("reader.theme", default: .auto) static var theme: ReaderTheme
         @RawUserDefault("reader.pageMode", default: .paging) static var pageMode: ReaderPageMode
         @RawUserDefault("reader.comicDirection", default: .auto) static var comicDirection: ComicReadingDirection
         @UserDefault("reader.brightness", default: -1) static var brightness: Double   // -1 = 跟随系统
         @UserDefault("reader.useSerifFont", default: false) static var useSerifFont: Bool   // 正文思源宋体（未打包字体时回退系统宋体）
+
+        /// 一次性迁移：旧版固定三档主题（日间/夜间/护眼）统一迁移为「跟随系统」，
+        /// 使阅读器背景与 App 浅色/深色主题对齐。
+        static func migrateReaderThemeToAutoIfNeeded() {
+            let flagKey = "reader.theme.migrated.to.auto.v1"
+            guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+            UserDefaults.standard.set(true, forKey: flagKey)
+            theme = .auto
+        }
     }
 
     /// 播放器偏好

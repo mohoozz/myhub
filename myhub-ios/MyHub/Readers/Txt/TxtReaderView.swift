@@ -1,6 +1,9 @@
 import SwiftUI
 import UIKit
 
+/// 阅读器顶部栏高度（按钮 36 + 上下内边距 14），正文内容据此避开顶部栏，避免文字穿透/被遮挡
+private let txtTopBarHeight: CGFloat = 50
+
 /// 纯 txt 阅读器（全屏）：编码自动检测 + 全文滚动阅读（懒加载）+ 一键复制全文；
 /// 阅读排版（字号 / 行距 / 主题 / 衬线）实时生效并持久化；
 /// 不建章节索引、不追踪进度，与小说阅读器区分（需要章节/进度走「以小说阅读器打开」）。
@@ -30,8 +33,20 @@ struct TxtReaderView: View {
         .overlay(alignment: .bottom) {
             if showSettings { settingsPanel }
         }
+        .simultaneousGesture(edgeSwipeGesture)
         .onAppear { viewModel.load() }
         .onDisappear { viewModel.cancel() }
+    }
+
+    /// 从屏幕左边缘向右滑退出阅读器（全屏 cover 无导航栈返回手势）
+    private var edgeSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 15, coordinateSpace: .local)
+            .onEnded { value in
+                guard value.startLocation.x < 36 else { return }
+                guard value.translation.width > 90 else { return }
+                guard abs(value.translation.height) < value.translation.width * 0.7 else { return }
+                presenter.close()
+            }
     }
 
     // MARK: - 正文
@@ -61,38 +76,25 @@ struct TxtReaderView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if viewModel.truncated {
-                        Label("文件过大，仅显示部分内容",
-                              systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .padding(.bottom, 12)
-                    }
-                    ForEach(0..<viewModel.lines.count, id: \.self) { index in
-                        let line = viewModel.lines[index]
-                        Text(line.isEmpty ? " " : line)
-                            .font(bodyFont)
-                            .foregroundStyle(viewModel.themeSpec.text)
-                            .lineSpacing(CGFloat(viewModel.appearance.fontSize * (viewModel.appearance.lineSpacing - 1)))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            VStack(spacing: 0) {
+                if viewModel.truncated {
+                    Label("文件过大，仅显示部分内容",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(.vertical, 8)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 40)
+                SelectableTextView(
+                    text: viewModel.text,
+                    fontSize: viewModel.appearance.fontSize,
+                    lineSpacing: viewModel.appearance.lineSpacing,
+                    useSerifFont: viewModel.appearance.useSerifFont,
+                    textColor: UIColor(viewModel.themeSpec.text)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .padding(.top, txtTopBarHeight)
         }
-    }
-
-    private var bodyFont: Font {
-        let appearance = viewModel.appearance
-        let size = CGFloat(appearance.fontSize)
-        if appearance.useSerifFont {
-            return Font.custom("NotoSerifSC-Regular", size: size)
-        }
-        return Font.system(size: size)
     }
 
     // MARK: - 顶部栏
@@ -151,6 +153,7 @@ struct TxtReaderView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 6)
+        .background(viewModel.themeSpec.background)
     }
 
     // MARK: - 阅读设置面板
@@ -197,6 +200,7 @@ struct TxtReaderView: View {
 
             settingRow("主题") {
                 HStack(spacing: 8) {
+                    themeButton(.auto, "自动", "circle.lefthalf.filled")
                     themeButton(.day, "日间", "sun.max")
                     themeButton(.eyeCare, "护眼", "leaf")
                     themeButton(.night, "夜间", "moon.stars")
@@ -284,6 +288,84 @@ struct TxtReaderView: View {
     }
 }
 
+// MARK: - 可选择正文文本视图（UITextView 桥接：支持长按选中 / 复制，TextKit 懒排版）
+
+private struct SelectableTextView: UIViewRepresentable {
+    let text: String
+    let fontSize: Double
+    let lineSpacing: Double
+    let useSerifFont: Bool
+    let textColor: UIColor
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.isScrollEnabled = true
+        tv.dataDetectorTypes = []
+        tv.backgroundColor = .clear
+        tv.textContainerInset = UIEdgeInsets(top: 8, left: 20, bottom: 40, right: 20)
+        tv.textContainer.lineFragmentPadding = 0
+        tv.alwaysBounceVertical = true
+        tv.contentInsetAdjustmentBehavior = .never
+        tv.keyboardDismissMode = .interactive
+        return tv
+    }
+
+    func updateUIView(_ tv: UITextView, context: Context) {
+        context.coordinator.apply(
+            tv: tv,
+            text: text,
+            fontSize: fontSize,
+            lineSpacing: lineSpacing,
+            useSerif: useSerifFont,
+            color: textColor
+        )
+    }
+
+    final class Coordinator {
+        private var lastText = ""
+        private var lastFontSize: Double = -1
+        private var lastLineSpacing: Double = -1
+        private var lastUseSerif = false
+        private var lastColor: UIColor = .clear
+
+        func apply(tv: UITextView, text: String, fontSize: Double, lineSpacing: Double, useSerif: Bool, color: UIColor) {
+            let styleChanged = text != lastText
+                || fontSize != lastFontSize
+                || lineSpacing != lastLineSpacing
+                || useSerif != lastUseSerif
+            let colorChanged = !color.isEqual(lastColor)
+
+            guard styleChanged || colorChanged else { return }
+
+            lastText = text
+            lastFontSize = fontSize
+            lastLineSpacing = lineSpacing
+            lastUseSerif = useSerif
+            lastColor = color
+
+            let font: UIFont
+            if useSerif, let serif = UIFont(name: "NotoSerifSC-Regular", size: CGFloat(fontSize)) {
+                font = serif
+            } else {
+                font = .systemFont(ofSize: CGFloat(fontSize))
+            }
+
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineSpacing = CGFloat(fontSize * (lineSpacing - 1))
+
+            tv.attributedText = NSAttributedString(string: text, attributes: [
+                .font: font,
+                .foregroundColor: color,
+                .paragraphStyle: paragraph
+            ])
+        }
+    }
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -298,13 +380,8 @@ final class TxtReaderViewModel: ObservableObject {
 
     @Published private(set) var state: State = .loading
     @Published private(set) var text = ""
-    /// 按换行拆分后的行数组，正文用 LazyVStack 懒加载渲染（见 TxtReaderView），避免单 Text 渲染全文
-    @Published private(set) var lines: [String] = []
     @Published private(set) var encodingName = ""
     @Published private(set) var truncated = false
-
-    /// 懒加载渲染的行数上限：防止极端文本（如每行仅 1 字符）时 LazyVStack 子视图数量爆炸
-    private static let maxRenderLines = 200_000
 
     /// 阅读排版（改动即持久化，与小说阅读器共享 Reader 偏好）
     @Published var appearance: ReaderAppearance {
@@ -348,12 +425,8 @@ final class TxtReaderViewModel: ObservableObject {
                 adapter: adapter, path: entry.path, limit: TextFileLoader.readerLimit
             )
             text = loaded.text
-            // 按换行拆分（保留空行）并缓存；正文用 LazyVStack 懒加载渲染，避免单 Text 渲染全文触发整段排版/文本选择索引
-            let allLines = loaded.text.components(separatedBy: "\n")
-            let overLineLimit = allLines.count > Self.maxRenderLines
-            lines = overLineLimit ? Array(allLines.prefix(Self.maxRenderLines)) : allLines
             encodingName = loaded.encodingName
-            truncated = loaded.truncated || overLineLimit
+            truncated = loaded.truncated
             state = .ready
         } catch is CancellationError {
         } catch {

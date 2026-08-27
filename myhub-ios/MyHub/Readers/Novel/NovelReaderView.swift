@@ -14,6 +14,8 @@ struct NovelReaderView: View {
     @State private var controlsVisible = true
     @State private var showCatalog = false
     @State private var showSettings = false
+    /// 左滑退出的跟手位移（屏幕左边缘右滑时内容整体右移，松手超过阈值关闭阅读器）
+    @State private var edgeDragOffset: CGFloat = 0
 
     init(context: NovelOpenContext) {
         self.context = context
@@ -26,6 +28,7 @@ struct NovelReaderView: View {
         ZStack {
             viewModel.themeSpec.background.ignoresSafeArea()
             content
+                .offset(x: edgeDragOffset)
             // 点击分区仅在翻页模式显示：滚动模式下全屏透明点击层会拦截 ScrollView 的滚动手势
             if viewModel.state == .ready, viewModel.appearance.pageMode == .paging {
                 touchZones
@@ -34,6 +37,28 @@ struct NovelReaderView: View {
                 controls
                     .transition(.opacity)
             }
+        }
+        .overlay(alignment: .leading) {
+            // 左滑退出手势区：仅占屏幕左边缘 24pt 窄条，不拦截 ScrollView 垂直滚动 / TabView 翻页 / 按钮点击。
+            EdgeSwipeBack(
+                onChanged: { translation in
+                    guard viewModel.state == .ready else { return }
+                    edgeDragOffset = translation
+                },
+                onEnded: { translation in
+                    let screenWidth = UIScreen.main.bounds.width
+                    if translation > screenWidth * 0.32 {
+                        // 超过阈值：内容滑出屏幕后关闭
+                        withAnimation(.appQuick) { edgeDragOffset = screenWidth }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            presenter.close()
+                        }
+                    } else {
+                        withAnimation(.appQuick) { edgeDragOffset = 0 }
+                    }
+                }
+            )
+            .frame(width: 24)
         }
         .statusBar(hidden: !controlsVisible)
         .animation(.appQuick, value: controlsVisible)
@@ -165,29 +190,88 @@ struct NovelReaderView: View {
 
     /// 滚动模式：连续滚动的页块（同一份分页结果，版式一致；程序滚动经 scrollIntent 联动）
     private var scrollingContent: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 28) {
-                    ForEach(0..<max(viewModel.pageCount, 1), id: \.self) { index in
-                        PagedTextLabel(attributedString: viewModel.pageContent(index))
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .id(index)
-                            .onAppear { viewModel.scrollVisiblePage(index) }
+        GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 28) {
+                        // 顶部哨兵：检测滚动到顶，用于跨章自动续读上一章
+                        Color.clear
+                            .frame(height: 1)
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: ScrollTopKey.self,
+                                        value: geo.frame(in: .named("novelScroll")).minY
+                                    )
+                                }
+                            )
+                        ForEach(viewModel.scrollStream) { page in
+                            PagedTextLabel(attributedString: viewModel.scrollPageContent(page))
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .id(page.id)
+                                .background(
+                                    // 可见页回写：GeometryReader 精确上报页块位置（onAppear 对 UIViewRepresentable 不可靠）
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: NovelVisibleKey.self,
+                                            value: [page: geo.frame(in: .named("novelScroll")).midY]
+                                        )
+                                    }
+                                )
+                        }
+                        // 底部哨兵：检测滚动到底，用于跨章自动续读下一章
+                        Color.clear
+                            .frame(height: 1)
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: ScrollEndKey.self,
+                                        value: geo.frame(in: .named("novelScroll")).maxY
+                                    )
+                                }
+                            )
+                    }
+                    .padding(.vertical, 8)
+                }
+                .coordinateSpace(name: "novelScroll")
+                .onTapGesture { withAnimation(.appQuick) { controlsVisible.toggle() } }
+                .onPreferenceChange(ScrollEndKey.self) { maxY in
+                    viewModel.scrollReachEnd(maxY <= viewport.size.height)
+                }
+                .onPreferenceChange(ScrollTopKey.self) { minY in
+                    viewModel.scrollReachTop(minY >= 0)
+                }
+                .onPreferenceChange(NovelVisibleKey.self) { values in
+                    // 最接近视口中点的页视为当前页（程序滚动期间由 scrollIntent 锁定忽略回写）
+                    guard viewModel.scrollIntent == nil else {
+                        AppLogger.shared.log("NovelVisible 忽略 scrollIntent=\(String(describing: viewModel.scrollIntent))", module: "novel-reader")
+                        return
+                    }
+                    guard !values.isEmpty else {
+                        AppLogger.shared.log("NovelVisible values 为空", module: "novel-reader")
+                        return
+                    }
+                    let mid = viewport.size.height / 2
+                    if let best = values.min(by: { abs($0.value - mid) < abs($1.value - mid) })?.key {
+                        viewModel.scrollVisiblePage(best)
                     }
                 }
-                .padding(.vertical, 8)
-            }
-            .onTapGesture { withAnimation(.appQuick) { controlsVisible.toggle() } }
-            .onChange(of: viewModel.scrollIntent) { target in
-                guard let target else { return }
-                withAnimation(.appQuick) {
-                    proxy.scrollTo(target, anchor: .top)
+                .onChange(of: viewModel.scrollIntentRevision) { _ in
+                    guard viewModel.scrollIntent != nil else { return }
+                    // 延迟一帧再滚动，确保 scrollStream 变更后的 LazyVStack 布局已完成，
+                    // 避免向上插入章节时 scrollTo 与布局竞争造成跳动。
+                    DispatchQueue.main.async {
+                        guard let current = viewModel.scrollIntent else { return }
+                        withAnimation(.appQuick) {
+                            proxy.scrollTo(current, anchor: .top)
+                        }
+                    }
                 }
-            }
-            .onAppear {
-                // 首次构建 / 重排后恢复页码定位（scrollIntent 可能先于视图出现被赋值）
-                if let target = viewModel.scrollIntent {
-                    proxy.scrollTo(target, anchor: .top)
+                .onAppear {
+                    // 首次构建 / 重排后恢复页码定位（scrollIntent 可能先于视图出现被赋值）
+                    if let target = viewModel.scrollIntent {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
                 }
             }
         }
@@ -416,6 +500,7 @@ struct ReaderSettingsPanel: View {
                 // 主题
                 settingRow(title: "主题") {
                     Picker("主题", selection: themeBinding) {
+                        Text("自动").tag(ReaderTheme.auto)
                         Text("日间").tag(ReaderTheme.day)
                         Text("护眼").tag(ReaderTheme.eyeCare)
                         Text("夜间").tag(ReaderTheme.night)
@@ -526,4 +611,87 @@ struct ReaderSettingsPanel: View {
             ? "\(Int(AppSettings.Reader.brightness * 100))%"
             : "跟随系统"
     }
+}
+
+// MARK: - 滚动模式偏好键（可见页回写 + 滚动到底跨章）
+
+private struct ScrollEndKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ScrollTopKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct NovelVisibleKey: PreferenceKey {
+    static var defaultValue: [ScrollPage: CGFloat] = [:]
+    static func reduce(value: inout [ScrollPage: CGFloat], nextValue: () -> [ScrollPage: CGFloat]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+// MARK: - 左滑退出（fullScreenCover 无系统侧滑返回，补一个边缘右滑手势）
+
+/// 阅读器左边缘右滑退出手势桥接。
+/// 阅读器经 `.fullScreenCover` 呈现（模态，非 NavigationStack push），没有系统侧滑返回手势，
+/// 这里挂一个 `UIScreenEdgePanGestureRecognizer` 补上「从屏幕左边缘右滑退出」的交互。
+/// 承载视图仅左边缘窄条参与 hit-test，其余区域穿透，避免拦截 ScrollView 滚动 / TabView 翻页。
+private struct EdgeSwipeBack: UIViewRepresentable {
+    let onChanged: (CGFloat) -> Void
+    let onEnded: (CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIView(context: Context) -> EdgeSwipeBackView {
+        let view = EdgeSwipeBackView()
+        let edge = UIScreenEdgePanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handle(_:))
+        )
+        edge.edges = .left
+        edge.delegate = context.coordinator
+        view.addGestureRecognizer(edge)
+        context.coordinator.edge = edge
+        return view
+    }
+
+    func updateUIView(_ view: EdgeSwipeBackView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: EdgeSwipeBack
+        weak var edge: UIScreenEdgePanGestureRecognizer?
+
+        init(parent: EdgeSwipeBack) { self.parent = parent }
+
+        @objc func handle(_ g: UIScreenEdgePanGestureRecognizer) {
+            let translation = g.translation(in: g.view).x
+            switch g.state {
+            case .began, .changed:
+                parent.onChanged(max(0, translation))
+            case .ended, .cancelled, .failed:
+                parent.onEnded(max(0, translation))
+            default:
+                break
+            }
+        }
+    }
+}
+
+/// 左滑退出手势的透明承载视图。仅作为 `UIScreenEdgePanGestureRecognizer` 的宿主，
+/// 实际命中范围由外部 `.frame(width: 24)` 限定在屏幕左边缘窄条内。
+private final class EdgeSwipeBackView: UIView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
