@@ -89,6 +89,9 @@ struct ReadingProgress: Codable, FetchableRecord, PersistableRecord, Identifiabl
     var percent: Double
     var finished: Bool
     var updatedAt: Date
+    /// 文件指纹（stat 成功后持久化）：供重进「正在阅读」时直接构造真实 entry，封面秒出（命中浏览页磁盘缓存），无需等待每次的 stat 网络请求
+    var fileSize: Int64? = nil
+    var modTime: Date? = nil
 
     static let databaseTableName = "readingProgress"
 

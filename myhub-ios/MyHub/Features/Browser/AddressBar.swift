@@ -5,7 +5,6 @@ import UIKit
 /// URL 智能识别（合法 URL 直接导航，否则走默认搜索引擎）、域名 + HTTPS 安全图标、聚焦全选。
 struct AddressBar: View {
     @ObservedObject var tab: BrowserTab
-    @EnvironmentObject private var dataStore: BrowserDataStore
     /// 提交（导航）回调：由父视图交给 `BrowserSessionStore.open`
     var onSubmit: (URL) -> Void
 
@@ -30,8 +29,6 @@ struct AddressBar: View {
                     .font(.subheadline)
                     .lineLimit(1)
                     .foregroundStyle(AppColors.textPrimary)
-                Spacer(minLength: 0)
-                bookmarkButton
             }
         }
         .padding(.horizontal, 12)
@@ -71,31 +68,6 @@ struct AddressBar: View {
                 .font(.caption)
                 .foregroundStyle(AppColors.textSecondary)
         }
-    }
-
-    // MARK: - 书签（TODO §8.3 星标收藏）
-
-    private var isBookmarked: Bool {
-        guard let url = tab.currentURL else { return false }
-        return dataStore.isBookmarked(url.absoluteString)
-    }
-
-    private var bookmarkButton: some View {
-        Button {
-            guard let url = tab.currentURL else { return }
-            let title = tab.title.isEmpty ? (url.host ?? url.absoluteString) : tab.title
-            dataStore.toggleBookmark(
-                title: title,
-                url: url.absoluteString,
-                favicon: tab.faviconURL?.absoluteString
-            )
-        } label: {
-            Image(systemName: isBookmarked ? "star.fill" : "star")
-                .font(.subheadline)
-                .foregroundStyle(isBookmarked ? AppColors.primary : AppColors.textSecondary)
-        }
-        .buttonStyle(.plain)
-        .disabled(tab.currentURL == nil)
     }
 
     // MARK: - 行为

@@ -14,7 +14,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     // MARK: - 可观察状态（KVO 驱动）
 
     @Published var title = ""
-    @Published var currentURL: URL?
+    @Published var currentURL: URL? {
+        didSet {
+            // 相同值（如重定向回原 URL）不重复触发；init 中的初始赋值不会触发 didSet
+            guard currentURL != oldValue else { return }
+            onStateChange?()
+        }
+    }
     @Published var faviconURL: URL?
     @Published var estimatedProgress: Double = 0
     @Published var isLoading = false
@@ -29,11 +35,19 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 页面向上滚动（手指上滑）标志：用于收起底部操作栏（TODO §8.2）
     @Published var isScrollingUp = false
 
+    /// 起始页回退标记：从起始页导航进入过页面后为 `true`，
+    /// 使「回退」按钮在 webView 历史为空时仍可返回到起始页（Safari 行为）
+    @Published private(set) var startedFromStartPage = false
+
     /// `target=_blank` / `window.open` 回调：交给 `BrowserSessionStore` 新建标签
     var onOpenNewTab: ((URL) -> Void)?
 
     /// 主资源加载完成回调（url, title）：记录浏览历史（无痕不记录，TODO §8.3）
     var onDidFinishVisit: ((URL, String) -> Void)?
+
+    /// 标签状态变化回调（当前 URL 变化等）：由 `BrowserSessionStore` 订阅，驱动会话持久化，
+    /// 保证「导航后直接退出」也能保存上一次打开的页面
+    var onStateChange: (() -> Void)?
 
     private var observations: [NSKeyValueObservation] = []
 
@@ -66,6 +80,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     // MARK: - 导航操作
 
     func load(_ url: URL) {
+        // 从起始页导航进入页面：起始页成为可回退的第一页（需在 currentURL 更新前判断）
+        if isShowingStartPage {
+            startedFromStartPage = true
+        }
         clearError()
         currentURL = url   // 立即更新：隐藏起始页、刷新地址栏
         webView.load(URLRequest(url: url))
@@ -80,8 +98,31 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         webView.stopLoading()
     }
 
-    func goBack() { webView.goBack() }
+    /// 回退可用性：webView 历史栈可回退，或当前位于「从起始页进入」的页面（可回退到起始页）
+    var canGoBackOrStartPage: Bool {
+        webView.canGoBack || (startedFromStartPage && !isShowingStartPage)
+    }
+
+    /// 回退：优先走 webView 历史栈；栈空且从起始页进入时回退到起始页
+    func goBack() {
+        if webView.canGoBack {
+            webView.goBack()
+        } else if startedFromStartPage, !isShowingStartPage {
+            showStartPage()
+        }
+    }
+
     func goForward() { webView.goForward() }
+
+    /// 回退到起始页：清空 URL 展示起始页，并清空 webView 导航历史，
+    /// 使下一次从起始页的导航成为新的历史根，避免残留旧历史
+    private func showStartPage() {
+        startedFromStartPage = false
+        currentURL = nil
+        if #available(iOS 15.0, *) {
+            webView.backForwardList.removeAllItems()
+        }
+    }
 
     /// 展示标签卡片网格所需的快照（用于持久化）
     var snapshot: BrowserTabSnapshot {
@@ -125,15 +166,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 let value = webView.hasOnlySecureContent
                 Task { @MainActor [weak self] in self?.hasOnlySecureContent = value }
             },
-            // 滚动方向：contentOffset.y 增大 = 手指上滑（收起操作栏）
+            // 滚动方向：手指上滑 = 收起操作栏（缩小为胶囊），下滑 = 展开；
+            // 下滑（含滚回顶部回弹区）始终恢复展开，避免操作栏收起后无法恢复
             webView.scrollView.observe(\.contentOffset, options: [.new, .old]) { [weak self] scrollView, change in
                 let newY = scrollView.contentOffset.y
                 let oldY = change.oldValue?.y ?? newY
                 let delta = newY - oldY
-                // 忽略顶部回弹区与微小抖动
-                guard newY > 0, abs(delta) > 2 else { return }
-                let scrollingUp = delta > 0
-                Task { @MainActor [weak self] in self?.isScrollingUp = scrollingUp }
+                // 忽略微小抖动
+                guard abs(delta) > 2 else { return }
+                if delta < 0 {
+                    Task { @MainActor [weak self] in self?.isScrollingUp = false }
+                } else if newY > 0 {
+                    // 手指上滑且非顶部回弹区：收起
+                    Task { @MainActor [weak self] in self?.isScrollingUp = true }
+                }
             }
         ]
     }

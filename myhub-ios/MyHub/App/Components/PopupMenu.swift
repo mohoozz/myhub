@@ -158,10 +158,21 @@ struct BottomMenuDrawer: View {
 
     private let rowHeight: CGFloat = 50
     private let handleHeight: CGFloat = 26   // 把手区（5 + 上 8 + 下 13）
-    private let bottomPadding: CGFloat = 8
+    private let bottomPadding: CGFloat = 12
     private let maxHeightRatio: CGFloat = 0.75
     private let cornerRadius: CGFloat = 16
     private let maxWidth: CGFloat = 520      // iPad 限宽居中
+
+    /// 底部安全区高度（Home 指示条）：本视图 `.ignoresSafeArea()` 后
+    /// `GeometryProxy.safeAreaInsets` 会失效为 0，需从 keyWindow 读取真实值，
+    /// 否则最底部菜单项会贴着屏幕底边、不好点击。
+    private var bottomInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?
+            .windows.first(where: { $0.isKeyWindow })?
+            .safeAreaInsets.bottom ?? 0
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -209,7 +220,7 @@ struct BottomMenuDrawer: View {
                         }
                     }
 
-                    Color.clear.frame(height: bottomPadding)
+                    Color.clear.frame(height: bottomPadding + bottomInset)
                 }
                 .frame(height: height)
                 .frame(maxWidth: maxWidth)
@@ -232,7 +243,7 @@ struct BottomMenuDrawer: View {
 
     /// 抽屉高度：把手 + 列表 + 底部留白 + Home 指示条区；超过上限时列表内部滚动
     private func drawerHeight(in geo: GeometryProxy) -> CGFloat {
-        let content = handleHeight + CGFloat(items.count) * rowHeight + bottomPadding + geo.safeAreaInsets.bottom
+        let content = handleHeight + CGFloat(items.count) * rowHeight + bottomPadding + bottomInset
         return min(content, geo.size.height * maxHeightRatio)
     }
 

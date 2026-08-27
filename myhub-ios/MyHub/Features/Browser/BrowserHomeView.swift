@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 内置浏览器主页（TODO §8.1/§8.2，IOS-401）：
-/// 标签内容保活区 + 底部操作栏（含居中地址栏，滚动收起/点击展开）。
+/// 标签内容保活区 + 底部操作栏（含居中地址栏，滚动收起为小胶囊/下滑或点击展开，Safari 风格）。
 /// Safari 风格卡片网格标签管理（新建/关闭/切换 + 无痕开关）。
 struct BrowserHomeView: View {
     @EnvironmentObject private var session: BrowserSessionStore
@@ -11,26 +11,36 @@ struct BrowserHomeView: View {
     @State private var showingBookmarks = false
     @State private var showingHistory = false
     @State private var showingSettings = false
-    @State private var toolbarCollapsed = false
+    /// 操作栏是否收起为底部小胶囊（而非完全隐藏，始终可见可点击）
+    @State private var toolbarMini = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            contentArea
-            if !toolbarCollapsed, let tab = session.activeTab {
-                BrowserToolbar(
-                    tab: tab,
-                    tabCount: session.visibleTabs.count,
-                    menuItems: menuItems,
-                    onTabs: { showingTabs = true },
-                    onSubmitAddress: { url in session.open(url) }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                contentArea
+                // 展开态：完整操作栏占位底部
+                if !toolbarMini, let tab = session.activeTab {
+                    BrowserToolbar(
+                        tab: tab,
+                        tabCount: session.visibleTabs.count,
+                        menuItems: menuItems,
+                        onTabs: { showingTabs = true },
+                        onSubmitAddress: { url in session.open(url) }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            // 收起态：底部中央小胶囊（Safari 风格），点击展开完整操作栏
+            if toolbarMini, let tab = session.activeTab, !tab.isShowingStartPage {
+                miniCapsule(tab)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    .padding(.bottom, 10)
             }
         }
         .background(AppColors.pageBackground)
-        .animation(.appFast, value: toolbarCollapsed)
+        .animation(.appFast, value: toolbarMini)
         .onChange(of: session.activeTabID) { _ in
-            toolbarCollapsed = false
+            toolbarMini = false
         }
         .fullScreenCover(isPresented: $showingTabs) {
             TabGridView()
@@ -61,7 +71,8 @@ struct BrowserHomeView: View {
                 .accessibilityHidden(tab.id != session.activeTabID)
                 .onChange(of: tab.isScrollingUp) { scrollingUp in
                     guard tab.id == session.activeTabID else { return }
-                    toolbarCollapsed = scrollingUp
+                    // 起始页（新标签页）不收起；其余上滑收起、下滑展开
+                    toolbarMini = scrollingUp && !tab.isShowingStartPage
                 }
             }
         }
@@ -75,8 +86,37 @@ struct BrowserHomeView: View {
     }
 
     private func expandToolbar() {
-        guard toolbarCollapsed else { return }
-        toolbarCollapsed = false
+        guard toolbarMini else { return }
+        toolbarMini = false
+    }
+
+    // MARK: - 收起态小胶囊（Safari 风格）
+
+    /// 操作栏收起后缩为底部中央的小胶囊：锁图标 + 域名，点击展开完整操作栏
+    private func miniCapsule(_ tab: BrowserTab) -> some View {
+        Button {
+            expandToolbar()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: tab.hasOnlySecureContent ? "lock.fill" : "lock.open")
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textSecondary)
+                Text(tab.currentURL?.host ?? "网页")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(
+                Capsule()
+                    .fill(AppColors.cardBackground)
+                    .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+            )
+            .overlay(Capsule().stroke(AppColors.separator, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("展开浏览器操作栏")
     }
 
     // MARK: - 菜单

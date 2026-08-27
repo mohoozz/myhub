@@ -54,9 +54,13 @@ struct MyHubApp: App {
                 .environmentObject(browserDataStore)
                 .environmentObject(browseDisplaySettings)
                 .environmentObject(connectionStore)
-                // 进入后台时按设置上锁，返回前台显示锁定遮罩（TODO §10 安全）
+                // 进入后台时按设置上锁，返回前台显示锁定遮罩（TODO §10 安全）；
+                // 同时兜底落盘浏览器会话，确保导航后立即退出也不丢失
                 .onChange(of: scenePhase) { phase in
-                    if phase == .background { appLock.lockForBackground() }
+                    if phase == .background {
+                        appLock.lockForBackground()
+                        browserSession.persistNow()
+                    }
                 }
                 .overlay {
                     if appLock.isLocked {

@@ -70,6 +70,19 @@ final class ReadingHistoryStore: ObservableObject {
         reload()
     }
 
+    // MARK: - 文件指纹（stat 成功后写回，重进时秒出封面）
+
+    /// 更新指定记录的文件指纹（仅 stat 成功时调用；失败保留旧指纹，重进时封面仍可命中缓存）
+    func updateFingerprint(recordID: Int64, size: Int64, modTime: Date) {
+        guard let db = AppDatabase.shared.dbQueue else { return }
+        _ = try? db.write { database in
+            try database.execute(
+                sql: "UPDATE readingProgress SET fileSize = ?, modTime = ? WHERE id = ?",
+                arguments: [size, modTime, recordID]
+            )
+        }
+    }
+
     /// 更新某连接下记录的 filePath（源文件重命名后同步，目录重命名时内部文件路径前缀一并更新）
     func updatePath(connectionID: Int64, from oldPath: String, to newPath: String) {
         guard let db = AppDatabase.shared.dbQueue else { return }

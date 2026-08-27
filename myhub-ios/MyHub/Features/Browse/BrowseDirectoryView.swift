@@ -9,33 +9,15 @@ struct BrowseLocation: Hashable, Codable {
     var path: String
 }
 
-/// 搜索栏跨版本适配：iOS 26 起 `.searchable` 默认把搜索栏挪到屏幕底部（常驻显示），
-/// 与 `.refreshable` 叠加后会导致内容区无法上下滚动（TODO 283）。这里在 iOS 26 上显式
-/// 用 `.navigationBarDrawer(displayMode: .automatic)` 把搜索栏放回导航栏抽屉——默认收起、
-/// 上滑到顶部才动画展开、再上滑才触发刷新（TODO 284）；iOS 26 以下维持系统默认的顶部搜索栏。
-private extension View {
-    @ViewBuilder
-    func browseSearchable(text: Binding<String>) -> some View {
-        if #available(iOS 26.0, *) {
-            self.searchable(
-                text: text,
-                placement: .navigationBarDrawer(displayMode: .automatic),
-                prompt: "搜索当前目录"
-            )
-        } else {
-            self.searchable(text: text, prompt: "搜索当前目录")
-        }
-    }
-
-    /// 下拉刷新跨版本适配：iOS 26 上 `.refreshable` 与 `.searchable` 叠加会导致内容区无法上下滚动
-    /// （TODO 283/284），因此 iOS 26 不挂下拉刷新（刷新功能仍由右上角「…」菜单里的「刷新」提供）。
-    @ViewBuilder
-    func browseRefreshable(_ action: @escaping @Sendable () async -> Void) -> some View {
-        if #available(iOS 26.0, *) {
-            self
-        } else {
-            self.refreshable { await action() }
-        }
+/// 浏览内容区滚动偏移上报：minY >= 0 表示已回到顶部。
+/// 用于驱动「搜索框在顶部时出现在面包屑与内容之间，下滑即隐藏」（TODO 336）。
+/// 采用自绘搜索框替代系统 `.searchable`：iOS 26 上 `.searchable` 与 `.refreshable`
+/// 叠加会导致内容区无法上下滚动（TODO 283/284），自绘后各 iOS 版本统一挂载 `.refreshable`，
+/// 下拉刷新图标（TODO 335）与搜索框两全。
+private struct BrowseScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -76,6 +58,8 @@ struct BrowseDirectoryView: View {
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var deletingPaths: Set<String>?
     @State private var forceDeletePaths: Set<String>?
+    /// 内容区滚动偏移（顶部为 0）：驱动搜索框显示/隐藏
+    @State private var scrollOffset: CGFloat = 0
 
     init(
         connection: Connection,
@@ -150,14 +134,20 @@ struct BrowseDirectoryView: View {
             )
             Divider().overlay(AppColors.separator)
 
+            if showSearchBar {
+                searchBar
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                Divider().overlay(AppColors.separator)
+            }
+
             content
         }
+        .animation(.appQuick, value: showSearchBar)
         .background(AppColors.pageBackground)
         // 普通浏览态隐藏导航栏标题：当前目录/路径已由正文顶部面包屑承载，避免与面包屑重复、令导航栏更清爽；
         // 仅多选态保留「已选 N 项」作为操作状态反馈。
         .navigationTitle(viewModel.isSelecting ? "已选 \(viewModel.selection?.count ?? 0) 项" : "")
         .navigationBarTitleDisplayMode(.inline)
-        .browseSearchable(text: $viewModel.searchText)
         // 液体玻璃关闭时隐藏系统返回按钮，改用无玻璃自定义返回（见 toolbar）
         .navigationBarBackButtonHidden(showsPlainBack)
         .toolbar { toolbar }
@@ -313,9 +303,21 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 内容区
 
+    /// 搜索框可见性：滚动回到顶部附近（含下拉刷新回弹）才显示
+    private var showSearchBar: Bool { scrollOffset >= -1 }
+
     @ViewBuilder
     private var content: some View {
         ScrollView {
+            // 顶部零高探测器：滚动偏移通过 preference 上报，驱动搜索框显隐
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: BrowseScrollOffsetKey.self,
+                    value: proxy.frame(in: .named("browseScroll")).minY
+                )
+            }
+            .frame(height: 0)
+
             switch viewModel.state {
             case .loading:
                 loadingState
@@ -329,7 +331,51 @@ struct BrowseDirectoryView: View {
                 }
             }
         }
-        .browseRefreshable { await viewModel.refresh() }
+        .coordinateSpace(name: "browseScroll")
+        .refreshable { await viewModel.refresh() }
+        .scrollDismissesKeyboard(.immediately)
+        .onPreferenceChange(BrowseScrollOffsetKey.self) { value in
+            // 仅在跨过可见性阈值时更新，避免滚动过程中每帧重绘
+            let shouldShow = value >= -1
+            if (scrollOffset >= -1) != shouldShow {
+                scrollOffset = shouldShow ? 0 : value
+            }
+        }
+    }
+
+    /// 搜索框：位于面包屑与内容之间，仅在列表处于顶部时显示（下滑隐藏，TODO 336）
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(AppColors.textSecondary)
+            TextField("搜索当前目录", text: $viewModel.searchText)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textPrimary)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !viewModel.searchText.isEmpty {
+                Button {
+                    viewModel.searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(AppColors.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(AppColors.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(AppColors.separator, lineWidth: 0.5)
+                )
+        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private func fileCollection(adapter: StorageAdapter) -> some View {
@@ -832,14 +878,14 @@ private struct BreadcrumbBar: View {
                 ForEach(Array(crumbs.enumerated()), id: \.offset) { index, crumb in
                     if index > 0 {
                         Image(systemName: "chevron.right")
-                            .font(.caption2)
+                            .font(.subheadline)
                             .foregroundStyle(AppColors.textSecondary)
                     }
                     Button {
                         onSelect(index)
                     } label: {
                         Text(crumb)
-                            .font(.subheadline)
+                            .font(.headline)
                             .foregroundStyle(index == crumbs.count - 1
                                              ? AppColors.textPrimary : AppColors.primary)
                             .lineLimit(1)

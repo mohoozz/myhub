@@ -26,6 +26,11 @@ struct ReadingHomeView: View {
     @State private var adapters: [Int64: StorageAdapter] = [:]
     @State private var resolved: [Int64: FileEntry] = [:]   // stat 后的最新条目（供文件指纹校验）
     @State private var resolving: Set<Int64> = []
+    /// stat 失败时间（连接抖动/源文件删除时进入冷却，期满后自动重试，避免封面永久占位）
+    @State private var statFailedAt: [Int64: Date] = [:]
+    @State private var retryScheduled = false
+    private let statConcurrency = 8
+    private let statRetryInterval: TimeInterval = 30
     @State private var confirmDeleteIDs: [Int64]?
     /// 「删除源文件」确认：优先移入回收站；回收站不可用时降级「彻底删除」确认（与浏览界面一致）
     @State private var deletingSourceIDs: [Int64]?
@@ -575,9 +580,21 @@ struct ReadingHomeView: View {
 
     // MARK: - 数据解析
 
-    /// 记录 → FileEntry（stat 成功用最新值——文件指纹校验依赖准确的 size/modTime；否则按记录构造兜底）
+    /// 记录 → FileEntry：stat 成功用最新值（文件指纹校验依赖准确的 size/modTime）；
+    /// 否则用库内持久化的指纹（重进 app 时 stat 尚未完成也能得到真实 size > 0 的 entry，
+    /// 封面直接命中浏览页磁盘缓存秒出，不被 stat 网络请求阻塞）；都没有才落兜底占位。
     private func entry(for record: ReadingProgress) -> FileEntry {
         if let resolved = resolved[record.id ?? -1] { return resolved }
+        if let fileSize = record.fileSize, fileSize > 0, let modTime = record.modTime {
+            return FileEntry(
+                name: StoragePath.fileName(of: record.filePath),
+                path: record.filePath,
+                isDir: false,
+                size: fileSize,
+                modTime: modTime,
+                ext: StoragePath.ext(of: record.filePath)
+            )
+        }
         return FileEntry(
             name: StoragePath.fileName(of: record.filePath),
             path: record.filePath,
@@ -601,23 +618,51 @@ struct ReadingHomeView: View {
         })
     }
 
-    /// 批量 stat 解析最新 FileEntry（限并发 3；失败落兜底条目，避免反复重试）
+    /// 批量 stat 解析最新 FileEntry（限并发 statConcurrency）：
+    /// - 成功写入 resolved（视图重建后封面走 RemoteCoverImage 命中浏览页磁盘缓存），
+    ///   并把最新指纹写回数据库（重进 app 时先用旧指纹秒出封面，后台静默校正）；
+    /// - 失败不写 resolved（保持 nil，库内旧指纹保留——封面仍可命中缓存不丢），
+    ///   进入 statFailedAt 冷却，期满后自动重试——避免弱网/连接抖动时一次失败导致封面永久占位。
     private func resolveAll() {
+        let now = Date()
         let targets = history.records.filter {
             let id = $0.id ?? -1
-            return resolved[id] == nil && !resolving.contains(id)
+            guard resolved[id] == nil && !resolving.contains(id) else { return false }
+            if let failedAt = statFailedAt[id] {
+                return now.timeIntervalSince(failedAt) >= statRetryInterval   // 冷却期满才允许重试
+            }
+            return true
         }
         guard !targets.isEmpty else { return }
-        for record in targets.prefix(3) {
+        for record in targets.prefix(statConcurrency) {
             guard let recordID = record.id,
                   let adapter = adapters[record.connectionID] else { continue }
             resolving.insert(recordID)
             Task { @MainActor in
-                let entry = (try? await adapter.stat(record.filePath)) ?? entry(for: record)
+                do {
+                    let entry = try await adapter.stat(record.filePath)
+                    statFailedAt[recordID] = nil
+                    resolved[recordID] = entry
+                    history.updateFingerprint(recordID: recordID, size: entry.size, modTime: entry.modTime)
+                } catch {
+                    // 失败：记录失败时间（不写 resolved，保持 nil 以便冷却期满后重试）
+                    statFailedAt[recordID] = Date()
+                    scheduleStatRetry()
+                }
                 resolving.remove(recordID)
-                resolved[recordID] = entry
                 resolveAll()   // 继续下一批
             }
+        }
+    }
+
+    /// 存在失败记录时，安排冷却期满后的自动重试（仅调度一次，成功后自然不再进入）
+    private func scheduleStatRetry() {
+        guard !retryScheduled else { return }
+        retryScheduled = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(statRetryInterval * 1_000_000_000))
+            retryScheduled = false
+            resolveAll()
         }
     }
 

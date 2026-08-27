@@ -37,7 +37,7 @@ final class BrowserSessionStore: ObservableObject {
         return tab
     }
 
-    /// 统一配置标签回调（新窗口 + 历史记录）
+    /// 统一配置标签回调（新窗口 + 历史记录 + 会话持久化）
     private func configure(_ tab: BrowserTab) {
         tab.onOpenNewTab = { [weak self] url in
             self?.newTab(url: url)
@@ -48,6 +48,10 @@ final class BrowserSessionStore: ObservableObject {
                 url: url.absoluteString,
                 favicon: nil
             )
+        }
+        // URL 变化即持久化：导航（地址栏输入/点击链接/重定向）后直接退出也能恢复
+        tab.onStateChange = { [weak self] in
+            self?.persist()
         }
     }
 
@@ -98,6 +102,11 @@ final class BrowserSessionStore: ObservableObject {
     }
 
     // MARK: - 会话持久化（退出保存 + 启动恢复）
+
+    /// App 进入后台/即将终止时兜底落盘（由 App 层 `scenePhase` 回调调用）
+    func persistNow() {
+        persist()
+    }
 
     /// 仅持久化非无痕标签（无痕标签关闭即失忆）
     private func persist() {
