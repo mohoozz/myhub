@@ -253,6 +253,7 @@ struct ReadingHomeView: View {
         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
         .cellPressableMenu(
             cornerRadius: 14,
+            highlightShape: .circle,
             items: menuItems(for: record),
             onTap: { tap(record) }   // 长按弹底部抽屉菜单；指针右键弹锚点菜单
         )
@@ -303,6 +304,7 @@ struct ReadingHomeView: View {
             )
             .cellPressableMenu(
                 cornerRadius: 0,
+                highlightShape: .circle,
                 items: menuItems(for: record),
                 onTap: { tap(record) }
             )

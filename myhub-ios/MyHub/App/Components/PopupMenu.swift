@@ -375,6 +375,14 @@ private struct PopupSecondaryMenuModifier: ViewModifier {
 
 // MARK: - 单元格按压交互
 
+/// 单元格按压高亮形状
+enum CellPressHighlightShape {
+    /// 圆角矩形（默认，铺满整行/卡片）
+    case roundedRect
+    /// 圆形（取卡片短边为直径，居中显示）
+    case circle
+}
+
 /// 单元格按压交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单无法触发）：
 /// - 点击 → onTap；长按 → 底部抽屉菜单（互斥：长按识别后松开不再触发点击）；
 /// - 按压中内容缩放 0.97（保留按压反馈），高亮基于原始 frame 铺满整行/卡片，
@@ -382,6 +390,7 @@ private struct PopupSecondaryMenuModifier: ViewModifier {
 /// - iPad/Mac 指针右键弹锚点圆角菜单（与长按同一组菜单项）。
 private struct CellPressModifier: ViewModifier {
     var cornerRadius: CGFloat = 12
+    let highlightShape: CellPressHighlightShape
     let items: [PopupMenuItem]
     let onTap: () -> Void
 
@@ -389,16 +398,32 @@ private struct CellPressModifier: ViewModifier {
     @State private var isPressing = false
     @State private var anchor: CGRect = .zero
 
+    /// 按压高亮：圆形时取卡片短边为直径、居中绘制正圆
+    @ViewBuilder
+    private var pressHighlight: some View {
+        switch highlightShape {
+        case .roundedRect:
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
+        case .circle:
+            GeometryReader { geo in
+                let side = min(geo.size.width, geo.size.height)
+                Circle()
+                    .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
+                    .frame(width: side, height: side)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
     func body(content: Content) -> some View {
         content
             .background(AnchorReader(anchor: $anchor))
             // 先缩放内容（保留 0.97 按压反馈），高亮 overlay 叠加在其后：
             // 高亮基于原始 frame 铺满整行，内容缩放时不会漏出四周直角空隙
             .scaleEffect(isPressing ? 0.97 : 1)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
-            )
+            .overlay(pressHighlight)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(PressBridge(
                 onTap: onTap,
@@ -432,11 +457,13 @@ extension View {
     /// 单元格交互：点击 + 长按弹底部抽屉菜单 + 指针右键弹锚点菜单（修复 Button 吞长按）
     func cellPressableMenu(
         cornerRadius: CGFloat = 12,
+        highlightShape: CellPressHighlightShape = .roundedRect,
         items: [PopupMenuItem],
         onTap: @escaping () -> Void
     ) -> some View {
         modifier(CellPressModifier(
             cornerRadius: cornerRadius,
+            highlightShape: highlightShape,
             items: items,
             onTap: onTap
         ))

@@ -41,6 +41,25 @@ final class NowPlaying {
             .store(in: &cancellables)
 
         setupRemoteCommands()
+
+        // 后台保活：软解引擎(VLCKit)退后台瞬间可能自动暂停，延迟重断言播放
+        NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.handleEnterBackground() }
+            }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.handleWillEnterForeground() }
+            }
+            .store(in: &cancellables)
+
+        // 音频中断（来电/Siri/其他 App 抢占音频）结束后的恢复
+        NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .sink { [weak self] note in
+                Task { @MainActor [weak self] in self?.handleInterruption(note) }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - 封面（与播放页共享 CoverService 缓存）
@@ -113,6 +132,61 @@ final class NowPlaying {
             info[MPMediaItemPropertyArtwork] = artwork
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    // MARK: - 后台保活 / 音频中断
+
+    /// 退后台瞬间是否正在播放（重断言只针对「系统自动暂停」，用户主动暂停不干预）
+    private var playingBeforeBackground = false
+    /// 音频被打断前是否在播放
+    private var playingBeforeInterruption = false
+
+    /// 退后台：VLCKit/系统可能在退后台瞬间自动暂停，短暂延迟后按播放意图重断言一次
+    private func handleEnterBackground() {
+        let core = PlayerCore.shared
+        playingBeforeBackground = core.isPlaying
+        guard playingBeforeBackground else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.playingBeforeBackground else { return }
+                let core = PlayerCore.shared
+                // 用户在控制中心主动暂停(pausedAt != nil)则不干预；仅恢复系统自动暂停
+                if core.state == .paused, core.pausedAt == nil {
+                    core.play()
+                }
+                self.playingBeforeBackground = false
+            }
+        }
+    }
+
+    /// 回前台兜底：若退后台期间被系统自动暂停（非用户主动）则恢复
+    private func handleWillEnterForeground() {
+        let core = PlayerCore.shared
+        guard playingBeforeBackground, core.state == .paused, core.pausedAt == nil else { return }
+        core.play()
+        playingBeforeBackground = false
+    }
+
+    /// 音频中断：来电/其他 App 抢占用结束后，按系统建议恢复播放
+    private func handleInterruption(_ notification: Notification) {
+        guard
+            let typeRaw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: typeRaw)
+        else { return }
+        switch type {
+        case .began:
+            playingBeforeInterruption = PlayerCore.shared.isPlaying
+        case .ended:
+            let shouldResume = (notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                .map { AVAudioSession.InterruptionOptions(rawValue: $0).contains(.shouldResume) } ?? false
+            try? AVAudioSession.sharedInstance().setActive(true)
+            if playingBeforeInterruption, shouldResume {
+                PlayerCore.shared.play()
+            }
+            playingBeforeInterruption = false
+        @unknown default:
+            break
+        }
     }
 
     // MARK: - 远程控制

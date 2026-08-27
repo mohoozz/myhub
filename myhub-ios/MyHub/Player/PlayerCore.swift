@@ -63,6 +63,11 @@ final class PlayerCore: ObservableObject {
 
     var isPlaying: Bool { state == .playing }
 
+    /// 用户主动暂停时间（UI / 控制中心调用 pause() 时记录）。
+    /// 系统自动暂停（退后台、VLCKit 自动暂停、音频中断）不经过 pause()，保持 nil，
+    /// 后台保活据此区分「用户不想播」与「系统误暂停」。
+    private(set) var pausedAt: Date?
+
     /// 是否处于 seek 等待（目标位置尚未缓冲到），UI 据此显示加载菊花
     var isSeeking: Bool { seekTarget != nil }
 
@@ -90,6 +95,7 @@ final class PlayerCore: ObservableObject {
         rate = Float(min(3.0, max(0.5, AppSettings.Player.defaultSpeed)))
         lastReportAt = 0
         lastTimeRefreshAt = 0
+        pausedAt = nil
         state = .loading
 
         let kind = await EngineRouter.resolve(url: request.url, preference: request.decodePreference ?? .auto)
@@ -109,10 +115,12 @@ final class PlayerCore: ObservableObject {
     // MARK: - 播放控制
 
     func play() {
+        pausedAt = nil
         engine?.play()
     }
 
     func pause() {
+        pausedAt = Date()
         engine?.pause()
         report(force: true)
     }

@@ -54,6 +54,8 @@ final class AVPlayerEngine: PlaybackEngine {
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
         player.allowsExternalPlayback = true   // AirPlay
+        // 退后台默认策略(.automatic)在无 PiP 时会暂停视频；改为尽可能继续播放（配合 UIBackgroundModes=audio）
+        player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
 
         self.playerItem = item
         self.player = player
