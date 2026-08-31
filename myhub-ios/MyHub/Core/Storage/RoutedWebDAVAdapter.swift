@@ -6,17 +6,25 @@ enum ConnectionRoute: Equatable {
     case externalNetwork
 }
 
-/// WebDAV 内外网双地址适配器（路径源优化，IOS-101 / TODO 324）：
-/// - 启动时 / 用户手动「测试连接」时探测一次内网地址，成功即锁定生效路由（内网/外网），
-///   后续所有操作一直使用锁定地址，不再重复探测；
+/// WebDAV 内外网双地址适配器（路径源优化，IOS-101 / TODO 324、351、352）：
+/// - 路由判定采用「内外网竞速」（Happy Eyeballs）：内网优先探测，外网延迟 ~700ms 兜底并发，
+///   谁先成功用谁并锁定。内网环境下内网 RTT 极低会在外网启动前完成、锁内网；
+///   外网环境下内网不可达（超时/拒绝），外网在 ~700ms 后成功即锁外网——
+///   不再像旧逻辑那样死等内网 5s 超时才回退，App 启动后内外网判定显著加快（TODO 352）。
 /// - 锁定结果按「内网根 URL」进程级共享：目录浏览每进入一级目录都会新建适配器实例，
-///   共享后各实例复用同一份判定结论，外网环境下不再出现每次进目录都等待内网超时的问题；
-/// - 尚未判定（锁定前）的业务请求按内网优先探测式回退，首次成功即完成锁定；
+///   共享后各实例复用同一份判定结论；
+/// - 关键修复（TODO 351）：`readStream`/`writeStream` 在未锁定时先执行竞速判定再选址，
+///   不再盲目走内网。此前启动探测尚未完成时点击播放会直连内网、外网环境下必然失败且不回退，
+///   导致「刚打开 App 点视频有时无法播放」；
 /// - 重新判定时机只有两个：用户手动「测试连接」、重启 App。
 final class RoutedWebDAVAdapter: StorageAdapter {
     /// 进程级路由锁定表：key = 内网根 URL，缺省 = 尚未判定
     private static let sharedLock = NSLock()
     private static var lockedRouteByURL: [String: ConnectionRoute] = [:]
+
+    /// 外网探测延迟（内网优先窗口）：内网 RTT 通常 < 100ms，此窗口内足以完成内网判定，
+    /// 给内网优先机会避免内网环境误走公网外网地址；窗口后仍未判定则并发外网加速回退。
+    private static let externalProbeDelayNanos: UInt64 = 700_000_000
 
     private let internalAdapter: WebDAVAdapter
     private let externalAdapter: WebDAVAdapter
@@ -45,31 +53,74 @@ final class RoutedWebDAVAdapter: StorageAdapter {
         Self.lockedRouteByURL[routeKey] = route
     }
 
-    /// 是否应走内网：已锁定按锁定结果；未锁定则内网优先（内网用 5s 短超时兜底回退）
-    private var shouldUseInternal: Bool {
-        lockedRoute != .externalNetwork
+    private func clearLock() {
+        Self.sharedLock.lock(); defer { Self.sharedLock.unlock() }
+        Self.lockedRouteByURL[routeKey] = nil
     }
 
-    /// 未锁定时按内网优先探测，首次成功即锁定生效路由；已锁定时直接走锁定地址。
-    /// 内网失败、外网也失败时保持未锁定，交由下次判定（测试连接/重启）重新探测。
+    // MARK: - 路由判定（竞速）
+
+    /// 内外网竞速判定（Happy Eyeballs）：内网优先启动，外网延迟兜底并发，谁先成功返回谁。
+    /// 内外网均不可达返回 nil。探测轻量（PROPFIND Depth:0），失败快速返回。
+    private func raceRoute() async -> ConnectionRoute? {
+        let internalAdapter = self.internalAdapter
+        let externalAdapter = self.externalAdapter
+        let externalDelay = Self.externalProbeDelayNanos
+        return await withTaskGroup(of: ConnectionRoute?.self) { group in
+            // 内网：立即探测（优先）
+            group.addTask {
+                do { try await internalAdapter.testConnection(); return .internalNetwork }
+                catch { return nil }
+            }
+            // 外网：延迟启动兜底，给内网优先窗口；被取消（内网已成功）则不发起
+            group.addTask {
+                try? await Task.sleep(nanoseconds: externalDelay)
+                if Task.isCancelled { return nil }
+                do { try await externalAdapter.testConnection(); return .externalNetwork }
+                catch { return nil }
+            }
+            for await result in group {
+                if let route = result {
+                    group.cancelAll()   // 先成功者胜出，取消另一方，尽快返回
+                    return route
+                }
+            }
+            return nil
+        }
+    }
+
+    /// 确保已判定生效路由：已锁定直接返回；未锁定则竞速判定并锁定。
+    /// 竞速都失败（内外网均不可达）时不锁定，返回内网兜底——交由真实请求报错触发上层重试，
+    /// 下次（测试连接 / 重启 / 再次读取）重新判定。
+    private func resolveRoute() async -> ConnectionRoute {
+        if let lockedRoute { return lockedRoute }
+        if let route = await raceRoute() {
+            lockRoute(route)
+            return route
+        }
+        return .internalNetwork
+    }
+
+    // MARK: - 通用请求路由
+
+    /// 未锁定时先竞速判定生效路由，再执行对应地址的操作；
+    /// 内网锁定后操作失败（内网可能刚断）回退外网并重新锁定，保证可用性。
     private func route<T>(
         _ internalOp: () async throws -> T,
         externalOp: () async throws -> T
     ) async throws -> T {
-        if let lockedRoute {
-            return lockedRoute == .internalNetwork
-                ? try await internalOp()
-                : try await externalOp()
+        let route = await resolveRoute()
+        if route == .internalNetwork {
+            do {
+                return try await internalOp()
+            } catch {
+                // 内网锁定后临时不可达：回退外网并改锁外网
+                let value = try await externalOp()
+                lockRoute(.externalNetwork)
+                return value
+            }
         }
-        do {
-            let value = try await internalOp()
-            lockRoute(.internalNetwork)
-            return value
-        } catch {
-            let value = try await externalOp()
-            lockRoute(.externalNetwork)
-            return value
-        }
+        return try await externalOp()
     }
 
     // MARK: - StorageAdapter
@@ -85,8 +136,10 @@ final class RoutedWebDAVAdapter: StorageAdapter {
     }
 
     func readStream(_ path: String, range: Range<Int64>?) async throws -> AsyncThrowingStream<Data, Error> {
-        // 流式传输无法在流内切换地址：按当前路由决策直接选取，避免中途断流
-        if shouldUseInternal {
+        // 流式传输无法在流内切换地址：先竞速判定生效路由再选址，避免未锁定时盲目走内网
+        // （外网环境下内网不可达会导致播放失败且不回退，TODO 351）。
+        let route = await resolveRoute()
+        if route == .internalNetwork {
             return try await internalAdapter.readStream(path, range: range)
         }
         return try await externalAdapter.readStream(path, range: range)
@@ -94,8 +147,9 @@ final class RoutedWebDAVAdapter: StorageAdapter {
 
     func writeStream(_ path: String, data: AsyncThrowingStream<Data, Error>) async throws {
         // 数据流只能消费一次，内网失败后无法完整回退外网重写：直接抛出，由用户重试
-        // （未锁定时内网失败记为外网生效，重试直接走外网）
-        if shouldUseInternal {
+        // （内网失败记为外网生效，重试直接走外网）。未锁定时先竞速判定再选址。
+        let route = await resolveRoute()
+        if route == .internalNetwork {
             do {
                 try await internalAdapter.writeStream(path, data: data)
                 lockRoute(.internalNetwork)
@@ -129,16 +183,18 @@ final class RoutedWebDAVAdapter: StorageAdapter {
     }
 
     func testConnection() async throws {
-        // 手动测试 / 启动探测：总是重新判定一次，成功即锁定生效地址
+        // 手动测试 / 启动探测：清除旧锁定后竞速重新判定，成功即锁定生效地址
         activeRoute = nil
-        do {
-            try await internalAdapter.testConnection()
-            lockRoute(.internalNetwork)
-            activeRoute = .internalNetwork
-        } catch {
-            try await externalAdapter.testConnection()
-            lockRoute(.externalNetwork)
-            activeRoute = .externalNetwork
+        clearLock()
+        if let route = await raceRoute() {
+            lockRoute(route)
+            activeRoute = route
+            return
         }
+        // 竞速判定内外网均不可达：以外网真实错误对外反馈（保留原「不可达」提示语义）
+        try await externalAdapter.testConnection()
+        // 兜底：外网这次又可达则锁外网
+        lockRoute(.externalNetwork)
+        activeRoute = .externalNetwork
     }
 }

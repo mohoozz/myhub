@@ -1,7 +1,8 @@
 import Foundation
 
 /// WebDAV 适配器：URLSession + PROPFIND/GET，支持 HTTP Range 串流、HTTPS、Basic 认证
-final class WebDAVAdapter: StorageAdapter {
+/// 所有存储属性均为不可变 `let`（URLSession 亦线程安全），可安全跨并发域使用（内外网竞速判定捕获）。
+final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
     private let config: WebDAVConfig
     private let password: String?
     private let session: URLSession

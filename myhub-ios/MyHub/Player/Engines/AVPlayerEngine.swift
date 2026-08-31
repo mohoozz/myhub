@@ -201,8 +201,25 @@ final class AVPlayerEngine: PlaybackEngine {
 
         observations.append(item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
-                guard item.isPlaybackBufferEmpty else { return }
-                self?.onEvent?(.stateChanged(.buffering))
+                guard let self, item.isPlaybackBufferEmpty else { return }
+                // 缓冲耗尽：仅在引擎确非播放态时上报缓冲，避免与 timeControlStatus 抢报
+                if player.timeControlStatus != .playing {
+                    self.onEvent?(.stateChanged(.buffering))
+                }
+            }
+        })
+
+        // 缓冲恢复：数据重新充足到可持续播放时，若已在播放则切回 playing，
+        // 清除「缓冲耗尽后卡在 buffering」——此前只监听 isPlaybackBufferEmpty 发 buffering，
+        // 缓冲补上后 timeControlStatus 未变化不触发 KVO，状态无人切回，菊花一直转（TODO 353）。
+        observations.append(item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self, item.isPlaybackLikelyToKeepUp else { return }
+                if player.timeControlStatus == .playing {
+                    self.onEvent?(.stateChanged(.playing))
+                } else if player.timeControlStatus == .paused {
+                    self.onEvent?(.stateChanged(.ready))
+                }
             }
         })
 

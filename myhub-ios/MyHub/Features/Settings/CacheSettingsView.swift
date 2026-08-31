@@ -64,7 +64,7 @@ struct CacheSettingsView: View {
         .navigationTitle("缓存与存储")
         .tint(AppColors.primary)
         .onAppear(perform: reload)
-        .confirmationDialog(
+        .alert(
             "清理缓存",
             isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }),
             presenting: clearing
@@ -79,7 +79,7 @@ struct CacheSettingsView: View {
         } message: { partition in
             Text("将清空\(partition.displayName)（当前 \(DisplayFormatters.size(sizes[partition] ?? 0))），缓存可重建。")
         }
-        .confirmationDialog("清空全部缓存", isPresented: $confirmClearAll, titleVisibility: .visible) {
+        .alert("清空全部缓存", isPresented: $confirmClearAll) {
             Button("清空", role: .destructive) {
                 try? CacheManager.shared.clearAll()
                 AppLogger.shared.log("已清空全部缓存")

@@ -108,10 +108,9 @@ struct TrashView: View {
                     .disabled(items.isEmpty)
             }
         }
-        .confirmationDialog(
+        .alert(
             "清空回收站",
-            isPresented: $showClearConfirm,
-            titleVisibility: .visible
+            isPresented: $showClearConfirm
         ) {
             Button("全部彻底删除", role: .destructive) {
                 Task { await clear() }

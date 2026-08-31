@@ -32,8 +32,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var isSSLError = false
     @Published var errorMessage: String?
 
-    /// 页面向上滚动（手指上滑）标志：用于收起底部操作栏（TODO §8.2）
-    @Published var isScrollingUp = false
+    /// 页面滚动计数：任意方向滚动均自增，用于将底部操作栏收起为胶囊（TODO §8.2）
+    /// 用计数器而非布尔，保证「展开后再次滚动」也能再触发收起
+    @Published var scrollTick: Int = 0
 
     /// 起始页回退标记：从起始页导航进入过页面后为 `true`，
     /// 使「回退」按钮在 webView 历史为空时仍可返回到起始页（Safari 行为）
@@ -48,6 +49,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 标签状态变化回调（当前 URL 变化等）：由 `BrowserSessionStore` 订阅，驱动会话持久化，
     /// 保证「导航后直接退出」也能保存上一次打开的页面
     var onStateChange: (() -> Void)?
+
+    /// 下拉刷新控件（由 `BrowserWebView` 创建并挂到 `scrollView`）：
+    /// 页面加载完成/失败时在此结束刷新动画（`scrollView` 强持有，故弱引用即可）
+    weak var refreshControl: UIRefreshControl?
 
     private var observations: [NSKeyValueObservation] = []
 
@@ -150,7 +155,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             },
             webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
                 let value = webView.isLoading
-                Task { @MainActor [weak self] in self?.isLoading = value }
+                Task { @MainActor [weak self] in
+                    self?.isLoading = value
+                    // 加载结束（成功/失败/取消）即收起下拉刷新动画
+                    if !value { self?.refreshControl?.endRefreshing() }
+                }
             },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] webView, _ in
                 let value = webView.canGoBack
@@ -164,20 +173,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 let value = webView.hasOnlySecureContent
                 Task { @MainActor [weak self] in self?.hasOnlySecureContent = value }
             },
-            // 滚动方向：手指上滑 = 收起操作栏（缩小为胶囊），下滑 = 展开；
-            // 下滑（含滚回顶部回弹区）始终恢复展开，避免操作栏收起后无法恢复
+            // 滚动即收起操作栏为胶囊（任意方向，Safari 风格）：只有点击胶囊才恢复地址栏
             webView.scrollView.observe(\.contentOffset, options: [.new, .old]) { [weak self] scrollView, change in
                 let newY = scrollView.contentOffset.y
                 let oldY = change.oldValue?.y ?? newY
-                let delta = newY - oldY
-                // 忽略微小抖动
-                guard abs(delta) > 2 else { return }
-                if delta < 0 {
-                    Task { @MainActor [weak self] in self?.isScrollingUp = false }
-                } else if newY > 0 {
-                    // 手指上滑且非顶部回弹区：收起
-                    Task { @MainActor [weak self] in self?.isScrollingUp = true }
-                }
+                // 忽略微小抖动（含页面加载时的自动布局微调）
+                guard abs(newY - oldY) > 2 else { return }
+                Task { @MainActor [weak self] in self?.scrollTick += 1 }
             }
         ]
     }
@@ -324,6 +326,17 @@ struct BrowserWebView: UIViewRepresentable {
             webView.trailingAnchor.constraint(equalTo: container.trailingAnchor)
         ])
 
+        // 下拉刷新：页面滚动到顶部继续下拉即重新加载（原生 UIRefreshControl，自带下拉/转圈动画）
+        let refresh = UIRefreshControl()
+        refresh.tintColor = UIColor(AppColors.primary)
+        refresh.addTarget(
+            context.coordinator,
+            action: #selector(Coordinator.handleRefresh(_:)),
+            for: .valueChanged
+        )
+        webView.scrollView.refreshControl = refresh
+        tab.refreshControl = refresh
+
         // 左边缘滑动：历史栈非空交给系统 backForward 手势；为空时退出页签
         let edge = UIScreenEdgePanGestureRecognizer(
             target: context.coordinator,
@@ -370,6 +383,16 @@ struct BrowserWebView: UIViewRepresentable {
             // 点击页面任意处（含空白）：先收起键盘/退出地址栏编辑，再展开操作栏
             Keyboard.dismiss()
             parent.onTap?()
+        }
+
+        @objc func handleRefresh(_ sender: UIRefreshControl) {
+            // 已加载页面则重新加载（加载完成后由 isLoading KVO 收起动画）；
+            // 起始页/无 URL 时无内容可刷，立即结束动画
+            if parent.tab.currentURL != nil {
+                parent.tab.reload()
+            } else {
+                sender.endRefreshing()
+            }
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {

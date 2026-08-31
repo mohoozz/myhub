@@ -31,6 +31,8 @@ final class VLCEngine: NSObject, PlaybackEngine {
     private var pendingStartAt: TimeInterval?
     private var didApplyStartAt = false
     private var didEmitReady = false
+    /// 最近一次上报给上层的状态：用于「时间在走却仍标记 buffering」的兜底纠正（TODO 353）
+    private var lastReportedState: PlaybackState = .idle
 
     override init() {
         super.init()
@@ -95,6 +97,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         pendingStartAt = nil
         didApplyStartAt = false
         didEmitReady = false
+        lastReportedState = .idle
     }
 
     func seek(to seconds: TimeInterval) {
@@ -145,28 +148,39 @@ final class VLCEngine: NSObject, PlaybackEngine {
 
     // MARK: - delegate 状态处理
 
+    /// 统一状态上报出口：记录最近状态，供时间回调兜底纠正
+    private func emit(_ state: PlaybackState) {
+        lastReportedState = state
+        onEvent?(.stateChanged(state))
+    }
+
     fileprivate func handleStateChanged() {
         switch player.state {
         case .opening:
-            onEvent?(.stateChanged(.loading))
+            emit(.loading)
         case .buffering:
-            onEvent?(.stateChanged(.buffering))
+            // VLCKit 的 buffering 通知有时在播放中途重复触发：若已在播放（时间在走）则不回退菊花
+            if player.isPlaying, currentTime > 0 {
+                emit(.playing)
+            } else {
+                emit(.buffering)
+            }
         case .playing:
             applyPendingStartIfNeeded()
             if !didEmitReady {
                 didEmitReady = true
-                onEvent?(.stateChanged(.ready))
+                emit(.ready)
                 onEvent?(.tracksChanged)
             }
-            onEvent?(.stateChanged(.playing))
+            emit(.playing)
         case .paused:
-            onEvent?(.stateChanged(.paused))
+            emit(.paused)
         case .stopped:
-            onEvent?(.stateChanged(.idle))
+            emit(.idle)
         case .ended:
-            onEvent?(.stateChanged(.ended))
+            emit(.ended)
         case .error:
-            onEvent?(.stateChanged(.failed("软解引擎播放失败")))
+            emit(.failed("软解引擎播放失败"))
         default:
             break
         }
@@ -174,6 +188,12 @@ final class VLCEngine: NSObject, PlaybackEngine {
 
     fileprivate func handleTimeChanged() {
         applyPendingStartIfNeeded()
+        // 兜底：时间在推进说明实际已在播放，但 VLCKit 的 buffering→playing 状态变更有时不触发，
+        // 导致卡在 buffering 菊花不消失（TODO 353）。此处主动纠正为 playing。
+        // 限已发过 ready（首帧就绪、轨道已解析）后再纠正，避免抢在 ready/tracksChanged 之前。
+        if didEmitReady, lastReportedState == .buffering, player.isPlaying {
+            emit(.playing)
+        }
         onEvent?(.timeUpdated(current: currentTime, duration: duration))
     }
 

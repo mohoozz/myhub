@@ -56,7 +56,7 @@ struct BrowserSettingsView: View {
         }
         .navigationTitle("浏览器设置")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("确定清除缓存、Cookie 与浏览历史？", isPresented: $showingClearConfirm, titleVisibility: .visible) {
+        .alert("确定清除缓存、Cookie 与浏览历史？", isPresented: $showingClearConfirm) {
             Button("清除", role: .destructive) { clearBrowsingData() }
             Button("取消", role: .cancel) {}
         }

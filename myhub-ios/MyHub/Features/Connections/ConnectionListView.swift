@@ -67,7 +67,7 @@ struct ConnectionListView: View {
         .sheet(item: $editing) { context in
             ConnectionFormView(store: store, connection: context.connection, isNew: context.isNew)
         }
-        .confirmationDialog(
+        .alert(
             "删除连接源",
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
             presenting: deleting

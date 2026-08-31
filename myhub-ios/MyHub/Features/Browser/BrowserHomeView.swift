@@ -40,7 +40,8 @@ struct BrowserHomeView: View {
         .background(AppColors.pageBackground)
         .animation(.appFast, value: toolbarMini)
         .onChange(of: session.activeTabID) { _ in
-            toolbarMini = false
+            // 打开/切换到网页标签 → 收为胶囊；起始页（需输入网址）→ 展开地址栏
+            toolbarMini = !(session.activeTab?.isShowingStartPage ?? true)
         }
         .fullScreenCover(isPresented: $showingTabs) {
             TabGridView()
@@ -63,16 +64,20 @@ struct BrowserHomeView: View {
             ForEach(session.visibleTabs) { tab in
                 BrowserView(
                     tab: tab,
-                    onEdgeSwipeBack: { closeTab(tab) },
-                    onTap: { expandToolbar() }
+                    onEdgeSwipeBack: { closeTab(tab) }
                 )
                 .opacity(tab.id == session.activeTabID ? 1 : 0)
                 .allowsHitTesting(tab.id == session.activeTabID)
                 .accessibilityHidden(tab.id != session.activeTabID)
-                .onChange(of: tab.isScrollingUp) { scrollingUp in
+                .onChange(of: tab.scrollTick) { _ in
                     guard tab.id == session.activeTabID else { return }
-                    // 起始页（新标签页）不收起；其余上滑收起、下滑展开
-                    toolbarMini = scrollingUp && !tab.isShowingStartPage
+                    // 滑动页面即收为胶囊（起始页除外，只有点击胶囊才恢复地址栏）
+                    if !tab.isShowingStartPage { toolbarMini = true }
+                }
+                .onChange(of: tab.currentURL) { url in
+                    guard tab.id == session.activeTabID else { return }
+                    // 打开新界面（导航到网页）→ 胶囊；回退到起始页 → 展开地址栏
+                    toolbarMini = (url != nil)
                 }
             }
         }

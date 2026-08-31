@@ -58,8 +58,8 @@ struct BrowseDirectoryView: View {
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var deletingPaths: Set<String>?
     @State private var forceDeletePaths: Set<String>?
-    /// 内容区滚动偏移（顶部为 0）：驱动搜索框显示/隐藏
-    @State private var scrollOffset: CGFloat = 0
+    /// 搜索框显隐（TODO 336/345）：滚到顶部显示、下滑超过搜索框高度隐藏，带迟滞避免抖动
+    @State private var showSearchBar = true
 
     init(
         connection: Connection,
@@ -204,10 +204,9 @@ struct BrowseDirectoryView: View {
                 ImagePreviewView(images: context.images, initialIndex: context.index, adapter: adapter)
             }
         }
-        .confirmationDialog(
+        .alert(
             "删除确认",
-            isPresented: Binding(get: { deletingPaths != nil }, set: { if !$0 { deletingPaths = nil } }),
-            titleVisibility: .visible
+            isPresented: Binding(get: { deletingPaths != nil }, set: { if !$0 { deletingPaths = nil } })
         ) {
             Button("移入回收站", role: .destructive) {
                 if let paths = deletingPaths {
@@ -225,10 +224,9 @@ struct BrowseDirectoryView: View {
         } message: {
             Text("将删除 \(deletingPaths?.count ?? 0) 个项目（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）")
         }
-        .confirmationDialog(
+        .alert(
             "无法使用回收站",
-            isPresented: Binding(get: { forceDeletePaths != nil }, set: { if !$0 { forceDeletePaths = nil } }),
-            titleVisibility: .visible
+            isPresented: Binding(get: { forceDeletePaths != nil }, set: { if !$0 { forceDeletePaths = nil } })
         ) {
             Button("彻底删除", role: .destructive) {
                 if let paths = forceDeletePaths {
@@ -280,8 +278,10 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 内容区
 
-    /// 搜索框可见性：滚动回到顶部附近（含下拉刷新回弹）才显示
-    private var showSearchBar: Bool { scrollOffset >= -1 }
+    /// 搜索框自身高度估算（含上下内外边距与分隔线）：作为下滑隐藏阈值——
+    /// 内容需上滚超过该高度再隐藏，确保隐藏后腾出的空间已被滚动量吸收，
+    /// 否则会被 ScrollView 拉回顶部，造成「隐藏即回弹（看似下滑不消失）」的抖动。
+    private let searchBarHeight: CGFloat = 60
 
     @ViewBuilder
     private var content: some View {
@@ -312,10 +312,14 @@ struct BrowseDirectoryView: View {
         .refreshable { await viewModel.refresh() }
         .scrollDismissesKeyboard(.immediately)
         .onPreferenceChange(BrowseScrollOffsetKey.self) { value in
-            // 仅在跨过可见性阈值时更新，避免滚动过程中每帧重绘
-            let shouldShow = value >= -1
-            if (scrollOffset >= -1) != shouldShow {
-                scrollOffset = shouldShow ? 0 : value
+            // 迟滞判定（避免阈值边界抖动 / 隐藏回弹）：
+            // - 回到顶部附近（minY >= -1）显示；
+            // - 内容上滚超过搜索框高度（minY < -searchBarHeight）才隐藏；
+            // - 二者之间为死区，保持当前状态。
+            if value >= -1 {
+                if !showSearchBar { showSearchBar = true }
+            } else if value < -searchBarHeight {
+                if showSearchBar { showSearchBar = false }
             }
         }
     }

@@ -52,13 +52,12 @@ struct ReadingHomeView: View {
                 .toolbarRole(isSelecting ? .navigationStack : .editor)
                 .overlay(alignment: .bottom) { bottomOverlay }
         }
-        .confirmationDialog(
+        .alert(
             "删除阅读记录",
             isPresented: Binding(
                 get: { confirmDeleteIDs != nil },
                 set: { if !$0 { confirmDeleteIDs = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button("删除", role: .destructive) {
                 if let ids = confirmDeleteIDs {
@@ -71,13 +70,12 @@ struct ReadingHomeView: View {
         } message: {
             Text("将删除 \(confirmDeleteIDs?.count ?? 0) 条阅读记录（不影响源文件）")
         }
-        .confirmationDialog(
+        .alert(
             "删除源文件",
             isPresented: Binding(
                 get: { deletingSourceIDs != nil },
                 set: { if !$0 { deletingSourceIDs = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button("移入回收站", role: .destructive) {
                 if let ids = deletingSourceIDs {
@@ -98,13 +96,12 @@ struct ReadingHomeView: View {
         } message: {
             Text("将删除 \(deletingSourceIDs?.count ?? 0) 个源文件及对应阅读记录（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）")
         }
-        .confirmationDialog(
+        .alert(
             "无法使用回收站",
             isPresented: Binding(
                 get: { forceDeletingSourceIDs != nil },
                 set: { if !$0 { forceDeletingSourceIDs = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button("彻底删除", role: .destructive) {
                 if let ids = forceDeletingSourceIDs {
@@ -258,7 +255,7 @@ struct ReadingHomeView: View {
         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
         .cellPressableMenu(
             cornerRadius: 14,
-            highlightShape: .circle,
+            highlightShape: .roundedRect,
             items: menuItems(for: record),
             onTap: { tap(record) }   // 长按弹底部抽屉菜单；指针右键弹锚点菜单
         )
@@ -309,7 +306,7 @@ struct ReadingHomeView: View {
             )
             .cellPressableMenu(
                 cornerRadius: 0,
-                highlightShape: .circle,
+                highlightShape: .roundedRect,
                 items: menuItems(for: record),
                 onTap: { tap(record) }
             )

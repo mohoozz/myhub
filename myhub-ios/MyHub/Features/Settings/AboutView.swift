@@ -133,7 +133,7 @@ struct LogView: View {
         .sheet(isPresented: $showShare) {
             ActivityView(url: AppLogger.shared.url)
         }
-        .confirmationDialog("清空日志", isPresented: $confirmClear, titleVisibility: .visible) {
+        .alert("清空日志", isPresented: $confirmClear) {
             Button("清空", role: .destructive) {
                 AppLogger.shared.clear()
                 content = ""

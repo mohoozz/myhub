@@ -76,7 +76,7 @@ struct HistoryView: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .confirmationDialog("确定清空全部历史记录？", isPresented: $showingClearConfirm, titleVisibility: .visible) {
+            .alert("确定清空全部历史记录？", isPresented: $showingClearConfirm) {
                 Button("清空", role: .destructive) { dataStore.clearHistory() }
                 Button("取消", role: .cancel) {}
             }
