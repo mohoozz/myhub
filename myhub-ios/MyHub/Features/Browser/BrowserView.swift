@@ -4,12 +4,11 @@ import SwiftUI
 /// 封装 `WKWebView` + 2px 加载进度条 + 错误页（失败/SSL + 重试）。
 struct BrowserView: View {
     @ObservedObject var tab: BrowserTab
-    var onEdgeSwipeBack: (() -> Void)? = nil
     var onTap: (() -> Void)? = nil
 
     var body: some View {
         ZStack {
-            BrowserWebView(tab: tab, onEdgeSwipeBack: onEdgeSwipeBack, onTap: onTap)
+            BrowserWebView(tab: tab, onTap: onTap)
 
             // 起始页：空白标签（未加载 URL）时显示
             if tab.isShowingStartPage {

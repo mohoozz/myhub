@@ -38,8 +38,9 @@ struct NovelReaderView: View {
                     .transition(.opacity)
             }
         }
-        .overlay(alignment: .leading) {
-            // 左滑退出手势区：仅占屏幕左边缘 24pt 窄条，不拦截 ScrollView 垂直滚动 / TabView 翻页 / 按钮点击。
+        .background(
+            // 左滑退出：从屏幕左边缘右滑关闭阅读器。手势实际挂在 window 上（见 EdgeSwipeBack），
+            // 此处仅作为生命周期锚点，不占布局、不拦截 ScrollView 滚动 / TabView 翻页 / 按钮点击。
             EdgeSwipeBack(
                 onChanged: { translation in
                     guard viewModel.state == .ready else { return }
@@ -58,8 +59,7 @@ struct NovelReaderView: View {
                     }
                 }
             )
-            .frame(width: 24)
-        }
+        )
         .statusBar(hidden: !controlsVisible)
         .animation(.appQuick, value: controlsVisible)
         .onAppear { viewModel.load() }
@@ -636,62 +636,81 @@ private struct NovelVisibleKey: PreferenceKey {
     }
 }
 
-// MARK: - 左滑退出（fullScreenCover 无系统侧滑返回，补一个边缘右滑手势）
+// MARK: - 左滑退出（fullScreenCover 无系统侧滑返回，补一个屏幕左边缘右滑手势）
 
 /// 阅读器左边缘右滑退出手势桥接。
-/// 阅读器经 `.fullScreenCover` 呈现（模态，非 NavigationStack push），没有系统侧滑返回手势，
-/// 这里挂一个 `UIScreenEdgePanGestureRecognizer` 补上「从屏幕左边缘右滑退出」的交互。
-/// 承载视图仅左边缘窄条参与 hit-test，其余区域穿透，避免拦截 ScrollView 滚动 / TabView 翻页。
+/// 阅读器经 `.fullScreenCover` 呈现（模态，非 NavigationStack push），没有系统侧滑返回手势。
+/// 这里把 `UIScreenEdgePanGestureRecognizer` 挂到承载视图所在的 **window** 上：
+/// - window 位于整个视图层级最外层，SwiftUI 内部（TabView 翻页 / ScrollView 滚动）的手势
+///   无法将其吞掉，从根本上解决「窄条 overlay 上的边缘手势被内层滚动手势抢占而无法触发」的问题；
+/// - `edges = .left` 由系统保证仅屏幕左边缘起手才识别，不影响正文任意区域的翻页/滚动/点击；
+/// - 允许与其它手势同时识别（simultaneous），确保边缘右滑一定能被捕获。
 private struct EdgeSwipeBack: UIViewRepresentable {
     let onChanged: (CGFloat) -> Void
     let onEnded: (CGFloat) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-
     func makeUIView(context: Context) -> EdgeSwipeBackView {
         let view = EdgeSwipeBackView()
-        let edge = UIScreenEdgePanGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handle(_:))
-        )
-        edge.edges = .left
-        edge.delegate = context.coordinator
-        view.addGestureRecognizer(edge)
-        context.coordinator.edge = edge
+        view.onChanged = onChanged
+        view.onEnded = onEnded
         return view
     }
 
     func updateUIView(_ view: EdgeSwipeBackView, context: Context) {
-        context.coordinator.parent = self
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: EdgeSwipeBack
-        weak var edge: UIScreenEdgePanGestureRecognizer?
-
-        init(parent: EdgeSwipeBack) { self.parent = parent }
-
-        @objc func handle(_ g: UIScreenEdgePanGestureRecognizer) {
-            let translation = g.translation(in: g.view).x
-            switch g.state {
-            case .began, .changed:
-                parent.onChanged(max(0, translation))
-            case .ended, .cancelled, .failed:
-                parent.onEnded(max(0, translation))
-            default:
-                break
-            }
-        }
+        view.onChanged = onChanged
+        view.onEnded = onEnded
     }
 }
 
-/// 左滑退出手势的透明承载视图。仅作为 `UIScreenEdgePanGestureRecognizer` 的宿主，
-/// 实际命中范围由外部 `.frame(width: 24)` 限定在屏幕左边缘窄条内。
-private final class EdgeSwipeBackView: UIView {
+/// 左滑退出手势宿主。自身不参与布局与命中测试（交互全部穿透），
+/// 仅负责在挂载到 window 时把屏幕左边缘手势注册到 window、在移除时清理，避免泄漏到其它界面。
+private final class EdgeSwipeBackView: UIView, UIGestureRecognizerDelegate {
+    var onChanged: ((CGFloat) -> Void)?
+    var onEnded: ((CGFloat) -> Void)?
+
+    private weak var edgeGesture: UIScreenEdgePanGestureRecognizer?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
+        isUserInteractionEnabled = false // 自身不拦截任何触摸，交互全部穿透给正文
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if let window {
+            guard edgeGesture == nil else { return }
+            let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handle(_:)))
+            edge.edges = .left
+            edge.delegate = self
+            window.addGestureRecognizer(edge)
+            edgeGesture = edge
+        } else if let edge = edgeGesture {
+            // 阅读器 dismiss：从旧 window 移除手势，避免残留影响其它界面
+            edge.view?.removeGestureRecognizer(edge)
+            edgeGesture = nil
+        }
+    }
+
+    @objc private func handle(_ g: UIScreenEdgePanGestureRecognizer) {
+        let translation = g.translation(in: g.view).x
+        switch g.state {
+        case .began, .changed:
+            onChanged?(max(0, translation))
+        case .ended, .cancelled, .failed:
+            onEnded?(max(0, translation))
+        default:
+            break
+        }
+    }
+
+    // 允许与 TabView 翻页 / ScrollView 滚动等手势并存，保证边缘右滑一定能被识别
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
 }

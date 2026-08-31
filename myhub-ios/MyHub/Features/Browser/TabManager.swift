@@ -40,6 +40,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 使「回退」按钮在 webView 历史为空时仍可返回到起始页（Safari 行为）
     @Published private(set) var startedFromStartPage = false
 
+    /// 「从起始页出发」时 webView 历史栈的边界条目（起始页之前的最后一页；全新标签为 `nil`）。
+    /// 回退到该条目即视为回到起始页，避免回退越过起始页误入更早的残留历史（多退一页）。
+    private var startPageBoundary: WKBackForwardListItem?
+
     /// `target=_blank` / `window.open` 回调：交给 `BrowserSessionStore` 新建标签
     var onOpenNewTab: ((URL) -> Void)?
 
@@ -88,6 +92,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         // 从起始页导航进入页面：起始页成为可回退的第一页（需在 currentURL 更新前判断）
         if isShowingStartPage {
             startedFromStartPage = true
+            // 记录当前历史边界：后续回退到此条目即回到起始页（避免多退一页到残留历史）
+            startPageBoundary = webView.backForwardList.currentItem
         }
         clearError()
         currentURL = url   // 立即更新：隐藏起始页、刷新地址栏
@@ -103,14 +109,29 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         webView.stopLoading()
     }
 
-    /// 回退可用性：webView 历史栈可回退，或当前位于「从起始页进入」的页面（可回退到起始页）
+    /// 回退可用性：非起始页时总可回退（webView 历史栈可退，或可退回起始页）。
+    /// 起始页本身是标签的逻辑第一页，不可再回退。
     var canGoBackOrStartPage: Bool {
-        webView.canGoBack || (startedFromStartPage && !isShowingStartPage)
+        guard !isShowingStartPage else { return false }
+        return webView.canGoBack || startedFromStartPage
     }
 
-    /// 回退：优先走 webView 历史栈；栈空且从起始页进入时回退到起始页
+    /// 回退一步是否将回到起始页（即已到达「从起始页出发」时记录的历史边界）
+    private var reachedStartPageBoundary: Bool {
+        guard startedFromStartPage, let boundary = startPageBoundary else { return false }
+        return webView.backForwardList.backItem === boundary
+    }
+
+    /// 下一步回退是否为「回到起始页」（供手势层决定是否拦截系统 back 手势）
+    var backLeadsToStartPage: Bool {
+        guard !isShowingStartPage, startedFromStartPage else { return false }
+        // 无更早历史，或回退将越过起始页边界 → 下一步即起始页
+        return !webView.canGoBack || reachedStartPageBoundary
+    }
+
+    /// 回退：优先走 webView 历史栈；到达起始页边界（或栈空且从起始页进入）时回退到起始页
     func goBack() {
-        if webView.canGoBack {
+        if webView.canGoBack, !reachedStartPageBoundary {
             webView.goBack()
         } else if startedFromStartPage, !isShowingStartPage {
             showStartPage()
@@ -119,12 +140,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func goForward() { webView.goForward() }
 
-    /// 回退到起始页：清空 URL 展示起始页
+    /// 回退到起始页：清空 URL 展示起始页（起始页始终是标签的逻辑第一页）
     private func showStartPage() {
         startedFromStartPage = false
+        startPageBoundary = nil
         currentURL = nil
-        // 注：WKBackForwardList 无公开的清空历史栈 API（不存在 removeAllItems），
-        // 故这里只重置 UI 状态；webView 的历史栈会保留，从起始页重新导航后「回退」可能多退一页。
+        // 注：WKBackForwardList 无公开的清空历史栈 API；此处只重置 UI 状态，webView 历史栈保留。
+        // 再次从起始页导航时会依据 `startPageBoundary` 重新界定回退边界，从而不会多退一页到残留历史。
     }
 
     /// 展示标签卡片网格所需的快照（用于持久化）
@@ -305,10 +327,9 @@ extension BrowserTab: WKUIDelegate {
 
 /// 将 `BrowserTab` 持有的 `WKWebView` 挂到视图层级（标签保活：由 `ZStack` 常驻所有标签，
 /// 仅切换透明度而非销毁重建，从而保持导航历史栈）。
-/// 附带手势：左边缘滑动（历史栈空时退出页签）、点击页面（展开被收起的操作栏）。
+/// 附带手势：左边缘滑动（回退历史 / 回到起始页，绝不删除页签）、点击页面（展开被收起的操作栏）。
 struct BrowserWebView: UIViewRepresentable {
     let tab: BrowserTab
-    var onEdgeSwipeBack: (() -> Void)? = nil
     var onTap: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -337,7 +358,8 @@ struct BrowserWebView: UIViewRepresentable {
         webView.scrollView.refreshControl = refresh
         tab.refreshControl = refresh
 
-        // 左边缘滑动：历史栈非空交给系统 backForward 手势；为空时退出页签
+        // 左边缘滑动：默认交给系统 backForward 手势做页面间回退；
+        // 仅「下一步回退即起始页」时（见 updateUIView）改用本手势回到起始页
         let edge = UIScreenEdgePanGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleEdgeSwipe(_:))
@@ -360,8 +382,20 @@ struct BrowserWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ container: UIView, context: Context) {
-        // 历史栈空时启用边缘手势；非空时系统 backForward 手势已接管侧滑返回
-        context.coordinator.edgeGesture?.isEnabled = !tab.canGoBack
+        // 手势分工（保证「一直回退最终回到起始页」且绝不误删页签）：
+        // - 起始页：标签第一页，左滑不做任何事（既不删页签，也不跳到残留历史）
+        // - 下一步回退即起始页：用自定义边缘手势拦截，关闭系统 back 手势（避免越过起始页多退一页）
+        // - 其余（页面间回退）：交给系统 back 手势，保留跟手滑动动画
+        if tab.isShowingStartPage {
+            tab.webView.allowsBackForwardNavigationGestures = false
+            context.coordinator.edgeGesture?.isEnabled = false
+        } else if tab.backLeadsToStartPage {
+            tab.webView.allowsBackForwardNavigationGestures = false
+            context.coordinator.edgeGesture?.isEnabled = true
+        } else {
+            tab.webView.allowsBackForwardNavigationGestures = true
+            context.coordinator.edgeGesture?.isEnabled = false
+        }
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
@@ -372,11 +406,8 @@ struct BrowserWebView: UIViewRepresentable {
 
         @objc func handleEdgeSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
             guard gesture.state == .ended else { return }
-            if parent.tab.canGoBack {
-                parent.tab.goBack()
-            } else {
-                parent.onEdgeSwipeBack?()
-            }
+            // 仅在「下一步回退即起始页」时启用本手势：回退到起始页，绝不删除页签
+            parent.tab.goBack()
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {

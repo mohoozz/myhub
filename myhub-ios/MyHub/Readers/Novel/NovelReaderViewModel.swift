@@ -116,6 +116,10 @@ final class NovelReaderViewModel: ObservableObject {
 
     func load() {
         guard loadTask == nil else { return }
+        AppLogger.shared.log(
+            "打开小说: name=\(entry.name) ext=\(entry.ext) isEpub=\(isEpub) size=\(entry.size) path=\(entry.path) conn=\(connectionID)",
+            module: "novel-reader"
+        )
         loadTask = Task { await performLoad() }
     }
 
@@ -141,10 +145,19 @@ final class NovelReaderViewModel: ObservableObject {
                 try await loadTxt(adapter: adapter, anchor: anchor)
             }
             state = .ready
+            AppLogger.shared.log(
+                "加载完成 state=ready chapter=\(chapter) toc=\(toc.count) comicLike=\(comicLikePrompt)",
+                module: "novel-reader"
+            )
             applyReaderBrightness()
         } catch is CancellationError {
             // 退出时取消，不报错
+            AppLogger.shared.log("加载取消（退出/切换）", module: "novel-reader")
         } catch {
+            AppLogger.shared.log(
+                "加载失败: error=\(error) desc=\(error.localizedDescription)",
+                level: .error, module: "novel-reader"
+            )
             state = .failed(error.localizedDescription)
         }
     }
@@ -158,6 +171,10 @@ final class NovelReaderViewModel: ObservableObject {
         }
         try Task.checkCancellation()
         txtIndex = index
+        AppLogger.shared.log(
+            "txt 索引完成: 章节数=\(index.chapters.count) fileSize=\(index.fileSize)",
+            module: "novel-reader"
+        )
         // 章节磁盘缓存键与索引同源（索引指纹）：在线与 entry 一致，离线回退缓存索引时键自洽
         cacheIdentity = SegmentCache.FileIdentity(
             connectionID: connectionID,
@@ -170,6 +187,11 @@ final class NovelReaderViewModel: ObservableObject {
         // 一步定位：全局字节偏移 → 二分反查章 → 章内字节 → 行表映射章内字符
         let offset = max(0, min(anchor?.offset ?? 0, index.fileSize - 1))
         let targetChapter = index.chapterIndex(forOffset: offset)
+        // 越界前置日志：chapters[targetChapter] 若 targetChapter 越界会 fatalError 闪退，崩前留痕
+        AppLogger.shared.log(
+            "txt 定位: offset=\(offset) targetChapter=\(targetChapter) chapters.count=\(index.chapters.count)",
+            module: "novel-reader"
+        )
         let chapterStart = index.chapters[targetChapter].startOffset
         let loaded = try await loadChapter(targetChapter)
         chapter = targetChapter
@@ -209,6 +231,10 @@ final class NovelReaderViewModel: ObservableObject {
         epubBook = book
         bookTitle = book.title
         toc = book.toc.map { NovelTocEntry(id: $0.spineIndex, title: $0.title) }
+        AppLogger.shared.log(
+            "epub 解包完成: spine=\(book.spine.count) toc=\(book.toc.count) isComicLike=\(book.isComicLike)",
+            module: "novel-reader"
+        )
         if book.isComicLike {
             // 图集型：交由 View 层自动转交漫画阅读器（不再弹选择框）
             comicLikePrompt = true
@@ -227,6 +253,10 @@ final class NovelReaderViewModel: ObservableObject {
 
         // 一步定位：spine 序号 → 段落序号/段内偏移 → 组装文本字符位置
         let targetSpine = max(0, min(anchor?.spineIndex ?? 0, book.spine.count - 1))
+        AppLogger.shared.log(
+            "epub 定位 targetSpine=\(targetSpine) spine.count=\(book.spine.count)",
+            module: "novel-reader"
+        )
         let loaded = try await loadChapter(targetSpine)
         chapter = targetSpine
         blocks = loaded.blocks
@@ -273,6 +303,10 @@ final class NovelReaderViewModel: ObservableObject {
         paginationTask?.cancel()
         paginationGeneration += 1
         let generation = paginationGeneration
+        AppLogger.shared.log(
+            "repaginate 开始 chapter=\(chapterSnapshot) blocks=\(blocks.count) size=\(Int(size.width))x\(Int(size.height)) gen=\(generation) anchor=\(anchorCharOffset)",
+            module: "novel-reader"
+        )
         // 排版放后台，避免大章阻塞主线程
         paginationTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard !Task.isCancelled else { return }
@@ -286,6 +320,10 @@ final class NovelReaderViewModel: ObservableObject {
                       self.chapter == chapterSnapshot else { return }
                 self.pagination = result
                 self.paginationCache[chapterSnapshot] = result
+                AppLogger.shared.log(
+                    "repaginate 完成 chapter=\(chapterSnapshot) 页数=\(result.pages.count) 文本长度=\(result.attributedText.length)",
+                    module: "novel-reader"
+                )
                 var offset = anchorCharOffset
                 // epub 首次定位：段落锚点换算为组装文本字符位置（需分页产物的块位置映射）
                 if let pending = self.pendingEpubParagraph {
@@ -337,6 +375,10 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     func goToChapter(_ target: Int, toLastPage: Bool = false) {
+        AppLogger.shared.log(
+            "goToChapter target=\(target) toLastPage=\(toLastPage) 当前chapter=\(chapter) toc=\(toc.count)",
+            module: "novel-reader"
+        )
         guard toc.indices.contains(target), target != chapter || pagination == nil else { return }
         report(force: true)
         // 命中预分页缓存直接切换上下文并重建滚动流，不闪「章节加载中」加载画面
@@ -540,6 +582,10 @@ final class NovelReaderViewModel: ObservableObject {
 
     private func loadChapter(_ target: Int) async throws -> LoadedChapter {
         if let cached = chapterCache[target] { return cached }
+        AppLogger.shared.log(
+            "loadChapter target=\(target) isEpub=\(isEpub) toc=\(toc.count)",
+            module: "novel-reader"
+        )
         let loaded: LoadedChapter
         if isEpub {
             guard let epubBook else { throw StorageError.invalidConfig("epub 未解包") }
@@ -579,6 +625,11 @@ final class NovelReaderViewModel: ObservableObject {
                 chapterText = loadedText
             }
             // 原始行直接成段（保留缩进与空行间距）；章首行命中标题则放大加粗
+            // 越界前置日志：chapters[target] 若 target 越界会 fatalError 闪退，崩前留痕
+            AppLogger.shared.log(
+                "loadChapter txt 取标题: target=\(target) chapters.count=\(txtIndex.chapters.count) lines=\(chapterText.lines.count)",
+                module: "novel-reader"
+            )
             let title = txtIndex.chapters[target].title
             let blocks: [ReaderBlock] = chapterText.lines.enumerated().map { lineIndex, line in
                 let isTitle = lineIndex == 0
@@ -642,6 +693,13 @@ final class NovelReaderViewModel: ObservableObject {
         }
         // txt：组装文本字符位置 → 行表映射章内字节偏移 → + 章起始 → 全局字节偏移
         let offsetInChapter = txtCharOffsetToByteOffset(charOffset)
+        // 越界前置日志：chapters[chapter] 若 chapter 越界会 fatalError 闪退，崩前留痕
+        if let txtIndex, !txtIndex.chapters.indices.contains(chapter) {
+            AppLogger.shared.log(
+                "makeAnchor 章节越界 chapter=\(chapter) chapters.count=\(txtIndex.chapters.count)",
+                level: .warn, module: "novel-reader"
+            )
+        }
         let chapterStart = txtIndex?.chapters[chapter].startOffset ?? 0
         return NovelAnchor(
             kind: .txt,

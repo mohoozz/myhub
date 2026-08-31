@@ -84,6 +84,13 @@ enum TextPaginator {
             blocks: blocks, appearance: appearance, pageSize: pageSize, textColor: textColor
         )
         let pages = splitPages(attributed: attributed, pageSize: pageSize)
+        // blockStarts 正常应与 blocks 等长；不等长时锚点换算 blockStarts[index] 会越界闪退，先留痕
+        if blockStarts.count != blocks.count {
+            AppLogger.shared.log(
+                "TextPaginator: blockStarts(\(blockStarts.count)) ≠ blocks(\(blocks.count))，锚点换算存在越界风险",
+                level: .warn, module: "novel-reader"
+            )
+        }
         return ChapterPagination(attributedText: attributed, pages: pages, blockStarts: blockStarts)
     }
 

@@ -92,11 +92,16 @@ final class ComicReaderViewModel: ObservableObject {
 
     func load() {
         guard loadTask == nil else { return }
+        AppLogger.shared.log(
+            "打开漫画: name=\(entry.name) ext=\(entry.ext) size=\(entry.size) path=\(entry.path) conn=\(connectionID)",
+            module: "comic-reader"
+        )
         loadTask = Task { await performLoad() }
     }
 
     private func performLoad() async {
         guard let adapter else {
+            AppLogger.shared.log("打开失败: adapter=nil（连接不可用）", level: .error, module: "comic-reader")
             state = .failed("连接不可用，请检查连接源配置")
             return
         }
@@ -107,6 +112,10 @@ final class ComicReaderViewModel: ObservableObject {
                 Task { @MainActor in self?.state = .opening(fraction) }
             }
             try Task.checkCancellation()
+            AppLogger.shared.log(
+                "归档打开成功: pageCount=\(opened.pageCount) 首页名=\(opened.pageNames.first ?? "-")",
+                module: "comic-reader"
+            )
             let identity = ComicPageCache.identity(connectionID: connectionID, entry: entry)
             cacheIdentity = identity
             // 页名列表落盘（离线打开的结构基础）
@@ -115,11 +124,17 @@ final class ComicReaderViewModel: ObservableObject {
             }
             await finishOpen(source: opened, fileSize: entry.size, modTime: entry.modTime)
         } catch is CancellationError {
+            AppLogger.shared.log("打开取消（退出/切换）", module: "comic-reader")
         } catch {
+            AppLogger.shared.log(
+                "归档打开失败: error=\(error) desc=\(error.localizedDescription)，尝试离线回退",
+                level: .warn, module: "comic-reader"
+            )
             // IOS-605 离线回退：页名列表 + 解压页已缓存时可离线阅读（远程 rar 整包亦在缓存分区）
             if let offline = await ComicPageCache.offlineSource(
                 connectionID: connectionID, path: entry.path
             ) {
+                AppLogger.shared.log("离线回退成功: pageCount=\(offline.pageCount)", module: "comic-reader")
                 cacheIdentity = offline.identity
                 await finishOpen(
                     source: offline,
@@ -128,6 +143,10 @@ final class ComicReaderViewModel: ObservableObject {
                 )
                 showToast("离线模式：仅已缓存页面可读")
             } else {
+                AppLogger.shared.log(
+                    "离线回退失败，最终标记 failed: \(error.localizedDescription)",
+                    level: .error, module: "comic-reader"
+                )
                 state = .failed(error.localizedDescription)
             }
         }
@@ -147,6 +166,10 @@ final class ComicReaderViewModel: ObservableObject {
         let restored = min(max(saved.anchor?.page ?? 0, 0), max(source.pageCount - 1, 0))
         page = restored
         state = .ready
+        AppLogger.shared.log(
+            "finishOpen: pageCount=\(source.pageCount) 恢复页码=\(restored) stale=\(saved.stale)",
+            module: "comic-reader"
+        )
 
         // 封面缩略图缓存（「正在阅读」封面，异步不阻塞）
         let coverConnectionID = connectionID
@@ -210,6 +233,13 @@ final class ComicReaderViewModel: ObservableObject {
         if let image = await task.value {
             images[index] = image
             evictIfNeeded(around: index)
+        } else if !task.isCancelled {
+            // 解码返回 nil：页数据拉取失败 / 图片解码失败 —— 表现为该页一直停在占位「加载中」
+            let name = source?.pageNames.indices.contains(index) == true ? source?.pageNames[index] ?? "-" : "-"
+            AppLogger.shared.log(
+                "页面解码失败(返回nil): index=\(index) name=\(name)",
+                level: .warn, module: "comic-reader"
+            )
         }
         pageTasks[index] = nil
     }

@@ -79,6 +79,20 @@ final class BrowserSessionStore: ObservableObject {
         persist()
     }
 
+    /// 拖拽排序：将 `fromID` 标签移动到 `toID` 标签所在位置（实时交换，标签卡片长按拖动）
+    func moveTab(fromID: UUID, toID: UUID) {
+        guard fromID != toID,
+              let from = tabs.firstIndex(where: { $0.id == fromID }),
+              let to = tabs.firstIndex(where: { $0.id == toID })
+        else { return }
+        let moved = tabs.remove(at: from)
+        // 移除后重新定位目标：向下拖插到目标之后，向上拖插到目标之前
+        let target = tabs.firstIndex(where: { $0.id == toID }) ?? to
+        let insertAt = from < to ? target + 1 : target
+        tabs.insert(moved, at: min(insertAt, tabs.count))
+        persist()
+    }
+
     /// 在激活标签加载 URL（无激活标签则新建）
     func open(_ url: URL) {
         if let tab = activeTab {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 内置浏览器主页（TODO §8.1/§8.2，IOS-401）：
 /// 标签内容保活区 + 底部操作栏（含居中地址栏，滚动收起为小胶囊/下滑或点击展开，Safari 风格）。
@@ -62,10 +63,7 @@ struct BrowserHomeView: View {
     private var contentArea: some View {
         ZStack {
             ForEach(session.visibleTabs) { tab in
-                BrowserView(
-                    tab: tab,
-                    onEdgeSwipeBack: { closeTab(tab) }
-                )
+                BrowserView(tab: tab)
                 .opacity(tab.id == session.activeTabID ? 1 : 0)
                 .allowsHitTesting(tab.id == session.activeTabID)
                 .accessibilityHidden(tab.id != session.activeTabID)
@@ -84,11 +82,6 @@ struct BrowserHomeView: View {
     }
 
     // MARK: - 行为
-
-    /// 历史栈空时侧滑返回 → 退出页签
-    private func closeTab(_ tab: BrowserTab) {
-        session.closeTab(tab.id)
-    }
 
     private func expandToolbar() {
         guard toolbarMini else { return }
@@ -160,6 +153,9 @@ struct BrowserHomeView: View {
 private struct TabGridView: View {
     @EnvironmentObject private var session: BrowserSessionStore
     @Environment(\.dismiss) private var dismiss
+
+    /// 当前被长按拖动的标签（用于实时重排 + 拖动态视觉反馈）
+    @State private var draggingTab: BrowserTab?
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 12)]
 
@@ -241,6 +237,16 @@ private struct TabGridView: View {
             .buttonStyle(.plain)
         }
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // 长按拖动排序：拖起时记录来源，拖入其它卡片时实时重排
+        .onDrag {
+            draggingTab = tab
+            return NSItemProvider(object: tab.id.uuidString as NSString)
+        }
+        .onDrop(
+            of: [.plainText],
+            delegate: TabDropDelegate(item: tab, dragging: $draggingTab, session: session)
+        )
+        .opacity(draggingTab?.id == tab.id ? 0.35 : 1)
         .onTapGesture {
             session.switchTab(tab.id)
             dismiss()
@@ -301,5 +307,28 @@ private struct TabGridView: View {
         .padding(.vertical, 12)
         .background(AppColors.cardBackground.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) { Divider().overlay(AppColors.separator) }
+    }
+}
+
+/// 标签卡片拖拽排序代理（IOS-401）：拖入目标卡片时实时交换顺序，落下时清除拖动态
+private struct TabDropDelegate: DropDelegate {
+    let item: BrowserTab
+    @Binding var dragging: BrowserTab?
+    let session: BrowserSessionStore
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging, dragging.id != item.id else { return }
+        withAnimation(.appFast) {
+            session.moveTab(fromID: dragging.id, toID: item.id)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        return true
     }
 }

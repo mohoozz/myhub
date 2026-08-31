@@ -1,15 +1,18 @@
 import SwiftUI
+import UIKit
 
 /// 贴底式 mini 播放器（对齐 Flutter `MiniPlayer`，QQ 音乐风格）：
 /// iPhone 上紧贴底部页签栏、宽度占满屏幕；点击展开回全屏、下拉拖拽关闭。
 ///
 /// 封面 64×64 圆角 8、顶部溢出 8px（浮在卡片上边界，突出显示）；
 /// 标题显示「标题」，副标题显示「作者」（不显示路径）；
-/// 视频播放时封面实时渲染画面（`MiniCoverPreview`），音频播放时显示图标。
+/// 视频播放时封面实时渲染画面（`MiniCoverPreview`），音频播放时显示内嵌/同目录封面（缺失回落图标）。
 struct MiniPlayer: View {
     @EnvironmentObject private var player: PlayerPresenter
     @StateObject private var core = PlayerCore.shared
     @GestureState private var dragOffset: CGFloat = 0
+    /// 音频内嵌/同目录封面（异步经 `CoverService` 加载，与全屏/锁屏同源缓存，缺失时回落 music.note 图标）
+    @State private var audioCover: UIImage?
 
     /// 封面尺寸 / 顶部溢出（对齐 Flutter compact 布局）
     private let coverSize: CGFloat = 64
@@ -64,6 +67,25 @@ struct MiniPlayer: View {
                 }
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
+        // 切歌或音/视频模式切换时重新加载音频封面
+        .task(id: coverLoadKey) { await loadAudioCover() }
+    }
+
+    /// 音频封面加载键：随播放路径或音/视频模式变化而变化，触发重新加载
+    private var coverLoadKey: String {
+        "\(player.current?.path ?? "")|\(isAudio)"
+    }
+
+    /// 音频模式加载内嵌 / 同目录封面（复用 `CoverService` 内存/磁盘缓存，命中即时返回，与全屏/锁屏同源）。
+    /// 加载到即显示并回填锁屏封面；缺失或非音频时保持图标占位。
+    private func loadAudioCover() async {
+        audioCover = nil   // 切歌先清空，避免残留上一首封面
+        guard isAudio, let item = player.current else { return }
+        let result = await CoverService.shared.cover(forItem: item)
+        // 加载期间可能已切歌，回填前确认仍是当前条目
+        guard player.current?.path == item.path, let image = result.image else { return }
+        audioCover = image
+        NowPlaying.shared.setArtwork(image, for: item.path)
     }
 
     /// 卡片主体：标题/副标题 + 右侧操作按钮 + 底部 2px 进度条
@@ -136,18 +158,24 @@ struct MiniPlayer: View {
         }
     }
 
-    /// 封面：视频模式实时画面 / 音频模式图标占位；点击展开全屏
+    /// 封面：视频模式实时画面 / 音频模式内嵌封面（缺失回落图标）；点击展开全屏
     @ViewBuilder
     private var cover: some View {
         Group {
             if isAudio {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(AppColors.primary.opacity(0.12))
-                    .overlay {
-                        Image(systemName: "music.note")
-                            .font(.system(size: 24, weight: .medium))
-                            .foregroundStyle(AppColors.primary)
-                    }
+                if let audioCover {
+                    Image(uiImage: audioCover)
+                        .resizable()
+                        .scaledToFill()   // 填满封面（对齐全屏/浏览页 BoxFit.cover 观感）
+                } else {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(AppColors.primary.opacity(0.12))
+                        .overlay {
+                            Image(systemName: "music.note")
+                                .font(.system(size: 24, weight: .medium))
+                                .foregroundStyle(AppColors.primary)
+                        }
+                }
             } else {
                 MiniCoverPreview(output: core.videoOutput)
             }
