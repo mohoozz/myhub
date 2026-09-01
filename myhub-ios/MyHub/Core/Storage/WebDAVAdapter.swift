@@ -171,22 +171,15 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
         }
         let request = makeRequest("GET", path: path, headers: headers)
         return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    // 用 data(for:) 一次性读完整 range：AsyncBytes 逐字节迭代性能极差
-                    // （1MB ≈ 100 万次 await），弱网下分片/moov 读取极易超时，封面抽帧与播放均受影响。
-                    // 当前所有调用方（1MB 分片、moov、封面图片）均为读完整 range，无流式增量消费需求。
-                    let (data, response) = try await session.data(for: request)
-                    try validate(response)
-                    if !data.isEmpty {
-                        continuation.yield(data)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
+            // 真正的增量流式下载（TODO 356）：按网络到达的数据块（通常几 KB~几十 KB）持续 yield，
+            // 弱网慢速下载不再「整块下完才返回」——配合上层停滞超时可断点续传、不丢弃已下载数据。
+            // 用 per-task delegate（iOS 15+，task 强引用直至完成）承接回调，而非 AsyncBytes
+            // （后者逐字节 await，1MB ≈ 百万次，性能极差）。task 保持对 delegate 强引用，无需额外持有。
+            let delegate = StreamingReadDelegate(continuation: continuation)
+            let task = session.dataTask(with: request)
+            task.delegate = delegate
             continuation.onTermination = { _ in task.cancel() }
+            task.resume()
         }
     }
 

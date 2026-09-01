@@ -51,6 +51,10 @@ final class AVPlayerEngine: PlaybackEngine {
         guard playable else { throw PlayerPlaybackError("系统原生无法解码该格式") }
 
         let item = AVPlayerItem(asset: asset)
+        // 弱网抗抖动（TODO 356）：本地回环代理会让 AVPlayer 误判带宽极高（连的是 127.0.0.1），
+        // 于是只维持很浅的缓冲；一旦代理后端弱网拉取阻塞就瞬间耗尽卡顿。显式设定前向缓冲目标时长，
+        // 强制 AVPlayer 主动多囤数据抗抖动（0 为系统自动，此处用预加载秒数对齐软解 network-caching 策略）。
+        item.preferredForwardBufferDuration = max(0, AppSettings.Player.preloadSeconds)
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
         player.allowsExternalPlayback = true   // AirPlay

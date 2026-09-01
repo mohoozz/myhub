@@ -75,6 +75,10 @@ final class VLCEngine: NSObject, PlaybackEngine {
         let media = VLCMedia(url: url)
         // 优先硬件解码（VideoToolbox）降低软解 CPU 发热；不支持的编码由 avcodec 自动回退软解
         media.addOption(":avcodec-hw=videotoolbox")
+        // 弱网抗抖动（TODO 356）：加大解复用前的网络缓冲。VLC 默认 network-caching 仅 1000ms，
+        // 弱网下极易耗尽卡顿；用预加载秒数换算并限制在 3~5s，对齐 nPlayer 软解平滑度，兼顾起播速度。
+        let networkCachingMs = Int(min(max(AppSettings.Player.preloadSeconds, 3), 5) * 1000)
+        media.addOption(":network-caching=\(networkCachingMs)")
         player.media = media
         onEvent?(.stateChanged(.loading))
         // VLCKit 异步起播：opening/buffering/playing 状态经 delegate 回报
