@@ -175,6 +175,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
                 didEmitReady = true
                 emit(.ready)
                 onEvent?(.tracksChanged)
+                logAudioDiagnostics()
             }
             emit(.playing)
         case .paused:
@@ -207,6 +208,16 @@ final class VLCEngine: NSObject, PlaybackEngine {
         didApplyStartAt = true
         seek(to: start)
         player.rate = desiredRate
+    }
+
+    /// 记录软解音轨信息，定位「有画面无声」——音轨是否被识别/选中（TODO 358）
+    private func logAudioDiagnostics() {
+        let names = (player.audioTrackNames as? [String]) ?? []
+        let indexes = (player.audioTrackIndexes as? [NSNumber]) ?? []
+        AppLogger.shared.log(
+            "软解音轨诊断 names=[\(names.joined(separator: ","))] indexes=[\(indexes.map { $0.stringValue }.joined(separator: ","))] current=\(player.currentAudioTrackIndex)",
+            module: "player-audio"
+        )
     }
 }
 

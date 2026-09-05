@@ -55,6 +55,18 @@ enum ComicPageCache {
         await store.store(named: "pages.json", data: data, for: file)
     }
 
+    // MARK: - 页宽高比（条漫占位高度 = 真实高度，恢复定位不被解码膨胀顶偏）
+
+    static func pageRatios(file: SegmentCache.FileIdentity) async -> [Int: Float]? {
+        guard let data = await store.data(named: "ratios.json", for: file) else { return nil }
+        return try? JSONDecoder().decode([Int: Float].self, from: data)
+    }
+
+    static func storePageRatios(_ ratios: [Int: Float], file: SegmentCache.FileIdentity) async {
+        guard enabled, let data = try? JSONEncoder().encode(ratios) else { return }
+        await store.store(named: "ratios.json", data: data, for: file)
+    }
+
     // MARK: - 远程 rar/cbr 整包复用（UnrarKit 需要文件 URL；落缓存分区供下次/离线直接用）
 
     static func archiveURL(for file: SegmentCache.FileIdentity, ext: String) async -> URL {
@@ -90,5 +102,80 @@ final class DiskCachedComicSource: ComicPageSource {
             return data
         }
         throw StorageError.offline("第 \(index + 1) 页")
+    }
+}
+
+/// 缓存优先漫画源（缓存秒开）：页名列表来自缓存，单页数据优先命中磁盘缓存；
+/// 后台归档源（fallback）补齐后，缓存未命中的页回退到归档按需解压，保证完整性。
+/// fallback 用锁保护（`pageData` 在后台线程调用，`setFallback`/`markFallbackFailed` 在 MainActor 调用）。
+final class CachedFirstComicSource: ComicPageSource {
+    let identity: SegmentCache.FileIdentity
+    let pageNames: [String]
+
+    private enum FallbackState {
+        case pending
+        case ready(ComicPageSource)
+        case failed
+    }
+
+    private let lock = NSLock()
+    private var fallbackState: FallbackState = .pending
+
+    init(identity: SegmentCache.FileIdentity, pageNames: [String]) {
+        self.identity = identity
+        self.pageNames = pageNames
+    }
+
+    func setFallback(_ source: ComicPageSource) {
+        lock.lock(); fallbackState = .ready(source); lock.unlock()
+    }
+
+    func markFallbackFailed() {
+        lock.lock(); fallbackState = .failed; lock.unlock()
+    }
+
+    func pageData(at index: Int) async throws -> Data {
+        guard pageNames.indices.contains(index) else { throw ArchiveDecodeError.noPages }
+        // 缓存命中（ViewModel 层通常已命中，此处兜底）
+        if let data = await ComicPageCache.page(file: identity, name: pageNames[index]) {
+            AppLogger.shared.log("CachedFirst 缓存命中兜底: 第\(index + 1)页", module: "comic-reader")
+            return data
+        }
+        // 等 fallback 就绪（后台归档打开中，最多 ~8s）；失败/超时按离线占位报错
+        let t0 = CFAbsoluteTimeGetCurrent()
+        var waitedMs = 0
+        while true {
+            lock.lock()
+            let state = fallbackState
+            lock.unlock()
+            switch state {
+            case .ready(let source):
+                let waited = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+                AppLogger.shared.log(
+                    String(format: "CachedFirst 等 fallback 就绪: 第%d页 等待=%.0fms", index + 1, waited),
+                    module: "comic-reader"
+                )
+                return try await source.pageData(at: index)
+            case .failed:
+                throw StorageError.offline("第 \(index + 1) 页")
+            case .pending:
+                break
+            }
+            if waitedMs >= 8_000 { throw StorageError.offline("第 \(index + 1) 页") }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waitedMs += 100
+            if Task.isCancelled { throw CancellationError() }
+        }
+    }
+
+    func close() {
+        lock.lock()
+        if case .ready(let source) = fallbackState {
+            fallbackState = .failed
+            lock.unlock()
+            source.close()
+        } else {
+            lock.unlock()
+        }
     }
 }

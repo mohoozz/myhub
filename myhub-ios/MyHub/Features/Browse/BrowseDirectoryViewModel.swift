@@ -61,6 +61,10 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// 当前目录已收藏路径（星标状态）
     @Published private(set) var favoritePaths: Set<String> = []
 
+    /// 当前目录被判定为图集型（漫画）的 epub 路径集合（目录层预判，IOS-207 策略 5）
+    @Published private(set) var comicEpubPaths: Set<String> = []
+    private var comicEpubDetectTask: Task<Void, Never>?
+
     /// 排序与视图模式：读写均落到 UserDefaults（排序与路径显示偏好缓存）
     @Published var sortKey: BrowseSortKey {
         didSet { displayedEntriesCache = nil; AppSettings.Browse.sortKey = sortKey }
@@ -182,10 +186,47 @@ final class BrowseDirectoryViewModel: ObservableObject {
             state = list.isEmpty ? .empty : .loaded
             DirectoryCache.shared.save(connectionID: connectionID, path: path, entries: list)
             reloadFavorites()
+            detectComicEpubs(adapter: adapter)
         } catch {
             // 有缓存/旧数据则静默保留，仅首载失败显示错误态
             if entries.isEmpty {
                 state = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - epub 漫画预判（IOS-207 策略 5）
+
+    /// 同步判定（目录显示 / 打开分发用）：优先用已算好的集合，未就绪时兜底查持久化缓存。
+    func isComicEpub(_ entry: FileEntry) -> Bool {
+        guard entry.ext == "epub", !entry.isDir else { return false }
+        return comicEpubPaths.contains(entry.path)
+            || EpubComicCache.lookup(connectionID: connectionID, entry: entry) == true
+    }
+
+    /// 列目录后异步预判 epub 是否漫画：命中缓存立即更新，未命中做轻量解包判定（串行，避免大文件密集 Range）。
+    private func detectComicEpubs(adapter: StorageAdapter) {
+        let epubs = entries.filter { !$0.isDir && $0.ext == "epub" }
+        comicEpubDetectTask?.cancel()
+        comicEpubDetectTask = Task { [weak self] in
+            guard let self else { return }
+            var detected = self.comicEpubPaths
+            for entry in epubs {
+                guard !Task.isCancelled else { return }
+                let result: Bool?
+                if let cached = EpubComicCache.lookup(connectionID: self.connectionID, entry: entry) {
+                    result = cached
+                } else {
+                    result = await EpubBook.detectComicLike(adapter: adapter, entry: entry)
+                    if let result {
+                        EpubComicCache.store(result, connectionID: self.connectionID, entry: entry)
+                    }
+                }
+                if result == true { detected.insert(entry.path) }
+                else if result == false { detected.remove(entry.path) }
+                if detected != self.comicEpubPaths {
+                    self.comicEpubPaths = detected
+                }
             }
         }
     }

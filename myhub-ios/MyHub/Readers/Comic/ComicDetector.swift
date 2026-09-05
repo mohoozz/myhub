@@ -2,8 +2,10 @@ import Foundation
 
 /// 漫画识别策略（IOS-207）：
 /// 1. 扩展名优先：`.cbz` / `.cbr` 直接按漫画处理；
-/// 2. 内容嗅探兜底：zip/rar/epub 内图片占比 ≥ 90% 且文件名呈自然序列判定为漫画；
-/// 3. 手动覆盖：浏览页右键/长按菜单「以漫画阅读打开」（见 BrowseDirectoryView）。
+/// 2. 内容嗅探兜底：zip/rar 内图片占比 ≥ 90% 且文件名呈自然序列判定为漫画；
+/// 3. epub 图集型判定：spine 抽样 XHTML 文本稀少且含插图（见 EpubBook.isComicSpine）；
+/// 4. 手动覆盖：浏览页右键/长按菜单「以漫画阅读打开 / 以小说阅读打开」（见 BrowseDirectoryView）；
+/// 5. 目录层预判：列目录时对 epub 判定并缓存，直接显示漫画徽标 + 打开走漫画阅读器（见 EpubComicCache）。
 enum ComicDetector {
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "avif"]
 
@@ -30,5 +32,27 @@ enum ComicDetector {
             return stem.rangeOfCharacter(from: .decimalDigits) != nil
         }
         return numbered.count * 2 >= images.count
+    }
+}
+
+/// epub 图集型（漫画）判定结果缓存（IOS-207 漫画识别策略 5）：
+/// 目录层预判 epub 是否漫画，命中后直接显示漫画徽标 + 打开直接走漫画阅读器，
+/// 避免「小说阅读器判定 → 转交漫画阅读器」的双重解包（大文件 Range 密集请求易触发 WebDAV 空响应）。
+/// 键含文件 size/modTime，文件替换即失效。
+enum EpubComicCache {
+    private static let defaults = UserDefaults.standard
+    private static let keyPrefix = "epub.comic."
+
+    private static func key(connectionID: Int64, entry: FileEntry) -> String {
+        "\(keyPrefix)\(connectionID)|\(entry.path)|\(entry.size)|\(Int64(entry.modTime.timeIntervalSince1970))"
+    }
+
+    /// 命中返回判定结果，未命中返回 nil
+    static func lookup(connectionID: Int64, entry: FileEntry) -> Bool? {
+        defaults.object(forKey: key(connectionID: connectionID, entry: entry)) as? Bool
+    }
+
+    static func store(_ isComic: Bool, connectionID: Int64, entry: FileEntry) {
+        defaults.set(isComic, forKey: key(connectionID: connectionID, entry: entry))
     }
 }

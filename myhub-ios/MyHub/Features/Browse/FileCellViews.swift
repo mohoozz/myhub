@@ -61,12 +61,16 @@ struct FileGridCell: View {
     let isPlaying: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
+    /// 目录层预判：epub 内容为图集型（漫画）时按漫画显示徽标（IOS-207 策略 5）
+    var isComicEpub: Bool = false
 
     @State private var duration: Double?
     @State private var hovering = false
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
-    private var mediaType: MediaType { MediaType.detect(ext: entry.ext) }
+    private var mediaType: MediaType {
+        isComicEpub ? .comic : MediaType.detect(ext: entry.ext)
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -158,11 +162,15 @@ struct FileListRow: View {
     let isPlaying: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
+    /// 目录层预判：epub 内容为图集型（漫画）时按漫画显示徽标（IOS-207 策略 5）
+    var isComicEpub: Bool = false
 
     @State private var duration: Double?
     @State private var hovering = false
 
-    private var mediaType: MediaType { MediaType.detect(ext: entry.ext) }
+    private var mediaType: MediaType {
+        isComicEpub ? .comic : MediaType.detect(ext: entry.ext)
+    }
 
     var body: some View {
         VStack(spacing: 0) {

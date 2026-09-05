@@ -36,7 +36,7 @@ final class PlaybackProgressStore {
                 existing.updatedAt = Date()
                 try existing.update(database)
             } else {
-                var record = ReadingProgress(
+                let record = ReadingProgress(
                     id: nil,
                     connectionID: connectionID,
                     filePath: report.path,

@@ -42,6 +42,7 @@ enum ArchiveDecoder {
         entry: FileEntry,
         adapter: StorageAdapter,
         connectionID: Int64,
+        knownPageNames: [String]? = nil,
         onDownloadProgress: ((Double) -> Void)? = nil
     ) async throws -> ComicPageSource {
         AppLogger.shared.log(
@@ -52,7 +53,7 @@ enum ArchiveDecoder {
         case "zip", "cbz":
             return try await openZipFamily(entry: entry, adapter: adapter)
         case "epub":
-            return try await openEpub(entry: entry, adapter: adapter)
+            return try await openEpub(entry: entry, adapter: adapter, knownPageNames: knownPageNames)
         case "rar", "cbr":
             return try await openRar(
                 entry: entry, adapter: adapter, connectionID: connectionID,
@@ -101,10 +102,28 @@ enum ArchiveDecoder {
 
     // MARK: - epub 漫画（按 spine 阅读顺序提取插图页）
 
-    private static func openEpub(entry: FileEntry, adapter: StorageAdapter) async throws -> ComicPageSource {
+    private static func openEpub(
+        entry: FileEntry, adapter: StorageAdapter, knownPageNames: [String]? = nil
+    ) async throws -> ComicPageSource {
+        let t0 = CFAbsoluteTimeGetCurrent()
         let book = try await EpubBook(adapter: adapter, entry: entry)
-        let pageNames = try await book.comicPageNames()
-        AppLogger.shared.log("epub 图集页数=\(pageNames.count)", module: "comic-reader")
+        let t1 = CFAbsoluteTimeGetCurrent()
+        let pageNames: [String]
+        if let known = knownPageNames, !known.isEmpty {
+            // 缓存秒开后复用已缓存页名，跳过遍历 194 个 spine XHTML（每次 2 次 Range 请求）
+            pageNames = known
+            AppLogger.shared.log(
+                String(format: "epub 复用缓存页名=%d 元数据耗时=%.0fms(跳过页名遍历)", pageNames.count, (t1 - t0) * 1000),
+                module: "comic-reader"
+            )
+        } else {
+            pageNames = try await book.comicPageNames()
+            let t2 = CFAbsoluteTimeGetCurrent()
+            AppLogger.shared.log(
+                String(format: "epub 图集页数=%d 解包总耗时=%.0fms(元数据=%.0fms+页名遍历=%.0fms)", pageNames.count, (t2 - t0) * 1000, (t1 - t0) * 1000, (t2 - t1) * 1000),
+                module: "comic-reader"
+            )
+        }
         guard !pageNames.isEmpty else {
             AppLogger.shared.log("epub 无图集页 → noPages", level: .warn, module: "comic-reader")
             throw ArchiveDecodeError.noPages

@@ -193,13 +193,16 @@ actor CoverService {
 
     // MARK: - 按类型产出
 
-    /// 恒无封面（`CoverService` 视角）：目录、字幕、其它文件、小说。
-    /// 注：epub 封面由 `EpubBook.cacheCoverThumbnail` 单独提取写入缩略图分区，
-    /// 不经本服务的 `produce`（`.novel` 分支恒返回 nil），故 txt/epub 均可短路。
+    /// 恒无封面（`CoverService` 视角）：目录、字幕、其它文件、txt 小说。
+    /// epub 封面改由本服务 `produce` 轻量提取（`EpubBook.extractCover`），供浏览目录直接显示封面；
+    /// txt 纯文本仍短路。原「epub 封面仅打开后经 cacheCoverThumbnail 写缩略图分区」不再承担目录封面。
     private static func hasNoCover(_ entry: FileEntry) -> Bool {
         if entry.isDir { return true }
         switch MediaType.detect(ext: entry.ext) {
-        case .novel, .subtitle, .other:
+        case .novel:
+            // epub 有内嵌封面（目录层轻量提取）；txt 纯文本恒无封面
+            return entry.ext == "txt"
+        case .subtitle, .other:
             return true
         case .video, .audio, .comic, .image:
             return false
@@ -248,7 +251,17 @@ actor CoverService {
                     Self.logCover(.warn, "comic 封面缺失", entry: entry)
                 }
                 return CoverResult(image: image, duration: nil)
-            case .novel, .subtitle, .other:
+            case .novel:
+                // epub：轻量提取内嵌封面（封面缺失/解析失败则占位，由失败冷却限流重试）
+                if entry.ext == "epub" {
+                    let image = await EpubBook.extractCover(adapter: adapter, entry: entry)
+                    if image == nil {
+                        Self.logCover(.warn, "epub 封面缺失", entry: entry)
+                    }
+                    return CoverResult(image: image, duration: nil)
+                }
+                return CoverResult(image: nil, duration: nil)
+            case .subtitle, .other:
                 return CoverResult(image: nil, duration: nil)
             }
         } catch {

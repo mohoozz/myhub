@@ -178,7 +178,12 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
             let delegate = StreamingReadDelegate(continuation: continuation)
             let task = session.dataTask(with: request)
             task.delegate = delegate
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.onTermination = { _ in
+                // 先标记终止再取消：cancel 触发的完成回调会看到终止标记直接忽略，
+                // 避免对已终止的 continuation 二次 finish 导致崩溃
+                delegate.markTerminated()
+                task.cancel()
+            }
             task.resume()
         }
     }
@@ -243,6 +248,76 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
         request.timeoutInterval = min(timeoutInterval, 10)
         let (_, response) = try await session.data(for: request)
         try validate(response)
+    }
+}
+
+// MARK: - 增量流式下载 delegate（TODO 356）
+
+/// `readStream` 的 per-task 数据接收 delegate：将网络到达的数据块持续 `yield` 给上游，
+/// 完成或失败时结束流。URLSession 的 per-task delegate（iOS 15+）会被 task 强引用直至结束，
+/// 无需额外持有；消费方取消迭代时经 `markTerminated` 提前标记，避免已终止后续流再 `finish` 崩溃。
+final class StreamingReadDelegate: NSObject, URLSessionDataDelegate {
+    private let continuation: AsyncThrowingStream<Data, Error>.Continuation
+    private let lock = NSLock()
+    private var terminated = false
+
+    init(continuation: AsyncThrowingStream<Data, Error>.Continuation) {
+        self.continuation = continuation
+    }
+
+    /// 消费方取消迭代时调用：原子标记终止，使随后 cancel 触发的完成回调直接忽略。
+    func markTerminated() {
+        lock.lock()
+        terminated = true
+        lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        // 校验 HTTP 状态码：Range 读取必须 2xx（206 Partial Content / 200）。
+        // 否则（416 Range 不满足 / 4xx / 5xx / 内网代理错误页）错误响应体若被当数据 yield，
+        // 会污染 RangeZipReader 的中央目录/条目解析，表现为「malformed」「图片一直加载中」等偶发故障。
+        var badStatus: Int?
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            badStatus = http.statusCode
+        }
+        lock.lock()
+        if let code = badStatus, !terminated {
+            terminated = true
+            lock.unlock()
+            continuation.finish(throwing: StorageError.http(
+                status: code,
+                message: HTTPURLResponse.localizedString(forStatusCode: code)
+            ))
+            completionHandler(.cancel)
+            return
+        }
+        lock.unlock()
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        let isTerminated = terminated
+        lock.unlock()
+        guard !isTerminated else { return }
+        // yield 对已终止的流是安全的（返回 .terminated），不会崩溃
+        continuation.yield(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        guard !terminated else {
+            lock.unlock()
+            return
+        }
+        terminated = true
+        lock.unlock()
+
+        if let error {
+            continuation.finish(throwing: error)
+        } else {
+            continuation.finish()
+        }
     }
 }
 

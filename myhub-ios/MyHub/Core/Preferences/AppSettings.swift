@@ -96,6 +96,7 @@ enum AppSettings {
         @RawUserDefault("reader.theme", default: .auto) static var theme: ReaderTheme
         @RawUserDefault("reader.pageMode", default: .paging) static var pageMode: ReaderPageMode
         @RawUserDefault("reader.comicDirection", default: .auto) static var comicDirection: ComicReadingDirection
+        @RawUserDefault("reader.comicMode", default: .webtoon) static var comicMode: ComicReadMode
         @UserDefault("reader.brightness", default: -1) static var brightness: Double   // -1 = 跟随系统
         @UserDefault("reader.useSerifFont", default: false) static var useSerifFont: Bool   // 正文思源宋体（未打包字体时回退系统宋体）
 

@@ -412,7 +412,8 @@ struct BrowseDirectoryView: View {
                     progress: entry.isDir ? nil : progressMap[entry.path],
                     isPlaying: isPlaying(entry),
                     menuItems: contextMenuItems(for: entry),
-                    onTap: { tap(entry) }
+                    onTap: { tap(entry) },
+                    isComicEpub: viewModel.isComicEpub(entry)
                 )
                 .onAppear { viewModel.loadChildCountIfNeeded(for: entry) }
             }
@@ -436,7 +437,8 @@ struct BrowseDirectoryView: View {
                     progress: entry.isDir ? nil : progressMap[entry.path],
                     isPlaying: isPlaying(entry),
                     menuItems: contextMenuItems(for: entry),
-                    onTap: { tap(entry) }
+                    onTap: { tap(entry) },
+                    isComicEpub: viewModel.isComicEpub(entry)
                 )
                 .onAppear { viewModel.loadChildCountIfNeeded(for: entry) }
             }
@@ -639,7 +641,7 @@ struct BrowseDirectoryView: View {
                 .liquidGlassToolbar(false)
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                PopupMenuButton(items: addItems, symbol: "plus")
+                PopupMenuButton(items: addItems, symbol: "plus", style: .popover)
                 PopupMenuButton(items: overflowItems)
             }
             .liquidGlassToolbar(liquidGlassMode)
@@ -710,7 +712,7 @@ struct BrowseDirectoryView: View {
     // MARK: - 操作菜单（长按 / 指针右键）
 
     private func contextMenuItems(for entry: FileEntry) -> [PopupMenuItem] {
-        let type = MediaType.detect(ext: entry.ext)
+        let type = viewModel.isComicEpub(entry) ? .comic : MediaType.detect(ext: entry.ext)
         var items: [PopupMenuItem] = [
             PopupMenuItem(title: entry.isDir ? "进入" : "打开", systemImage: "arrow.right.circle") {
                 tap(entry)
@@ -729,6 +731,12 @@ struct BrowseDirectoryView: View {
         if !entry.isDir, ["zip", "rar", "epub"].contains(entry.ext), type != .comic {
             items.append(PopupMenuItem(title: "以漫画阅读打开", systemImage: "photo.stack") {
                 comicReader.open(connection: connection, entry: entry)
+            })
+        }
+        // 反向覆盖（IOS-207 策略 5）：epub 已判定为漫画时，可强制以小说阅读器打开
+        if !entry.isDir, entry.ext == "epub", type == .comic {
+            items.append(PopupMenuItem(title: "以小说阅读打开", systemImage: "book") {
+                novelReader.open(connection: connection, entry: entry)
             })
         }
         if !entry.isDir, type == .subtitle || type == .other {
@@ -828,6 +836,9 @@ struct BrowseDirectoryView: View {
             // txt 默认走纯 txt 阅读器（全文滚动）；epub 走小说阅读器（章节/进度）
             if entry.ext == "txt" {
                 txtReader.open(connection: connection, entry: entry)
+            } else if viewModel.isComicEpub(entry) {
+                // 图集型 epub：直接走漫画阅读器，避免小说阅读器判定→转交的二次解包（IOS-207 策略 5）
+                comicReader.open(connection: connection, entry: entry)
             } else {
                 novelReader.open(connection: connection, entry: entry)
             }

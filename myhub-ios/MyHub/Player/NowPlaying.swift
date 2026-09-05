@@ -97,10 +97,24 @@ final class NowPlaying {
         switch state {
         case .loading, .buffering, .ready, .playing:
             if !sessionConfigured {
-                try? session.setCategory(.playback, mode: .moviePlayback)
-                sessionConfigured = true
+                do {
+                    try session.setCategory(.playback, mode: .moviePlayback)
+                    sessionConfigured = true
+                } catch {
+                    AppLogger.shared.log(
+                        "设置音频会话 category 失败 error=\(error.localizedDescription)",
+                        level: .error, module: "player-audio"
+                    )
+                }
             }
-            try? session.setActive(true)
+            do {
+                try session.setActive(true)
+            } catch {
+                AppLogger.shared.log(
+                    "激活音频会话失败 error=\(error.localizedDescription)",
+                    level: .error, module: "player-audio"
+                )
+            }
         case .idle, .ended, .failed:
             try? session.setActive(false, options: .notifyOthersOnDeactivation)
             artwork = nil

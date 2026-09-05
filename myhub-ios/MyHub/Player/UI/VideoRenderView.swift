@@ -57,18 +57,23 @@ final class PiPState: NSObject, ObservableObject {
 }
 
 extension PiPState: AVPictureInPictureControllerDelegate {
-    func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
-        isActive = true
+    // AVPictureInPictureControllerDelegate 为 nonisolated 协议，而 PiPState 是 @MainActor 类；
+    // 直接实现会触发「main actor-isolated instance method cannot satisfy nonisolated requirement」。
+    // 故方法标 nonisolated，回调线程通过 Task 派发到主线程再改 @Published（与 VLCEngine delegate 同款）。
+    nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        Task { @MainActor in self.isActive = true }
     }
 
-    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-        isActive = false
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
+        Task { @MainActor in self.isActive = false }
     }
 
-    func pictureInPictureController(_ controller: AVPictureInPictureController,
-                                    failedToStartPictureInPictureWithError error: Error) {
-        isActive = false
-        lastError = "画中画启动失败：\(error.localizedDescription)"
+    nonisolated func pictureInPictureController(_ controller: AVPictureInPictureController,
+                                                failedToStartPictureInPictureWithError error: Error) {
+        Task { @MainActor in
+            self.isActive = false
+            self.lastError = "画中画启动失败：\(error.localizedDescription)"
+        }
     }
 }
 

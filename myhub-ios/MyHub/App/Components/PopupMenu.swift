@@ -26,8 +26,8 @@ struct PopupMenuItem: Identifiable {
 final class PopupMenuPresenter: ObservableObject {
     /// 菜单呈现样式
     enum Style {
-        case popover   // 锚点圆角卡片：… 按钮 / iPad·Mac 指针右键
-        case drawer    // 底部抽屉：iOS 长按（参照 Flutter showModalBottomSheet）
+        case popover   // 锚点圆角卡片：+ 按钮 / iPad·Mac 指针右键
+        case drawer    // 底部抽屉：… 按钮 / iOS 长按（参照 Flutter showModalBottomSheet）
     }
 
     struct State {
@@ -283,7 +283,8 @@ private struct DrawerRowStyle: ButtonStyle {
 
 // MARK: - 触发组件
 
-/// 「…」触发按钮：记录自身全局位置并弹出圆角菜单；symbol 可定制（默认「…」）
+/// 「…」触发按钮：记录自身全局位置并弹出底部抽屉菜单（与长按文件菜单一致）；
+/// symbol 可定制（默认「…」），style 可定制（默认底部抽屉，+ 按钮传 .popover 保持锚点卡片）。
 ///
 /// 按压反馈由 `PressBridge` 真实触摸驱动，而非系统 Button 的 `isPressed`：
 /// NavigationStack 左滑返回手势期间，系统为返回按钮高亮时会误把导航栏 trailing
@@ -293,6 +294,7 @@ private struct DrawerRowStyle: ButtonStyle {
 struct PopupMenuButton: View {
     let items: [PopupMenuItem]
     var symbol: String = "ellipsis"
+    var style: PopupMenuPresenter.Style = .drawer
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
     @State private var isPressing = false
@@ -307,7 +309,7 @@ struct PopupMenuButton: View {
             .scaleEffect(isPressing ? 0.97 : 1)
             .background(AnchorReader(anchor: $anchor))
             .overlay(PressBridge(
-                onTap: { presenter.show(items: items, anchor: anchor) },
+                onTap: { presenter.show(items: items, anchor: anchor, style: style) },
                 onPressing: { pressing in
                     if pressing {
                         // 按下：瞬时切换（无动画），保证跟手；不用 easeOut 渐变，避免按下瞬间延迟

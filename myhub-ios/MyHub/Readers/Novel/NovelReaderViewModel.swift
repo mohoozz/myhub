@@ -710,28 +710,37 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     /// txt 锚点换算：组装文本字符位置 → 章内字节偏移（行字节范围映射，与排版无关）
+    /// charOffset 来自分页器（CoreText），为 **UTF-16 坐标**，行累计与行内截取统一用 utf16 视图，
+    /// 避免 emoji 等代理对字符（1 Character = 2 UTF-16 码元）导致锚点漂移。
     private func txtCharOffsetToByteOffset(_ charOffset: Int) -> Int64 {
         guard let chapterText = txtChapter, !chapterText.lines.isEmpty else { return 0 }
         var consumed = 0
         var lineIndex = 0
         var inLine = 0
         for (index, line) in chapterText.lines.enumerated() {
-            if consumed + line.text.count > charOffset {
+            // 必须取 >=：页首恰落在段间分隔 \n 位置（consumed + count == charOffset）时归到上一段末尾。
+            // 若用 >，consumed 会越过 charOffset，下一行 break 时 inLine = -1 → prefix(-1) 必崩（SIGTRAP）
+            if consumed + line.text.utf16.count >= charOffset {
                 lineIndex = index
-                inLine = charOffset - consumed
+                inLine = max(0, charOffset - consumed)
                 break
             }
-            consumed += line.text.count + 1   // 段 + 段间分隔 \n
+            consumed += line.text.utf16.count + 1   // 段（UTF-16）+ 段间分隔 \n
             lineIndex = index
-            inLine = line.text.count
+            inLine = line.text.utf16.count
         }
         let line = chapterText.lines[lineIndex]
-        let inLineBytes = String(line.text.prefix(inLine))
+        // utf16 下标用于 String 截取时自动向下对齐字素边界，不会截断代理对
+        let end = line.text.utf16.index(
+            line.text.startIndex, offsetBy: inLine, limitedBy: line.text.endIndex
+        ) ?? line.text.endIndex
+        let inLineBytes = String(line.text[..<end])
             .data(using: chapterText.encoding)?.count ?? 0
         return line.byteRange.lowerBound + Int64(inLineBytes)
     }
 
     /// txt 锚点换算：章内字节偏移 → 组装文本字符位置（行二分 + 行内前缀解码，码元边界回退）
+    /// 返回值为 **UTF-16 坐标**（与分页器 pages 范围一致），供 pageIndex(forCharOffset:) 定位
     private func txtByteOffsetToCharOffset(_ byteOffset: Int64) -> Int {
         guard let chapterText = txtChapter, !chapterText.lines.isEmpty else { return 0 }
         var lineIndex = 0
@@ -748,15 +757,15 @@ final class NovelReaderViewModel: ObservableObject {
         var probe = raw.count
         while probe >= 0 {
             if let decoded = String(data: raw.prefix(probe), encoding: chapterText.encoding) {
-                inLineChars = decoded.count
+                inLineChars = decoded.utf16.count
                 break
             }
             probe -= 1
         }
-        // 组装文本字符位置 = Σ(前序行文本长度 + 1) + 行内字符
+        // 组装文本字符位置（UTF-16）= Σ(前序行 utf16 长度 + 1) + 行内字符
         var charOffset = inLineChars
         for prior in 0..<lineIndex {
-            charOffset += chapterText.lines[prior].text.count + 1
+            charOffset += chapterText.lines[prior].text.utf16.count + 1
         }
         return charOffset
     }

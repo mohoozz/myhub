@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// 播放进度上报（进度持久化 / 「正在阅读」自动刷新由 PlaybackProgressStore 订阅）
@@ -171,6 +172,10 @@ final class PlayerCore: ObservableObject {
     private func startEngine(kind: PlayerEngineKind) {
         guard let request = pendingRequest else { return }
         engine?.stop()
+        AppLogger.shared.log(
+            "startEngine kind=\(kind.rawValue) url=\(request.url.lastPathComponent) ext=\(request.url.pathExtension) mediaType=\(request.mediaType.rawValue)",
+            module: "player-audio"
+        )
 
         let engine: PlaybackEngine = kind == .hardware ? AVPlayerEngine() : VLCEngine()
         engine.onEvent = { [weak self] event in self?.handle(event: event, from: kind) }
@@ -252,6 +257,13 @@ final class PlayerCore: ObservableObject {
         subtitleTracks = engine?.availableSubtitleTracks ?? []
         selectedAudioTrackID = engine?.currentAudioTrackID
         selectedSubtitleTrackID = engine?.currentSubtitleTrackID
+
+        // 记录音轨解析结果与系统音频环境，定位「有画面无声」（TODO 358）
+        let session = AVAudioSession.sharedInstance()
+        AppLogger.shared.log(
+            "refreshTracks kind=\(engineKind?.rawValue ?? "nil") count=\(audioTracks.count) audio=\(audioTracks.map { "\($0.id):\($0.name)" }.joined(separator: ",")) selected=\(selectedAudioTrackID.map(String.init) ?? "nil") audioOnly=\(isAudioOnly) volume=\(String(format: "%.2f", session.outputVolume)) category=\(session.category.rawValue)",
+            module: "player-audio"
+        )
     }
 
     private func teardownSession() {

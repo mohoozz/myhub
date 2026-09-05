@@ -8,11 +8,28 @@ import UIKit
 /// `playbackProgressDidChange` 供「正在阅读」列表自动刷新（与播放/小说进度共用通道）。
 enum ComicProgressStore {
 
-    /// 漫画进度锚点：页码 + 文件指纹（fileSize + modTime，文件被替换则进度作废）
+    /// 漫画进度锚点：页码 + 页内偏移 + 文件指纹（fileSize + modTime，文件被替换则进度作废）
     struct ComicAnchor: Codable {
         var page: Int
         var fileSize: Int64
         var modTime: TimeInterval
+        /// 页内阅读偏移（条漫：页面被屏顶切割的分数位置 0...1；0 = 页顶）
+        var pageOffset: Float = 0
+
+        init(page: Int, fileSize: Int64, modTime: TimeInterval, pageOffset: Float = 0) {
+            self.page = page
+            self.fileSize = fileSize
+            self.modTime = modTime
+            self.pageOffset = pageOffset
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            page = try c.decode(Int.self, forKey: .page)
+            fileSize = try c.decode(Int64.self, forKey: .fileSize)
+            modTime = try c.decode(TimeInterval.self, forKey: .modTime)
+            pageOffset = try c.decodeIfPresent(Float.self, forKey: .pageOffset) ?? 0
+        }
 
         func fingerprintMatches(fileSize: Int64, modTime: Date) -> Bool {
             self.fileSize == fileSize && abs(self.modTime - modTime.timeIntervalSince1970) < 2

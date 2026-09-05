@@ -16,6 +16,8 @@ struct ComicReaderView: View {
     @State private var controlsVisible = false
     /// 条漫模式程序滚动目标（ScrollViewReader 消费）
     @State private var scrollIntent: Int?
+    /// 左滑退出的跟手位移（屏幕左边缘右滑时内容整体右移，松手超过阈值关闭阅读器）
+    @State private var edgeDragOffset: CGFloat = 0
 
     init(
         context: NovelOpenContext,
@@ -81,6 +83,29 @@ struct ComicReaderView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .offset(x: edgeDragOffset)
+        .background(
+            // 左滑退出：从屏幕左边缘右滑关闭阅读器。手势实际挂在 window 上（见 EdgeSwipeBack），
+            // 此处仅作为生命周期锚点，不占布局、不拦截滚动 / 翻页 / 缩放 / 按钮点击。
+            EdgeSwipeBack(
+                onChanged: { translation in
+                    edgeDragOffset = translation
+                },
+                onEnded: { translation, velocity in
+                    let screenWidth = UIScreen.main.bounds.width
+                    // 灵敏判定：位移过 1/4 屏宽，或向右快速轻扫即退出
+                    if translation > screenWidth * 0.25 || velocity > 600 {
+                        // 超过阈值：内容滑出屏幕后关闭
+                        withAnimation(.appQuick) { edgeDragOffset = screenWidth }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            onClose()
+                        }
+                    } else {
+                        withAnimation(.appQuick) { edgeDragOffset = 0 }
+                    }
+                }
+            )
+        )
         .animation(.appQuick, value: viewModel.nextCandidate != nil)
         .animation(.appQuick, value: viewModel.toast)
         .statusBarHidden(!controlsVisible)
@@ -196,12 +221,15 @@ struct ComicReaderView: View {
             }
             .coordinateSpace(name: "webtoon")
             .onPreferenceChange(WebtoonVisibleKey.self) { values in
-                // 最接近屏幕中点的页视为当前页（程序滚动期间忽略回写）
-                guard scrollIntent == nil, !values.isEmpty else { return }
+                // 最接近屏幕中点的页视为当前页；恢复定位中 / 程序滚动期间不回写（防止覆盖恢复页）
+                guard !viewModel.isRestoring, scrollIntent == nil, !values.isEmpty else { return }
                 let mid = UIScreen.main.bounds.height / 2
-                if let best = values.min(by: { abs($0.value - mid) < abs($1.value - mid) })?.key,
-                   best != viewModel.page {
-                    viewModel.goToPage(best)
+                if let best = values.min(by: { abs($0.value.midY - mid) < abs($1.value.midY - mid) }) {
+                    // 页内偏移：页面被屏顶切割的分数位置（恢复定位精确到页内，而非只到页顶）
+                    let frame = best.value
+                    let offset = frame.height > 0
+                        ? Float(min(max(-frame.minY / frame.height, 0), 1)) : 0
+                    viewModel.updateWebtoonVisible(page: best.key, offset: offset)
                 }
             }
             .onTapGesture { toggleControls() }
@@ -215,30 +243,67 @@ struct ComicReaderView: View {
         }
     }
 
-    /// 程序滚动到当前页（首次进入恢复 / 切入条漫 / slider 跳转）
+    /// 程序滚动到当前页（首次进入恢复 / 切入条漫）
     private func scrollToCurrent(_ reader: ScrollViewProxy, animated: Bool) {
         let target = viewModel.page
-        guard target > 0 else { return }
+        let anchor = webtoonRestoreAnchor(for: target)
         scrollIntent = target
-        DispatchQueue.main.async {
-            if animated {
-                withAnimation(.appQuick) { reader.scrollTo(target, anchor: .top) }
-            } else {
-                reader.scrollTo(target, anchor: .top)
+        AppLogger.shared.log(
+            "条漫恢复定位: 目标第\(target + 1)页 页内偏移=\(String(format: "%.2f", viewModel.pageOffset))",
+            module: "comic-reader"
+        )
+        // LazyVStack 懒加载、图片解码前页高未知，初始 contentSize 不足时单次 scrollTo 会失效停在顶部。
+        // 随布局/解码推进分阶段重试，直至目标页进入实例化范围定位到位（恢复为无动画瞬时重试，不跳动）。
+        let delays: [TimeInterval] = [0, 0.1, 0.3, 0.6, 1.0]
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard scrollIntent == target else { return }
+                if animated {
+                    withAnimation(.appQuick) { reader.scrollTo(target, anchor: anchor) }
+                } else {
+                    reader.scrollTo(target, anchor: anchor)
+                }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { scrollIntent = nil }
+        }
+        // 覆盖最后一次重试后：结束程序滚动 + 结束恢复期（交还可见页回写）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            if scrollIntent == target { scrollIntent = nil }
+            viewModel.endWebtoonRestore()
+            // 恢复结束后再确认最终停留页（验证 scrollTo 是否生效）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                AppLogger.shared.log("条漫恢复定位完成: 停留第\(viewModel.page + 1)页", module: "comic-reader")
+            }
         }
     }
 
+    /// 恢复定位 anchor：把页内偏移 f（页面被屏顶切割的分数位置）还原到屏顶。
+    /// scrollTo anchor 语义：页分数位置 a 与滚动区分数位置 a 对齐，页高 h、屏高 H 时
+    /// 屏顶落在页分数 f 处需 a = f·h/(h−H)（h≤H 时页可整屏显示，直接页顶）。
+    private func webtoonRestoreAnchor(for target: Int) -> UnitPoint {
+        let f = CGFloat(viewModel.pageOffset)
+        guard f > 0.001,
+              let ratio = viewModel.pageRatios[target] ?? viewModel.fallbackRatio
+        else { return .top }
+        let H = UIScreen.main.bounds.height
+        let h = UIScreen.main.bounds.width * ratio
+        guard h > H else { return .top }
+        let ay = f * h / (h - H)
+        return UnitPoint(x: 0, y: min(max(ay, 0), 1))
+    }
+
     private func webtoonPage(_ index: Int) -> some View {
-        ComicImagePage(index: index, images: viewModel.images, fitWidth: true)
+        ComicImagePage(
+            index: index, images: viewModel.images, fitWidth: true,
+            aspectRatio: viewModel.pageRatios[index] ?? viewModel.fallbackRatio
+        )
             .id(index)
+            .onAppear { viewModel.ensureLoaded(index) }
             .background(
                 // 可见页回写（条漫恢复页码显示）
                 GeometryReader { proxy in
                     Color.clear.preference(
                         key: WebtoonVisibleKey.self,
-                        value: [index: proxy.frame(in: .named("webtoon")).midY]
+                        value: [index: proxy.frame(in: .named("webtoon"))]
                     )
                 }
             )
@@ -373,6 +438,8 @@ struct ComicReaderView: View {
 
     private func switchMode(_ mode: ComicReadMode) {
         guard mode != viewModel.mode else { return }
+        // 切回条漫前标记恢复定位中（防止 LazyVStack 顶部布局提前回写覆盖当前页）
+        if mode == .webtoon { viewModel.beginWebtoonRestore() } else { viewModel.resetPageOffset() }
         viewModel.mode = mode
         // 条漫重建后由 onAppear 恢复到当前页（scrollToCurrent）
     }
@@ -438,6 +505,8 @@ private struct ComicImagePage: View {
     let index: Int
     let images: [Int: UIImage]
     let fitWidth: Bool   // 条漫按宽度铺满；翻页模式按比例适应
+    /// 已知页宽高比（高/宽）：条漫占位用真实高度，恢复定位不被解码膨胀顶偏
+    var aspectRatio: CGFloat? = nil
 
     var body: some View {
         if let image = images[index] {
@@ -457,7 +526,9 @@ private struct ComicImagePage: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: fitWidth ? 420 : nil)
+            .frame(height: fitWidth && aspectRatio == nil ? 420 : nil)
+            // 已知宽高比：占位高度=宽×比（≈解码后真实高度），定位精准
+            .aspectRatio(fitWidth ? aspectRatio.map { 1 / $0 } : nil, contentMode: .fit)
         }
     }
 }
@@ -485,8 +556,8 @@ private struct ZoomableScrollView<Content: View>: UIViewRepresentable {
         scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.backgroundColor = .clear
 
-        // 未缩放时平移手势让位给外层翻页（TabView 滑动），放大后才接管拖动
-        scrollView.panGestureRecognizer.delegate = context.coordinator
+        // 未缩放时禁用平移让位给外层翻页（TabView 滑动），放大后经 scrollViewDidZoom 接管拖动
+        scrollView.isScrollEnabled = false
 
         let hosted = UIHostingController(rootView: content)
         hosted.view.backgroundColor = .clear
@@ -515,17 +586,15 @@ private struct ZoomableScrollView<Content: View>: UIViewRepresentable {
         context.coordinator.hosting?.rootView = content
     }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, UIScrollViewDelegate {
         weak var hosting: UIHostingController<Content>?
         weak var zoomView: UIView?
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { zoomView }
 
-        /// 1x 时平移手势不生效（翻页交给外层 TabView）；放大后才接管拖动
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let scrollView = gestureRecognizer.view as? UIScrollView,
-                  gestureRecognizer == scrollView.panGestureRecognizer else { return true }
-            return scrollView.zoomScale > 1.001
+        /// 1x 时禁用手动滚动（翻页交给外层 TabView）；放大后才接管拖动
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            scrollView.isScrollEnabled = scrollView.zoomScale > 1.001
         }
 
         @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
@@ -549,8 +618,8 @@ private struct ZoomableScrollView<Content: View>: UIViewRepresentable {
 // MARK: - 条漫可见页偏好键
 
 private struct WebtoonVisibleKey: PreferenceKey {
-    static var defaultValue: [Int: CGFloat] = [:]
-    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+    static var defaultValue: [Int: CGRect] = [:]
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
         value.merge(nextValue()) { $1 }
     }
 }

@@ -24,6 +24,7 @@ final class AppLogger {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         currentDay = Self.dayFormatter.string(from: Date())
         fileURL = dir.appendingPathComponent("myhub-\(currentDay).log")
+        backupLogsIfNewBuild()
         cleanupOldLogs()
         CrashReporter.install(logsDirectory: dir)
     }
@@ -67,6 +68,50 @@ final class AppLogger {
         }
     }
 
+    /// 每次重新编译打包后的第一次启动：把 Logs 目录里已有的 .log 备份到 backup/ 子目录，
+    /// 从零开始写新日志，避免旧构建的日志污染本次分析。
+    /// 构建标识取 App 可执行文件的 mtime——每次重新编译打包都会重写可执行文件，mtime 必然变化；
+    /// 同一次安装内多次启动 mtime 不变，不会误触发备份。
+    private func backupLogsIfNewBuild() {
+        let stamp = Self.currentBuildStamp()
+        let key = "com.myhub.AppLogger.lastBuildStamp"
+        let defaults = UserDefaults.standard
+        if defaults.integer(forKey: key) == stamp {
+            return
+        }
+        defaults.set(stamp, forKey: key)
+
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        let logs = files.filter { $0.pathExtension == "log" }
+        guard !logs.isEmpty else { return }
+
+        let backupDir = dir.appendingPathComponent("backup", isDirectory: true)
+        try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+        let stampText = Self.buildStampFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(stamp)))
+        for file in logs {
+            let base = file.deletingPathExtension().lastPathComponent  // myhub-2026-09-05 / crash
+            let target = backupDir.appendingPathComponent("\(base)-build-\(stampText).log")
+            try? FileManager.default.moveItem(at: file, to: target)
+        }
+        logger.info("日志已按新构建重置：备份 \(logs.count, privacy: .public) 个旧日志到 backup/（build \(stampText, privacy: .public)）")
+        cleanupBackup(in: backupDir)
+    }
+
+    private static func currentBuildStamp() -> Int {
+        guard let url = Bundle.main.executableURL,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let date = attrs[.modificationDate] as? Date else { return 0 }
+        return Int(date.timeIntervalSince1970)
+    }
+
+    private func cleanupBackup(in backupDir: URL) {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: backupDir, includingPropertiesForKeys: nil) else { return }
+        let backups = files
+            .filter { $0.lastPathComponent.hasSuffix(".log") }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        backups.dropFirst(30).forEach { try? FileManager.default.removeItem(at: $0) }
+    }
+
     private func rollIfNeeded() {
         let day = Self.dayFormatter.string(from: Date())
         guard day != currentDay else { return }
@@ -101,6 +146,13 @@ final class AppLogger {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private static let buildStampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmmss"
         return f
     }()
 }

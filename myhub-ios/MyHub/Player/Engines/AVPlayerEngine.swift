@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 
 /// 硬解引擎：AVPlayer / VideoToolbox。
 /// 处理 H.264/HEVC 等主流格式；`allowsExternalPlayback` 支持 AirPlay；
@@ -50,6 +51,19 @@ final class AVPlayerEngine: PlaybackEngine {
         let playable = (try? await asset.load(.isPlayable)) ?? false
         guard playable else { throw PlayerPlaybackError("系统原生无法解码该格式") }
 
+        // 检测「有视频轨却无音频轨」：AVFoundation 对 DTS/DTS-HD/TrueHD/E-AC-3 等不支持的音频编码
+        // 会直接不暴露音轨（loadTracks 返回空），导致起播成功但「有画面无声」（TODO 358）。
+        // 抛错触发 PlayerCore 在 auto 模式下回退 VLC 软解兜底；纯音频文件无视频轨，不会误触发。
+        let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        if !videoTracks.isEmpty, audioTracks.isEmpty {
+            AppLogger.shared.log(
+                "硬解音轨缺失 video=\(videoTracks.count) audio=0 -> 回退软解",
+                module: "player-audio"
+            )
+            throw PlayerPlaybackError("该视频音频编码不受系统支持")
+        }
+
         let item = AVPlayerItem(asset: asset)
         // 弱网抗抖动（TODO 356）：本地回环代理会让 AVPlayer 误判带宽极高（连的是 127.0.0.1），
         // 于是只维持很浅的缓冲；一旦代理后端弱网拉取阻塞就瞬间耗尽卡顿。显式设定前向缓冲目标时长，
@@ -72,6 +86,9 @@ final class AVPlayerEngine: PlaybackEngine {
 
         installObservers(player: player, item: item)
         onEvent?(.stateChanged(.loading))
+
+        // 异步记录音轨编码，定位「有画面无声」——判断音频编码是否被硬解支持（TODO 358）
+        Task { await logAudioDiagnostics(asset: asset) }
     }
 
     // MARK: - 控制
@@ -243,5 +260,32 @@ final class AVPlayerEngine: PlaybackEngine {
         guard !didApplyStartAt, let start = pendingStartAt, start > 1 else { return }
         didApplyStartAt = true
         seek(to: start)
+    }
+
+    /// 记录硬解音轨编码信息，定位「有画面无声」——判断音频编码是否被系统原生支持（TODO 358）
+    private func logAudioDiagnostics(asset: AVURLAsset) async {
+        let tracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        var parts: [String] = []
+        for (i, track) in tracks.enumerated() {
+            let descs = (try? await track.load(.formatDescriptions)) ?? []
+            let codecs = descs.map { Self.fourCC(CMFormatDescriptionGetMediaSubType($0)) }.joined(separator: "+")
+            parts.append("\(i):\(codecs.isEmpty ? "?" : codecs)")
+        }
+        AppLogger.shared.log(
+            "硬解音轨诊断 url=\(asset.url.lastPathComponent) tracks=\(tracks.count) codecs=[\(parts.joined(separator: ","))] audibleOptions=\(audibleGroup?.options.count ?? 0)",
+            module: "player-audio"
+        )
+    }
+
+    /// FourCharCode 转可读字符串（如 'aac ' / 'ac-3' / 'ec-3' / 'dtsc' / 'Opus'）
+    private static func fourCC(_ code: FourCharCode) -> String {
+        let bytes: [UInt8] = [
+            UInt8((code >> 24) & 0xFF),
+            UInt8((code >> 16) & 0xFF),
+            UInt8((code >> 8) & 0xFF),
+            UInt8(code & 0xFF),
+        ]
+        let ascii = bytes.map { (32...126).contains($0) ? $0 : UInt8(46) }   // 非可打印字符以 '.' 占位
+        return String(bytes: ascii, encoding: .ascii) ?? "?"
     }
 }
