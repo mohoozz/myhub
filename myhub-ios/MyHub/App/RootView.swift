@@ -98,15 +98,20 @@ struct RootView: View {
         } else {
             // 自定义底部页签栏：系统 TabView 无法直接缩小图标，
             // 改用 ZStack 保活 + 自绘 HStack 页签（纯图标、图标尺寸可控）
-            // mini 播放器贴底页签栏上方（对齐 Flutter 移动端 bottomNavigationBar）
-            VStack(spacing: 0) {
-                keepAlivePhoneTabs
-                if player.isMini {
-                    MiniPlayer()
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+            // mini 播放器 + 页签栏（TODO 376 方案 C 悬浮圆角胶囊）：经 safeAreaInset 注入，
+            // 内容可滚动穿过胶囊下方而不被遮挡；二者左右内缩 12pt 对齐、间距 8pt。
+            keepAlivePhoneTabs
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 8) {
+                        if player.isMini {
+                            MiniPlayer(roundedBottom: true)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                        BottomTabBar(selection: $router.selectedTab, tabs: AppTab.phoneTabs)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
                 }
-                BottomTabBar(selection: $router.selectedTab, tabs: AppTab.phoneTabs)
-            }
         }
     }
 
@@ -206,25 +211,38 @@ enum AppTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// iPhone 底部页签栏：自绘以精确控制图标大小（系统 TabView 纯图标会过大）
+/// iPhone 底部页签栏：自绘以精确控制图标大小（系统 TabView 纯图标会过大）。
+/// TODO 376 方案 C：悬浮圆角胶囊——四周圆角 26pt + 1pt 灰色描边与白色主界面分割 + 轻阴影，
+/// 不再贴底通栏（左右内缩与底部间距由 RootView 的 safeAreaInset 外壳统一控制）。
 private struct BottomTabBar: View {
     @Binding var selection: AppTab
     let tabs: [AppTab]
 
+    @EnvironmentObject private var router: AppRouter
+
     /// 液体玻璃模式：开启时页签栏使用 Liquid Glass 背景，关闭时用实色背景
     @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
+
+    /// 胶囊圆角 / 条高（TODO 376 方案 C）
+    private let cornerRadius: CGFloat = 26
+    private let barHeight: CGFloat = 56
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(tabs) { tab in
                 let isSelected = selection == tab
                 Button {
-                    selection = tab
+                    if isSelected {
+                        // 重复点击当前页签：通知该页回到起始界面（浏览页 → 路径源选择）
+                        router.reselect(tab)
+                    } else {
+                        selection = tab
+                    }
                 } label: {
                     Image(systemName: tab.symbol)
                         .font(.system(size: 20))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
+                        .frame(height: barHeight)
                         .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
                         .contentShape(Rectangle())
                 }
@@ -232,8 +250,15 @@ private struct BottomTabBar: View {
                 .accessibilityLabel(tab.title)
             }
         }
-        .background(barBackground.ignoresSafeArea(edges: .bottom))
-        .overlay(alignment: .top) { Divider().opacity(0.4) }
+        .frame(height: barHeight)
+        .background(barBackground)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        // 1pt 灰色描边：白底主界面下与内容分割（TODO 376）
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(AppColors.tabBarBorder, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
     }
 
     /// 页签栏背景：液体玻璃开 → Liquid Glass（iOS 26）/ 毛玻璃回退；关 → 实色
@@ -243,7 +268,7 @@ private struct BottomTabBar: View {
             if #available(iOS 26.0, *) {
                 Rectangle()
                     .fill(Color.clear)
-                    .glassEffect(.regular, in: Rectangle())
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             } else {
                 Rectangle().fill(.ultraThinMaterial)
             }

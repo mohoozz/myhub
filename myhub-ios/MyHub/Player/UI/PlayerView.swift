@@ -26,7 +26,6 @@ struct PlayerView: View {
     @State private var miniDragOffset: CGFloat = 0
     /// 播完推荐下一个（IOS-204）
     @State private var nextCandidate: (connection: Connection, entry: FileEntry)?
-    @State private var nextCountdown = 5
     @State private var nextTask: Task<Void, Never>?
     /// 画中画失败等操作提示（短暂胶囊，自动消失）
     @State private var pipNotice: String?
@@ -220,13 +219,12 @@ struct PlayerView: View {
                 .transition(.opacity)
             }
 
-            // 播完推荐下一个（底部提示 + 5s 倒计时）
+            // 播完推荐下一个（底部提示，点击才播放）
             if let nextCandidate {
                 VStack {
                     Spacer()
                     NextMediaTip(
                         entry: nextCandidate.entry,
-                        remaining: nextCountdown,
                         onPlay: { playNext() },
                         onCancel: { cancelNext() }
                     )
@@ -239,19 +237,13 @@ struct PlayerView: View {
 
     // MARK: - 播完推荐下一个（IOS-204）
 
-    /// 播放结束：查找同目录下一个同类型文件，底部提示 5s 倒计时自动播放
+    /// 播放结束：查找同目录下一个同类型文件，底部弹出提示（不自动播放，等用户点击）
     private func prepareNext() {
         nextTask?.cancel()
         guard let item = player.current else { return }
         nextTask = Task { @MainActor in
             guard let candidate = await NextMediaFinder.find(after: item), !Task.isCancelled else { return }
             withAnimation(.appQuick) { nextCandidate = candidate }
-            for remaining in stride(from: 5, through: 1, by: -1) {
-                nextCountdown = remaining
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled else { return }
-            }
-            playNext()
         }
     }
 

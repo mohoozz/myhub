@@ -16,10 +16,11 @@ enum NextMediaFinder {
         guard let siblings = try? await adapter.list(parent) else { return nil }
         let sameType = siblings.filter { !$0.isDir && MediaType.detect(ext: $0.ext) == mediaType }
 
-        // 与浏览页一致的排序偏好（AppSettings.Browse.sortKey / sortAscending）
-        let ascending = AppSettings.Browse.sortAscending
+        // 与浏览页一致的排序偏好：优先用该目录单独缓存的顺序（TODO 370），无记录回落全局默认
+        let preference = BrowseSortPreferences.preference(connectionID: connectionID, path: parent)
+        let ascending = preference?.ascending ?? AppSettings.Browse.sortAscending
         let sorted: [FileEntry]
-        switch AppSettings.Browse.sortKey {
+        switch preference?.sortKey ?? AppSettings.Browse.sortKey {
         case .name:
             sorted = sameType.sorted {
                 ascending
@@ -38,10 +39,10 @@ enum NextMediaFinder {
     }
 }
 
-/// 「下一个：xxx」底部提示（IOS-204）：5s 倒计时自动播放，点击立即播放，可取消
+/// 「下一个：xxx」底部提示（IOS-204 / IOS-208）：播完 / 翻完推荐同目录下一个（视频 / 音频 / 漫画），
+/// 不自动播放、不自动切换，由用户点击提示条才播放 / 打开，或点 × 取消。
 struct NextMediaTip: View {
     let entry: FileEntry
-    let remaining: Int
     let onPlay: () -> Void
     let onCancel: () -> Void
 
@@ -60,18 +61,10 @@ struct NextMediaTip: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    // 倒计时环
-                    ZStack {
-                        Circle()
-                            .stroke(.white.opacity(0.25), lineWidth: 2)
-                        Circle()
-                            .trim(from: 0, to: CGFloat(remaining) / 5)
-                            .stroke(.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                        Text("\(remaining)")
-                            .font(.caption2.monospacedDigit())
-                    }
-                    .frame(width: 28, height: 28)
+                    // 点击播放入口（已去除倒计时自动切换）
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.5))
                 }
                 .foregroundStyle(.white)
             }

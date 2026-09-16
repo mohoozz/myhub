@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 点击/长按选中态高亮（IOS-702）：按压浅蓝高亮 + 缩放 0.97（参考正在阅读列表高亮）。
+/// 点击/长按选中态高亮（IOS-702）：按压浅蓝高亮 + 缩放 0.975（与文件 cell 的按压表现对齐，TODO 375）。
 /// 高亮以半透明 overlay 叠加，避免被卡片不透明背景遮住。
 struct SelectableCellStyle: ButtonStyle {
     var cornerRadius: CGFloat = 12
@@ -9,9 +9,9 @@ struct SelectableCellStyle: ButtonStyle {
         configuration.label
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(configuration.isPressed ? AppColors.primary.opacity(0.12) : Color.clear)
+                    .fill(configuration.isPressed ? AppColors.primary.opacity(0.08) : Color.clear)
             )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .scaleEffect(configuration.isPressed ? 0.975 : 1)
             .animation(.appFast, value: configuration.isPressed)
     }
 }
@@ -65,7 +65,6 @@ struct FileGridCell: View {
     var isComicEpub: Bool = false
 
     @State private var duration: Double?
-    @State private var hovering = false
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
     private var mediaType: MediaType {
@@ -92,19 +91,20 @@ struct FileGridCell: View {
         .padding(8)
         .background(AppColors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+        )
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .onHover { hovering = $0 }              // iPad/PC 指针 hover 高亮（IOS-702）
-        .hoverEffect(.highlight)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(hovering ? AppColors.primary.opacity(0.08) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isSelected ? AppColors.primary : Color.clear, lineWidth: 2)
-        )
+        .hoverEffect(.highlight)                // iPad/PC 指针 hover（自定义淡填充由高亮层统一渲染）
         .breathingHighlight(highlighted)        // 「定位到原路径」呼吸灯（约 10s，不常亮）
-        .cellPressableMenu(items: menuItems, onTap: onTap)   // 点击 / 长按 / 指针右键弹出操作菜单
+        // 点击 / 长按 / 指针右键弹出操作菜单；选中态浮起抬升（TODO 375 方案 D）
+        .cellPressableMenu(
+            selectedScale: 1.03,
+            isSelected: isSelected,
+            items: menuItems,
+            onTap: onTap
+        )
     }
 
     private var cover: some View {
@@ -116,21 +116,32 @@ struct FileGridCell: View {
         .aspectRatio(1.35, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .topLeading) {
+            // 漫画徽标；多选态该角让给进度环/播放动画（右上角被勾选标记占用，TODO 371）
             if mediaType == .comic, !isSelecting {
                 ComicBadge().padding(6)
+            } else if isSelecting, hasStatus {
+                statusBadge
             }
         }
         .overlay(alignment: .topTrailing) {
             if isSelecting {
                 SelectionCheckmark(isSelected: isSelected)
-            } else if isPlaying || progress != nil {
-                FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
-                    .padding(6)
-                    .background(
-                        Circle().fill(.black.opacity(0.35)).padding(2)
-                    )
+            } else if hasStatus {
+                statusBadge
             }
         }
+    }
+
+    /// 是否有需要展示的状态（正在播放 / 有阅读进度）
+    private var hasStatus: Bool { isPlaying || progress != nil }
+
+    /// 状态角标：正在播放动画 / 阅读进度环（深色圆底，覆盖在封面上）
+    private var statusBadge: some View {
+        FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
+            .padding(6)
+            .background(
+                Circle().fill(.black.opacity(0.35)).padding(2)
+            )
     }
 
     private var caption: String {
@@ -166,7 +177,7 @@ struct FileListRow: View {
     var isComicEpub: Bool = false
 
     @State private var duration: Double?
-    @State private var hovering = false
+    @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
     private var mediaType: MediaType {
         isComicEpub ? .comic : MediaType.detect(ext: entry.ext)
@@ -191,7 +202,7 @@ struct FileListRow: View {
                     Text(entry.name)
                         .font(.body.weight(isPlaying ? .bold : .semibold))
                         .foregroundStyle(isPlaying ? AppColors.primary : AppColors.textPrimary)
-                        .lineLimit(1)
+                        .lineLimit(browseDisplaySettings.fileNameLines)
                     Text(caption)
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
@@ -199,12 +210,14 @@ struct FileListRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
+                // 多选态仍保留进度环/播放动画（勾选标记并排在其右侧，TODO 371）
+                if isPlaying || progress != nil {
+                    FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
+                }
                 if isSelecting {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
-                } else if isPlaying || progress != nil {
-                    FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
                 } else if entry.isDir {
                     Image(systemName: "chevron.right")
                         .font(.caption)
@@ -215,21 +228,16 @@ struct FileListRow: View {
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .onHover { hovering = $0 }
             .hoverEffect(.highlight)
-            .background(
-                (isSelected || hovering)
-                    ? AppColors.primary.opacity(0.08)
-                    : Color.clear
-            )
             .breathingHighlight(highlighted, cornerRadius: 0)
-            .cellPressableMenu(cornerRadius: 0, items: menuItems, onTap: onTap)
-
-            // 分割线（参照 Flutter iOS，缩进从封面右侧开始）
-            Rectangle()
-                .fill(AppColors.separator)
-                .frame(height: 0.5)
-                .padding(.leading, 76)
+            // 通栏列表行：高亮块内缩 4/6 收边成悬浮片，选中浮起（TODO 375 方案 D）
+            .cellPressableMenu(
+                cornerRadius: 0,
+                highlightInset: EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6),
+                isSelected: isSelected,
+                items: menuItems,
+                onTap: onTap
+            )
         }
     }
 

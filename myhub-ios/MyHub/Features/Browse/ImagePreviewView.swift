@@ -41,7 +41,9 @@ struct ImagePreviewView: View {
                 // 左右滑动翻页
                 TabView(selection: $index) {
                     ForEach(Array(images.enumerated()), id: \.element.path) { i, entry in
-                        RemoteImagePage(entry: entry, adapter: adapter)
+                        // 仅当前页与相邻页发起下载：TabView 会保留已访问页的视图、`.task` 不会自动取消，
+                        // 快速浏览大图目录时会累积多个全尺寸下载（单张上限 48MB）占满连接与带宽（TODO 372）
+                        RemoteImagePage(entry: entry, adapter: adapter, shouldLoad: abs(i - index) <= 1)
                             .tag(i)
                     }
                 }
@@ -162,6 +164,9 @@ struct ImagePreviewView: View {
 private struct RemoteImagePage: View {
     let entry: FileEntry
     let adapter: StorageAdapter
+    /// 是否需要下载（仅当前页与相邻页为 true）：值翻转会取消/启动下载任务，
+    /// 翻页离开后立即停止该页下载，避免多张大图并发占满连接（TODO 372）
+    let shouldLoad: Bool
 
     @State private var image: UIImage?
     @State private var failed = false
@@ -188,15 +193,22 @@ private struct RemoteImagePage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
-        .task(id: entry.path) {
+        .task(id: shouldLoad) {
+            // 非当前/相邻页不下载；翻页离开时 id 翻转 → 旧任务被取消（在途下载随之中断）
+            guard shouldLoad else { return }
             do {
                 let data = try await adapter.readAll(entry.path, limit: 48 * 1024 * 1024)
-                image = await Task.detached {
+                if Task.isCancelled { return }
+                let decoded = await Task.detached {
                     ImageDownsampler.downsample(data: data, maxPixel: 2048)
                 }.value
-                if image == nil { failed = true }
+                if Task.isCancelled { return }
+                image = decoded
+                if decoded == nil { failed = true }
+            } catch is CancellationError {
+                // 翻页离开 / 退出预览：保留占位，不提示失败
             } catch {
-                failed = true
+                if !Task.isCancelled { failed = true }
             }
         }
     }

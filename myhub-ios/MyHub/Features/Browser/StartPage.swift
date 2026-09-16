@@ -195,6 +195,10 @@ struct StartPage: View {
         .padding(.horizontal, 12)
         .background(AppColors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+        )
     }
 
     // MARK: - 图标

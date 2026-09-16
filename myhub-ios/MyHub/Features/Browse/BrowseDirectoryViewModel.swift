@@ -5,7 +5,8 @@ import Photos
 
 /// 目录浏览 ViewModel（IOS-102 浏览 + IOS-103~105 文件操作）：
 /// - stale-while-revalidate：先展示目录缓存（秒开），再后台拉新；
-/// - 排序 / 搜索 / 视图模式偏好持久化（AppSettings.Browse）；
+/// - 排序 / 搜索 / 视图模式偏好持久化：排序按「连接 + 目录」单独缓存（BrowseSortPreferences，TODO 370），
+///   其余落 AppSettings.Browse；
 /// - 多选模式与文件操作：新建文件夹 / 重命名 / 移动 / 复制（跨源流式中转）/ 删除入回收站 / 收藏；
 /// - 传输：上传（文件/相册，字节级进度）、下载到本地沙盒 / 相册 / 「文件」App。
 @MainActor
@@ -31,10 +32,25 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    /// 回收站不支持时的降级错误（UI 引导真删确认）
+    /// 回收站不支持或移动失败时的降级错误（UI 引导真删确认）
     enum TrashError: Error, LocalizedError {
-        case unsupported
-        var errorDescription: String? { "该连接源不支持回收站" }
+        /// movedToTrash：本次已成功移入回收站、无需再彻底删除的路径
+        /// reason：失败原因摘要（占用/网络/不支持，UI 提示用，TODO 373）
+        case unsupported(movedToTrash: Set<String>, reason: String?)
+        var errorDescription: String? {
+            if let reason { return "移入回收站失败：\(reason)" }
+            return "该连接源不支持回收站"
+        }
+        /// 本次已移入回收站的路径（降级真删时需排除，避免对已移走的文件重复删除并误报失败）
+        var movedToTrash: Set<String> {
+            if case .unsupported(let paths, _) = self { return paths }
+            return []
+        }
+        /// 失败原因摘要（UI 展示「无法使用回收站」弹窗时附带）
+        var reason: String? {
+            if case .unsupported(_, let reason) = self { return reason }
+            return nil
+        }
     }
 
     let connection: Connection
@@ -65,12 +81,22 @@ final class BrowseDirectoryViewModel: ObservableObject {
     @Published private(set) var comicEpubPaths: Set<String> = []
     private var comicEpubDetectTask: Task<Void, Never>?
 
-    /// 排序与视图模式：读写均落到 UserDefaults（排序与路径显示偏好缓存）
+    /// 排序与视图模式：读写均落到 UserDefaults。
+    /// 排序按「连接 + 目录」单独缓存（TODO 370）：每个目录各自记忆顺序，
+    /// 首次进入无记录时回落全局默认；视图模式仍为全局偏好。
     @Published var sortKey: BrowseSortKey {
-        didSet { displayedEntriesCache = nil; AppSettings.Browse.sortKey = sortKey }
+        didSet {
+            displayedEntriesCache = nil
+            guard sortKey != oldValue else { return }
+            persistSortPreference()
+        }
     }
     @Published var sortAscending: Bool {
-        didSet { displayedEntriesCache = nil; AppSettings.Browse.sortAscending = sortAscending }
+        didSet {
+            displayedEntriesCache = nil
+            guard sortAscending != oldValue else { return }
+            persistSortPreference()
+        }
     }
     @Published var viewMode: BrowseViewMode {
         didSet { AppSettings.Browse.viewMode = viewMode }
@@ -81,6 +107,8 @@ final class BrowseDirectoryViewModel: ObservableObject {
     var storageAdapter: StorageAdapter? { adapter }
 
     private var loaded = false
+    /// 刷新补刷标记：刷新进行中再次请求刷新时登记，本轮结束后立即再刷一次（避免操作后的刷新被丢弃）
+    private var refreshPending = false
     private var childCountInFlight: Set<String> = []
     private var childCountAttempted: Set<String> = []
     private var toastTask: Task<Void, Never>?
@@ -90,11 +118,16 @@ final class BrowseDirectoryViewModel: ObservableObject {
     private var displayedEntriesCache: [FileEntry]?
 
     init(connection: Connection, path: String) {
+        let normalizedPath = StoragePath.normalize(path)
         self.connection = connection
-        self.path = StoragePath.normalize(path)
+        self.path = normalizedPath
         self.adapter = try? AdapterFactory.makeAdapter(for: connection)
-        self.sortKey = AppSettings.Browse.sortKey
-        self.sortAscending = AppSettings.Browse.sortAscending
+        // 排序（TODO 370）：优先恢复本目录单独缓存的顺序，无记录回落全局默认
+        let sortPreference = BrowseSortPreferences.preference(
+            connectionID: connection.id ?? 0, path: normalizedPath
+        )
+        self.sortKey = sortPreference?.sortKey ?? AppSettings.Browse.sortKey
+        self.sortAscending = sortPreference?.ascending ?? AppSettings.Browse.sortAscending
         self.viewMode = AppSettings.Browse.viewMode
         // 收藏双向同步：收藏页/其他入口变更后刷新星标
         favoritesObserver = NotificationCenter.default.addObserver(
@@ -108,6 +141,20 @@ final class BrowseDirectoryViewModel: ObservableObject {
         if let favoritesObserver {
             NotificationCenter.default.removeObserver(favoritesObserver)
         }
+    }
+
+    /// 排序变更：写入本目录单独缓存的偏好（TODO 370，其次进入该目录时恢复），
+    /// 并同步全局默认——未记录过顺序的目录首次进入时沿用最近使用的顺序。
+    private func persistSortPreference() {
+        BrowseSortPreferences.save(
+            BrowseSortPreferences.Preference(
+                sortKey: sortKey, ascending: sortAscending, updatedAt: Date()
+            ),
+            connectionID: connectionID,
+            path: path
+        )
+        AppSettings.Browse.sortKey = sortKey
+        AppSettings.Browse.sortAscending = sortAscending
     }
 
     // MARK: - 展示数据（搜索过滤 + 排序，文件夹在前）
@@ -173,13 +220,28 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// 下拉刷新
     func refresh() async {
         guard let adapter else { return }
-        await refresh(using: adapter)
+        await refresh(using: adapter, notifyFailure: true)
     }
 
-    private func refresh(using adapter: StorageAdapter) async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
+    /// 目录刷新：
+    /// - 正在刷新时登记补刷（`refreshPending`）而不是丢弃——否则删除/上传等操作后的刷新会撞上
+    ///   进行中的后台刷新被静默吞掉，列表长时间不更新；
+    /// - 失败保留旧数据（stale-while-revalidate），仅首载（无任何数据）时进入错误态，
+    ///   避免弱网下一次抖动把已显示的目录打成空白（TODO 369）。
+    private func refresh(using adapter: StorageAdapter, notifyFailure: Bool = false) async {
+        if isRefreshing {
+            refreshPending = true
+            return
+        }
+        repeat {
+            refreshPending = false
+            isRefreshing = true
+            await performRefresh(using: adapter, notifyFailure: notifyFailure)
+            isRefreshing = false
+        } while refreshPending
+    }
+
+    private func performRefresh(using adapter: StorageAdapter, notifyFailure: Bool) async {
         do {
             let list = try await adapter.list(path)
             entries = list
@@ -188,9 +250,15 @@ final class BrowseDirectoryViewModel: ObservableObject {
             reloadFavorites()
             detectComicEpubs(adapter: adapter)
         } catch {
-            // 有缓存/旧数据则静默保留，仅首载失败显示错误态
+            AppLogger.shared.log(
+                "目录刷新失败 path=\(path)：\(error.localizedDescription)",
+                level: .warn, module: "browse"
+            )
+            // 有缓存/旧数据则保留，仅首载失败显示错误态
             if entries.isEmpty {
                 state = .failed(error.localizedDescription)
+            } else if notifyFailure {
+                showToast("刷新失败：\(error.localizedDescription)")
             }
         }
     }
@@ -231,10 +299,20 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    /// 操作后失效缓存并刷新
+    /// 操作后刷新：**不再预删磁盘缓存**——刷新成功会由 `save` 覆盖为新数据；
+    /// 若刷新失败（弱网/地址切换），旧缓存得以保留，避免下次进入该目录时既无缓存可展示、
+    /// 刷新又失败 → 整个目录显示为空/错误页、只能重启 App（TODO 369）。
     private func invalidateAndRefresh() async {
-        DirectoryCache.shared.invalidate(connectionID: connectionID, path: path)
         await refresh()
+    }
+
+    /// 删除/移动成功后本地立即移除条目并同步目录缓存：不等网络刷新，弱网下界面依然正确
+    /// （否则刷新失败时被删文件会继续留在列表里，或陈旧缓存导致下次进入仍显示已删文件）
+    private func applyLocalRemoval(_ removedPaths: Set<String>) {
+        guard !removedPaths.isEmpty else { return }
+        entries.removeAll { removedPaths.contains($0.path) }
+        state = entries.isEmpty ? .empty : .loaded
+        DirectoryCache.shared.save(connectionID: connectionID, path: path, entries: entries)
     }
 
     // MARK: - 文件夹子项数（懒加载，限并发）
@@ -350,18 +428,14 @@ final class BrowseDirectoryViewModel: ObservableObject {
                 failed.append(entry.name)
             }
         }
-        // 移动成功：同步删除源连接下的阅读记录（TODO §7.309，路径已变更，记录不再指向原文件）
+        // 移动成功：同步删除源连接下的阅读记录 + 本地列表立即移除（TODO §7.309，路径已变更，记录不再指向原文件）
         if isMove, !movedPaths.isEmpty {
             ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
+            applyLocalRemoval(Set(movedPaths))
         }
-        if sameConnection {
-            await invalidateAndRefresh()
-        } else {
-            // 跨源：源目录（移动时）与目标目录缓存都失效
-            DirectoryCache.shared.invalidate(connectionID: connectionID, path: path)
-            DirectoryCache.shared.invalidate(connectionID: destination.id ?? 0, path: StoragePath.normalize(destDir))
-            await refresh()
-        }
+        // 源目录刷新（不预删缓存：刷新成功会覆盖，失败保留旧缓存，避免弱网下目录空白，TODO 369）；
+        // 跨源时目标目录缓存同样不预删，进入该目录时先展示缓存再后台刷新自愈
+        await refresh()
         if failed.isEmpty {
             showToast(isMove ? "已移动 \(paths.count) 项" : "已复制 \(paths.count) 项")
         } else {
@@ -401,30 +475,42 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
         let stamp = Self.trashStamp()
         var movedPaths: [String] = []
+        var failureReason: String?
         do {
             for sourcePath in paths.sorted() {
                 guard let entry = entry(for: sourcePath) else { continue }
                 let trashName = "\(stamp)-\(entry.name)"
                 let trashPath = "/.trash/\(trashName)"
-                try await adapter.move(sourcePath, trashPath)
+                do {
+                    // 占用类瞬时失败自动重试（TODO 373）：刚播放完的文件服务端句柄可能尚未释放
+                    try await Self.withOccupancyRetry { try await adapter.move(sourcePath, trashPath) }
+                } catch {
+                    failureReason = Self.failureHint(for: error)
+                    throw error
+                }
                 movedPaths.append(sourcePath)
                 // 记录原路径元数据（§3.3 回收站还原用）
                 await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: entry)
             }
         } catch {
-            // 已移入回收站的文件同样清理阅读记录（回收站还原不还原记录，见 TODO §7.309 决策）
-            if !movedPaths.isEmpty {
-                ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
-            }
-            throw TrashError.unsupported
+            // 部分成功：已移入回收站的文件同样清理阅读记录并立即从列表移除
+            // （回收站还原不还原记录，见 TODO §7.309 决策）；未成功的由 UI 引导「彻底删除」降级处理，
+            // 并携带失败原因（占用/网络/不支持）供弹窗提示（TODO 373）
+            finishTrashMove(movedPaths)
+            throw TrashError.unsupported(movedToTrash: Set(movedPaths), reason: failureReason)
         }
         // 移入回收站即删除对应阅读记录（还原后无需还原记录，TODO §7.309）
-        if !movedPaths.isEmpty {
-            ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
-        }
+        finishTrashMove(movedPaths)
         await invalidateAndRefresh()
         endSelection()
         showToast("已移入回收站")
+    }
+
+    /// 移入回收站收尾：清理阅读记录 + 本地列表立即移除并同步缓存（弱网下界面依然正确）
+    private func finishTrashMove(_ movedPaths: [String]) {
+        guard !movedPaths.isEmpty else { return }
+        ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
+        applyLocalRemoval(Set(movedPaths))
     }
 
     /// 彻底删除（回收站不可用时经用户确认的降级）
@@ -434,22 +520,119 @@ final class BrowseDirectoryViewModel: ObservableObject {
         var deletedPaths: [String] = []
         for sourcePath in paths.sorted() {
             do {
-                try await adapter.delete(sourcePath)
+                // 占用类瞬时失败自动重试（TODO 373）
+                try await Self.withOccupancyRetry { try await adapter.delete(sourcePath) }
                 deletedPaths.append(sourcePath)
             } catch {
-                failed.append(StoragePath.fileName(of: sourcePath))
+                failed.append("\(StoragePath.fileName(of: sourcePath))（\(Self.failureHint(for: error))）")
             }
         }
-        // 彻底删除：同步清理阅读记录（TODO §7.309）
+        // 彻底删除：同步清理阅读记录 + 本地列表立即移除（TODO §7.309）
         if !deletedPaths.isEmpty {
             ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(deletedPaths))
+            applyLocalRemoval(Set(deletedPaths))
         }
         await invalidateAndRefresh()
         endSelection()
         if failed.isEmpty {
             showToast("已删除")
         } else {
-            operationError = "删除失败：\(failed.joined(separator: "、"))"
+            // 附具体失败原因与可操作建议（文件刚播放完时服务端句柄可能仍被占用，TODO 373）
+            operationError = "删除失败：\(failed.joined(separator: "、"))。文件可能仍被占用或网络异常，请稍后重试"
+        }
+    }
+
+    // MARK: - 删除类操作容错（TODO 373）
+
+    /// 占用/瞬时类错误自动重试：文件刚播放完时服务端（NAS）可能仍持有读取句柄，
+    /// 立即 MOVE/DELETE 会返回 423/409/5xx 或网络抖动错误，短延迟后通常即可成功。
+    /// 最多 3 次尝试（首次 + 2 次重试），退避 0.6s / 1.2s
+    private static func withOccupancyRetry<T>(_ operation: () async throws -> T) async throws -> T {
+        var attempt = 0
+        while true {
+            do {
+                return try await operation()
+            } catch {
+                attempt += 1
+                guard attempt < 3, isRetryableOccupancyError(error) else { throw error }
+                AppLogger.shared.log(
+                    "删除类操作失败，退避后重试（第 \(attempt) 次）error=\(error.localizedDescription)",
+                    level: .warn, module: "browse"
+                )
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 600_000_000)
+            }
+        }
+    }
+
+    /// 可重试错误：服务端瞬时占用/网关错误（423/409/429/5xx、异常响应）与网络抖动/超时；
+    /// 认证失败 / 文件不存在等业务错误不重试
+    private static func isRetryableOccupancyError(_ error: Error) -> Bool {
+        if let storage = error as? StorageError {
+            switch storage {
+            case .http(let status, _):
+                return status == 409 || status == 423 || status == 429 || (500...599).contains(status)
+            case .invalidResponse:
+                return true
+            case .underlying(let inner):
+                return isRetryableOccupancyError(inner)
+            default:
+                return false
+            }
+        }
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost,
+             .notConnectedToInternet, .dnsLookupFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 失败原因提示：把底层错误翻译为用户可行动的原因（占用/网络/权限/服务器）；
+    /// 删除失败提示与「无法使用回收站」弹窗共用
+    private static func failureHint(for error: Error) -> String {
+        if let storage = error as? StorageError {
+            switch storage {
+            case .http(let status, _) where status == 423:
+                return "文件被占用（HTTP 423）"
+            case .http(let status, _) where status == 409:
+                return "服务器状态冲突（HTTP 409）"
+            case .http(let status, _) where status == 429:
+                return "请求过于频繁（HTTP 429）"
+            case .http(let status, _) where status == 405 || status == 501:
+                return "服务器不支持该操作（HTTP \(status)）"
+            case .http(let status, _) where (500...599).contains(status):
+                return "服务器错误（HTTP \(status)）"
+            case .http(let status, _):
+                return "HTTP \(status)"
+            case .authenticationFailed:
+                return "认证失败或权限不足"
+            case .notFound:
+                return "文件不存在，可能已被删除或移动"
+            case .invalidResponse(let message):
+                return "服务器响应异常（\(message)）"
+            case .underlying(let inner):
+                return networkHint(for: inner) ?? inner.localizedDescription
+            case .invalidPath, .invalidConfig, .unsupportedProtocol, .offline:
+                return storage.localizedDescription
+            }
+        }
+        if let urlError = error as? URLError {
+            return networkHint(for: urlError) ?? urlError.localizedDescription
+        }
+        return error.localizedDescription
+    }
+
+    /// 网络类错误 → 简短提示（无匹配返回 nil 交由调用方回退原始描述）
+    private static func networkHint(for error: Error) -> String? {
+        guard let urlError = error as? URLError else { return nil }
+        switch urlError.code {
+        case .timedOut: return "网络超时"
+        case .notConnectedToInternet: return "无网络连接"
+        case .networkConnectionLost: return "网络连接中断"
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed: return "无法连接服务器"
+        default: return nil
         }
     }
 

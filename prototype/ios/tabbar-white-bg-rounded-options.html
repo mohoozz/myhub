@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>主界面白底 · 底部 Tab 栏圆角方案原型</title>
+<style>
+:root{--primary:#2563EB;--old:#EEF4FB;--tp:#1A1A2E;--ts:#6B7280;--line:#D1D5DB}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:26px;line-height:1.7;max-width:1020px}
+.subtitle code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:308px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.before{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.7;min-height:108px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:308px;height:600px;border:8px solid #111827;border-radius:40px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+.phone.old{background:var(--old)}
+.statusbar{height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:11px;font-weight:600}
+.nav{flex:none;height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.nav .t{font-size:21px;font-weight:700}
+.nav .ic{font-size:14px;color:var(--ts);letter-spacing:3px}
+.content{flex:1;overflow:hidden;padding:2px 12px 0;position:relative;background:transparent}
+.row{display:flex;align-items:center;gap:10px;padding:9px 2px}
+.row .th{width:44px;height:44px;border-radius:9px;background:var(--old);border:1px solid #EDF0F3;display:flex;align-items:center;justify-content:center;font-size:20px;flex:none}
+.row .n{font-size:13px;font-weight:600}
+.row .s{font-size:11px;color:var(--ts);margin-top:2px}
+.tabbar{flex:none;display:flex;align-items:flex-start;background:#fff;position:relative;z-index:5}
+.tab{flex:1;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:17px;opacity:.38;cursor:pointer;user-select:none}
+.tab .dot{width:4px;height:4px;border-radius:50%;background:transparent}
+.tab.on{opacity:1}
+.tab.on .dot{background:var(--primary)}
+.tabbar.cur{border-top:1px solid rgba(17,24,39,.10)}
+.tabbar.a{border-top:1px solid var(--line);border-radius:16px 16px 0 0}
+.tabbar.b{border:1px solid var(--line);border-bottom:none;border-radius:16px 16px 0 0}
+.tabbar.c{margin:0 12px 8px;height:58px;align-items:center;border:1px solid var(--line);border-radius:26px;box-shadow:0 5px 16px rgba(17,24,39,.10)}
+.tabbar.c .tab{height:58px}
+.content.d{margin:0 3px;border-left:1px solid var(--line);border-right:1px solid var(--line);border-bottom:1px solid var(--line);border-radius:0 0 20px 20px;box-shadow:0 4px 10px rgba(17,24,39,.05)}
+table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1020px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>主界面白底 · 底部 Tab 栏圆角改造</h1>
+<p class="subtitle">
+  TODO 376：主界面背景由浅蓝灰 <code>#EEF4FB</code> 改为<b>纯白</b>，底部页签栏需要<b>灰色边框</b>与主界面分割、并改为<b>圆角</b>。<br>
+  以下为「现状 + 4 个候选方案」原型（全部方案主界面均为白底），确认后再实施到 Swift 代码（<code>RootView.BottomTabBar</code> / <code>AppColors.pageBackground</code>）。
+</p>
+<div class="boards" id="boards"></div>
+
+<table>
+  <tr><th>方案</th><th>Tab 栏形态</th><th>与主界面分割</th><th>实现改动</th><th>主要取舍</th></tr>
+  <tr><td>现状</td><td>通栏直角</td><td>顶部 10% 透明度细线</td><td>—</td><td>主界面改白后分割线几乎不可见</td></tr>
+  <tr><td>A 上圆角 + 顶边灰线</td><td>全宽、上圆角 16pt</td><td>顶部 1pt 灰线（沿弧线）</td><td>最小</td><td>左右无边框，「面板感」偏弱</td></tr>
+  <tr><td>B 上圆角 + 三边描边</td><td>全宽、上圆角 16pt</td><td>上/左/右三边 1pt 灰描边</td><td>小</td><td>左右竖线贴屏边，边界最完整</td></tr>
+  <tr><td>C 悬浮圆角胶囊</td><td>内缩 12pt、离底 8pt、圆角 26pt</td><td>四周 1pt 灰描边 + 轻阴影</td><td>中</td><td>最现代；占垂直空间，mini 播放器衔接需重排</td></tr>
+  <tr><td>D 内容区底部圆角衔接</td><td>通栏直角（不放圆角），圆角落在内容区底部</td><td>沿内容区圆角的 1pt 灰线</td><td>中</td><td>有设计感；「Tab 栏圆角」体现为交界处圆角</td></tr>
+</table>
+<div class="footnote">
+  <b>共同规则（4 个方案一致）：</b>主界面背景统一改纯白（<code>#FFFFFF</code>）；灰色边框统一 1pt <code>#D1D5DB</code>（嫌重可降到 <code>#E5E7EB</code>）；
+  白底下卡片（列表缩略图 / 网格卡）与背景将无法区分，原型已顺便给缩略图补 1pt 极浅描边 <code>#EDF0F3</code>，可在选定 Tab 方案后一并处理；
+  液体玻璃开启时页签栏为玻璃材质 + 同一灰色描边（原型以实底白演示）；A/B/D 为贴底通栏形态，mini 播放器圆角语言可直接延续，C 悬浮方案需与胶囊留 8pt 间距。<br>
+  <b>推荐：</b>C（悬浮圆角胶囊）——圆角 + 灰色边框最完整、观感最现代；若希望改动最小且保留通栏形态，选 B（三边描边），A 的顶边灰线最轻但两侧无边界。
+</div>
+<script>
+const STATUS = '<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>';
+const NAV = '<div class="nav"><span class="t">阅读</span><span class="ic">🔍 ⋯</span></div>';
+const ROWS = [
+  ['🎬','星际穿越.mkv','视频 · 2:49:00 · 已看 65%'],
+  ['📖','三体.epub','小说 · 已读 12%'],
+  ['🎵','深夜电台.mp3','音频 · 3:24:00 · 上次听到 45%']
+];
+const ROWS_HTML = ROWS.map(r => `<div class="row"><div class="th">${r[0]}</div>
+  <div><div class="n">${r[1]}</div><div class="s">${r[2]}</div></div></div>`).join('');
+const TABS = [['📚',1],['⚡',0],['📁',0],['🌐',0],['⚙️',0]];
+const TABS_HTML = TABS.map(t => `<div class="tab ${t[1] ? 'on' : ''}" onclick="pick(this)">${t[0]}<span class="dot"></span></div>`).join('');
+function pick(el){ el.closest('.tabbar').querySelectorAll('.tab').forEach(t => t.classList.remove('on')); el.classList.add('on'); }
+function phone(phoneCls, contentCls, tabCls, note) {
+  return `<div class="phone ${phoneCls}">${STATUS}${NAV}
+    <div class="content ${contentCls}">${ROWS_HTML}</div>
+    <div class="tabbar ${tabCls}">${TABS_HTML}</div>${note || ''}</div>`;
+}
+const boards = [
+  {t:'现状', tag:'Before', cls:'before',
+   d:`主界面浅蓝灰底 <code>#EEF4FB</code>，页签栏通栏直角、顶部一条极淡分割线。<br>
+     <span class="cons">问题：主界面改纯白后，白栏贴白底，分割线几乎不可见；无圆角。</span>`,
+   h: phone('old', '', 'cur')},
+  {t:'方案 A · 上圆角 + 顶边灰线', tag:'最轻',
+   d:`全宽贴底保留，仅顶部两角圆角 16pt + 一条 <b>1pt 灰线沿圆角弧线</b>。<br>
+     <span class="pros">优点：改动最小，与 mini 播放器圆角语言一致。</span><br>
+     <span class="cons">缺点：左右无边框，与主界面只靠一条线分割，「独立面板」感偏弱。</span>`,
+   h: phone('', '', 'a')},
+  {t:'方案 B · 上圆角 + 三边灰色描边', tag:'最清晰',
+   d:`全宽贴底 + 上圆角 16pt，<b>上/左/右三边 1pt 灰描边</b>连成完整边框。<br>
+     <span class="pros">优点：边框完整、白底上边界最明确；贴底形态改动小。</span><br>
+     <span class="cons">缺点：左右两条竖线贴近屏幕边缘，观感偏「框」。</span>`,
+   h: phone('', '', 'b')},
+  {t:'方案 C · 悬浮圆角胶囊', tag:'推荐', tagCls:'rec',
+   d:`页签栏左右内缩 12pt、距底部 8pt，<b>四周圆角 26pt + 1pt 灰描边 + 轻阴影</b>，悬浮于内容之上（iOS 26 风）。<br>
+     <span class="pros">优点：圆角与灰色边框最完整、最现代；底部手势区更轻。</span><br>
+     <span class="cons">缺点：多占约 8pt 垂直空间；mini 播放器与胶囊的衔接需要跟着改为「留 8pt 间距」。</span>`,
+   h: phone('', '', 'c')},
+  {t:'方案 D · 内容区底部圆角衔接', tag:'最有设计感',
+   d:`页签栏保持通栏直角白底；<b>圆角落在内容区底部两角（20pt）</b>，内容区像一张圆角卡片压在页签栏上，交界处沿弧线描灰线。<br>
+     <span class="pros">优点：交界处圆角自然、有层次，页签栏仍是通栏不影响布局。</span><br>
+     <span class="cons">缺点：「圆角」不直接长在页签栏上，需为内容容器加圆角 + 描边。</span>`,
+   h: phone('', 'd', '')}
+];
+document.getElementById('boards').innerHTML = boards.map(b => `
+  <div class="board">
+    <h2>${b.t}${b.tag ? `<span class="tag ${b.tagCls || b.cls || ''}">${b.tag}</span>` : ''}</h2>
+    <div class="desc">${b.d}</div>
+    ${b.h}
+  </div>`).join('');
+</script>
+</body>
+</html>

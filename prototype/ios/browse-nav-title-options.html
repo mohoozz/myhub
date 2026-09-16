@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>浏览界面 · 面包屑改造方案原型</title>
+<style>
+:root{--primary:#2563EB;--page-bg:#EEF4FB;--card:#FFF;--tp:#1A1A2E;--ts:#6B7280;--sep:#E5E7EB;--hl:#EEF4FB}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:28px;line-height:1.7}
+.subtitle code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.boards{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}
+.board{width:300px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}
+.tag.before{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.7;min-height:92px}
+.desc b{color:var(--tp)}
+.pros{color:#047857}.cons{color:#B45309}
+.phone{width:300px;height:620px;background:var(--page-bg);border:8px solid #111827;border-radius:40px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18)}
+.statusbar{height:30px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:11px;font-weight:600}
+.navbar{flex:none;height:44px;display:flex;align-items:center;gap:6px;padding:0 10px;background:rgba(255,255,255,.72);backdrop-filter:blur(8px);position:relative;z-index:5}
+.back{color:var(--primary);font-size:22px;font-weight:600;line-height:1;padding:0 4px}
+.actions{margin-left:auto;display:flex;gap:14px;padding-right:4px}
+.icon{width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,.1);color:var(--primary);font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.nav-title{font-size:17px;font-weight:600;line-height:1.1}
+.center{position:absolute;left:50%;transform:translateX(-50%);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.left{font-size:19px;font-weight:700;margin-left:2px}
+.two-line{display:flex;flex-direction:column;align-items:center}
+.two-line .conn{font-size:11px;font-weight:500;color:var(--ts)}
+.two-line .dir{font-size:16px;font-weight:600}
+.clickable{cursor:pointer;display:flex;align-items:center;gap:4px}
+.chev{font-size:9px;color:var(--ts);transition:transform .18s}
+.nav-title.open .chev{transform:rotate(180deg)}
+.popover{position:absolute;top:46px;left:50%;transform:translateX(-50%) scale(.96);width:210px;background:var(--card);border-radius:12px;box-shadow:0 10px 30px rgba(17,24,39,.18);border:.5px solid var(--sep);padding:6px;z-index:20;opacity:0;pointer-events:none;transition:.18s}
+.popover.open{opacity:1;pointer-events:auto;transform:translateX(-50%) scale(1)}
+.crumb{display:flex;align-items:center;justify-content:space-between;font-size:13px;padding:7px 9px;border-radius:8px;color:var(--primary);cursor:pointer}
+.crumb:hover{background:var(--hl)}
+.crumb .depth{font-size:10px;color:var(--ts)}
+.crumb.cur{color:var(--tp);font-weight:600;cursor:default}
+.crumb.cur:hover{background:transparent}
+.breadcrumb{flex:none;height:36px;display:flex;align-items:center;gap:4px;padding:0 12px;white-space:nowrap}
+.breadcrumb .c{font-size:15px;font-weight:600;color:var(--primary)}
+.breadcrumb .c.last{color:var(--tp)}
+.breadcrumb .s{color:var(--ts);font-size:12px}
+.searchbar{flex:none;margin:8px 12px;height:44px;border-radius:10px;background:var(--card);border:.5px solid var(--sep);display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--ts);font-size:13px}
+.content{flex:1;overflow:hidden;padding:4px 12px 12px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.cell{background:var(--card);border-radius:10px;padding:8px;display:flex;flex-direction:column;align-items:center;gap:5px}
+.thumb{width:100%;aspect-ratio:1.15;border-radius:8px;background:var(--hl);display:flex;align-items:center;justify-content:center;font-size:26px}
+.fname{font-size:10px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%}
+.annot{position:absolute;z-index:30;font-size:10px;font-weight:600;background:#1D4ED8;color:#fff;border-radius:8px;padding:2px 7px;box-shadow:0 3px 8px rgba(29,78,216,.3);white-space:nowrap}
+.annot.rm{background:#DC2626;text-decoration:line-through}
+.annot.add{background:#047857}
+table{border-collapse:collapse;margin-top:40px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--sep);vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:900px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>浏览界面 · 面包屑改造方案</h1>
+<p class="subtitle">
+  TODO 364：删除正文顶部的面包屑，当前目录名称改在<b>顶部操作栏（导航栏）</b>展示。
+  以下为「现状 + 4 个候选方案」原型（方案 C 可点击标题交互体验），确认后再实施到 Swift 代码。
+</p>
+<div class="boards" id="boards"></div>
+
+<table>
+  <tr><th>方案</th><th>导航栏显示</th><th>跳回任意层级</th><th>正文空间</th><th>主要取舍</th></tr>
+  <tr><td>现状</td><td>无标题</td><td>✅ 面包屑点击</td><td>被面包屑占 36pt</td><td>与导航行为重复、头部拥挤</td></tr>
+  <tr><td>A 居中目录名</td><td>目录名（居中）</td><td>❌ 仅逐级返回</td><td>+36pt</td><td>最简洁，能力有损</td></tr>
+  <tr><td>B 左对齐大标题</td><td>目录名（左对齐）</td><td>❌ 仅逐级返回</td><td>+36pt</td><td>与其它页签风格统一</td></tr>
+  <tr><td>C 目录名+路径浮层</td><td>目录名 ▾（点击展开）</td><td>✅ 浮层内点选</td><td>+36pt</td><td>多一次点击，推荐</td></tr>
+  <tr><td>D 双行标题</td><td>连接名 + 目录名</td><td>❌ 仅逐级返回</td><td>+36pt（栏高 +8pt）</td><td>信息全但偏拥挤</td></tr>
+</table>
+
+<div class="footnote">
+  <b>共同规则（各方案一致）：</b>根目录时标题显示「连接名」；多选态标题仍显示「已选 N 项」（复用现有逻辑）；
+  搜索框代替面包屑上移，仍随下滑隐藏。<br>
+  <b>推荐：</b>方案 C —— 默认视觉等同方案 A（最简），需要跨层级跳转时点标题即可，等价保留原面包屑能力，无功能回退。
+</div>
+
+<script>
+const GRID = [
+  {e:'📁',n:'2024 合集'},{e:'📁',n:'经典老片'},{e:'🎬',n:'星际穿越.mkv'},
+  {e:'🎬',n:'盗梦空间.mp4'},{e:'🎬',n:'奥本海默.mp4'},{e:'🖼️',n:'海报.jpg'}
+];
+const ACTIONS = '<div class="actions"><div class="icon">+</div><div class="icon">⋯</div></div>';
+const STATUS = '<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>';
+const GRID_HTML = '<div class="content"><div class="grid">' + GRID.map(c =>
+  `<div class="cell"><div class="thumb">${c.e}</div><div class="fname">${c.n}</div></div>`).join('') + '</div></div>';
+
+function phone(inner, extraClass = '') {
+  return `<div class="phone ${extraClass}">${STATUS}${inner}${GRID_HTML}</div>`;
+}
+
+const boards = [
+  {
+    title: '现状', tag: 'Before', tagCls: 'before',
+    desc: `正文顶部一整行横向滚动面包屑（连接名 / 逐级目录），导航栏无标题。<br>问题：与导航行为重复，占据正文约 36pt 高度。`,
+    html: phone(`
+      <div class="navbar"><span class="back">‹</span>${ACTIONS}</div>
+      <div class="breadcrumb"><span class="c">我的NAS</span><span class="s">›</span>
+        <span class="c">视频</span><span class="s">›</span><span class="c last">电影</span></div>
+      <div class="searchbar">🔍 搜索当前目录</div>
+      <span class="annot rm" style="top:118px;left:80px;">面包屑（待删除）</span>`)
+  },
+  {
+    title: '方案 A · 导航栏居中目录名', tag: '极简',
+    desc: `删除面包屑，导航栏标题（系统居中位）显示<b>当前目录名</b>；根目录显示连接名。<br>
+      <span class="pros">优点：最简洁，正文多出约 36pt；搜索框紧贴导航栏。</span><br>
+      <span class="cons">缺点：失去「跳回任意层级」，只能逐级返回 / 左缘右滑。</span>`,
+    html: phone(`
+      <div class="navbar"><span class="back">‹</span><div class="nav-title center">电影</div>${ACTIONS}</div>
+      <div class="searchbar" style="margin-top:6px;">🔍 搜索当前目录</div>
+      <span class="annot" style="top:60px;left:128px;">标题 = 当前目录名</span>
+      <span class="annot add" style="top:86px;left:196px;">正文 +36pt</span>`)
+  },
+  {
+    title: '方案 B · 左对齐大标题', tag: '风格统一',
+    desc: `同方案 A 删除面包屑，标题改为<b>左对齐加粗</b>（复用现有 leadingNavTitle 样式），与「浏览 / 收藏 / 设置」页签标题一致。<br>
+      <span class="pros">优点：页面间风格统一；长目录名可用整行宽度。</span><br>
+      <span class="cons">缺点：同 A，无多层级跳转。</span>`,
+    html: phone(`
+      <div class="navbar"><span class="back">‹</span><div class="nav-title left">电影</div>${ACTIONS}</div>
+      <div class="searchbar" style="margin-top:6px;">🔍 搜索当前目录</div>
+      <span class="annot" style="top:60px;left:36px;">左对齐加粗目录名</span>`)
+  },
+  {
+    title: '方案 C · 目录名 + 点击展开路径浮层', tag: '推荐', tagCls: 'rec',
+    desc: `默认只显示当前目录名（同方案 A），<b>点击标题</b>在下方弹出完整路径浮层，可点任意层级直接跳转（等价原面包屑能力）。<br>
+      <span class="pros">优点：默认极简 + 保留快速跳转；再点标题 / 点空白收起。</span><br>
+      <span class="cons">缺点：多一次点击才能看到路径。</span>`,
+    html: phone(`
+      <div class="navbar"><span class="back">‹</span>
+        <div class="nav-title center clickable" id="titleC" onclick="togglePath(event)">电影 <span class="chev">▼</span></div>
+        ${ACTIONS}
+        <div class="popover" id="popoverC">
+          <div class="crumb">我的NAS <span class="depth">根目录</span></div>
+          <div class="crumb">/ 视频 <span class="depth">第 1 级</span></div>
+          <div class="crumb cur">/ 视频 / 电影 <span class="depth">当前</span></div>
+        </div>
+      </div>
+      <div class="searchbar" style="margin-top:6px;">🔍 搜索当前目录</div>
+      <span class="annot" style="top:60px;left:138px;">点击标题 ▾</span>`)
+  },
+  {
+    title: '方案 D · 双行标题（连接名 + 目录名）', tag: '信息最全',
+    desc: `导航栏标题两行：上方小字灰色<b>连接名</b>、下方主标题<b>当前目录名</b>；根目录时仅显示连接名。<br>
+      <span class="pros">优点：明确所在连接源（多源用户友好）。</span><br>
+      <span class="cons">缺点：导航栏更高（约 52pt），长标题易截断，视觉偏拥挤。</span>`,
+    html: phone(`
+      <div class="navbar" style="height:52px"><span class="back">‹</span>
+        <div class="nav-title center two-line"><span class="conn">我的NAS</span><span class="dir">电影</span></div>${ACTIONS}</div>
+      <div class="searchbar" style="margin-top:6px;">🔍 搜索当前目录</div>
+      <span class="annot" style="top:66px;left:120px;">连接名 + 目录名</span>`, 'tall')
+  }
+];
+
+document.getElementById('boards').innerHTML = boards.map(b => `
+  <div class="board">
+    <h2>${b.title}${b.tag ? `<span class="tag ${b.tagCls || ''}">${b.tag}</span>` : ''}</h2>
+    <div class="desc">${b.desc}</div>
+    ${b.html}
+  </div>`).join('');
+
+function togglePath(e) {
+  e.stopPropagation();
+  document.getElementById('popoverC').classList.toggle('open');
+  document.getElementById('titleC').classList.toggle('open');
+}
+document.addEventListener('click', () => {
+  document.getElementById('popoverC')?.classList.remove('open');
+  document.getElementById('titleC')?.classList.remove('open');
+});
+document.getElementById('popoverC').addEventListener('click', e => e.stopPropagation());
+</script>
+</body>
+</html>

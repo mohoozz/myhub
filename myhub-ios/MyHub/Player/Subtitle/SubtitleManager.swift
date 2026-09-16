@@ -207,6 +207,8 @@ final class SubtitleManager: ObservableObject {
         let stream = try await adapter.readStream(path, range: nil)
         var data = Data()
         for try await chunk in stream {
+            // 显式响应取消：切换视频 / 退出播放器时停止字幕下载（TODO 372 同类检查）
+            try Task.checkCancellation()
             data.append(chunk)
             if data.count > 8 * 1024 * 1024 { break }   // 字幕文件上限保护
         }

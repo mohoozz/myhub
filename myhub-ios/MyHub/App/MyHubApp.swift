@@ -56,11 +56,15 @@ struct MyHubApp: App {
                 .environmentObject(browseDisplaySettings)
                 .environmentObject(connectionStore)
                 // 进入后台时按设置上锁，返回前台显示锁定遮罩（TODO §10 安全）；
-                // 同时兜底落盘浏览器会话，确保导航后立即退出也不丢失
+                // 同时兜底落盘浏览器会话，确保导航后立即退出也不丢失；
+                // 长时间后台（熄屏）回到前台时执行网络自愈，避免「音视频加载失败只能重启 App」（TODO 366）
                 .onChange(of: scenePhase) { phase in
                     if phase == .background {
                         appLock.lockForBackground()
                         browserSession.persistNow()
+                        NetworkRecovery.shared.noteDidEnterBackground()
+                    } else if phase == .active {
+                        NetworkRecovery.shared.recoverAfterReturningToForeground()
                     }
                 }
                 .overlay {

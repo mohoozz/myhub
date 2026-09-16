@@ -8,6 +8,10 @@ import UIKit
 /// 标题显示「标题」，副标题显示「作者」（不显示路径）；
 /// 视频播放时封面实时渲染画面（`MiniCoverPreview`），音频播放时显示内嵌/同目录封面（缺失回落图标）。
 struct MiniPlayer: View {
+    /// iPhone 悬浮胶囊页签栏上方：四周圆角卡片（TODO 376 方案 C）；
+    /// iPad 悬浮底部保持贴底式仅顶部圆角
+    var roundedBottom: Bool = false
+
     @EnvironmentObject private var player: PlayerPresenter
     @StateObject private var core = PlayerCore.shared
     @GestureState private var dragOffset: CGFloat = 0
@@ -20,6 +24,11 @@ struct MiniPlayer: View {
     /// 封面距卡片左缘 / 封面与标题区间距
     private let coverLeading: CGFloat = 16
     private let coverGap: CGFloat = 12
+
+    /// 卡片外形：iPhone 悬浮态四周圆角（TODO 376 方案 C）；iPad 贴底态仅顶部圆角
+    private var cardShape: TopRoundedShape {
+        TopRoundedShape(radius: 16, roundedBottom: roundedBottom)
+    }
 
     private var progressRatio: CGFloat {
         guard core.duration > 0 else { return 0 }
@@ -46,10 +55,12 @@ struct MiniPlayer: View {
         ZStack(alignment: .topLeading) {
             // 卡片主体（不含封面）。封面作为 ZStack 兄弟节点而非卡片子节点，
             // 顶部溢出才不会被卡片的 ClipShape 裁掉。
-            // 贴底布局：与底部页签栏同背景色、仅顶部圆角、宽度占满（对齐 Flutter mini）。
+            // iPhone：与胶囊页签栏对齐的悬浮圆角卡片（TODO 376 方案 C）；
+            // iPad：贴底布局，与底部页签栏同背景色、仅顶部圆角、宽度占满（对齐 Flutter mini）。
             cardBody
                 .background(AppColors.sidebarBackground)
-                .clipShape(TopRoundedShape(radius: 16))
+                .clipShape(cardShape)
+                .overlay { cardShape.stroke(AppColors.cardBorder, lineWidth: 1) }
 
             // 封面浮层：顶部溢出 8px（QQ 音乐观感）
             cover
@@ -58,7 +69,9 @@ struct MiniPlayer: View {
         }
         .offset(y: dragOffset)
         .gesture(
-            DragGesture()
+            // 用 .global 坐标空间：卡片自身随手指偏移，若用默认 .local 坐标空间，
+            // 视图移动会反过来改变 translation 的换算基准，产生正反馈导致拖动抖动。
+            DragGesture(coordinateSpace: .global)
                 .updating($dragOffset) { value, state, _ in
                     state = max(0, value.translation.height)
                 }
@@ -191,12 +204,17 @@ struct MiniPlayer: View {
     }
 }
 
-/// 仅顶部圆角（贴底 mini 播放器，对齐 Flutter mini 顶部 16 圆角）
+/// mini 播放器圆角外形：默认仅顶部圆角（贴底态，对齐 Flutter mini 顶部 16 圆角）；
+/// `roundedBottom = true` 时四周圆角（iPhone 悬浮于胶囊页签栏上方，TODO 376 方案 C）
 private struct TopRoundedShape: Shape {
     var radius: CGFloat
+    var roundedBottom: Bool = false
 
     func path(in rect: CGRect) -> Path {
         let r = min(radius, min(rect.width, rect.height))
+        if roundedBottom {
+            return Path(roundedRect: rect, cornerSize: CGSize(width: r, height: r), style: .continuous)
+        }
         var path = Path()
         path.move(to: CGPoint(x: 0, y: rect.maxY))
         path.addLine(to: CGPoint(x: 0, y: r))

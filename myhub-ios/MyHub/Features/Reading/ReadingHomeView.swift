@@ -14,6 +14,8 @@ struct ReadingHomeView: View {
     @EnvironmentObject private var comicReader: ComicReaderPresenter
     @EnvironmentObject private var router: AppRouter
     @EnvironmentObject private var locator: BrowseLocator
+    /// 文件名行数等浏览显示偏好（设置「文件名行数」，浏览页与阅读页的卡片、列表均生效）
+    @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
     @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
 
@@ -220,7 +222,7 @@ struct ReadingHomeView: View {
                 Text(title(of: record))
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
-                    .lineLimit(2)
+                    .lineLimit(browseDisplaySettings.fileNameLines)
                     .multilineTextAlignment(.leading)
                     .padding(.top, 4)
                 Spacer(minLength: 8)
@@ -249,13 +251,15 @@ struct ReadingHomeView: View {
         }
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(isSelected ? AppColors.primary : Color.white.opacity(0.08),
-                        lineWidth: isSelected ? 2 : 1)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)   // 常态极细描边界，选中态由高亮层接管
         )
         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+        // 卡片被沉浸式封面铺满，选中描边用不透明主色保证对比度（TODO 375 方案 D）
         .cellPressableMenu(
             cornerRadius: 14,
-            highlightShape: .roundedRect,
+            selectedScale: 1.03,
+            selectedStroke: AppColors.primary,
+            isSelected: isSelected,
             items: menuItems(for: record),
             onTap: { tap(record) }   // 长按弹底部抽屉菜单；指针右键弹锚点菜单
         )
@@ -280,7 +284,7 @@ struct ReadingHomeView: View {
                     Text(title(of: record))
                         .font(.body.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(1)
+                        .lineLimit(browseDisplaySettings.fileNameLines)
                     Text(subtitle(for: record))
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
@@ -288,12 +292,14 @@ struct ReadingHomeView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
+                // 多选态仍保留进度环（勾选标记并排在其右侧，TODO 371）
+                if record.finished || record.percent > 0 {
+                    progressRing(record)
+                }
                 if isSelecting {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
-                } else if record.finished || record.percent > 0 {
-                    progressRing(record)
                 }
             }
             .padding(.horizontal, 12)
@@ -301,21 +307,14 @@ struct ReadingHomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .hoverEffect(.highlight)
-            .background(
-                isSelected ? AppColors.primary.opacity(0.08) : Color.clear
-            )
+            // 通栏列表行：高亮块内缩 4/6 收边成悬浮片，选中浮起（TODO 375 方案 D）
             .cellPressableMenu(
                 cornerRadius: 0,
-                highlightShape: .roundedRect,
+                highlightInset: EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6),
+                isSelected: isSelected,
                 items: menuItems(for: record),
                 onTap: { tap(record) }
             )
-
-            // 分割线（参照 Flutter iOS，缩进从封面右侧开始）
-            Rectangle()
-                .fill(AppColors.separator)
-                .frame(height: 0.5)
-                .padding(.leading, 76)
         }
     }
 

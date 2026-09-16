@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>长按 / 选中高亮改造方案原型</title>
+<style>
+:root{--primary:#2563EB;--page-bg:#EEF4FB;--card:#FFF;--tp:#1A1A2E;--ts:#6B7280;--sep:#E5E7EB;--hl:#EEF4FB}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:26px;line-height:1.7;max-width:1000px}
+.subtitle code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:288px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.before{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.7;min-height:100px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:288px;background:var(--page-bg);border:8px solid #111827;border-radius:38px;overflow:hidden;box-shadow:0 12px 28px rgba(17,24,39,.18)}
+.statusbar{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:11px;font-weight:600}
+.navbar{height:42px;display:flex;align-items:center;gap:8px;padding:0 12px;background:rgba(255,255,255,.76);position:relative;z-index:5}
+.back{color:var(--primary);font-size:21px;font-weight:600;line-height:1}
+.nav-title{font-size:15px;font-weight:600;flex:1}
+.nav-title small{font-size:12px;color:var(--ts);font-weight:400;margin-left:5px}
+/* 通用 cell（行 / 卡）：高亮由 CSS 变量驱动，方案只改变量 */
+.cell{position:relative;transition:transform .14s ease}
+.hi{position:absolute;inset:var(--hi-inset,0);border-radius:var(--hi-radius,0);opacity:0;background:transparent;pointer-events:none;transition:opacity .14s ease}
+.cell.sel .hi{opacity:1;background:var(--sel-fill);box-shadow:var(--sel-ring,inset 0 0 0 0 transparent)}
+.cell.press .hi{opacity:1;background:var(--press-fill)}
+.cell.press{transform:scale(var(--p-scale,.97));z-index:2}
+/* 列表行 */
+.row{display:flex;align-items:center;gap:11px;padding:11px 12px;background:var(--card);--hi-radius:11px}
+.row .thumb{width:46px;height:46px;border-radius:9px;background:var(--hl);display:flex;align-items:center;justify-content:center;font-size:22px;flex:none;position:relative;z-index:1;transition:all .14s ease}
+.row .meta{flex:1;min-width:0;position:relative;z-index:1}
+.row .n{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .s{font-size:11px;color:var(--ts);margin-top:2px}
+.row .trail{font-size:11px;color:var(--ts);position:relative;z-index:1}
+.tick{width:19px;height:19px;border-radius:50%;border:1.5px solid #9CA3AF;flex:none;position:relative;z-index:3;background:#fff}
+.tick.on{background:var(--primary);border-color:var(--primary);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center}
+/* 网格 */
+.gridwrap{background:rgba(255,255,255,.55);padding:9px 12px 13px}
+.gridwrap .cap{font-size:10px;color:var(--ts);font-weight:600;margin-bottom:7px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.card{background:var(--card);border-radius:12px;padding:6px;box-shadow:0 1px 3px rgba(17,24,39,.07);--hi-inset:1px;--hi-radius:11px}
+.card .cover{width:100%;aspect-ratio:1.2;border-radius:8px;background:var(--hl);display:flex;align-items:center;justify-content:center;font-size:24px;transition:all .14s ease}
+.card .cn{font-size:10px;text-align:center;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .tick{position:absolute;top:5px;right:5px;width:17px;height:17px;border:1.5px solid #fff;background:rgba(0,0,0,.28);z-index:3}
+.card .tick.on{background:var(--primary);border-color:#fff}
+.st{position:absolute;right:4px;top:-8px;font-size:9px;font-weight:700;color:#fff;background:#1D4ED8;border-radius:7px;padding:1px 6px;z-index:9;white-space:nowrap}
+.st.press{background:#B45309}.st.norm{background:#6B7280}
+/* ===== 方案变量：只改内缩 / 圆角 / 填充 / 描边 / 缩放 ===== */
+.before{--hi-inset:0;--hi-radius:0;--sel-fill:rgba(37,99,235,.10);--press-fill:rgba(37,99,235,.13)}
+.a{--hi-inset:4px 6px;--sel-fill:rgba(37,99,235,.10);--press-fill:rgba(37,99,235,.12);--sel-ring:0 1px 4px rgba(37,99,235,.15)}
+.b{--hi-inset:4px 6px;--sel-fill:rgba(37,99,235,.05);--press-fill:rgba(37,99,235,.09);--sel-ring:inset 0 0 0 1.5px rgba(37,99,235,.85);--p-scale:.98}
+.c{--hi-inset:0;--sel-fill:transparent;--press-fill:transparent;--p-scale:.98}
+.d{--hi-inset:4px 6px;--sel-fill:rgba(37,99,235,.04);--press-fill:rgba(37,99,235,.07);--sel-ring:0 5px 14px rgba(37,99,235,.20),inset 0 0 0 1px rgba(37,99,235,.35)}
+/* 方案 C 专属：内容聚焦高亮 */
+.c .row.sel .thumb{box-shadow:0 0 0 2px var(--primary);background:#DBEAFE;transform:scale(1.06)}
+.c .row.press .thumb{background:#DBEAFE;transform:scale(.93)}
+.c .row.press .meta{opacity:.7}
+.c .card .hi{opacity:0}
+.c .card.sel .hi{opacity:1;background:transparent;box-shadow:inset 0 0 0 2px var(--primary)}
+.c .card.press .cover{transform:scale(.93)}
+/* 方案 D 专属：整卡浮起 */
+.d .cell.sel{transform:scale(1.02);z-index:3}
+.d .card.sel{transform:scale(1.035)}
+/* 表格 / 脚注 */
+table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--sep);vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1000px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>浏览 / 阅读界面 · 长按与选中高亮改造</h1>
+<p class="subtitle">TODO 375：长按文件时背景高亮是「铺满整行 / 整卡的生硬矩形」。现状为 <code>primary 12%</code> 铺满 cell（列表行直角通栏、网格卡整卡泛蓝），缺少边界收束与层次。<br>下列「现状 + 4 个方案」均含<b>列表行</b>与<b>网格卡</b>，标注常态 / 选中 / 按压三态；可按住体验按压反馈，点击可切换选中。</p>
+<div class="boards" id="boards"></div>
+<table>
+  <tr><th>方案</th><th>列表行高亮</th><th>网格卡高亮</th><th>视觉感受</th><th>主要取舍</th></tr>
+  <tr><td>现状</td><td>直角通栏色块</td><td>整卡泛蓝</td><td>生硬、无边界</td><td>—</td></tr>
+  <tr><td>A 内缩圆角</td><td>内缩 6pt / 圆角 11</td><td>内缩 1pt / 圆角 11</td><td>像选中了一张卡片</td><td>高亮略小于可点区域</td></tr>
+  <tr><td>B 描边胶囊</td><td>1.5pt 主色描边 + 5% 填充</td><td>同左</td><td>轻盈、边界清晰</td><td>与勾选/进度环叠略显信息多</td></tr>
+  <tr><td>C 封面聚焦</td><td>只高亮缩略图</td><td>只描边封面区</td><td>最克制</td><td>选中感知弱，依赖勾选标记</td></tr>
+  <tr><td>D 浮起抬升</td><td>抬升 + 软阴影 + 细描边</td><td>同左，幅度更大</td><td>有层次、高级</td><td>列表内浮起对比弱，实现稍复杂</td></tr>
+</table>
+<div class="footnote">
+  <b>共同规则：</b>按压（长按瞬间）与选中（多选态）分为两层——按压是「临时反馈」、选中是「持久状态」，同一 cell 可同时存在（选中后再按压应仍保持选中样式）。<br>
+  <b>我的推荐：</b>方案 B（描边胶囊）——列表与网格视觉统一、边界清晰，且不依赖色块面积表达选中，与现有勾选标记 / 进度环共存最干净；若希望更「重」的选中感则选 A。
+</div>
+<script>
+const NAV = '<div class="navbar"><span class="back">‹</span><div class="nav-title">电影 <small>已选 1 项</small></div></div>';
+const STATUS = '<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>';
+const ROWS = [
+  {e:'🎬',n:'星际穿越.mkv',s:'视频 · 2:49:00 · 5.6 GB',st:'',tag:['norm','常态']},
+  {e:'🎬',n:'盗梦空间.mp4',s:'视频 · 2:28:00 · 4.1 GB',st:'sel',tag:['','选中'],tick:true},
+  {e:'📁',n:'2024 合集',s:'目录 · 12 项',st:'press',tag:['press','按压中']}
+];
+const CARDS = [
+  {e:'🎬',n:'星际穿越',st:'',tag:['norm','常态']},
+  {e:'🖼️',n:'海报.jpg',st:'sel',tag:['','选中'],tick:true},
+  {e:'🎬',n:'奥本海默',st:'press',tag:['press','按压中']}
+];
+function rowHTML(r){
+  return `<div class="cell row ${r.st}"><span class="hi"></span>
+    <div class="thumb">${r.e}</div>
+    <div class="meta"><div class="n">${r.n}</div><div class="s">${r.s}</div></div>
+    ${r.tick ? '<div class="tick on">✓</div>' : '<div class="trail">›</div>'}
+    ${r.tag ? `<span class="st ${r.tag[0]}">${r.tag[1]}</span>` : ''}</div>`;
+}
+function cardHTML(c){
+  return `<div class="cell card ${c.st}"><span class="hi"></span>
+    ${c.tick ? '<div class="tick on">✓</div>' : ''}
+    <div class="cover">${c.e}</div><div class="cn">${c.n}</div>
+    ${c.tag ? `<span class="st ${c.tag[0]}">${c.tag[1]}</span>` : ''}</div>`;
+}
+function phone(cls){
+  return `<div class="phone ${cls}">${STATUS}${NAV}
+    <div class="list">${ROWS.map(rowHTML).join('')}</div>
+    <div class="gridwrap"><div class="cap">网格形态</div><div class="grid">${CARDS.map(cardHTML).join('')}</div></div>
+  </div>`;
+}
+const boards = [
+  {t:'现状',tag:'Before',cls:'before',
+   d:'按压 / 选中均为 <b>铺满 cell 的矩形色块</b>：列表行直角通栏、网格卡整卡泛蓝；按压仅叠 0.97 缩放。<br><span class="cons">问题：色块贴边生硬、无边界收束，与卡片圆角/留白风格割裂。</span>'},
+  {t:'方案 A · 内缩圆角高亮',tag:'推荐备选',cls:'a',
+   d:'高亮块四周<b>内缩 6pt、圆角 11</b>，像「卡片内嵌一张被选中的底片」，附极轻阴影。<br><span class="pros">优点：保留色块选中感，边界干净；改动仅 2 个参数。</span><br><span class="cons">缺点：高亮面积略小于整行。</span>'},
+  {t:'方案 B · 描边胶囊',tag:'推荐',cls:'b',
+   d:'以 <b>1.5pt 主色描边 + 5% 极淡填充</b> 表达选中，按压仅 9% 填充、缩放 0.98。<br><span class="pros">优点：轻盈、边界最清晰，列表与网格统一；与勾选标记同源。</span><br><span class="cons">缺点：选中感偏弱，深色封面上需靠勾选标记补足。</span>'},
+  {t:'方案 C · 封面聚焦',tag:'最克制',cls:'c',
+   d:'行与卡不铺底色，只高亮<b>缩略图 / 封面区</b>（描边或轻微放大），其余内容保持原样。<br><span class="pros">优点：最干净，文字区完全不受干扰。</span><br><span class="cons">缺点：整行可点的暗示变弱，选中反馈依赖右侧勾选标记。</span>'},
+  {t:'方案 D · 浮起抬升',tag:'最有层次',cls:'d',
+   d:'选中时 cell <b>轻微放大（1.02~1.035）+ 软阴影抬升</b>，配细描边，几乎不铺色。<br><span class="pros">优点：有「拿起一张卡」的物理感，层次最好。</span><br><span class="cons">缺点：列表行浮起对比弱；多选大量选中时阴影略花。</span>'}
+];
+document.getElementById('boards').innerHTML = boards.map(b => `
+  <div class="board">
+    <h2>${b.t}${b.tag ? `<span class="tag ${b.cls === 'a' ? '' : b.cls === 'before' ? 'before' : 'rec'}">${b.tag}</span>` : ''}</h2>
+    <div class="desc">${b.d}</div>
+    ${phone(b.cls)}
+  </div>`).join('');
+// 交互：点击切换选中；按住预览按压
+document.querySelectorAll('.cell').forEach(cell => {
+  cell.addEventListener('click', () => cell.classList.toggle('sel'));
+  cell.addEventListener('pointerdown', () => cell.classList.add('press'));
+  const up = () => cell.classList.remove('press');
+  cell.addEventListener('pointerup', up);
+  cell.addEventListener('pointerleave', up);
+});
+</script>
+</body>
+</html>

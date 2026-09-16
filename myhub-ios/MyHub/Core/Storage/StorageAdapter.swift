@@ -18,6 +18,9 @@ enum StorageError: Error, LocalizedError {
     case http(status: Int, message: String?)
     case authenticationFailed
     case unsupportedProtocol(String)
+    /// 服务器响应异常：可达但返回的不是预期协议响应（如反代/网关返回的 HTML 错误页、空体），
+    /// 与 notFound/http 区分，避免调用方把异常响应当作「空结果」（TODO 369）
+    case invalidResponse(String)
     /// 离线模式：请求的内容未缓存（已缓存内容无网络播放/阅读，IOS-605）
     case offline(String)
     case underlying(Error)
@@ -31,6 +34,7 @@ enum StorageError: Error, LocalizedError {
             return "HTTP \(status)\(message.map { "（\($0)）" } ?? "")"
         case .authenticationFailed: return "认证失败，请检查用户名与密码"
         case .unsupportedProtocol(let name): return "暂不支持 \(name) 协议（预留扩展）"
+        case .invalidResponse(let message): return "服务器响应异常：\(message)"
         case .offline(let name): return "离线模式：\(name)未缓存，无法加载"
         case .underlying(let error): return error.localizedDescription
         }

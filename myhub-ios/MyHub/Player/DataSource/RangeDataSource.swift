@@ -60,6 +60,9 @@ final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
                 stallStrikes = 0   // 本轮有进展，继续续传直至取满
             } else {
                 stallStrikes += 1
+                // 零进展停滞（TODO 366）：当前锁定地址可能已不可达（长时间熄屏 / 网络环境变化），
+                // 通知路由层失效锁定，下一轮续传重试重新竞速判定可达地址（内部带冷却，避免抖动反复竞速）
+                (adapter as? RouteRecoverable)?.invalidateRoute(reason: "分片读取零进展停滞")
                 if stallStrikes >= maxAttempts { break }
                 try? await Task.sleep(nanoseconds: UInt64(stallStrikes) * 400_000_000)
             }

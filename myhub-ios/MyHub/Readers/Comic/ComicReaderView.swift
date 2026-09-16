@@ -5,7 +5,7 @@ import UIKit
 /// - 单页 / 双页（横屏·平板自动启用，从右向左 / 从左向右可切换并持久化）/ 条漫（纵向连续滚动）；
 /// - 双指缩放（UIScrollView 桥接）；点击中央呼出控制层；
 /// - 页码进度直接恢复（条漫模式经 ScrollViewReader 程序滚动定位）；
-/// - 翻完最后一页弹出「下一本」提示（5s 倒计时自动打开）。
+/// - 翻完最后一页弹出「下一本」提示，点击提示条才打开（不自动打开）。
 struct ComicReaderView: View {
     let context: NovelOpenContext
     var onClose: () -> Void = {}
@@ -65,13 +65,12 @@ struct ComicReaderView: View {
                 .transition(.opacity)
             }
 
-            // 翻完推荐下一本（底部提示 + 5s 倒计时）
+            // 翻完推荐下一本（底部提示，点击才打开）
             if let candidate = viewModel.nextCandidate {
                 VStack {
                     Spacer()
                     NextMediaTip(
                         entry: candidate,
-                        remaining: viewModel.nextCountdown,
                         onPlay: {
                             viewModel.cancelNext()
                             onOpenNext(candidate)
@@ -109,11 +108,6 @@ struct ComicReaderView: View {
         .animation(.appQuick, value: viewModel.nextCandidate != nil)
         .animation(.appQuick, value: viewModel.toast)
         .statusBarHidden(!controlsVisible)
-        .onReceive(NotificationCenter.default.publisher(for: .comicOpenNext)) { note in
-            // 倒计时结束自动打开下一本
-            guard let candidate = note.userInfo?["entry"] as? FileEntry else { return }
-            onOpenNext(candidate)
-        }
         .onAppear { viewModel.load() }
         .onDisappear { viewModel.teardown() }
     }

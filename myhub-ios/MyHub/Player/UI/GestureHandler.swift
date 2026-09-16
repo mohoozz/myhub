@@ -90,7 +90,7 @@ struct PlayerGestureLayer: View {
                 // 常规手势层（锁定态失效）
                 Color.clear
                     .contentShape(Rectangle())
-                    .gesture(dragGesture(in: geometry.size))
+                    .gesture(dragGesture(in: geometry))
                     .onTapGesture {
                         handleTap()
                     }
@@ -144,8 +144,19 @@ struct PlayerGestureLayer: View {
 
     // MARK: - 拖动手势（进度 / 音量 / 亮度）
 
-    private func dragGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 12)
+    /// 下拉进入 mini 的距离阈值（pt）：拉过此距离松手即进入，不必拖过屏幕 1/6。
+    private let miniTriggerDistance: CGFloat = 56
+    /// 轻扫判定阈值（pt）：短距离但松手速度够快（按速度外推的终点位移）同样进入，
+    /// 让用户「轻轻一拉」就能切换。
+    private let miniFlickDistance: CGFloat = 110
+
+    private func dragGesture(in geometry: GeometryProxy) -> some Gesture {
+        // 必须用 .global 坐标空间：miniDragOffset 让包含手势层的整个内容层跟随手指偏移，
+        // 若用默认 .local 坐标空间，视图自身的移动会反过来改变 translation 的换算基准
+        // （translation ≈ 手指位移 - 视图位移），与 offset 形成正反馈回路 → 拖动中画面上下抖动、
+        // 跟随距离减半。全局坐标下 translation 恒为手指真实位移，跟随 1:1 且稳定。
+        let frame = geometry.frame(in: .global)
+        return DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { value in
                 if dragMode == nil {
                     if abs(value.translation.width) > abs(value.translation.height) {
@@ -153,11 +164,12 @@ struct PlayerGestureLayer: View {
                         seekBase = core.currentTime
                         seekTarget = core.currentTime
                     } else {
-                        let third = size.width / 3
-                        if value.startLocation.x < third {
+                        let third = frame.width / 3
+                        let startX = value.startLocation.x - frame.minX
+                        if startX < third {
                             dragMode = .brightness
                             gestureStartBrightness = UIScreen.main.brightness
-                        } else if value.startLocation.x > third * 2 {
+                        } else if startX > third * 2 {
                             dragMode = .volume
                             gestureStartVolume = SystemVolume.current
                         } else {
@@ -169,7 +181,7 @@ struct PlayerGestureLayer: View {
                 switch dragMode {
                 case .seek:
                     guard core.duration > 0 else { return }
-                    let ratio = value.translation.width / max(size.width, 1)
+                    let ratio = value.translation.width / max(frame.width, 1)
                     // 固定跨度（随滑动距离 5s~60s）：满屏滑动对应 60s，不再随视频总时长放大。
                     // 限制 ratio 在 [-1, 1] 内，避免滑出屏幕范围导致跨度超过 60s。
                     let maxDelta: TimeInterval = 60
@@ -177,13 +189,13 @@ struct PlayerGestureLayer: View {
                     seekTarget = min(max(0, seekBase + delta), core.duration)
                     show(.seek(target: seekTarget, duration: core.duration))
                 case .volume:
-                    let delta = Float(-value.translation.height / max(size.height, 1))
+                    let delta = Float(-value.translation.height / max(frame.height, 1))
                     let stepped = ((gestureStartVolume + delta) / 0.05).rounded() * 0.05   // 步进 5%
                     let clamped = min(max(stepped, 0), 1)
                     SystemVolume.set(clamped)
                     show(.volume(percent: Int((clamped * 100).rounded())))
                 case .brightness:
-                    let delta = -value.translation.height / max(size.height, 1)
+                    let delta = -value.translation.height / max(frame.height, 1)
                     let brightness = min(max(gestureStartBrightness + delta, 0), 1)
                     UIScreen.main.brightness = brightness
                     show(.brightness(percent: Int((brightness * 100).rounded())))
@@ -193,13 +205,15 @@ struct PlayerGestureLayer: View {
                     break
                 }
             }
-            .onEnded { _ in
+            .onEnded { value in
                 switch dragMode {
                 case .seek:
                     core.seek(to: seekTarget)
                     hideFeedbackLater()
                 case .mini:
-                    if miniDragOffset > 120 {
+                    // 距离过阈值直接进入；短距离但松手够快（速度外推的终点位移超阈值）同样进入
+                    let predicted = value.predictedEndTranslation.height
+                    if max(0, value.translation.height) > miniTriggerDistance || predicted > miniFlickDistance {
                         onMini()
                     }
                     withAnimation(.appQuick) { miniDragOffset = 0 }

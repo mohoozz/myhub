@@ -73,7 +73,6 @@ final class ComicReaderViewModel: ObservableObject {
 
     /// 翻完推荐下一本（IOS-208）
     @Published private(set) var nextCandidate: FileEntry?
-    @Published var nextCountdown = 0
 
     private let adapter: StorageAdapter?
     private var source: ComicPageSource?
@@ -103,6 +102,10 @@ final class ComicReaderViewModel: ObservableObject {
         reportTask?.cancel()
         toastTask?.cancel()
         nextTask?.cancel()
+        // 兜底释放归档资源（远程 rar 临时文件）：正常路径由 teardown() 释放，
+        // 若视图未触发 onDisappear 便释放，避免临时文件残留占盘
+        source?.close()
+        source = nil
     }
 
     // MARK: - 加载（直接恢复历史页码）
@@ -521,21 +524,12 @@ final class ComicReaderViewModel: ObservableObject {
 
     // MARK: - 翻完推荐下一本（IOS-208）
 
+    /// 翻完只弹提示、不自动打开；点击提示条由 View 层经 Presenter 接管（换 entry 重建阅读器）
     private func scheduleNextTip() {
         guard nextCandidate == nil, nextTask == nil else { return }
         nextTask = Task {
             guard let found = await Self.findNextComic(after: entry, connection: connection) else { return }
-            await MainActor.run {
-                self.nextCandidate = found
-                self.nextCountdown = 5
-            }
-            // 5s 倒计时自动打开
-            for remaining in stride(from: 4, through: 0, by: -1) {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if Task.isCancelled { return }
-                await MainActor.run { self.nextCountdown = remaining }
-            }
-            if !Task.isCancelled { openNext() }
+            await MainActor.run { self.nextCandidate = found }
         }
     }
 
@@ -543,17 +537,6 @@ final class ComicReaderViewModel: ObservableObject {
         nextTask?.cancel()
         nextTask = nil
         nextCandidate = nil
-        nextCountdown = 0
-    }
-
-    private func openNext() {
-        // 由 View 层经 Presenter 接管（需要换 entry 重建阅读器）
-        guard let candidate = nextCandidate else { return }
-        cancelNext()
-        NotificationCenter.default.post(
-            name: .comicOpenNext, object: nil,
-            userInfo: ["connection": connection, "entry": candidate]
-        )
     }
 
     /// 同目录按浏览排序偏好找下一本漫画
@@ -564,9 +547,13 @@ final class ComicReaderViewModel: ObservableObject {
         let parent = StoragePath.parent(of: entry.path)
         guard let siblings = try? await adapter.list(parent) else { return nil }
         let comics = siblings.filter { !$0.isDir && MediaType.detect(ext: $0.ext) == .comic }
-        let ascending = AppSettings.Browse.sortAscending
+        // 用该目录单独缓存的排序（TODO 370）与浏览界面显示顺序一致，无记录回落全局默认
+        let preference = BrowseSortPreferences.preference(
+            connectionID: connection.id ?? 0, path: parent
+        )
+        let ascending = preference?.ascending ?? AppSettings.Browse.sortAscending
         let sorted: [FileEntry]
-        switch AppSettings.Browse.sortKey {
+        switch preference?.sortKey ?? AppSettings.Browse.sortKey {
         case .name:
             sorted = comics.sorted {
                 ascending
@@ -595,9 +582,4 @@ final class ComicReaderViewModel: ObservableObject {
     }
 
     private var connectionID: Int64 { connection.id ?? 0 }
-}
-
-/// 漫画「打开下一本」通知（ComicReaderView → ComicReaderPresenter 换项重建）
-extension Notification.Name {
-    static let comicOpenNext = Notification.Name("comicOpenNext")
 }

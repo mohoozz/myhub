@@ -21,6 +21,8 @@ enum TextFileLoader {
         var data = Data()
         var truncated = false
         for try await chunk in stream {
+            // 显式响应取消：退出阅读器 / 关闭编辑器时立刻停止下载，避免大文件继续占用连接与带宽（TODO 372）
+            if Task.isCancelled { throw CancellationError() }
             data.append(chunk)
         }
         if Int64(data.count) > limit {

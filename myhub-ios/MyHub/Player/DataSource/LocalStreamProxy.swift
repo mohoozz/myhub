@@ -18,7 +18,13 @@ final class LocalStreamProxy {
     private let connectionQueue = DispatchQueue(label: "myhub.streamproxy.conn", attributes: .concurrent)
     private var listener: NWListener?
     private var port: UInt16 = 0
+    /// 监听是否已就绪（.ready）：长时间后台（熄屏）后监听可能进入 waiting/failed，
+    /// 端口不再可用且此前只有重启 App 才能恢复（TODO 366）；
+    /// 作为健康标记，register / recoverIfNeeded 据此判断是否重建
+    private var listenerReady = false
     private let lock = NSLock()
+    /// 串行化监听重建流程：重建期间可能等待信号量，故不能持有状态锁（避免与 stateUpdateHandler 互锁）
+    private let lifecycleLock = NSLock()
     private var sessions: [String: Session] = [:]
 
     private init() {}
@@ -28,13 +34,17 @@ final class LocalStreamProxy {
     func register(reader: CachedRangeReader, fileName: String) throws -> URL {
         try startIfNeeded()
         let id = UUID().uuidString
+        let encoded = fileName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "media"
+        lock.lock()
+        let currentPort = port
+        lock.unlock()
+        guard currentPort > 0,
+              let url = URL(string: "http://127.0.0.1:\(currentPort)\(Self.pathPrefix)\(id)/\(encoded)") else {
+            throw PlayerPlaybackError("本地代理 URL 生成失败")
+        }
         lock.lock()
         sessions[id] = Session(reader: reader, contentType: Self.mimeType(forFileName: fileName))
         lock.unlock()
-        let encoded = fileName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "media"
-        guard let url = URL(string: "http://127.0.0.1:\(port)\(Self.pathPrefix)\(id)/\(encoded)") else {
-            throw PlayerPlaybackError("本地代理 URL 生成失败")
-        }
         return url
     }
 
@@ -55,44 +65,107 @@ final class LocalStreamProxy {
 
     // MARK: - 服务生命周期
 
-    private func startIfNeeded() throws {
+    /// 长时间后台回前台等场景的健康自愈（TODO 366）：
+    /// 监听处于 waiting/failed/未启动状态时异步重建；已就绪的监听不动，
+    /// 避免打断后台音频仍在进行的分片连接。
+    func recoverIfNeeded() {
         lock.lock()
-        defer { lock.unlock() }
-        if listener != nil { return }
+        let isHealthy = listener != nil && listenerReady && port > 0
+        lock.unlock()
+        guard !isHealthy else { return }
+        AppLogger.shared.log("本地串流代理监听不健康，触发自愈重建", level: .warn, module: "stream")
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            do {
+                try self.startIfNeeded()
+                self.lock.lock()
+                let recoveredPort = self.port
+                self.lock.unlock()
+                AppLogger.shared.log("本地串流代理自愈重建完成 port=\(recoveredPort)", level: .info, module: "stream")
+            } catch {
+                AppLogger.shared.log(
+                    "本地串流代理自愈重建失败 error=\(String(describing: error))",
+                    level: .error, module: "stream"
+                )
+            }
+        }
+    }
+
+    private func startIfNeeded() throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+
+        lock.lock()
+        let isUsable = listener != nil && listenerReady && port > 0
+        let stale = isUsable ? nil : listener
+        lock.unlock()
+        if isUsable { return }
+
+        // 监听不可用（从未启动 / 长时间后台后进入 waiting、failed、cancelled）：
+        // 清理僵尸监听后重建，避免复用失效端口导致音视频加载全失败（TODO 366）
+        if stale != nil {
+            AppLogger.shared.log("监听不可用，重建本地串流代理", level: .warn, module: "stream")
+        }
+        lock.lock()
+        listener = nil
+        listenerReady = false
+        port = 0
+        lock.unlock()
+        stale?.cancel()
 
         let parameters = NWParameters.tcp
         parameters.requiredInterfaceType = .loopback
         let listener = try NWListener(using: parameters, on: .any)
 
         let semaphore = DispatchSemaphore(value: 0)
-        var readyPort: UInt16?
+        var started = false
         var startError: Error?
-        listener.stateUpdateHandler = { [weak self] state in
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            guard let self else { return }
             switch state {
             case .ready:
-                readyPort = listener.port?.rawValue
+                let readyPort = listener?.port?.rawValue
+                self.lock.lock()
+                self.listenerReady = true
+                if let readyPort { self.port = readyPort }
+                let currentPort = self.port
+                self.lock.unlock()
+                started = true
                 semaphore.signal()
+                AppLogger.shared.log("listener ready port=\(currentPort)", level: .info, module: "stream")
+            case .waiting(let error):
+                // 运行中进入等待（系统网络栈重置等）：标记未就绪，
+                // 由 register / 长时间后台回前台（recoverIfNeeded）触发重建（TODO 366）
+                self.lock.lock()
+                self.listenerReady = false
+                self.lock.unlock()
                 AppLogger.shared.log(
-                    "listener ready port=\(readyPort ?? 0)",
-                    level: .info, module: "stream"
+                    "listener waiting（标记未就绪，待自愈重建）error=\(String(describing: error))",
+                    level: .warn, module: "stream"
                 )
             case .failed(let error):
                 startError = error
+                self.lock.lock()
+                self.listenerReady = false
+                if self.listener === listener {
+                    self.listener = nil
+                    self.port = 0
+                }
+                self.lock.unlock()
                 semaphore.signal()
                 AppLogger.shared.log(
                     "listener failed error=\(String(describing: error))",
                     level: .error, module: "stream"
                 )
-                // 运行中失败自愈：清引用，下次 register 由 startIfNeeded 重建监听
-                self?.lock.lock()
-                self?.listener = nil
-                self?.port = 0
-                self?.lock.unlock()
             case .cancelled:
-                AppLogger.shared.log(
-                    "listener cancelled",
-                    level: .warn, module: "stream"
-                )
+                self.lock.lock()
+                self.listenerReady = false
+                if self.listener === listener {
+                    self.listener = nil
+                    self.port = 0
+                }
+                self.lock.unlock()
+                AppLogger.shared.log("listener cancelled", level: .warn, module: "stream")
             default:
                 break
             }
@@ -103,12 +176,17 @@ final class LocalStreamProxy {
         listener.start(queue: listenerQueue)
 
         _ = semaphore.wait(timeout: .now() + 3)
-        guard let port = readyPort else {
+        guard started else {
             listener.cancel()
+            AppLogger.shared.log(
+                "listener 启动失败 error=\(String(describing: startError))",
+                level: .error, module: "stream"
+            )
             throw startError ?? PlayerPlaybackError("本地串流代理启动失败")
         }
-        self.port = port
+        lock.lock()
         self.listener = listener
+        lock.unlock()
     }
 
     // MARK: - 连接处理（每连接一个请求，响应后关闭；客户端按需重连）

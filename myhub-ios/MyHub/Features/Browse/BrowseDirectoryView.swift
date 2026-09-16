@@ -10,7 +10,7 @@ struct BrowseLocation: Hashable, Codable {
 }
 
 /// 浏览内容区滚动偏移上报：minY >= 0 表示已回到顶部。
-/// 用于驱动「搜索框在顶部时出现在面包屑与内容之间，下滑即隐藏」（TODO 336）。
+/// 用于驱动「搜索框在顶部时显示，下滑即隐藏」（TODO 336）。
 /// 采用自绘搜索框替代系统 `.searchable`：iOS 26 上 `.searchable` 与 `.refreshable`
 /// 叠加会导致内容区无法上下滚动（TODO 283/284），自绘后各 iOS 版本统一挂载 `.refreshable`，
 /// 下拉刷新图标（TODO 335）与搜索框两全。
@@ -22,19 +22,19 @@ private struct BrowseScrollOffsetKey: PreferenceKey {
 }
 
 /// 目录浏览页（IOS-102 浏览 + IOS-103~105 文件操作）：
-/// - 面包屑 + 搜索 + 视图切换 + 排序 + 上传（文件/相册）+ 下拉刷新 + 空/加载/错误状态；
+/// - 导航栏显示当前目录名（TODO 364，根目录为连接名）+ 搜索 + 视图切换 + 排序 + 上传（文件/相册）+ 下拉刷新 + 空/加载/错误状态；
 /// - 长按（iOS，底部抽屉菜单）/ 指针右键（iPad/PC，锚点菜单）弹操作菜单；多选经菜单「多选」或右上角「…」→「选择」进入，底部操作栏：移动/复制/重命名/下载/收藏/删除；
 /// - NavigationStack 系统交互式 pop 返回上一级。
 struct BrowseDirectoryView: View {
     let connection: Connection
     let path: String
     @Binding var navPath: NavigationPath
-    /// 「定位到原路径」目标文件全路径：命中单元格呼吸灯高亮（由 BrowseHomeView 约 10s 后清除）
-    let highlightPath: String?
     /// 可用连接源（移动/复制跨源目标选择）
     var connections: [Connection] = []
 
     @StateObject private var viewModel: BrowseDirectoryViewModel
+    /// 「定位到原路径」全局状态（IOS-704）：本目录若为目标文件所在目录则滚动定位 + 呼吸灯高亮
+    @EnvironmentObject private var locator: BrowseLocator
     @EnvironmentObject private var player: PlayerPresenter
     @EnvironmentObject private var novelReader: NovelReaderPresenter
     @EnvironmentObject private var comicReader: ComicReaderPresenter
@@ -58,6 +58,8 @@ struct BrowseDirectoryView: View {
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var deletingPaths: Set<String>?
     @State private var forceDeletePaths: Set<String>?
+    /// 回收站移动失败原因（占用/网络/不支持，TODO 373）：「无法使用回收站」弹窗附带展示
+    @State private var forceDeleteReason: String?
     /// 搜索框显隐（TODO 336/345）：滚到顶部显示、下滑超过搜索框高度隐藏，带迟滞避免抖动
     @State private var showSearchBar = true
 
@@ -65,13 +67,11 @@ struct BrowseDirectoryView: View {
         connection: Connection,
         path: String,
         navPath: Binding<NavigationPath>,
-        highlightPath: String?,
         connections: [Connection] = []
     ) {
         self.connection = connection
         self.path = StoragePath.normalize(path)
         self._navPath = navPath
-        self.highlightPath = highlightPath
         self.connections = connections
         _viewModel = StateObject(
             wrappedValue: BrowseDirectoryViewModel(connection: connection, path: path)
@@ -79,6 +79,84 @@ struct BrowseDirectoryView: View {
     }
 
     private var connectionID: Int64 { connection.id ?? 0 }
+
+    // MARK: - 删除前释放文件占用（TODO 372/373）
+
+    /// 「无法使用回收站」弹窗文案：附失败原因（占用/网络/权限），便于用户判断重试时机
+    private var forceDeleteMessage: String {
+        var text = "该连接源不支持回收站或部分项目移动失败"
+        if let reason = forceDeleteReason, !reason.isEmpty {
+            text += "（\(reason)）"
+        }
+        text += "，将彻底删除剩余的 \(forceDeletePaths?.count ?? 0) 个项目，不可恢复。"
+        return text
+    }
+
+    /// 待删项包含当前播放（含 mini）的文件时先停止播放并稍候：
+    /// 注销串流会话、取消在途分片请求，让服务端句柄尽快释放，
+    /// 避免 NAS 因文件仍被读取而拒绝 MOVE/DELETE（表现为刚播放完删除失败，TODO 373）
+    private func releasePlaybackIfNeeded(_ paths: Set<String>) async {
+        guard let current = player.current,
+              (current.connectionID ?? 0) == connectionID,
+              paths.contains(current.path) else { return }
+        AppLogger.shared.log("删除前停止播放被删文件 path=\(current.path)", module: "browse")
+        player.close()
+        // 轮询等待 PlayerCore 注销串流会话（reader.cancel 立即置位并停止在途请求），
+        // 最长 1s；未在播放该文件时首轮即返回，不引入额外延迟
+        for _ in 0..<10 {
+            if PlayerCore.shared.request == nil { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        // 再等一小段，让取消的在途请求传播到服务端（释放读取句柄）
+        try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+
+    // MARK: - 导航栏标题（TODO 364）
+
+    /// 导航栏标题：普通浏览态显示当前目录名，多选态显示已选数量
+    private var navigationTitleText: String {
+        viewModel.isSelecting
+            ? "已选 \(viewModel.selection?.count ?? 0) 项"
+            : currentDirectoryName
+    }
+
+    /// 当前目录名：根目录回退显示连接名（面包屑已删除，目录归属改由导航栏承载）
+    private var currentDirectoryName: String {
+        let normalized = StoragePath.normalize(viewModel.path)
+        return normalized == "/" ? connection.name : StoragePath.fileName(of: normalized)
+    }
+
+    // MARK: - 定位到原路径（IOS-704）
+
+    /// 目标文件全路径：仅当本目录是「定位目标」的所在目录时非 nil（其余目录层不参与高亮/滚动）
+    private var highlightPath: String? {
+        guard let highlight = locator.highlight,
+              highlight.connectionID == connectionID,
+              StoragePath.parent(of: highlight.path) == path
+        else { return nil }
+        return highlight.path
+    }
+
+    /// 本次定位 token：同一文件重复定位时值不同，驱动重新滚动定位
+    private var highlightToken: UUID? { highlightPath == nil ? nil : locator.highlight?.token }
+
+    /// 定位滚动任务键：目标路径 / 定位 token / 目录加载态与展示条目数，
+    /// 任一变化（新定位、目录加载完成、搜索过滤变化）都会重新滚动定位
+    private struct HighlightScrollKey: Equatable {
+        var path: String?
+        var token: UUID?
+        var loaded: Bool
+        var count: Int
+    }
+
+    private var highlightScrollKey: HighlightScrollKey {
+        HighlightScrollKey(
+            path: highlightPath,
+            token: highlightToken,
+            loaded: viewModel.state == .loaded,
+            count: viewModel.displayedEntries.count
+        )
+    }
 
     /// 诊断：body 求值频率（限流日志，用于排查「文件多无法滑动」）
     private static var renderCount = 0
@@ -125,26 +203,18 @@ struct BrowseDirectoryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            BreadcrumbBar(
-                connectionName: connection.name,
-                path: viewModel.path,
-                onSelect: navigateToCrumb
-            )
-            Divider().overlay(AppColors.separator)
-
             if showSearchBar {
                 searchBar
                     .transition(.move(edge: .top).combined(with: .opacity))
-                Divider().overlay(AppColors.separator)
             }
 
             content
         }
         .animation(.appQuick, value: showSearchBar)
         .background(AppColors.pageBackground)
-        // 普通浏览态隐藏导航栏标题：当前目录/路径已由正文顶部面包屑承载，避免与面包屑重复、令导航栏更清爽；
-        // 仅多选态保留「已选 N 项」作为操作状态反馈。
-        .navigationTitle(viewModel.isSelecting ? "已选 \(viewModel.selection?.count ?? 0) 项" : "")
+        // 面包屑已移除（TODO 364）：普通态标题显示当前目录名（根目录为连接名），
+        // 多选态改为「已选 N 项」作为操作状态反馈。
+        .navigationTitle(navigationTitleText)
         .navigationBarTitleDisplayMode(.inline)
         // 液体玻璃关闭时隐藏系统返回按钮，改用无玻璃自定义返回（见 toolbar）
         .navigationBarBackButtonHidden(showsPlainBack)
@@ -211,10 +281,22 @@ struct BrowseDirectoryView: View {
             Button("移入回收站", role: .destructive) {
                 if let paths = deletingPaths {
                     Task {
+                        // 删除前释放占用：被删文件正在播放（含 mini）时先停播并等待串流会话注销（TODO 373）
+                        await releasePlaybackIfNeeded(paths)
                         do {
                             try await viewModel.delete(paths: paths)
+                        } catch let trashError as BrowseDirectoryViewModel.TrashError {
+                            // 回收站不可用 → 仅对未成功的剩余项降级真删确认：
+                            // 已移入回收站的项目不再重复删除，避免误报「删除失败」（TODO 369），
+                            // 附带失败原因（占用/网络/不支持）供弹窗提示（TODO 373）
+                            let remaining = paths.subtracting(trashError.movedToTrash)
+                            if !remaining.isEmpty {
+                                forceDeleteReason = trashError.reason
+                                forceDeletePaths = remaining
+                            }
                         } catch {
-                            forceDeletePaths = paths   // 回收站不可用 → 降级真删确认
+                            forceDeleteReason = error.localizedDescription
+                            forceDeletePaths = paths
                         }
                     }
                 }
@@ -226,17 +308,24 @@ struct BrowseDirectoryView: View {
         }
         .alert(
             "无法使用回收站",
-            isPresented: Binding(get: { forceDeletePaths != nil }, set: { if !$0 { forceDeletePaths = nil } })
+            isPresented: Binding(
+                get: { forceDeletePaths != nil },
+                set: { if !$0 { forceDeletePaths = nil; forceDeleteReason = nil } }
+            )
         ) {
             Button("彻底删除", role: .destructive) {
                 if let paths = forceDeletePaths {
-                    Task { await viewModel.forceDelete(paths: paths) }
+                    Task {
+                        // 兜底再释放一次占用：首轮 MOVE 可能正因占用失败，此时文件可能仍在播放（TODO 373）
+                        await releasePlaybackIfNeeded(paths)
+                        await viewModel.forceDelete(paths: paths)
+                    }
                 }
                 forceDeletePaths = nil
             }
             Button("取消", role: .cancel) { forceDeletePaths = nil }
         } message: {
-            Text("该连接源不支持回收站，将直接彻底删除 \(forceDeletePaths?.count ?? 0) 个项目，不可恢复。")
+            Text(forceDeleteMessage)
         }
         .alert("重命名", isPresented: Binding(
             get: { renaming != nil },
@@ -278,53 +367,84 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 内容区
 
-    /// 搜索框自身高度估算（含上下内外边距与分隔线）：作为下滑隐藏阈值——
+    /// 搜索框自身高度估算（含上下内外边距）：作为下滑隐藏阈值——
     /// 内容需上滚超过该高度再隐藏，确保隐藏后腾出的空间已被滚动量吸收，
     /// 否则会被 ScrollView 拉回顶部，造成「隐藏即回弹（看似下滑不消失）」的抖动。
     private let searchBarHeight: CGFloat = 60
 
     @ViewBuilder
     private var content: some View {
-        ScrollView {
-            // 顶部零高探测器：滚动偏移通过 preference 上报，驱动搜索框显隐
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: BrowseScrollOffsetKey.self,
-                    value: proxy.frame(in: .named("browseScroll")).minY
-                )
-            }
-            .frame(height: 0)
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                // 顶部零高探测器：滚动偏移通过 preference 上报，驱动搜索框显隐
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: BrowseScrollOffsetKey.self,
+                        value: proxy.frame(in: .named("browseScroll")).minY
+                    )
+                }
+                .frame(height: 0)
 
-            switch viewModel.state {
-            case .loading:
-                loadingState
-            case .failed(let message):
-                errorState(message)
-            case .empty:
-                emptyState
-            case .loaded:
-                if let adapter = viewModel.storageAdapter {
-                    fileCollection(adapter: adapter)
+                switch viewModel.state {
+                case .loading:
+                    loadingState
+                case .failed(let message):
+                    errorState(message)
+                case .empty:
+                    emptyState
+                case .loaded:
+                    if let adapter = viewModel.storageAdapter {
+                        fileCollection(adapter: adapter)
+                    }
                 }
             }
-        }
-        .coordinateSpace(name: "browseScroll")
-        .refreshable { await viewModel.refresh() }
-        .scrollDismissesKeyboard(.immediately)
-        .onPreferenceChange(BrowseScrollOffsetKey.self) { value in
-            // 迟滞判定（避免阈值边界抖动 / 隐藏回弹）：
-            // - 回到顶部附近（minY >= -1）显示；
-            // - 内容上滚超过搜索框高度（minY < -searchBarHeight）才隐藏；
-            // - 二者之间为死区，保持当前状态。
-            if value >= -1 {
-                if !showSearchBar { showSearchBar = true }
-            } else if value < -searchBarHeight {
-                if showSearchBar { showSearchBar = false }
+            .coordinateSpace(name: "browseScroll")
+            .refreshable { await viewModel.refresh() }
+            .scrollDismissesKeyboard(.immediately)
+            .onPreferenceChange(BrowseScrollOffsetKey.self) { value in
+                // 迟滞判定（避免阈值边界抖动 / 隐藏回弹）：
+                // - 回到顶部附近（minY >= -1）显示；
+                // - 内容上滚超过搜索框高度（minY < -searchBarHeight）才隐藏；
+                // - 二者之间为死区，保持当前状态。
+                if value >= -1 {
+                    if !showSearchBar { showSearchBar = true }
+                } else if value < -searchBarHeight {
+                    if showSearchBar { showSearchBar = false }
+                }
+            }
+            // 「定位到原路径」：目标目录加载完成后滚动到目标文件（IOS-704）
+            .task(id: highlightScrollKey) {
+                await scrollToHighlightIfNeeded(scrollProxy)
             }
         }
     }
 
-    /// 搜索框：位于面包屑与内容之间，仅在列表处于顶部时显示（下滑隐藏，TODO 336）
+    /// 滚动定位到「定位到原路径」目标文件：
+    /// LazyVGrid / LazyVStack 增量实例化，目标单元格未挂载时单次 scrollTo 会落空
+    /// （初始 contentSize 偏小、懒加载尚未展开），故分阶段重试逐次逼近；
+    /// 全程无动画瞬时滚动，避免多次动画叠加产生抖动（与漫画阅读器整页定位同策略）。
+    private func scrollToHighlightIfNeeded(_ proxy: ScrollViewProxy) async {
+        guard let target = highlightPath, viewModel.state == .loaded else { return }
+        // 目标被当前搜索过滤时先清空搜索，保证目标出现在展示列表中
+        if !viewModel.searchText.isEmpty,
+           !viewModel.displayedEntries.contains(where: { $0.path == target }) {
+            viewModel.searchText = ""
+        }
+        if let token = highlightToken {
+            // 高亮续期：从「目标即将可见」起重新计满约 10s
+            locator.keepAliveHighlight(token: token)
+        }
+        let delays: [UInt64] = [0, 120_000_000, 300_000_000, 600_000_000, 1_000_000_000]
+        for (index, delay) in delays.enumerated() {
+            if index > 0 {
+                do { try await Task.sleep(nanoseconds: delay) } catch { return }
+            }
+            if Task.isCancelled { return }
+            proxy.scrollTo(target, anchor: .center)
+        }
+    }
+
+    /// 搜索框：位于导航栏与内容之间，仅在列表处于顶部时显示（下滑隐藏，TODO 336）
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -346,7 +466,7 @@ struct BrowseDirectoryView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(AppColors.cardBackground)
@@ -395,6 +515,7 @@ struct BrowseDirectoryView: View {
 
     private func gridView(_ items: [FileEntry], adapter: StorageAdapter) -> some View {
         let progressMap = progressByPath
+        let highlightTarget = highlightPath   // 求值一次，避免每个单元格重复解析路径
         return LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 110, maximum: 160), spacing: 12)],
             spacing: 12
@@ -406,7 +527,7 @@ struct BrowseDirectoryView: View {
                     adapter: adapter,
                     siblings: viewModel.entries,
                     childCount: viewModel.childCounts[entry.path],
-                    highlighted: entry.path == highlightPath,
+                    highlighted: entry.path == highlightTarget,
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
                     progress: entry.isDir ? nil : progressMap[entry.path],
@@ -423,6 +544,7 @@ struct BrowseDirectoryView: View {
 
     private func listView(_ items: [FileEntry], adapter: StorageAdapter) -> some View {
         let progressMap = progressByPath
+        let highlightTarget = highlightPath   // 求值一次，避免每个单元格重复解析路径
         return LazyVStack(spacing: 0) {
             ForEach(items, id: \.path) { entry in
                 FileListRow(
@@ -431,7 +553,7 @@ struct BrowseDirectoryView: View {
                     adapter: adapter,
                     siblings: viewModel.entries,
                     childCount: viewModel.childCounts[entry.path],
-                    highlighted: entry.path == highlightPath,
+                    highlighted: entry.path == highlightTarget,
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
                     progress: entry.isDir ? nil : progressMap[entry.path],
@@ -808,13 +930,6 @@ struct BrowseDirectoryView: View {
         }
     }
 
-    /// 面包屑回跳：crumb 深度 d 对应导航栈第 d+1 层（第 1 层为连接根目录）
-    private func navigateToCrumb(depth: Int) {
-        let remove = navPath.count - (depth + 1)
-        guard remove > 0 else { return }
-        navPath.removeLast(remove)
-    }
-
     private func open(_ entry: FileEntry) {
         if entry.isDir {
             navPath.append(BrowseLocation(connectionID: connectionID, path: entry.path))
@@ -861,46 +976,6 @@ struct BrowseDirectoryView: View {
             },
         ]
         popupMenu.show(items: items, style: .drawer)
-    }
-}
-
-// MARK: - 面包屑
-
-/// 面包屑路径导航（IOS-102）：连接名 / 逐级目录，点击回跳
-private struct BreadcrumbBar: View {
-    let connectionName: String
-    let path: String
-    let onSelect: (Int) -> Void
-
-    private var crumbs: [String] {
-        [connectionName] + path.split(separator: "/").map(String.init)
-    }
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(Array(crumbs.enumerated()), id: \.offset) { index, crumb in
-                    if index > 0 {
-                        Image(systemName: "chevron.right")
-                            .font(.subheadline)
-                            .foregroundStyle(AppColors.textSecondary)
-                    }
-                    Button {
-                        onSelect(index)
-                    } label: {
-                        Text(crumb)
-                            .font(.headline)
-                            .foregroundStyle(index == crumbs.count - 1
-                                             ? AppColors.textPrimary : AppColors.primary)
-                            .lineLimit(1)
-                    }
-                    .disabled(index == crumbs.count - 1)
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
     }
 }
 

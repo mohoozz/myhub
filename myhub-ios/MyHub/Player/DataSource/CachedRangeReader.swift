@@ -19,8 +19,13 @@ final class CachedRangeReader: @unchecked Sendable {
     private let prefetchLimiter = PrefetchLimiter(limit: 3)
     /// 线程安全的网络拉取字节累计（跨分片/Task）
     private let networkBytes = NetworkByteCounter()
+    /// 会话取消标记（TODO 372）：置位后拒绝一切新的读取/预取网络请求
+    private let cancelFlag = CancelFlag()
 
     var contentLength: Int64 { source.contentLength }
+
+    /// 会话是否已注销取消（取消后 read/segment/预取不再发起任何新请求）
+    var isCancelled: Bool { cancelFlag.isCancelled }
 
     /// 本 reader 生命周期内实际从数据源（网络）拉取的字节数（不含分片缓存命中）
     var networkBytesFetched: Int64 { networkBytes.total }
@@ -34,13 +39,22 @@ final class CachedRangeReader: @unchecked Sendable {
     }
 
     /// 取消所有 in-flight 分片拉取（播放器关闭 / 会话注销时调用），
-    /// 阻止后台预取与未完成的 NAS 请求继续占用连接
+    /// 阻止后台预取与未完成的 NAS 请求继续占用连接。
+    /// 先置取消标记再取消在途请求：read/segment 之后直接失败、排队中的预取任务获得额度后立即退出、
+    /// in-flight 去重器拒绝 cancel 之后的新请求——避免快速切换视频时旧视频的残留分片请求
+    /// （预读窗口可达 15MB）继续占用连接池与 NAS 带宽，拖慢新视频加载（TODO 372）
     func cancel() {
+        guard cancelFlag.markCancelled() else { return }
+        AppLogger.shared.log(
+            "reader 已取消（会话注销），停止后续分片拉取与预取",
+            level: .info, module: "stream"
+        )
         Task { await inFlight.cancelAll() }
     }
 
     /// 读取 [lowerBound, upperBound)：按分片装配，命中缓存的分片不再走网络
     func read(range: Range<Int64>) async throws -> Data {
+        guard !isCancelled else { throw CancellationError() }
         guard range.upperBound > range.lowerBound else { return Data() }
         let segLen = SegmentCache.segmentLength
         let firstSegment = range.lowerBound / segLen
@@ -50,6 +64,7 @@ final class CachedRangeReader: @unchecked Sendable {
         result.reserveCapacity(min(Int(range.count), 8 * 1024 * 1024))
         var index = firstSegment
         while index <= lastSegment {
+            guard !isCancelled else { throw CancellationError() }
             let data = try await segment(index)
             let segmentStart = index * segLen
             let cutLower = Int(max(range.lowerBound, segmentStart) - segmentStart)
@@ -65,6 +80,7 @@ final class CachedRangeReader: @unchecked Sendable {
 
     /// 单分片：缓存命中直出；未命中拉取 + 写盘（in-flight 去重）；离线模式未命中即失败
     private func segment(_ index: Int64) async throws -> Data {
+        guard !isCancelled else { throw CancellationError() }
         // 离线兜底时无视本地化开关读存量缓存（开关只约束新内容是否落盘）
         if cachingEnabled || offlineMode,
            let cached = await SegmentCache.shared.data(file: identity, segment: index) {
@@ -88,15 +104,21 @@ final class CachedRangeReader: @unchecked Sendable {
     /// 预读窗口：当前位置向后预取（秒数 × 估算码率，AppSettings.Player.preloadSeconds 可配）；
     /// 弱网抖动时窗口内分片已就绪，保证平滑播放；离线模式不预取
     private func prefetch(afterSegment index: Int64) {
-        guard prefetchEnabled, !offlineMode else { return }
+        guard prefetchEnabled, !offlineMode, !isCancelled else { return }
         let count = max(1, Int(ceil(Double(Self.readaheadBytes) / Double(SegmentCache.segmentLength))))
         let maxSegment = (contentLength - 1) / SegmentCache.segmentLength
         for offset in 1...Int64(count) {
             let next = index + offset
             guard next <= maxSegment else { break }
             Task.detached(priority: .utility) { [weak self] in
-                guard let self else { return }
+                guard let self, !self.isCancelled else { return }
                 await self.prefetchLimiter.acquire()
+                // 排队等待并发额度期间会话可能已注销（快速切换视频）：
+                // 立即归还额度退出，不再发起残留分片请求（TODO 372）
+                guard !self.isCancelled else {
+                    await self.prefetchLimiter.release()
+                    return
+                }
                 _ = try? await self.segment(next)
                 await self.prefetchLimiter.release()
             }
@@ -112,8 +134,12 @@ final class CachedRangeReader: @unchecked Sendable {
 /// 分片级 in-flight 去重：同一分片的并发拉取合并为一次网络请求
 private actor InFlightSegments {
     private var tasks: [Int64: Task<Data, Error>] = [:]
+    /// 已取消标记：cancelAll 后拒绝一切新请求——覆盖「取消瞬间恰好有新 segment 正在进入」的
+    /// 竞态窗口，避免会话注销后又新建 NAS 请求（TODO 372）
+    private var cancelled = false
 
     func value(for key: Int64, operation: @escaping @Sendable () async throws -> Data) async throws -> Data {
+        guard !cancelled else { throw CancellationError() }
         if let existing = tasks[key] {
             return try await existing.value
         }
@@ -123,12 +149,35 @@ private actor InFlightSegments {
         return try await task.value
     }
 
-    /// 取消所有 in-flight 分片拉取：终止其底层 NAS 请求并释放连接（会话注销时调用）
+    /// 取消所有 in-flight 分片拉取并置取消标记：终止底层 NAS 请求、释放连接（会话注销时调用），
+    /// 之后同一 reader 不会再发起任何新请求
     func cancelAll() {
+        cancelled = true
         for task in tasks.values {
             task.cancel()
         }
         tasks.removeAll()
+    }
+}
+
+/// 线程安全的取消标记：NSLock 保护，跨 Task / 线程读写安全（TODO 372）
+private final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    /// 首次置位返回 true（幂等：重复 cancel 不重复触发）
+    func markCancelled() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !value else { return false }
+        value = true
+        return true
     }
 }
 

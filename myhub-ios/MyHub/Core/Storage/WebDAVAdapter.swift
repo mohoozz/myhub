@@ -123,7 +123,32 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
             throw StorageError.notFound(path)
         }
         try validate(response)
-        return WebDAVMultiStatusParser().parse(data: data)
+        let parser = WebDAVMultiStatusParser()
+        let items = parser.parse(data: data)
+        // 合法响应必然包含 <multistatus> 根元素（空目录亦然）；解析不到根元素说明服务器/反代
+        // 返回的不是 DAV 响应（HTML 错误页、登录页、空体等）。若按空数组返回，调用方会把它
+        // 当成「空目录」：界面显示整个目录文件消失、空列表还会写入目录缓存固化错误，
+        // 刷新也无法恢复、只能重启 App 重新判定地址（TODO 369）。这里抛错让上层保留旧数据。
+        guard parser.sawMultiStatus else {
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? -1
+            let contentType = http?.value(forHTTPHeaderField: "Content-Type") ?? "-"
+            AppLogger.shared.log(
+                "PROPFIND 响应异常（非 multistatus）path=\(path) depth=\(depth) status=\(status) contentType=\(contentType) bytes=\(data.count) body=\(Self.bodyPrefix(data))",
+                level: .warn, module: "webdav"
+            )
+            throw StorageError.invalidResponse("PROPFIND \(path) 返回非 DAV 响应（HTTP \(status)，\(data.count) 字节）")
+        }
+        return items
+    }
+
+    /// 异常响应诊断：截取响应体前缀（去换行、限长），用于判断是错误页/登录页还是空响应
+    private static func bodyPrefix(_ data: Data) -> String {
+        let text = String(decoding: data.prefix(200), as: UTF8.self)
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "<empty>" : String(text.prefix(160))
     }
 
     // MARK: - StorageAdapter
@@ -145,6 +170,13 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
                 modTime: item.lastModified ?? .distantPast,
                 ext: item.isCollection ? "" : StoragePath.ext(of: name)
             ))
+        }
+        // 服务器返回了条目但全部被过滤（目录自身/隐藏项）：记录一次，便于区分「真空目录」与过滤异常
+        if result.isEmpty, items.count > 1 {
+            AppLogger.shared.log(
+                "list 过滤后为空 dir=\(base) 服务器条目=\(items.count) href=\(items.prefix(5).map(\.href).joined(separator: ","))",
+                level: .warn, module: "webdav"
+            )
         }
         return result
     }
@@ -353,6 +385,9 @@ final class WebDAVMultiStatusParser: NSObject, XMLParserDelegate {
     private var current = WebDAVResponseItem()
     private var currentText = ""
     private var insideResponse = false
+    /// 是否解析到 multistatus 根元素：区分「合法的空 multistatus」与「非 DAV 响应」
+    /// （HTML 错误页/登录页/空体等），后者不能当作空目录返回（TODO 369）
+    private(set) var sawMultiStatus = false
 
     func parse(data: Data) -> [WebDAVResponseItem] {
         let parser = XMLParser(data: data)
@@ -373,6 +408,8 @@ final class WebDAVMultiStatusParser: NSObject, XMLParserDelegate {
     ) {
         currentText = ""
         switch localName(elementName) {
+        case "multistatus":
+            sawMultiStatus = true
         case "response":
             insideResponse = true
             current = WebDAVResponseItem()

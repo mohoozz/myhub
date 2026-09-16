@@ -249,6 +249,11 @@ final class PlayerCore: ObservableObject {
             startEngine(kind: .software)
             return
         }
+        // 记录失败时的地址锁定快照（TODO 366）：配合 network-route 日志定位「熄屏后加载失败」是否与网络/路由有关
+        AppLogger.shared.log(
+            "播放失败 kind=\(kind.rawValue) error=\(error.localizedDescription) 地址锁定=\(RoutedWebDAVAdapter.lockSnapshot())",
+            level: .error, module: "player-audio"
+        )
         state = .failed(error.localizedDescription)
     }
 

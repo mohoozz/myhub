@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内置浏览器 · 底部操作栏优化方案原型</title>
+<style>
+:root{--primary:#2563EB;--tb-line:#D1D5DB;--card-line:#EDF0F3;--sep:#E5E7EB;--tp:#1A1A2E;--ts:#6B7280;--fill:#F3F4F6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:26px;line-height:1.7;max-width:1060px}
+.subtitle code,.d-code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:340px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.before{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.7;min-height:126px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:340px;height:680px;border:8px solid #111827;border-radius:40px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+.statusbar{height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;font-weight:600}
+/* 网页模拟 */
+.web{flex:1;overflow:hidden;padding:14px 16px;background:#fff}
+.wimg{height:118px;border-radius:12px;background:linear-gradient(135deg,#DBEAFE,#EEF4FB);display:flex;align-items:center;justify-content:center;font-size:34px;margin-bottom:12px}
+.wh{font-size:17px;font-weight:700}
+.wm{font-size:11px;color:var(--ts);margin:4px 0 10px}
+.wline{height:9px;border-radius:5px;background:#EEF1F4;margin-bottom:8px}
+.wline.s{width:62%}.wline.m{width:84%}
+/* 通用按钮 */
+.nb{display:flex;align-items:center;justify-content:center;color:var(--tp);flex:none}
+.nb.dim{color:#C3C7CE}
+/* 地址栏通用 */
+.addr{display:flex;align-items:center;gap:6px;font-size:12px;min-width:0}
+.addr .u{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 全局悬浮 Tab 栏（上下文参照，各方案一致） */
+.appbar{flex:none;margin:8px 12px 8px;height:56px;border:1px solid var(--tb-line);border-radius:26px;display:flex;align-items:center;background:#fff;box-shadow:0 3px 8px rgba(0,0,0,.08)}
+.appbar span{flex:1;text-align:center;font-size:20px;opacity:.35}
+.appbar span.on{opacity:1}
+/* ===== 现状 ===== */
+.tb.cur{flex:none;display:flex;align-items:center;gap:2px;padding:6px 6px 2px;background:#fff;border-top:1px solid var(--sep)}
+.tb.cur .nb{width:38px;height:40px;font-size:16px}
+.tb.cur .addr{flex:1;height:38px;border:1px solid var(--sep);border-radius:10px;padding:0 10px}
+.tb.cur .tsq{display:flex;align-items:center;gap:4px;font-size:13px;height:40px;padding:0 4px}
+/* ===== 方案 A：一颗悬浮胶囊（与全局 Tab 栏同语言） ===== */
+.tb.a{flex:none;margin:0 12px;height:52px;display:flex;align-items:center;gap:4px;padding:0 6px;background:#fff;border:1px solid var(--tb-line);border-radius:26px;box-shadow:0 3px 8px rgba(0,0,0,.10)}
+.tb.a .nb{width:34px;height:44px;font-size:16px;border-radius:22px}
+.tb.a .addr{flex:1;height:38px;border-radius:19px;background:var(--fill);padding:0 12px}
+.tb.a .tsq{display:flex;align-items:center;gap:3px;font-size:12px;height:36px;padding:0 6px;border-radius:18px;background:var(--fill)}
+/* ===== 方案 B：通栏双行（上行地址、下行按钮） ===== */
+.tb.b{flex:none;background:#fff;border-top:1px solid var(--sep);padding:8px 12px 6px}
+.tb.b .addr{height:40px;border-radius:12px;background:var(--fill);padding:0 12px;font-size:13px}
+.tb.b .row{display:flex;justify-content:space-between;margin-top:6px;padding:0 4px}
+.tb.b .b5{width:56px;height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:17px;color:var(--tp)}
+.tb.b .b5 i{font-size:9px;font-style:normal;color:var(--ts)}
+/* ===== 方案 C：通栏极简单行（Safari 式，标签收进菜单） ===== */
+.tb.c{flex:none;display:flex;align-items:center;gap:4px;padding:6px 10px 2px;background:#fff;border-top:1px solid var(--sep)}
+.tb.c .nb{width:42px;height:42px;font-size:17px}
+.tb.c .addr{flex:1;height:40px;border-radius:20px;background:var(--fill);padding:0 14px;font-size:13px}
+/* ===== 方案 D：三段悬浮胶囊（导航组 / 地址 / 标签菜单组） ===== */
+.tb.d{flex:none;margin:0 12px;display:flex;align-items:center;gap:8px}
+.tb.d .pill{height:48px;display:flex;align-items:center;background:#fff;border:1px solid var(--tb-line);border-radius:24px;box-shadow:0 3px 8px rgba(0,0,0,.10)}
+.tb.d .nb{width:40px;height:46px;font-size:16px}
+.tb.d .navg{padding:0 2px}
+.tb.d .navg .div{width:1px;height:20px;background:var(--sep);margin:0 1px}
+.tb.d .addr{flex:1;height:48px;border-radius:24px;background:#fff;border:1px solid var(--tb-line);padding:0 14px;box-shadow:0 3px 8px rgba(0,0,0,.10)}
+.tb.d .tabg{gap:2px;padding:0 4px}
+.tb.d .cnt{font-size:12px;font-weight:600;margin-left:-4px}
+table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1060px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>内置浏览器 · 底部操作栏优化</h1>
+<p class="subtitle">
+  TODO 377：内置浏览器底部操作栏观感差。现状 <code>BrowserToolbar</code> 是一行 7 个元素的<b>通栏直角白条</b>：
+  后退/前进/刷新（左侧死宽 118pt）｜ 地址栏 ｜ 标签数/菜单（右侧死宽 118pt），iPhone 上地址栏仅剩约 <b>120pt</b>；<br>
+  且它直接叠在全局悬浮胶囊 Tab 栏（TODO 376 方案 C，圆角 26 + 灰描边 + 悬浮）之上，<b>直角通栏 vs 圆角悬浮</b>两套语言相邻打架。<br>
+  以下为「现状 + 4 个候选方案」原型（各方案均保留全局悬浮 Tab 栏作为上下文，确认后再实施到 Swift 代码 <code>BrowserToolbar</code> / <code>BrowserHomeView</code>）。
+</p>
+<div class="boards">
+
+<!-- ================= 现状 ================= -->
+<div class="board">
+  <h2>现状<span class="tag before">Before</span></h2>
+  <div class="desc">
+    通栏直角白条 + 顶部 Divider，一行塞 7 个元素。<br>
+    <span class="cons">问题：①地址栏被左右死宽区挤到约 120pt，域名截断；②按钮命中区仅 38×40 且无分组，观感「密、挤、乱」；
+    ③紧贴上方的是圆角悬浮 Tab 栏，直角通栏白条的顶边 Divider 与之语言冲突，底部出现两层横条堆叠。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="web">
+      <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+      <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+    </div>
+    <div class="tb cur">
+      <div class="nb">‹</div><div class="nb">›</div><div class="nb">↻</div>
+      <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+      <div class="tsq">⧉ 3</div><div class="nb" style="width:32px;height:40px;font-size:16px">⋯</div>
+    </div>
+    <div class="appbar"><span>📚</span><span>⚡</span><span>📁</span><span class="on">🌐</span><span>⚙️</span></div>
+  </div>
+</div>
+
+<!-- ================= 方案 A ================= -->
+<div class="board">
+  <h2>方案 A · 悬浮单胶囊<span class="tag">最小改动</span></h2>
+  <div class="desc">
+    操作栏整体改为<b>一颗悬浮圆角胶囊</b>：左右内缩 12pt（与全局 Tab 栏对齐）、圆角 26、1pt 灰描边 + 轻阴影，与 Tab 栏形成上下「双胶囊」节奏。<br>
+    内部：导航三键用弱填充圆底、地址栏改为胶囊内<b>浅灰填充块</b>（不再描边）、标签/菜单收为右侧组。<br>
+    <span class="pros">优点：语言与 TODO 376 完全统一，改动集中在 <code>BrowserToolbar</code> 一层；地址栏增至约 160pt。</span><br>
+    <span class="cons">缺点：仍是单行 7 元素，信息密度未减；两颗胶囊 + mini 播放器时底部最多三层。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="web">
+      <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+      <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+    </div>
+    <div class="tb a">
+      <div class="nb">‹</div><div class="nb">›</div><div class="nb">↻</div>
+      <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+      <div class="tsq">⧉ 3</div><div class="nb" style="width:32px;font-size:16px">⋯</div>
+    </div>
+    <div class="appbar"><span>📚</span><span>⚡</span><span>📁</span><span class="on">🌐</span><span>⚙️</span></div>
+  </div>
+</div>
+
+<!-- ================= 方案 B ================= -->
+<div class="board">
+  <h2>方案 B · 通栏双行（地址 + 按钮）<span class="tag">最好点</span></h2>
+  <div class="desc">
+    通栏白底分两行：<b>上行满宽地址栏</b>（浅灰胶囊，域名完整显示），<b>下行 5 个操作按钮均匀铺开</b>（后退/前进/刷新/标签/菜单，每个 56pt 宽 + 文字标签）。<br>
+    <span class="pros">优点：地址栏最宽（约 340pt）、命中区最大、分组最清晰，误触最少。</span><br>
+    <span class="cons">缺点：垂直占用约 100pt（现状 48pt），叠加全局 Tab 栏后网页可视区明显变矮；观感偏「工具箱」，不如胶囊轻盈。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="web">
+      <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+      <div class="wline"></div><div class="wline s"></div><div class="wline m"></div>
+    </div>
+    <div class="tb b">
+      <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+      <div class="row">
+        <div class="b5">‹<i>后退</i></div><div class="b5">›<i>前进</i></div><div class="b5">↻<i>刷新</i></div>
+        <div class="b5">⧉<i>标签 3</i></div><div class="b5">⋯<i>菜单</i></div>
+      </div>
+    </div>
+    <div class="appbar"><span>📚</span><span>⚡</span><span>📁</span><span class="on">🌐</span><span>⚙️</span></div>
+  </div>
+</div>
+
+<!-- ================= 方案 C ================= -->
+<div class="board">
+  <h2>方案 C · 通栏极简单行<span class="tag">Safari 式</span></h2>
+  <div class="desc">
+    通栏白底保持贴底（与全局 Tab 栏分割靠 1pt 灰线），单行只留 <b>5 个元素</b>：后退 / 前进 / 居中地址胶囊（锁 + 域名 + 刷新）/ 菜单；<b>「标签数」并入菜单首项</b>（标签页 (3)）。<br>
+    <span class="pros">优点：最简、地址栏约 175pt 最宽（单行方案里）；元素间距大，观感清爽。</span><br>
+    <span class="cons">缺点：切标签多一次点击（⋯ → 标签页）；刷新键移入地址栏内，位置需适应。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="web">
+      <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+      <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+    </div>
+    <div class="tb c">
+      <div class="nb">‹</div><div class="nb">›</div>
+      <div class="addr">🔒 <span class="u" style="flex:1">blog.myhub.dev</span> ↻</div>
+      <div class="nb">⋯</div>
+    </div>
+    <div class="appbar"><span>📚</span><span>⚡</span><span>📁</span><span class="on">🌐</span><span>⚙️</span></div>
+  </div>
+</div>
+
+<!-- ================= 方案 D ================= -->
+<div class="board">
+  <h2>方案 D · 三段悬浮胶囊<span class="tag rec">推荐</span></h2>
+  <div class="desc">
+    左右内缩 12pt，<b>拆成三个并列胶囊</b>：①导航组胶囊（后退/前进/刷新，组内 1pt 竖分隔线连成一体）；②地址胶囊（锁 + 域名，等宽居中）；③标签/菜单胶囊。<br>
+    <span class="pros">优点：按钮成组、控件族边界清晰，密度观感最舒服；圆角/描边语言与全局 Tab 栏、mini 播放器完全一致；地址栏约 145pt。</span><br>
+    <span class="cons">缺点：三段之间的 8pt 缝隙是视觉噪音，元素更「碎」；实现需在工具栏内再拆两层容器。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="web">
+      <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+      <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+    </div>
+    <div class="tb d">
+      <div class="pill navg">
+        <div class="nb">‹</div><div class="div"></div><div class="nb">›</div><div class="div"></div><div class="nb">↻</div>
+      </div>
+      <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+      <div class="pill tabg">
+        <div class="nb" style="width:34px">⧉</div><span class="cnt">3</span><div class="div"></div><div class="nb" style="width:34px">⋯</div>
+      </div>
+    </div>
+    <div class="appbar"><span>📚</span><span>⚡</span><span>📁</span><span class="on">🌐</span><span>⚙️</span></div>
+  </div>
+</div>
+
+</div><!-- /boards -->
+
+<table>
+  <tr><th>方案</th><th>形态</th><th>地址栏宽</th><th>垂直占用</th><th>实现改动</th><th>主要取舍</th></tr>
+  <tr><td>现状</td><td>通栏直角白条 + 顶部分割线</td><td>≈120pt</td><td>≈48pt</td><td>—</td><td>挤、密；与悬浮 Tab 栏语言冲突</td></tr>
+  <tr><td>A 悬浮单胶囊</td><td>内缩 12pt，圆角 26 + 灰描边 + 轻阴影，内部弱填充分组</td><td>≈160pt</td><td>≈52pt</td><td>小（只改一层）</td><td>语言统一、改动最小；7 元素密度未减</td></tr>
+  <tr><td>B 通栏双行</td><td>上行地址栏、下行 5 按钮 + 文字标签</td><td>≈340pt</td><td>≈100pt</td><td>中</td><td>最好点最清晰；底部最占空间，「工具箱」感</td></tr>
+  <tr><td>C 通栏极简单行</td><td>5 元素单行，标签收进菜单，刷新入地址栏</td><td>≈175pt</td><td>≈48pt</td><td>中（菜单结构改动）</td><td>最简；切标签多一步、需适应</td></tr>
+  <tr><td>D 三段悬浮胶囊</td><td>导航组 / 地址 / 标签菜单 三颗胶囊并列</td><td>≈145pt</td><td>≈48pt</td><td>中</td><td>分组逻辑最清晰；胶囊更碎、缝隙多</td></tr>
+</table>
+
+<div class="footnote">
+  <b>共同前提：</b>全部方案保留「后退/前进/刷新 + 地址栏 + 标签 + 菜单」的现有功能集（C 除外，标签并入菜单）；灰描边统一 1pt <code>#D1D5DB</code>（<code>AppColors.tabBarBorder</code>），浅灰填充 <code>#F3F4F6</code>，内缩 12pt 与全局 Tab 栏对齐；
+  收起态小胶囊（锁 + 域名，滚动后自动收为底部小胶囊）继续保留，选定方案后按其圆角语言统一。<br>
+  <b>推荐：</b>D（三段悬浮胶囊）——分组逻辑最清晰、与全局 Tab 栏/mini 播放器圆角语言完全一致，观感最现代；若只想小改，选 A（悬浮单胶囊），改动最小、收益已经很明显；若追求最简且接受标签多一步，选 C。
+</div>
+</body>
+</html>

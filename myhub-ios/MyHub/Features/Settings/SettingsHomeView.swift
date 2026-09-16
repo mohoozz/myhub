@@ -37,7 +37,7 @@ struct SettingsHomeView: View {
                 }
             }
 
-            Section("显示") {
+            Section {
                 Picker(selection: $browseDisplaySettings.fileNameLines) {
                     ForEach(1...5, id: \.self) { lines in
                         Text("\(lines) 行").tag(lines)
@@ -48,6 +48,10 @@ struct SettingsHomeView: View {
                 Toggle(isOn: $liquidGlassMode) {
                     Label("液体玻璃模式", systemImage: "circle.hexagongrid")
                 }
+            } header: {
+                Text("显示")
+            } footer: {
+                Text("文件/标题过长时按设定行数换行显示（浏览页与阅读页的卡片、列表均生效）。")
             }
 
             Section("阅读与播放") {

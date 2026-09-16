@@ -173,9 +173,23 @@ final class NowPlaying {
         }
     }
 
-    /// 回前台兜底：若退后台期间被系统自动暂停（非用户主动）则恢复
+    /// 回前台兜底：仍处于播放态时重新激活音频会话（长时间熄屏后可能被系统停用，TODO 366），
+    /// 并在退后台期间被系统自动暂停（非用户主动）时恢复播放
     private func handleWillEnterForeground() {
         let core = PlayerCore.shared
+        // 播放状态未变时不会触发 handleState 的会话激活，
+        // 长时间熄屏后回来可能「画面在动但无声」，这里按播放态兜底重激活；
+        // 非播放态（如用户暂停）不激活，避免无谓打断其他 App 的音频
+        if core.isPlaying {
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                AppLogger.shared.log(
+                    "回前台重新激活音频会话失败 error=\(error.localizedDescription)",
+                    level: .error, module: "player-audio"
+                )
+            }
+        }
         guard playingBeforeBackground, core.state == .paused, core.pausedAt == nil else { return }
         core.play()
         playingBeforeBackground = false

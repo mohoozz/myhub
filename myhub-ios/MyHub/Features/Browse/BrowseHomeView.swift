@@ -2,14 +2,14 @@ import SwiftUI
 
 /// 文件浏览主页（TODO §3.1，IOS-102）：
 /// 连接源选择器（启用状态 / 绿·红点）+ 目录导航栈（NavigationStack 自带左侧边缘交互式 pop 返回上一级）。
-/// 处理「定位到原路径」（BrowseLocator）：重建目录栈并呼吸灯高亮目标约 10s。
+/// 处理「定位到原路径」（BrowseLocator）：重建目录栈直达目标所在目录，
+/// 目录页自取全局高亮状态完成滚动定位 + 呼吸灯高亮约 10s。
 struct BrowseHomeView: View {
     @EnvironmentObject private var store: ConnectionStore
     @EnvironmentObject private var locator: BrowseLocator
+    @EnvironmentObject private var router: AppRouter
 
     @State private var navPath = NavigationPath()
-    /// 定位高亮目标：连接 + 文件全路径
-    @State private var highlight: (connectionID: Int64, path: String)?
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -20,7 +20,6 @@ struct BrowseHomeView: View {
                             connection: connection,
                             path: location.path,
                             navPath: $navPath,
-                            highlightPath: highlightTarget(in: location),
                             connections: store.connections.filter(\.enabled)
                         )
                     } else {
@@ -36,9 +35,17 @@ struct BrowseHomeView: View {
                     }
                 }
         }
-        .onAppear { store.reload() }
+        .onAppear {
+            store.reload()
+            // 兜底：定位请求可能在浏览页挂载 / 导航栈就绪前就已发出（onChange 不会对已存在的值触发）
+            if let request = locator.request { handleLocate(request) }
+        }
         .onChange(of: locator.request) { request in
             if let request { handleLocate(request) }
+        }
+        .onChange(of: router.reselectRequest) { request in
+            guard request?.tab == .browse else { return }
+            handleReselect()
         }
     }
 
@@ -102,6 +109,10 @@ struct BrowseHomeView: View {
             .padding(12)
             .background(AppColors.cardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+            )
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(SelectableCellStyle())
@@ -162,33 +173,22 @@ struct BrowseHomeView: View {
         return locations
     }
 
-    // MARK: - 定位到原路径（呼吸灯高亮约 10s，不常亮）
+    // MARK: - 重复点击「浏览」页签：回到路径源选择（起始界面）
 
-    private func handleLocate(_ request: BrowseLocator.Request) {
-        guard connection(for: request.connectionID) != nil else {
-            locator.consume()
-            return
-        }
-        let parent = StoragePath.parent(of: request.filePath)
-        navPath = NavigationPath(locations(to: parent, connectionID: request.connectionID))
-        withAnimation(.appQuick) { highlight = (request.connectionID, request.filePath) }
-        locator.consume()
-
-        // 约 10s 后淡出高亮（不常亮，IOS-704）
-        let target = request.filePath
-        Task {
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
-            guard highlight?.path == target else { return }
-            withAnimation(.appQuick) { highlight = nil }
-        }
+    /// 底栏再次点击已选中的「浏览」图标：清空目录导航栈，回到连接源（路径源）选择列表。
+    /// 已在起始界面时不做处理（保留原地无变化），避免无意义的状态变更。
+    private func handleReselect() {
+        guard !navPath.isEmpty else { return }
+        navPath = NavigationPath()
     }
 
-    /// 仅目标文件所在目录那一层携带高亮路径
-    private func highlightTarget(in location: BrowseLocation) -> String? {
-        guard let highlight,
-              highlight.connectionID == location.connectionID,
-              StoragePath.parent(of: highlight.path) == StoragePath.normalize(location.path)
-        else { return nil }
-        return highlight.path
+    // MARK: - 定位到原路径（重建目录栈；滚动定位与呼吸灯由 BrowseLocator + 目录页完成）
+
+    private func handleLocate(_ request: BrowseLocator.Request) {
+        defer { locator.consume() }
+        guard connection(for: request.connectionID) != nil else { return }
+        // 重建导航栈：从源根逐级到目标文件所在目录（目录页据此滚动定位并呼吸灯高亮）
+        let parent = StoragePath.parent(of: request.filePath)
+        navPath = NavigationPath(locations(to: parent, connectionID: request.connectionID))
     }
 }

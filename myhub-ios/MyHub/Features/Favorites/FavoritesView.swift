@@ -142,6 +142,10 @@ struct FavoritesView: View {
         .padding(8)
         .background(AppColors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+        )
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .hoverEffect(.highlight)
         .cellPressableMenu(items: menuItems(for: favorite)) { open(favorite) }
@@ -157,7 +161,7 @@ struct FavoritesView: View {
                 Text(entry.name)
                     .font(.body)
                     .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(1)
+                    .lineLimit(browseDisplaySettings.fileNameLines)
                 Text("\(connections[favorite.connectionID]?.name ?? "") · \(favorite.filePath)")
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
@@ -172,9 +176,19 @@ struct FavoritesView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(AppColors.cardBackground)
-        .contentShape(Rectangle())
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下行块描边界定（TODO 376）
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .hoverEffect(.highlight)
-        .cellPressableMenu(cornerRadius: 10, items: menuItems(for: favorite)) { open(favorite) }
+        // 通栏列表行：高亮块内缩 4/6 收边成悬浮片（TODO 375 方案 D）
+        .cellPressableMenu(
+            cornerRadius: 10,
+            highlightInset: EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6),
+            items: menuItems(for: favorite)
+        ) { open(favorite) }
     }
 
     /// 封面（复用浏览页组件，保证两页一致）；文件夹直接图标

@@ -396,47 +396,89 @@ enum CellPressHighlightShape {
     case circle
 }
 
-/// 单元格按压交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单无法触发）：
+/// 单元格按压/选中交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单无法触发）：
 /// - 点击 → onTap；长按 → 底部抽屉菜单（互斥：长按识别后松开不再触发点击）；
-/// - 按压中内容缩放 0.97（保留按压反馈），高亮基于原始 frame 铺满整行/卡片，
-///   缩放时不漏出直角空隙，与 hover/选中高亮保持一致；
+/// - 三态视觉（TODO 375 方案 D「浮起抬升」）：常态无底色；
+///   hover 6% / 按压 8% 的内缩圆角极淡填充（按压内容回缩 0.975 跟手）；
+///   选中不再铺满整行/整卡的矩形色块，改为「轻微放大 + 主色软阴影抬升 + 细描边 + 4% 填充」，
+///   靠抬升层次而非色块面积表达选中（与勾选标记 / 进度环共存更干净）；
 /// - iPad/Mac 指针右键弹锚点圆角菜单（与长按同一组菜单项）。
 private struct CellPressModifier: ViewModifier {
     var cornerRadius: CGFloat = 12
     let highlightShape: CellPressHighlightShape
+    /// 高亮块相对 cell 边缘的内缩（卡片 1pt 贴边；通栏列表行 4/6 收边成悬浮片）
+    var highlightInset: EdgeInsets = EdgeInsets(top: 1, leading: 1, bottom: 1, trailing: 1)
+    /// 选中浮起幅度（列表行 / 卡片各自微调）
+    var selectedScale: CGFloat = 1.02
+    /// 选中细描边色（深色封面卡可传更高对比度）
+    var selectedStroke: Color = AppColors.primary.opacity(0.35)
+    /// 多选选中态（由调用方下发）
+    var isSelected: Bool = false
     let items: [PopupMenuItem]
     let onTap: () -> Void
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
     @State private var isPressing = false
+    @State private var isHovering = false
     @State private var anchor: CGRect = .zero
 
-    /// 按压高亮：圆形时取卡片短边为直径、居中绘制正圆
+    /// 高亮块圆角：通栏列表行 cell 无圆角（0）时单独收一个具名圆角
+    private var highlightRadius: CGFloat { cornerRadius > 0 ? cornerRadius : 11 }
+
+    /// 缩放：按压回缩（跟手），选中浮起（持久）
+    private var scale: CGFloat {
+        if isPressing { return 0.975 }
+        if isSelected { return selectedScale }
+        return 1
+    }
+
+    /// 高亮填充：选中 4% < hover 6% < 按压 8%（都比旧的 12% 铺满色块轻得多）
+    private var highlightFill: Color {
+        if isSelected { return AppColors.primary.opacity(0.04) }
+        if isPressing { return AppColors.primary.opacity(0.08) }
+        if isHovering { return AppColors.primary.opacity(0.06) }
+        return .clear
+    }
+
+    private var hasHighlight: Bool { isSelected || isPressing || isHovering }
+
+    /// 高亮层（内缩圆角）：hover / 按压 / 选中共用底色；
+    /// 选中额外叠加细描边 + 主色软阴影 = 浮起抬升
     @ViewBuilder
-    private var pressHighlight: some View {
+    private var highlightLayer: some View {
         switch highlightShape {
         case .roundedRect:
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
+            RoundedRectangle(cornerRadius: highlightRadius, style: .continuous)
+                .fill(highlightFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: highlightRadius, style: .continuous)
+                        .stroke(isSelected ? selectedStroke : Color.clear, lineWidth: 1)
+                )
+                .shadow(color: isSelected ? AppColors.primary.opacity(0.20) : Color.clear,
+                        radius: 5, y: 5)
+                .padding(highlightInset)
+                .opacity(hasHighlight ? 1 : 0)
         case .circle:
             GeometryReader { geo in
                 let side = min(geo.size.width, geo.size.height)
                 Circle()
-                    .fill(isPressing ? AppColors.primary.opacity(0.12) : Color.clear)
+                    .fill(highlightFill)
                     .frame(width: side, height: side)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .shadow(color: isSelected ? AppColors.primary.opacity(0.20) : Color.clear,
+                            radius: 5, y: 5)
+                    .opacity(hasHighlight ? 1 : 0)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     func body(content: Content) -> some View {
         content
             .background(AnchorReader(anchor: $anchor))
-            // 先缩放内容（保留 0.97 按压反馈），高亮 overlay 叠加在其后：
-            // 高亮基于原始 frame 铺满整行，内容缩放时不会漏出四周直角空隙
-            .scaleEffect(isPressing ? 0.97 : 1)
-            .overlay(pressHighlight)
+            // 选中浮起 / 按压回缩；动画只挂在 isSelected 上（按压由 onPressing 的事务控制，保持瞬时跟手）
+            .scaleEffect(scale)
+            .overlay(highlightLayer)
+            .animation(.appFast, value: isSelected)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(PressBridge(
                 onTap: onTap,
@@ -459,24 +501,39 @@ private struct CellPressModifier: ViewModifier {
                     presenter.show(items: items, anchor: anchor, style: .drawer)
                 }
             ))
+            .onHover { isHovering = $0 }
             .accessibilityAddTraits(.isButton)
             .background(SecondaryClickBridge {
                 presenter.show(items: items, anchor: anchor)
             })
+            // 选中项浮起，需盖住相邻 cell 的描边与阴影
+            .zIndex(isSelected ? 1 : 0)
     }
 }
 
 extension View {
     /// 单元格交互：点击 + 长按弹底部抽屉菜单 + 指针右键弹锚点菜单（修复 Button 吞长按）
+    /// - Parameters:
+    ///   - cornerRadius: cell 自身形状圆角（同时决定可点区域）
+    ///   - highlightInset: 按压/hover/选中高亮块的内缩（列表行 4/6 收边，卡片 1pt 贴边）
+    ///   - isSelected: 多选选中态（浮起抬升，TODO 375 方案 D）
     func cellPressableMenu(
         cornerRadius: CGFloat = 12,
         highlightShape: CellPressHighlightShape = .roundedRect,
+        highlightInset: EdgeInsets = EdgeInsets(top: 1, leading: 1, bottom: 1, trailing: 1),
+        selectedScale: CGFloat = 1.02,
+        selectedStroke: Color = AppColors.primary.opacity(0.35),
+        isSelected: Bool = false,
         items: [PopupMenuItem],
         onTap: @escaping () -> Void
     ) -> some View {
         modifier(CellPressModifier(
             cornerRadius: cornerRadius,
             highlightShape: highlightShape,
+            highlightInset: highlightInset,
+            selectedScale: selectedScale,
+            selectedStroke: selectedStroke,
+            isSelected: isSelected,
             items: items,
             onTap: onTap
         ))
