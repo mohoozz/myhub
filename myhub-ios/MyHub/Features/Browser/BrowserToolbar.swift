@@ -67,10 +67,10 @@ struct BrowserToolbar: View {
                 .fill(AppColors.cardBackground)
         )
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        // 1pt 灰色描边：白底主界面下与内容分割（与全局悬浮页签栏同一灰色）
+        // 1pt 极浅描边：白底主界面下与内容分割（与全局悬浮页签栏 / mini 播放器统一为 cardBorder，TODO 376/379）
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(AppColors.tabBarBorder, lineWidth: 1)
+                .stroke(AppColors.cardBorder, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
         // 左右内缩 12pt：与全局悬浮页签栏对齐，形成上下「双胶囊」节奏

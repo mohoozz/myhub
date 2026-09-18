@@ -1,5 +1,35 @@
 import SwiftUI
 
+/// 全局底部装饰（悬浮页签栏 + mini 播放器）自身高度，**不含**系统底部安全区（Home 指示条）。
+/// 悬浮页签栏经 `safeAreaInset` 注入后，页面内 `safeAreaInset(edge: .bottom)` / `overlay(alignment:)`
+/// 的落点仍是「系统底部安全区」，并不包含页签栏，于是底部操作栏会落进页签栏之下被遮挡（TODO 379）。
+/// 页面只需在该安全区之上再让出装饰自身高度 + 间距，即可正好停在装饰上方。
+private struct BottomChromeHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    /// 全局底部装饰自身高度（0 表示无装饰，如 iPad）
+    var bottomChromeHeight: CGFloat {
+        get { self[BottomChromeHeightKey.self] }
+        set { self[BottomChromeHeightKey.self] = newValue }
+    }
+}
+
+/// 多选态隐藏底部悬浮页签栏（TODO 385）：页面进入多选时置 true，把底部让给多选操作栏，退出多选恢复。
+/// 用绑定而非单向值：多选状态由各页自己持有，需向上回写（iPad 无页签栏，默认常量绑定写入无副作用）。
+private struct BottomTabBarHiddenKey: EnvironmentKey {
+    static let defaultValue: Binding<Bool> = .constant(false)
+}
+
+extension EnvironmentValues {
+    /// 是否隐藏底部悬浮页签栏（多选态，TODO 385）
+    var bottomTabBarHidden: Binding<Bool> {
+        get { self[BottomTabBarHiddenKey.self] }
+        set { self[BottomTabBarHiddenKey.self] = newValue }
+    }
+}
+
 /// 自适应导航壳（IOS-001 / TODO §1.1）：
 /// - iPhone（Compact）：底部 `TabView`（系统保持各页状态）
 /// - iPad（Regular）：`NavigationSplitView` 侧边栏（含「收藏」），detail 用 ZStack 常驻保活
@@ -16,6 +46,11 @@ struct RootView: View {
     @EnvironmentObject private var txtReader: TxtReaderPresenter
     @EnvironmentObject private var connectionStore: ConnectionStore
     private var selection: AppTab { router.selectedTab }
+
+    /// 底部装饰（mini 播放器 + 悬浮页签栏）占用的高度：页面据此抬升底部操作栏（TODO 379）
+    @State private var bottomChromeHeight: CGFloat = 0
+    /// 多选态隐藏悬浮页签栏（由页面经 `\.bottomTabBarHidden` 回写，TODO 385）
+    @State private var bottomTabBarHidden = false
 
     /// 漫画阅读器路由绑定（下滑/系统关闭时联动 presenter）
     private var comicReaderBinding: Binding<NovelOpenContext?> {
@@ -100,17 +135,47 @@ struct RootView: View {
             // mini 播放器 + 页签栏（TODO 376 方案 C 悬浮圆角胶囊）：经 safeAreaInset 注入，
             // 内容可滚动穿过胶囊下方而不被遮挡；二者左右内缩 12pt 对齐、间距 8pt。
             keepAlivePhoneTabs
+                .environment(\.bottomChromeHeight, bottomChromeHeight)
+                .environment(\.bottomTabBarHidden, $bottomTabBarHidden)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 8) {
-                        if player.isMini {
-                            MiniPlayer(roundedBottom: true)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                        BottomTabBar(selection: $router.selectedTab, tabs: AppTab.phoneTabs)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                    phoneBottomChrome
                 }
+        }
+    }
+
+    /// iPhone 底部装饰：mini 播放器 + 悬浮圆角页签栏（TODO 376 方案 C）。
+    /// 同时量出自身高度（含 mini 播放器），回写 `bottomChromeHeight`，
+    /// 供页面把底部操作栏抬到装饰之上（TODO 379）。
+    /// 多选态隐藏页签栏（`bottomTabBarHidden`，TODO 385）：底部让给多选操作栏，测量值随之变小，
+    /// 操作栏自动落到页签栏原本的位置。
+    private var phoneBottomChrome: some View {
+        VStack(spacing: 8) {
+            if player.isMini {
+                MiniPlayer(roundedBottom: true)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            if !bottomTabBarHidden {
+                BottomTabBar(selection: $router.selectedTab, tabs: AppTab.phoneTabs)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .animation(.appQuick, value: bottomTabBarHidden)
+        .background {
+            GeometryReader { proxy in
+                // 页面内 safeAreaInset / overlay 的落点是「系统底部安全区」（Home 指示条），
+                // 不含祖先注入的页签栏，因此这里只取装饰自身高度：窗口底边到装饰顶边 − 系统安全区
+                let window = UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap { $0.windows }
+                    .first { $0.isKeyWindow }
+                let windowHeight = window?.bounds.height ?? proxy.frame(in: .global).maxY
+                let height = max(0, windowHeight - proxy.frame(in: .global).minY - (window?.safeAreaInsets.bottom ?? 0))
+                Color.clear
+                    .onAppear { bottomChromeHeight = height }
+                    .onChange(of: height) { bottomChromeHeight = $0 }
+            }
         }
     }
 
@@ -252,10 +317,10 @@ private struct BottomTabBar: View {
         .frame(height: barHeight)
         .background(barBackground)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        // 1pt 灰色描边：白底主界面下与内容分割（TODO 376）
+        // 1pt 极浅描边：与 mini 播放器 / 多选操作栏统一为 `cardBorder`（TODO 385）
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(AppColors.tabBarBorder, lineWidth: 1)
+                .stroke(AppColors.cardBorder, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
     }

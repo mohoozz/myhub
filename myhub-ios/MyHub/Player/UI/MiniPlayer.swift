@@ -18,9 +18,11 @@ struct MiniPlayer: View {
     /// 音频内嵌/同目录封面（异步经 `CoverService` 加载，与全屏/锁屏同源缓存，缺失时回落 music.note 图标）
     @State private var audioCover: UIImage?
 
-    /// 封面尺寸 / 顶部溢出（对齐 Flutter compact 布局）
+    /// 封面尺寸（对齐 Flutter compact 布局）
     private let coverSize: CGFloat = 64
-    private let coverOverflow: CGFloat = 8
+    /// 封面顶部溢出量：`.offset` 视觉上浮出卡片上边界，**不参与布局测量**。
+    /// 公开为静态常量供兄弟视图避让复用（如 `BrowserHomeView.bottomBarGap`），避免多处写死漂移。
+    static let coverOverflow: CGFloat = 8
     /// 封面距卡片左缘 / 封面与标题区间距
     private let coverLeading: CGFloat = 16
     private let coverGap: CGFloat = 12
@@ -65,7 +67,7 @@ struct MiniPlayer: View {
             // 封面浮层：顶部溢出 8px（QQ 音乐观感）
             cover
                 .padding(.leading, coverLeading)
-                .offset(y: -coverOverflow)
+                .offset(y: -Self.coverOverflow)
         }
         .offset(y: dragOffset)
         .gesture(

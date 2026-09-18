@@ -64,7 +64,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
     @Published var searchText = "" {
         didSet { displayedEntriesCache = nil }
     }
-    @Published private(set) var childCounts: [String: Int] = [:]
     @Published var transfer: TransferProgress?
     @Published var operationError: String?
     /// 操作结果轻提示（收藏成功 / 下载完成等）
@@ -109,8 +108,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
     private var loaded = false
     /// 刷新补刷标记：刷新进行中再次请求刷新时登记，本轮结束后立即再刷一次（避免操作后的刷新被丢弃）
     private var refreshPending = false
-    private var childCountInFlight: Set<String> = []
-    private var childCountAttempted: Set<String> = []
     private var toastTask: Task<Void, Never>?
     private var favoritesObserver: NSObjectProtocol?
     /// displayedEntries 排序结果缓存：文件多时 localizedStandardCompare 排序很慢，
@@ -313,32 +310,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
         entries.removeAll { removedPaths.contains($0.path) }
         state = entries.isEmpty ? .empty : .loaded
         DirectoryCache.shared.save(connectionID: connectionID, path: path, entries: entries)
-    }
-
-    // MARK: - 文件夹子项数（懒加载，限并发）
-
-    func loadChildCountIfNeeded(for entry: FileEntry) {
-        guard entry.isDir, let adapter,
-              !childCountAttempted.contains(entry.path),
-              !childCountInFlight.contains(entry.path),
-              childCountInFlight.count < 3 else { return }
-        childCountAttempted.insert(entry.path)
-        childCountInFlight.insert(entry.path)
-        Task {
-            let start = CFAbsoluteTimeGetCurrent()
-            let count = try? await adapter.list(entry.path).count
-            let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
-            childCountInFlight.remove(entry.path)
-            if let count {
-                childCounts[entry.path] = count   // 会话内缓存，不重复请求
-            }
-            if elapsedMs > 50 {
-                AppLogger.shared.log(
-                    "loadChildCount \(entry.path) 耗时 \(String(format: "%.1f", elapsedMs))ms, count=\(count ?? -1)",
-                    level: .warn, module: "browse"
-                )
-            }
-        }
     }
 
     // MARK: - 多选模式（菜单「多选」/ 右上角「…」→「选择」进入）

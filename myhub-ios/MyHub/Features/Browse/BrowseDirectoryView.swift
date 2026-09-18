@@ -46,6 +46,10 @@ struct BrowseDirectoryView: View {
     @ObservedObject private var playerCore = PlayerCore.shared
 
     @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
+    /// 全局底部装饰（悬浮页签栏 / mini 播放器）占用高度：底部覆盖层据此抬升（TODO 379）
+    @Environment(\.bottomChromeHeight) private var bottomChromeHeight
+    /// 多选态隐藏全局悬浮页签栏（回写 RootView，底部让给操作栏，TODO 385）
+    @Environment(\.bottomTabBarHidden) private var bottomTabBarHidden
 
     @State private var sheet: SheetRoute?
     @State private var imagePreview: ImagePreviewContext?
@@ -216,13 +220,24 @@ struct BrowseDirectoryView: View {
         // 多选态改为「已选 N 项」作为操作状态反馈。
         .navigationTitle(navigationTitleText)
         .navigationBarTitleDisplayMode(.inline)
-        // 液体玻璃关闭时隐藏系统返回按钮，改用无玻璃自定义返回（见 toolbar）
-        .navigationBarBackButtonHidden(showsPlainBack)
+        // 液体玻璃关闭时隐藏系统返回按钮，改用无玻璃自定义返回（见 toolbar）；
+        // 多选态同样隐藏：多选态左侧是纯文字的「全选 / 完成」，而系统返回按钮在 iOS 26 是
+        // 圆形玻璃胶囊，两者风格不一致；且多选态本就不应被返回上一级目录（TODO 386）
+        .navigationBarBackButtonHidden(showsPlainBack || viewModel.isSelecting)
         .toolbar { toolbar }
         .background(swipeBackEnabler)
-        // 底部覆盖层（多选操作栏 / 传输横幅 / 轻提示）经 safeAreaInset 注入：
-        // 自动叠在全局悬浮页签栏（含 mini 播放器）上方，不再被页签栏遮挡（TODO 379）
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomOverlay }
+        // 底部覆盖层（多选操作栏 / 传输横幅 / 轻提示，TODO 379）：
+        // safeAreaInset 只为滚动内容预留底部空间（高度固定），覆盖层本体由 overlay 绘制并抬升——
+        // 页面内 safeAreaInset / overlay 的落点是「系统底部安全区」，不含祖先注入的悬浮页签栏，
+        // 直接注入会落进页签栏之下被遮挡。
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: hasBottomOverlayContent ? Self.bottomOverlayReserve : 0)
+        }
+        .overlay(alignment: .bottom) { bottomOverlay }
+        // 多选态隐藏全局页签栏：底部让给操作栏；退出多选或本页退场即恢复（TODO 385）
+        .onChange(of: viewModel.isSelecting) { bottomTabBarHidden.wrappedValue = $0 }
+        .onAppear { bottomTabBarHidden.wrappedValue = viewModel.isSelecting }   // 返回本页时按当前多选态校正
+        .onDisappear { bottomTabBarHidden.wrappedValue = false }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.item],
@@ -512,8 +527,8 @@ struct BrowseDirectoryView: View {
             }
         }
         .animation(.appQuick, value: viewModel.viewMode)
-        // 底部覆盖层已由 safeAreaInset 注入，ScrollView 自动预留内容内边距（TODO 379），
-        // 不再手工叠加 64pt 底部留白
+        // 底部覆盖层的占位由 safeAreaInset（固定高度）为 ScrollView 预留内容内边距（TODO 379），
+        // 覆盖层本体是 overlay，不再手工叠加底部留白
     }
 
     private func gridView(_ items: [FileEntry], adapter: StorageAdapter) -> some View {
@@ -529,7 +544,6 @@ struct BrowseDirectoryView: View {
                     connection: connection,
                     adapter: adapter,
                     siblings: viewModel.entries,
-                    childCount: viewModel.childCounts[entry.path],
                     highlighted: entry.path == highlightTarget,
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
@@ -539,7 +553,6 @@ struct BrowseDirectoryView: View {
                     onTap: { tap(entry) },
                     isComicEpub: viewModel.isComicEpub(entry)
                 )
-                .onAppear { viewModel.loadChildCountIfNeeded(for: entry) }
             }
         }
         .padding(12)
@@ -555,7 +568,6 @@ struct BrowseDirectoryView: View {
                     connection: connection,
                     adapter: adapter,
                     siblings: viewModel.entries,
-                    childCount: viewModel.childCounts[entry.path],
                     highlighted: entry.path == highlightTarget,
                     isSelecting: viewModel.isSelecting,
                     isSelected: viewModel.selection?.contains(entry.path) ?? false,
@@ -565,7 +577,6 @@ struct BrowseDirectoryView: View {
                     onTap: { tap(entry) },
                     isComicEpub: viewModel.isComicEpub(entry)
                 )
-                .onAppear { viewModel.loadChildCountIfNeeded(for: entry) }
             }
         }
         .padding(.horizontal, 12)
@@ -621,6 +632,9 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 底部覆盖层（多选操作栏 / 传输横幅 / 轻提示）
 
+    /// 底部覆盖层高度（供 safeAreaInset 为滚动内容预留空间）：多选操作栏 + 10pt 间距
+    private static let bottomOverlayReserve: CGFloat = 64
+
     @ViewBuilder
     private var bottomOverlay: some View {
         VStack(spacing: 8) {
@@ -642,8 +656,8 @@ struct BrowseDirectoryView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        // 无内容时高度为 0：safeAreaInset 不额外预留底部空间（TODO 379）
-        .padding(.bottom, hasBottomOverlayContent ? 10 : 0)
+        // 抬到全局底部装饰（悬浮页签栏 / mini 播放器）之上；无内容时高度为 0，不占空间（TODO 379）
+        .padding(.bottom, hasBottomOverlayContent ? bottomChromeHeight + 10 : 0)
         .animation(.appQuick, value: viewModel.isSelecting)
         .animation(.appQuick, value: viewModel.toast)
     }
@@ -671,7 +685,7 @@ struct BrowseDirectoryView: View {
         .padding(.vertical, 10)
         .background(AppColors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(AppColors.separator, lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(AppColors.cardBorder, lineWidth: 1))
         .shadow(color: .black.opacity(0.1), radius: 8, y: 3)
         .padding(.horizontal, 24)
     }
@@ -686,7 +700,8 @@ struct BrowseDirectoryView: View {
             selectionButton("复制", symbol: "doc.on.doc", enabled: count > 0) {
                 if let paths = viewModel.selection { sheet = .copy(paths) }
             }
-            selectionButton("重命名", symbol: "pencil", enabled: count == 1) {
+            // 图标用 square.and.pencil（21×20）而非 pencil（18×16）：与相邻图标视觉体量一致
+            selectionButton("重命名", symbol: "square.and.pencil", enabled: count == 1) {
                 if let path = viewModel.selection?.first, let entry = viewModel.entry(for: path) {
                     renameText = entry.name
                     renaming = entry
@@ -707,7 +722,7 @@ struct BrowseDirectoryView: View {
         .padding(.vertical, 8)
         .background(selectionBarBackground)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColors.separator, lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColors.cardBorder, lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
         .padding(.horizontal, 12)
     }
@@ -731,8 +746,13 @@ struct BrowseDirectoryView: View {
             VStack(spacing: 3) {
                 Image(systemName: symbol)
                     .font(.body)
+                    // 固定图标槽高度：各 SF Symbol 固有尺寸不同（17pt 下实测 pencil 仅 18×16，
+                    // 而 arrow.right.doc.on.clipboard / doc.on.doc 为 21×23、star 22×20、trash 20×21），
+                    // 不统一的话重命名按钮内容最矮 → 居中后图标下沉、文字上浮，与相邻按钮错位（TODO 385）
+                    .frame(height: 24)
                 Text(title)
                     .font(.caption2)
+                    .lineLimit(1)
             }
             .foregroundStyle(enabled ? (destructive ? Color.red : AppColors.primary) : AppColors.textSecondary.opacity(0.5))
             .frame(maxWidth: .infinity)
@@ -748,6 +768,8 @@ struct BrowseDirectoryView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         if viewModel.isSelecting {
+            // 多选态系统返回按钮已隐藏（见 navigationBarBackButtonHidden），
+            // 故「全选」成为最左侧按钮，落在左上角（TODO 386）
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("全选") { viewModel.selectAll() }
             }

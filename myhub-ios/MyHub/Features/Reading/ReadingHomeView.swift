@@ -18,6 +18,10 @@ struct ReadingHomeView: View {
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
     @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
+    /// 全局底部装饰（悬浮页签栏 / mini 播放器）占用高度：多选操作栏据此抬升（TODO 379）
+    @Environment(\.bottomChromeHeight) private var bottomChromeHeight
+    /// 多选态隐藏全局悬浮页签栏（回写 RootView，底部让给操作栏，TODO 385）
+    @Environment(\.bottomTabBarHidden) private var bottomTabBarHidden
 
     @State private var viewMode: BrowseViewMode = AppSettings.Reading.viewMode {
         didSet { AppSettings.Reading.viewMode = viewMode }
@@ -52,10 +56,18 @@ struct ReadingHomeView: View {
                 // 多选态标题居中；常态用 .editor 令「阅读」大标题左对齐（与其余标签一致）。
                 // 液体玻璃按钮背景由工具栏项各自的 .liquidGlassToolbar 控制。
                 .toolbarRole(isSelecting ? .navigationStack : .editor)
-                // 多选操作栏经 safeAreaInset 注入：自动叠在全局悬浮页签栏（含 mini 播放器）上方，
-                // 不再被页签栏遮挡（TODO 379）
-                .safeAreaInset(edge: .bottom, spacing: 0) { bottomOverlay }
+                // 多选操作栏（TODO 379）：safeAreaInset 只负责为滚动内容预留底部空间（高度固定），
+                // 操作栏本体由 overlay 绘制并抬升——页面内 safeAreaInset / overlay 的落点是「系统底部
+                // 安全区」，不含祖先注入的悬浮页签栏，直接注入会被页签栏遮挡。
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Color.clear.frame(height: isSelecting ? Self.selectionBarReserve : 0)
+                }
+                .overlay(alignment: .bottom) { bottomOverlay }
         }
+        // 多选态隐藏全局页签栏：底部让给操作栏；退出多选或本页退场即恢复（TODO 385）
+        .onChange(of: isSelecting) { bottomTabBarHidden.wrappedValue = $0 }
+        .onAppear { bottomTabBarHidden.wrappedValue = isSelecting }   // 返回本页时按当前多选态校正
+        .onDisappear { bottomTabBarHidden.wrappedValue = false }
         .alert(
             "删除阅读记录",
             isPresented: Binding(
@@ -170,8 +182,8 @@ struct ReadingHomeView: View {
                     }
                 }
                 .animation(.appQuick, value: viewMode)
-                // 多选操作栏已由 safeAreaInset 注入，ScrollView 自动为其预留内容内边距（TODO 379），
-                // 不再手工叠加 64pt 底部留白
+                // 多选操作栏的占位由 safeAreaInset（固定高度）为 ScrollView 预留内容内边距（TODO 379），
+                // 操作栏本体是 overlay，不再手工叠加底部留白
             }
         }
     }
@@ -455,6 +467,9 @@ struct ReadingHomeView: View {
 
     // MARK: - 底部多选操作栏
 
+    /// 多选操作栏高度（供 safeAreaInset 为滚动内容预留空间：操作栏 + 10pt 间距）
+    private static let selectionBarReserve: CGFloat = 64
+
     @ViewBuilder
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
@@ -463,8 +478,8 @@ struct ReadingHomeView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        // 非多选态高度为 0：safeAreaInset 不额外预留底部空间（TODO 379）
-        .padding(.bottom, isSelecting ? 10 : 0)
+        // 抬到全局底部装饰（悬浮页签栏 / mini 播放器）之上；非多选态高度为 0，不占空间（TODO 379）
+        .padding(.bottom, isSelecting ? bottomChromeHeight + 10 : 0)
         .animation(.appQuick, value: isSelecting)
     }
 
@@ -511,7 +526,7 @@ struct ReadingHomeView: View {
         .padding(.vertical, 8)
         .background(selectionBarBackground)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColors.separator, lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColors.cardBorder, lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
         .padding(.horizontal, 12)
     }

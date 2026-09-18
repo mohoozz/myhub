@@ -44,14 +44,13 @@ struct SelectionCheckmark: View {
 
 // MARK: - 网格单元格
 
-/// 网格视图单元格：封面/图标、文件名、文件夹子项数、视频时长角标、漫画徽标。
+/// 网格视图单元格：封面/图标、文件名、视频时长角标、漫画徽标。
 /// 长按（iOS，底部抽屉）/ 指针右键（iPad/PC，锚点卡片）弹出操作菜单；多选经菜单「多选」或右上角「…」→「选择」进入。
 struct FileGridCell: View {
     let entry: FileEntry
     let connection: Connection
     let adapter: StorageAdapter
     let siblings: [FileEntry]
-    let childCount: Int?
     let highlighted: Bool
     let isSelecting: Bool
     let isSelected: Bool
@@ -146,7 +145,7 @@ struct FileGridCell: View {
 
     private var caption: String {
         if entry.isDir {
-            return childCount.map { "\($0) 项" } ?? "文件夹"
+            return "文件夹"
         }
         var parts: [String] = []
         if let duration { parts.append(DisplayFormatters.duration(duration)) }
@@ -163,7 +162,6 @@ struct FileListRow: View {
     let connection: Connection
     let adapter: StorageAdapter
     let siblings: [FileEntry]
-    let childCount: Int?
     let highlighted: Bool
     let isSelecting: Bool
     let isSelected: Bool
@@ -243,8 +241,7 @@ struct FileListRow: View {
 
     private var caption: String {
         if entry.isDir {
-            let count = childCount.map { "\($0) 项" } ?? "文件夹"
-            return "目录 · \(count)"
+            return "目录"
         }
         var parts = [mediaType.label]
         if let duration { parts.append(DisplayFormatters.duration(duration)) }

@@ -16,6 +16,16 @@ struct BrowserHomeView: View {
     /// 操作栏是否收起为底部小胶囊（而非完全隐藏，始终可见可点击）
     @State private var toolbarMini = false
 
+    /// 操作栏 / 收起态小胶囊与底部页签栏之间的视觉间距（左右内缩 12pt 形成上下「双胶囊」节奏）
+    private let tabBarGap: CGFloat = 12
+
+    /// 底部预留间距：与页签栏留一段距离；
+    /// 有 mini 播放器时再叠加上封面向上溢出量（`MiniPlayer.coverOverflow` 是 `.offset` 视觉位移、
+    /// 不参与布局测量，页面底边实际落在 mini 卡片上边界，不补偿就会与突出的封面贴太紧）。
+    private var bottomBarGap: CGFloat {
+        player.isMini ? tabBarGap + MiniPlayer.coverOverflow : tabBarGap
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
@@ -29,8 +39,8 @@ struct BrowserHomeView: View {
                         onTabs: { showingTabs = true },
                         onSubmitAddress: { url in session.open(url) }
                     )
-                    // mini 播放器同时在场时：与上方卡片再留 8pt，避免两颗悬浮胶囊贴在一起
-                    .padding(.bottom, player.isMini ? 8 : 0)
+                    // 与底部页签栏留出一段距离（有 mini 播放器时补偿封面向上溢出的 8pt）
+                    .padding(.bottom, bottomBarGap)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -38,7 +48,8 @@ struct BrowserHomeView: View {
             if toolbarMini, let tab = session.activeTab, !tab.isShowingStartPage {
                 miniCapsule(tab)
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
-                    .padding(.bottom, 10)
+                    // 与展开态操作栏底部对齐：同样避开页签栏 / mini 播放器封面溢出部分
+                    .padding(.bottom, bottomBarGap)
             }
         }
         .background(AppColors.pageBackground)
@@ -114,8 +125,8 @@ struct BrowserHomeView: View {
                     .fill(AppColors.cardBackground)
                     .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
             )
-            // 描边与全局悬浮页签栏 / 操作栏胶囊同一灰色（TODO 377 方案 A）
-            .overlay(Capsule().stroke(AppColors.tabBarBorder, lineWidth: 1))
+            // 描边与全局悬浮页签栏 / mini 播放器 / 操作栏胶囊统一为 cardBorder（TODO 377 方案 A）
+            .overlay(Capsule().stroke(AppColors.cardBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("展开浏览器操作栏")
