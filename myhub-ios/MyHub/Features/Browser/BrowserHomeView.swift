@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct BrowserHomeView: View {
     @EnvironmentObject private var session: BrowserSessionStore
     @EnvironmentObject private var dataStore: BrowserDataStore
+    @EnvironmentObject private var player: PlayerPresenter
 
     @State private var showingTabs = false
     @State private var showingBookmarks = false
@@ -28,6 +29,8 @@ struct BrowserHomeView: View {
                         onTabs: { showingTabs = true },
                         onSubmitAddress: { url in session.open(url) }
                     )
+                    // mini 播放器同时在场时：与上方卡片再留 8pt，避免两颗悬浮胶囊贴在一起
+                    .padding(.bottom, player.isMini ? 8 : 0)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -109,9 +112,10 @@ struct BrowserHomeView: View {
             .background(
                 Capsule()
                     .fill(AppColors.cardBackground)
-                    .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+                    .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
             )
-            .overlay(Capsule().stroke(AppColors.separator, lineWidth: 0.5))
+            // 描边与全局悬浮页签栏 / 操作栏胶囊同一灰色（TODO 377 方案 A）
+            .overlay(Capsule().stroke(AppColors.tabBarBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("展开浏览器操作栏")

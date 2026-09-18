@@ -7,6 +7,17 @@ struct MyHubApp: App {
     init() {
         _ = AppLogger.shared   // 尽早初始化日志 + 安装崩溃捕获（避免启动早期崩溃漏捕获）
         AppSettings.Reader.migrateReaderThemeToAutoIfNeeded()   // 旧版固定主题 → 跟随系统（一次性迁移）
+        NetworkPathMonitor.shared.start()   // 网络路径变化监测（TODO 380：熄屏后播放失败诊断）
+    }
+
+    /// scenePhase 可读名称（日志用）
+    private static func describe(_ phase: ScenePhase) -> String {
+        switch phase {
+        case .active: return "active"
+        case .inactive: return "inactive"
+        case .background: return "background"
+        @unknown default: return "unknown"
+        }
     }
     // 全局状态：主题 / 启动 / 播放呈现 / 弹出菜单 / 浏览器会话（§2.2.2 全局持有）
     @StateObject private var themeManager = ThemeManager()
@@ -59,6 +70,13 @@ struct MyHubApp: App {
                 // 同时兜底落盘浏览器会话，确保导航后立即退出也不丢失；
                 // 长时间后台（熄屏）回到前台时执行网络自愈，避免「音视频加载失败只能重启 App」（TODO 366）
                 .onChange(of: scenePhase) { phase in
+                    // 全相位面包屑（TODO 380）：熄屏→亮屏的 inactive/background/active 时序与
+                    // 当时播放/网络/路由状态，定位「熄屏一段时间后视频无法播放」
+                    let core = PlayerCore.shared
+                    AppLogger.shared.log(
+                        "scenePhase -> \(Self.describe(phase)) 播放=\(core.state.logDescription) 引擎=\(core.engineDiagnostics) item=\(core.currentItem?.title ?? "nil") 锁定=[\(RoutedWebDAVAdapter.lockSnapshot())] 代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot())",
+                        level: .info, module: "lifecycle"
+                    )
                     if phase == .background {
                         appLock.lockForBackground()
                         browserSession.persistNow()

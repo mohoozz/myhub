@@ -159,6 +159,11 @@ final class NowPlaying {
     private func handleEnterBackground() {
         let core = PlayerCore.shared
         playingBeforeBackground = core.isPlaying
+        // 后台保活面包屑（TODO 380）
+        AppLogger.shared.log(
+            "退后台 播放中=\(playingBeforeBackground) state=\(core.state.logDescription) 引擎=\(core.engineDiagnostics) 网络=\(NetworkPathMonitor.shared.snapshot())",
+            level: .info, module: "player-audio"
+        )
         guard playingBeforeBackground else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             Task { @MainActor [weak self] in
@@ -166,6 +171,7 @@ final class NowPlaying {
                 let core = PlayerCore.shared
                 // 用户在控制中心主动暂停(pausedAt != nil)则不干预；仅恢复系统自动暂停
                 if core.state == .paused, core.pausedAt == nil {
+                    AppLogger.shared.log("退后台被系统自动暂停 -> 重断言播放", level: .info, module: "player-audio")
                     core.play()
                 }
                 self.playingBeforeBackground = false
@@ -177,12 +183,18 @@ final class NowPlaying {
     /// 并在退后台期间被系统自动暂停（非用户主动）时恢复播放
     private func handleWillEnterForeground() {
         let core = PlayerCore.shared
+        // 回前台面包屑（TODO 380）：对照 scenePhase/network-route 日志，确认熄屏期间播放意图是否被系统暂停
+        AppLogger.shared.log(
+            "回前台 播放中=\(core.isPlaying) state=\(core.state.logDescription) 引擎=\(core.engineDiagnostics) 后台前播放中=\(playingBeforeBackground) 用户暂停=\(core.pausedAt != nil) 网络=\(NetworkPathMonitor.shared.snapshot())",
+            level: .info, module: "player-audio"
+        )
         // 播放状态未变时不会触发 handleState 的会话激活，
         // 长时间熄屏后回来可能「画面在动但无声」，这里按播放态兜底重激活；
         // 非播放态（如用户暂停）不激活，避免无谓打断其他 App 的音频
         if core.isPlaying {
             do {
                 try AVAudioSession.sharedInstance().setActive(true)
+                AppLogger.shared.log("回前台重激活音频会话成功（播放态兜底）", level: .debug, module: "player-audio")
             } catch {
                 AppLogger.shared.log(
                     "回前台重新激活音频会话失败 error=\(error.localizedDescription)",
@@ -191,6 +203,7 @@ final class NowPlaying {
             }
         }
         guard playingBeforeBackground, core.state == .paused, core.pausedAt == nil else { return }
+        AppLogger.shared.log("回前台恢复被系统自动暂停的播放", level: .info, module: "player-audio")
         core.play()
         playingBeforeBackground = false
     }
@@ -204,9 +217,17 @@ final class NowPlaying {
         switch type {
         case .began:
             playingBeforeInterruption = PlayerCore.shared.isPlaying
+            AppLogger.shared.log(
+                "音频中断开始 播放中=\(playingBeforeInterruption) state=\(PlayerCore.shared.state.logDescription)",
+                level: .info, module: "player-audio"
+            )
         case .ended:
             let shouldResume = (notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
                 .map { AVAudioSession.InterruptionOptions(rawValue: $0).contains(.shouldResume) } ?? false
+            AppLogger.shared.log(
+                "音频中断结束 shouldResume=\(shouldResume) 中断前播放中=\(playingBeforeInterruption) state=\(PlayerCore.shared.state.logDescription)",
+                level: .info, module: "player-audio"
+            )
             try? AVAudioSession.sharedInstance().setActive(true)
             if playingBeforeInterruption, shouldResume {
                 PlayerCore.shared.play()

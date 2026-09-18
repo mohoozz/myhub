@@ -48,6 +48,8 @@ struct PlayerView: View {
         .immersive()
         .onAppear {
             resetHideTimer()
+            // 按「播放器偏好 → 横竖屏切换」初始化方向：手动沿用缓存方向，自动跟随设备
+            orientation.enterPlayer()
             // 预安装系统音量滑杆，确保进入播放页后手势调音量能可靠写系统音量（音量始终与系统同步）
             SystemVolume.prepare()
             Task {
@@ -88,7 +90,12 @@ struct PlayerView: View {
         }
         // 切到纯音频时恢复竖屏（纯音频不提供横竖屏切换，避免卡在横屏）
         .onChange(of: isAudioPresentation) { audio in
-            if audio, orientation.isLandscape { orientation.lockPortrait() }
+            if audio {
+                if orientation.isLandscape { orientation.lockPortrait() }
+            } else {
+                // 切回视频：自动模式恢复跟随设备方向（纯音频期间可能锁过竖屏）
+                orientation.resyncWithDevice()
+            }
         }
     }
 
@@ -158,8 +165,8 @@ struct PlayerView: View {
                 .transition(.opacity)
             }
 
-            // 屏幕左中：横竖屏切换按钮（视频 + 控制层可见时显示；锁定/纯音频不显示）
-            if showControls, !isInterfaceLocked, !isAudioPresentation {
+            // 屏幕左中：横竖屏切换按钮（手动模式 + 视频 + 控制层可见时显示；自动模式/锁定/纯音频不显示）
+            if showControls, !isInterfaceLocked, !isAudioPresentation, orientation.isManualMode {
                 HStack {
                     Button {
                         orientation.toggle()

@@ -28,6 +28,10 @@ struct PreferencesSnapshot: Codable {
     var cacheLimitMB: Int
     var contentCachingEnabled: Bool
     var trashRetentionDays: Int
+    /// 退后台自动画中画；可选以兼容不含该字段的旧快照（nil 时保持当前设置）
+    var playerAutoPiPOnBackground: Bool?
+    /// 播放器横竖屏切换方式（manual / auto）；可选以兼容旧快照
+    var playerOrientationMode: String?
 
     static func capture() -> PreferencesSnapshot {
         PreferencesSnapshot(
@@ -46,7 +50,9 @@ struct PreferencesSnapshot: Codable {
             browserUserAgent: AppSettings.Browser.userAgent.rawValue,
             cacheLimitMB: AppSettings.Cache.totalLimitMB,
             contentCachingEnabled: AppSettings.Cache.contentCachingEnabled,
-            trashRetentionDays: AppSettings.Trash.retentionDays
+            trashRetentionDays: AppSettings.Trash.retentionDays,
+            playerAutoPiPOnBackground: AppSettings.Player.autoPiPOnBackground,
+            playerOrientationMode: AppSettings.Player.orientationMode.rawValue
         )
     }
 
@@ -67,6 +73,12 @@ struct PreferencesSnapshot: Codable {
         AppSettings.Cache.totalLimitMB = cacheLimitMB
         AppSettings.Cache.contentCachingEnabled = contentCachingEnabled
         AppSettings.Trash.retentionDays = trashRetentionDays
+        if let autoPiP = playerAutoPiPOnBackground {
+            AppSettings.Player.autoPiPOnBackground = autoPiP
+        }
+        if let mode = playerOrientationMode, let orientationMode = PlayerOrientationMode(rawValue: mode) {
+            AppSettings.Player.orientationMode = orientationMode
+        }
     }
 }
 

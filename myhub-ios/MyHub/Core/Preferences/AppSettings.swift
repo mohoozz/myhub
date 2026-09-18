@@ -56,6 +56,11 @@ enum DecodePreference: String, CaseIterable, Codable {
     case auto, hardware, software   // 自动 / 强制硬解 / 强制软解
 }
 
+/// 播放器横竖屏切换方式（TODO §10：设置 → 播放器偏好）
+enum PlayerOrientationMode: String, CaseIterable, Codable {
+    case manual, auto   // 手动：点按钮切换并缓存方向；自动：跟随设备横放/竖放
+}
+
 enum SearchEngine: String, CaseIterable, Codable {
     case google, bing, baidu, custom
 
@@ -120,6 +125,12 @@ enum AppSettings {
         @UserDefault("player.subtitleFontSize", default: 16) static var subtitleFontSize: Double
         @UserDefault("player.subtitleDelay", default: 0) static var subtitleDelay: Double
         @UserDefault("player.seekStepSeconds", default: 10) static var seekStepSeconds: Double   // 快进/快退步进
+        /// App 退后台时自动进入画中画（默认关闭；仅硬解 AVPlayer 路径生效）
+        @UserDefault("player.autoPiPOnBackground", default: false) static var autoPiPOnBackground: Bool
+        /// 横竖屏切换方式（手动 / 自动）
+        @RawUserDefault("player.orientationMode", default: .manual) static var orientationMode: PlayerOrientationMode
+        /// 手动模式下缓存的方向偏好（true = 横屏）：退出播放页不重置，下次播放沿用
+        @UserDefault("player.landscapePreferred", default: false) static var landscapePreferred: Bool
     }
 
     /// 浏览器偏好

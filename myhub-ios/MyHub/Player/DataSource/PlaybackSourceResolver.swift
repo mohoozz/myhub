@@ -6,6 +6,7 @@ import GRDB
 /// 同时查询历史播放进度生成 startAt，供引擎首帧就绪后一次性精准 seek（精准续播，无「先 0 后跳」）。
 enum PlaybackSourceResolver {
     static func makeRequest(connection: Connection, entry: FileEntry) async throws -> PlaybackRequest {
+        let startedAt = ProcessInfo.processInfo.systemUptime
         let mediaType = MediaType.detect(ext: entry.ext)
         let item = PlayableItem(
             title: entry.name,
@@ -16,14 +17,27 @@ enum PlaybackSourceResolver {
         let startAt = resumePosition(connectionID: connection.id, path: entry.path, mediaType: mediaType)
 
         let url: URL
-        if let remote = try await makeRemoteStreamURL(connection: connection, entry: entry) {
-            url = remote
-        } else if let adapter = try AdapterFactory.makeAdapter(for: connection) as? LocalAdapter,
-                  let fileURL = adapter.localFileURL(for: entry.path) {
-            url = fileURL
-        } else {
-            throw StorageError.invalidPath(entry.path)
+        do {
+            if let remote = try await makeRemoteStreamURL(connection: connection, entry: entry) {
+                url = remote
+            } else if let adapter = try AdapterFactory.makeAdapter(for: connection) as? LocalAdapter,
+                      let fileURL = adapter.localFileURL(for: entry.path) {
+                url = fileURL
+            } else {
+                throw StorageError.invalidPath(entry.path)
+            }
+        } catch {
+            // 解析失败面包屑（TODO 380）：区分「点播后就卡在数据源解析」还是进入了引擎加载
+            AppLogger.shared.log(
+                "数据源解析失败 file=\(entry.name) type=\(connection.type.rawValue) error=\(error.localizedDescription) 网络=\(NetworkPathMonitor.shared.snapshot())",
+                level: .error, module: "player-audio"
+            )
+            throw error
         }
+        AppLogger.shared.log(
+            "数据源解析完成 file=\(entry.name) type=\(connection.type.rawValue) url=\(url.absoluteString) startAt=\(startAt.map { String(Int($0)) } ?? "nil") 耗时=\(Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000))ms",
+            level: .info, module: "player-audio"
+        )
         return PlaybackRequest(item: item, url: url, mediaType: mediaType, startAt: startAt)
     }
 
@@ -45,12 +59,23 @@ enum PlaybackSourceResolver {
             // IOS-605 离线兜底：stat 失败构造的兜底条目（size <= 0）时，反查分片缓存身份，
             // 命中则以缓存身份起播——已缓存分片离线可播，未缓存区间快速报错不重试
             var offline = false
-            if entry.size <= 0,
-               let cached = await SegmentCache.shared.cachedIdentity(
-                   connectionID: connection.id ?? 0, path: entry.path
-               ) {
-                identity = cached
-                offline = true
+            if entry.size <= 0 {
+                if let cached = await SegmentCache.shared.cachedIdentity(
+                    connectionID: connection.id ?? 0, path: entry.path
+                ) {
+                    identity = cached
+                    offline = true
+                    // 熄屏回来 stat 失败时命中缓存身份才可能继续播（TODO 380 诊断）
+                    AppLogger.shared.log(
+                        "离线兜底：命中分片缓存身份 file=\(entry.name) size=\(cached.size)（按缓存身份起播）",
+                        level: .warn, module: "player-audio"
+                    )
+                } else {
+                    AppLogger.shared.log(
+                        "离线兜底：无分片缓存身份 file=\(entry.name)（stat 失败且无缓存，未缓存区间将快速失败）",
+                        level: .warn, module: "player-audio"
+                    )
+                }
             }
             let source = AdapterRangeDataSource(
                 adapter: adapter, path: entry.path,

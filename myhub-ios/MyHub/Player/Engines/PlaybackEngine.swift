@@ -28,6 +28,20 @@ enum PlaybackState: Equatable {
         if case .failed = self { return true }
         return false
     }
+
+    /// 可读状态名（诊断日志用，TODO 380）
+    var logDescription: String {
+        switch self {
+        case .idle: return "idle"
+        case .loading: return "loading"
+        case .ready: return "ready"
+        case .playing: return "playing"
+        case .paused: return "paused"
+        case .buffering: return "buffering"
+        case .ended: return "ended"
+        case .failed(let message): return "failed(\(message))"
+        }
+    }
 }
 
 /// 音轨 / 字幕轨选项
@@ -85,4 +99,12 @@ protocol PlaybackEngine: AnyObject {
     func selectAudioTrack(_ id: Int)
     /// 选择字幕轨；nil = 关闭字幕
     func selectSubtitleTrack(_ id: Int?)
+
+    /// 引擎内部状态快照（诊断日志用，TODO 380）：回前台 / 失败时记录，
+    /// 用于区分「卡在等待态」「已停滞」「播放器已释放」等熄屏后异常
+    var diagnosticSnapshot: String { get }
+}
+
+extension PlaybackEngine {
+    var diagnosticSnapshot: String { "none" }
 }

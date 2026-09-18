@@ -45,7 +45,21 @@ final class LocalStreamProxy {
         lock.lock()
         sessions[id] = Session(reader: reader, contentType: Self.mimeType(forFileName: fileName))
         lock.unlock()
+        // 注册面包屑（TODO 380）：记录起播时监听端口与 reader 参数，复现时确认「熄屏后回环地址是否仍可用」
+        AppLogger.shared.log(
+            "register 串流会话 file=\(fileName) port=\(currentPort) 内容长度=\(reader.contentLength) 缓存=\(reader.cachingEnabled) 离线=\(reader.offlineMode) 预取=\(reader.prefetchEnabled) 网络=\(NetworkPathMonitor.shared.snapshot())",
+            level: .info, module: "stream"
+        )
         return url
+    }
+
+    /// 监听健康快照（诊断日志用，TODO 380）：ready/端口/活跃会话数
+    func healthSnapshot() -> String {
+        lock.lock()
+        let state = listenerReady ? "ready" : (listener == nil ? "未启动" : "未就绪")
+        let snapshot = "listener=\(state) port=\(port) sessions=\(sessions.count)"
+        lock.unlock()
+        return snapshot
     }
 
     /// 注销串流会话，返回该会话累计网络拉取字节数（封面抽帧等一次性读取后统计下载量）。
@@ -72,8 +86,11 @@ final class LocalStreamProxy {
         lock.lock()
         let isHealthy = listener != nil && listenerReady && port > 0
         lock.unlock()
-        guard !isHealthy else { return }
-        AppLogger.shared.log("本地串流代理监听不健康，触发自愈重建", level: .warn, module: "stream")
+        guard !isHealthy else {
+            AppLogger.shared.log("本地串流代理监听健康，无需自愈（\(healthSnapshot())）", level: .debug, module: "stream")
+            return
+        }
+        AppLogger.shared.log("本地串流代理监听不健康（\(healthSnapshot())），触发自愈重建", level: .warn, module: "stream")
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             do {
@@ -98,13 +115,14 @@ final class LocalStreamProxy {
         lock.lock()
         let isUsable = listener != nil && listenerReady && port > 0
         let stale = isUsable ? nil : listener
+        let snapshot = "listener=\(listener == nil ? "nil" : "存在") ready=\(listenerReady) port=\(port) sessions=\(sessions.count)"
         lock.unlock()
         if isUsable { return }
 
         // 监听不可用（从未启动 / 长时间后台后进入 waiting、failed、cancelled）：
         // 清理僵尸监听后重建，避免复用失效端口导致音视频加载全失败（TODO 366）
         if stale != nil {
-            AppLogger.shared.log("监听不可用，重建本地串流代理", level: .warn, module: "stream")
+            AppLogger.shared.log("监听不可用（\(snapshot)），重建本地串流代理", level: .warn, module: "stream")
         }
         lock.lock()
         listener = nil

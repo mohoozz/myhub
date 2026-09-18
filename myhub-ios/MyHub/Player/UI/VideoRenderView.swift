@@ -17,8 +17,9 @@ final class PiPState: NSObject, ObservableObject {
         guard AVPictureInPictureController.isPictureInPictureSupported(),
               let controller = AVPictureInPictureController(playerLayer: layer) else { return }
         controller.delegate = self
-        // App 退后台时自动进入画中画（需 Info.plist 声明 UIBackgroundModes = audio）
-        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        // App 退后台时是否自动进入画中画（默认关闭，可在「设置 → 播放器偏好」开启；
+        // 需 Info.plist 声明 UIBackgroundModes = audio）
+        controller.canStartPictureInPictureAutomaticallyFromInline = AppSettings.Player.autoPiPOnBackground
         self.controller = controller
         isSupported = true
     }
@@ -129,10 +130,13 @@ struct VideoRenderView: UIViewRepresentable {
                 playerLayer = layer
                 attachedOutput = player
                 pip.attach(layer: layer)
+                // 渲染桥面包屑（TODO 380）：确认熄屏回前台/引擎切换后画面输出层是否重新挂载
+                AppLogger.shared.log("渲染桥挂载 硬解 AVPlayerLayer", level: .debug, module: "player")
             } else if let mediaPlayer = object as? VLCMediaPlayer {
                 mediaPlayer.drawable = view
                 attachedOutput = mediaPlayer
                 hostView = view
+                AppLogger.shared.log("渲染桥挂载 软解 VLC drawable", level: .debug, module: "player")
             }
         }
 

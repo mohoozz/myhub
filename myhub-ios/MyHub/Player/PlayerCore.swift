@@ -78,6 +78,11 @@ final class PlayerCore: ObservableObject {
     /// 当前播放请求（字幕/封面等周边模块读取连接与来源信息）
     var request: PlaybackRequest? { pendingRequest }
 
+    /// 引擎内部状态快照（诊断日志用，TODO 380）：如 AVPlayer 等待原因 / VLC 状态
+    var engineDiagnostics: String {
+        "\(engineKind?.rawValue ?? "nil") \(engine?.diagnosticSnapshot ?? "engine=nil")"
+    }
+
     // MARK: - 打开 / 关闭
 
     func open(_ request: PlaybackRequest) async {
@@ -85,6 +90,12 @@ final class PlayerCore: ObservableObject {
         if request.decodePreference == nil {
             request.decodePreference = AppSettings.Player.decodePreference
         }
+        // 打开上下文（TODO 380）：起播时的完整环境快照，复现「熄屏一段时间后无法播放」时
+        // 对照同刻 lifecycle / network-route / stream 日志定位是地址锁定、代理端口还是媒体探测卡住
+        AppLogger.shared.log(
+            "open file=\(request.item.title) mediaType=\(request.mediaType.rawValue) decode=\(request.decodePreference?.rawValue ?? "nil") startAt=\(request.startAt.map { String(Int($0)) } ?? "nil") url=\(request.url.absoluteString) 锁定=[\(RoutedWebDAVAdapter.lockSnapshot())] 代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot())",
+            level: .info, module: "player-audio"
+        )
         teardownSession()
         pendingRequest = request
         currentItem = request.item
@@ -184,10 +195,25 @@ final class PlayerCore: ObservableObject {
         self.didBecomeReady = false
 
         Task {
+            // load 两级面包屑（TODO 380）：外层「开始/返回/抛错 + 耗时」，内层引擎各自明细，
+            // 定位熄屏后卡在「媒体探测 / 轨道加载 / 起播」哪一步
+            let loadStart = ProcessInfo.processInfo.systemUptime
+            AppLogger.shared.log(
+                "engine.load 开始 kind=\(kind.rawValue) url=\(request.url.absoluteString)",
+                level: .debug, module: "player-audio"
+            )
             do {
                 try await engine.load(url: request.url, startAt: request.startAt)
+                AppLogger.shared.log(
+                    "engine.load 返回 kind=\(kind.rawValue) 耗时=\(Int((ProcessInfo.processInfo.systemUptime - loadStart) * 1000))ms",
+                    level: .info, module: "player-audio"
+                )
                 engine.play()
             } catch {
+                AppLogger.shared.log(
+                    "engine.load 抛错 kind=\(kind.rawValue) 耗时=\(Int((ProcessInfo.processInfo.systemUptime - loadStart) * 1000))ms error=\(error.localizedDescription)",
+                    level: .error, module: "player-audio"
+                )
                 handleFailure(error, from: kind)
             }
         }
@@ -205,6 +231,13 @@ final class PlayerCore: ObservableObject {
                 refreshTracks()
                 engine?.setRate(rate)
                 engine?.setVideoEnabled(!isAudioOnly)
+            }
+            if state != newState {
+                // 状态迁移面包屑（TODO 380）：loading/buffering 卡住或回跳时定位卡点
+                AppLogger.shared.log(
+                    "播放状态 \(state.logDescription) -> \(newState.logDescription) kind=\(kind.rawValue) 时间=\(Int(currentTime))s",
+                    level: .debug, module: "player-audio"
+                )
             }
             state = newState
             if newState == .ended {
@@ -246,12 +279,18 @@ final class PlayerCore: ObservableObject {
     private func handleFailure(_ error: Error, from kind: PlayerEngineKind) {
         let preference = pendingRequest?.decodePreference ?? .auto
         if kind == .hardware, preference == .auto, !didBecomeReady {
+            // 回退面包屑（TODO 380）：同时出现「硬解失败 + 软解失败」才最终失败，缺此条会误判卡点
+            AppLogger.shared.log(
+                "硬解起播失败，自动回退软解 error=\(error.localizedDescription) 引擎=\(engineDiagnostics)",
+                level: .warn, module: "player-audio"
+            )
             startEngine(kind: .software)
             return
         }
-        // 记录失败时的地址锁定快照（TODO 366）：配合 network-route 日志定位「熄屏后加载失败」是否与网络/路由有关
+        // 记录失败时的完整环境快照（TODO 366/380）：配合 network-route / stream / lifecycle 日志定位
+        // 「熄屏后无法播放」的根因是网络/路由、串流代理还是媒体本身
         AppLogger.shared.log(
-            "播放失败 kind=\(kind.rawValue) error=\(error.localizedDescription) 地址锁定=\(RoutedWebDAVAdapter.lockSnapshot())",
+            "播放失败 kind=\(kind.rawValue) error=\(error.localizedDescription) item=\(currentItem?.title ?? "nil") startAt=\(pendingRequest?.startAt.map { String(Int($0)) } ?? "nil") 引擎=\(engineDiagnostics) 锁定=[\(RoutedWebDAVAdapter.lockSnapshot())] 代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot()) state=\(state.logDescription)",
             level: .error, module: "player-audio"
         )
         state = .failed(error.localizedDescription)

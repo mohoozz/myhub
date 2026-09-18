@@ -15,6 +15,11 @@ final class AVPlayerEngine: PlaybackEngine {
     private var timeObserver: Any?
     private var observations: [NSKeyValueObservation] = []
     private var endObserver: NSObjectProtocol?
+    private var stallObserver: NSObjectProtocol?
+    /// 等待播放日志节流（TODO 380）：弱网下 waiting KVO 可能高频触发，至少间隔 2s 记一条
+    private var lastWaitingLogAt: TimeInterval = 0
+    /// 本次 load 起始时刻（诊断日志用，TODO 380）
+    private var loadStartedAt: TimeInterval = 0
 
     private var desiredRate: Float = 1
     private var pendingStartAt: TimeInterval?
@@ -44,11 +49,70 @@ final class AVPlayerEngine: PlaybackEngine {
     /// 硬解仅隐藏画面（AVPlayer 无便捷途径关闭视频解码；音频文件本就无视频轨）
     func setVideoEnabled(_ enabled: Bool) {}
 
+    /// 引擎内部状态快照（诊断日志用，TODO 380）
+    var diagnosticSnapshot: String {
+        guard let player else { return "player=nil item=nil" }
+        var parts = [
+            "timeControl=\(Self.describeTimeControl(player.timeControlStatus))",
+            "rate=\(player.rate)",
+        ]
+        if let reason = player.reasonForWaitingToPlay {
+            parts.append("waitingReason=\(reason.rawValue)")
+        }
+        if let item = playerItem {
+            parts.append("itemStatus=\(Self.describeItemStatus(item.status))")
+            parts.append("bufferEmpty=\(item.isPlaybackBufferEmpty)")
+            parts.append("keepUp=\(item.isPlaybackLikelyToKeepUp)")
+        } else {
+            parts.append("item=nil")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func describeTimeControl(_ status: AVPlayer.TimeControlStatus) -> String {
+        switch status {
+        case .paused: return "paused"
+        case .waitingToPlayAtSpecifiedRate: return "waiting"
+        case .playing: return "playing"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private static func describeItemStatus(_ status: AVPlayerItem.Status) -> String {
+        switch status {
+        case .unknown: return "unknown"
+        case .readyToPlay: return "ready"
+        case .failed: return "failed"
+        @unknown default: return "unknown"
+        }
+    }
+
     // MARK: - 加载
 
     func load(url: URL, startAt: TimeInterval?) async throws {
+        // 加载面包屑（TODO 380）：开始 / 媒体探测结果 / 提交 三段耗时，
+        // 熄屏回来后若卡住可判断是「探测无响应」（无后续日志）还是「建连慢」
+        let loadStart = ProcessInfo.processInfo.systemUptime
+        loadStartedAt = loadStart
+        AppLogger.shared.log(
+            "硬解加载开始 url=\(url.absoluteString) startAt=\(startAt.map { String(Int($0)) } ?? "nil") 网络=\(NetworkPathMonitor.shared.snapshot())",
+            level: .debug, module: "player-audio"
+        )
         let asset = AVURLAsset(url: url)
-        let playable = (try? await asset.load(.isPlayable)) ?? false
+        let playable: Bool
+        do {
+            playable = try await asset.load(.isPlayable)
+        } catch {
+            AppLogger.shared.log(
+                "硬解媒体探测失败 url=\(url.absoluteString) error=\(error.localizedDescription) 耗时=\(Self.elapsedMs(since: loadStart))ms",
+                level: .error, module: "player-audio"
+            )
+            throw error
+        }
+        AppLogger.shared.log(
+            "硬解媒体探测 playable=\(playable) 耗时=\(Self.elapsedMs(since: loadStart))ms",
+            level: .debug, module: "player-audio"
+        )
         guard playable else { throw PlayerPlaybackError("系统原生无法解码该格式") }
 
         // 检测「有视频轨却无音频轨」：AVFoundation 对 DTS/DTS-HD/TrueHD/E-AC-3 等不支持的音频编码
@@ -86,6 +150,10 @@ final class AVPlayerEngine: PlaybackEngine {
 
         installObservers(player: player, item: item)
         onEvent?(.stateChanged(.loading))
+        AppLogger.shared.log(
+            "硬解加载提交 video=\(videoTracks.count) audio=\(audioTracks.count) 总耗时=\(Self.elapsedMs(since: loadStart))ms 网络=\(NetworkPathMonitor.shared.snapshot())（等待 item 就绪）",
+            level: .info, module: "player-audio"
+        )
 
         // 异步记录音轨编码，定位「有画面无声」——判断音频编码是否被硬解支持（TODO 358）
         Task { await logAudioDiagnostics(asset: asset) }
@@ -113,6 +181,10 @@ final class AVPlayerEngine: PlaybackEngine {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+        if let stallObserver {
+            NotificationCenter.default.removeObserver(stallObserver)
+        }
+        stallObserver = nil
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
@@ -192,10 +264,22 @@ final class AVPlayerEngine: PlaybackEngine {
                 guard let self else { return }
                 switch item.status {
                 case .readyToPlay:
+                    // item 就绪耗时（TODO 380）：从 load 开始到可播的建连/拉流耗时，
+                    // 熄屏回来若「加载提交」后长时间无此条，说明卡在服务器不响应
+                    AppLogger.shared.log(
+                        "硬解 item 就绪 起播总耗时=\(Int((ProcessInfo.processInfo.systemUptime - self.loadStartedAt) * 1000))ms",
+                        level: .info, module: "player-audio"
+                    )
                     self.applyPendingStartIfNeeded()
                     self.onEvent?(.stateChanged(.ready))
                     self.onEvent?(.tracksChanged)
                 case .failed:
+                    // item 失败详情（TODO 380）：error 带域名/错误码，errorLog 带 HTTP 状态码，
+                    // 用于区分「网络请求被拒/超时」与「媒体本身问题」
+                    AppLogger.shared.log(
+                        "硬解 item 失败 error=\(item.error.map { "\($0)" } ?? "nil") errorLog=\(Self.errorLogSummary(item)) 网络=\(NetworkPathMonitor.shared.snapshot())",
+                        level: .error, module: "player-audio"
+                    )
                     self.onEvent?(.stateChanged(.failed(item.error?.localizedDescription ?? "媒体加载失败")))
                 default:
                     break
@@ -213,6 +297,16 @@ final class AVPlayerEngine: PlaybackEngine {
                 case .paused:
                     self.onEvent?(.stateChanged(.paused))
                 case .waitingToPlayAtSpecifiedRate:
+                    // 等待原因面包屑（TODO 380）：reason 区分「缓冲不足 / 评测起播码率 / 无 item」，
+                    // 附缓冲水位与网络路径，定位熄屏回前台后起播卡在等待态的原因
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if now - self.lastWaitingLogAt >= 2 {
+                        self.lastWaitingLogAt = now
+                        AppLogger.shared.log(
+                            "硬解等待播放 reason=\(player.reasonForWaitingToPlay?.rawValue ?? "nil") 缓冲空=\(item.isPlaybackBufferEmpty) 可续播=\(item.isPlaybackLikelyToKeepUp) 已缓冲=\(Int(self.bufferedTime))s 网络=\(NetworkPathMonitor.shared.snapshot())",
+                            level: .warn, module: "player-audio"
+                        )
+                    }
                     self.onEvent?(.stateChanged(.buffering))
                 default:
                     break
@@ -253,13 +347,43 @@ final class AVPlayerEngine: PlaybackEngine {
                 self?.onEvent?(.stateChanged(.ended))
             }
         }
+
+        // 播放停滞通知（TODO 380）：系统判定「数据断流」时记录水位与 errorLog，
+        // 用于区分熄屏回前台后是「网络拉不动」还是「解码停顿」
+        stallObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                AppLogger.shared.log(
+                    "硬解播放停滞（playbackStalled）time=\(Int(self.currentTime))s 已缓冲=\(Int(self.bufferedTime))s 缓冲空=\(item.isPlaybackBufferEmpty) 可续播=\(item.isPlaybackLikelyToKeepUp) errorLog=\(Self.errorLogSummary(item)) 网络=\(NetworkPathMonitor.shared.snapshot())",
+                    level: .warn, module: "player-audio"
+                )
+            }
+        }
     }
 
     /// 历史进度恢复：首帧就绪后一次性 seek 到起始位置（精准续播，不先 0 后跳）
     private func applyPendingStartIfNeeded() {
         guard !didApplyStartAt, let start = pendingStartAt, start > 1 else { return }
         didApplyStartAt = true
+        AppLogger.shared.log("硬解恢复历史进度 seek=\(Int(start))s", level: .debug, module: "player-audio")
         seek(to: start)
+    }
+
+    /// 距起点毫秒数（诊断日志用，TODO 380）
+    private static func elapsedMs(since start: TimeInterval) -> Int {
+        Int((ProcessInfo.processInfo.systemUptime - start) * 1000)
+    }
+
+    /// AVPlayerItem 错误日志摘要（HTTP 状态码等，TODO 380）
+    private static func errorLogSummary(_ item: AVPlayerItem) -> String {
+        guard let log = item.errorLog(), !log.events.isEmpty else { return "none" }
+        return log.events.suffix(3).map { event in
+            "[\(event.errorStatusCode) \(event.errorDomain ?? "?") \(event.errorComment ?? "") \(event.uri ?? "")]"
+        }.joined(separator: " ")
     }
 
     /// 记录硬解音轨编码信息，定位「有画面无声」——判断音频编码是否被系统原生支持（TODO 358）

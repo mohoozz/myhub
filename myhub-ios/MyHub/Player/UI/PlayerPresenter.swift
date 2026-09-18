@@ -37,6 +37,12 @@ final class PlayerPresenter: ObservableObject {
     /// 从连接源条目播放：解析数据源（本地 file:// / 边下边播代理）+ 历史进度恢复（§4.2 精准续播）；
     /// 先展示播放 UI 再异步解析（弱网不出现「点了没反应」），解析失败经 lastError 呈现失败态
     func play(connection: Connection, entry: FileEntry) {
+        // 点击面包屑（TODO 380）：与后续「数据源解析完成 / open」日志对照，
+        // 判断熄屏回来点播卡在「解析前 / 解析中 / 引擎加载」
+        AppLogger.shared.log(
+            "点击播放 file=\(entry.name) type=\(connection.type.rawValue) 代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot())",
+            level: .info, module: "player"
+        )
         let mediaType = MediaType.detect(ext: entry.ext)
         play(PlayableItem(
             title: entry.name, path: entry.path,
@@ -47,7 +53,13 @@ final class PlayerPresenter: ObservableObject {
                 let request = try await PlaybackSourceResolver.makeRequest(connection: connection, entry: entry)
                 await PlayerCore.shared.open(request)
             } catch {
-                await MainActor.run { self.lastError = error.localizedDescription }
+                await MainActor.run {
+                    self.lastError = error.localizedDescription
+                    AppLogger.shared.log(
+                        "播放失败态呈现 error=\(error.localizedDescription)",
+                        level: .error, module: "player"
+                    )
+                }
             }
         }
     }

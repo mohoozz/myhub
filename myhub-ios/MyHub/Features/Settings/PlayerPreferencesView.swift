@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 播放器偏好（TODO §10 / IOS-503）：默认倍速/解码偏好/预读窗口/字幕样式/纯音频默认/音量步进（默认 5%）
+/// 播放器偏好（TODO §10 / IOS-503）：默认倍速/解码偏好/预读窗口/字幕样式/纯音频默认/音量步进（默认 5%）/退后台自动画中画
 struct PlayerPreferencesView: View {
     @State private var defaultSpeed = AppSettings.Player.defaultSpeed
     @State private var decodePreference = AppSettings.Player.decodePreference
@@ -10,6 +10,8 @@ struct PlayerPreferencesView: View {
     @State private var audioOnlyByDefault = AppSettings.Player.audioOnlyByDefault
     @State private var volumeStep = AppSettings.Player.volumeStep
     @State private var seekStepSeconds = AppSettings.Player.seekStepSeconds
+    @State private var autoPiPOnBackground = AppSettings.Player.autoPiPOnBackground
+    @State private var orientationMode = AppSettings.Player.orientationMode
 
     private static let speedOptions: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]
     private static let seekStepOptions: [Double] = [5, 10, 15, 30]
@@ -17,7 +19,11 @@ struct PlayerPreferencesView: View {
 
     var body: some View {
         Form {
-            Section("播放") {
+            Section {
+                Picker("横竖屏切换", selection: $orientationMode) {
+                    Text("手动切换").tag(PlayerOrientationMode.manual)
+                    Text("自动切换").tag(PlayerOrientationMode.auto)
+                }
                 Picker("默认倍速", selection: $defaultSpeed) {
                     ForEach(Self.speedOptions, id: \.self) { speed in
                         Text("\(speed, specifier: "%.2g")x").tag(speed)
@@ -29,6 +35,11 @@ struct PlayerPreferencesView: View {
                     }
                 }
                 Toggle("默认纯音频模式", isOn: $audioOnlyByDefault)
+                Toggle("退后台自动画中画", isOn: $autoPiPOnBackground)
+            } header: {
+                Text("播放")
+            } footer: {
+                Text("横竖屏切换：手动模式点播放页左侧按钮切换，并记住方向供下次播放沿用；自动模式跟随手机横放/竖放。退后台自动画中画：开启后，播放视频时 App 切换到后台将自动进入画中画；默认关闭，仍可通过播放页的画中画按钮手动开启。")
             }
             Section {
                 Picker("解码偏好", selection: $decodePreference) {
@@ -72,8 +83,10 @@ struct PlayerPreferencesView: View {
         .onChange(of: subtitleFontSize) { AppSettings.Player.subtitleFontSize = $0 }
         .onChange(of: subtitleDelay) { AppSettings.Player.subtitleDelay = $0 }
         .onChange(of: audioOnlyByDefault) { AppSettings.Player.audioOnlyByDefault = $0 }
+        .onChange(of: autoPiPOnBackground) { AppSettings.Player.autoPiPOnBackground = $0 }
         .onChange(of: volumeStep) { AppSettings.Player.volumeStep = $0 }
         .onChange(of: seekStepSeconds) { AppSettings.Player.seekStepSeconds = $0 }
+        .onChange(of: orientationMode) { AppSettings.Player.orientationMode = $0 }
     }
 
     private func valueRow<Content: View>(

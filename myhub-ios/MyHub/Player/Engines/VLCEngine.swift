@@ -31,6 +31,8 @@ final class VLCEngine: NSObject, PlaybackEngine {
     private var pendingStartAt: TimeInterval?
     private var didApplyStartAt = false
     private var didEmitReady = false
+    /// 最近一次记录过的 VLC 状态名（去重，避免重复状态刷日志，TODO 380）
+    private var lastStateLog: String?
     /// 最近一次上报给上层的状态：用于「时间在走却仍标记 buffering」的兜底纠正（TODO 353）
     private var lastReportedState: PlaybackState = .idle
 
@@ -72,6 +74,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         pendingStartAt = startAt
         didApplyStartAt = false
         didEmitReady = false
+        lastStateLog = nil
         let media = VLCMedia(url: url)
         // 优先硬件解码（VideoToolbox）降低软解 CPU 发热；不支持的编码由 avcodec 自动回退软解
         media.addOption(":avcodec-hw=videotoolbox")
@@ -80,6 +83,11 @@ final class VLCEngine: NSObject, PlaybackEngine {
         let networkCachingMs = Int(min(max(AppSettings.Player.preloadSeconds, 3), 5) * 1000)
         media.addOption(":network-caching=\(networkCachingMs)")
         player.media = media
+        // 加载面包屑（TODO 380）：记录起播 URL 与网络缓存策略，配合后续状态日志定位熄屏后卡点
+        AppLogger.shared.log(
+            "软解加载开始 url=\(url.absoluteString) startAt=\(startAt.map { String(Int($0)) } ?? "nil") network-caching=\(networkCachingMs)ms 网络=\(NetworkPathMonitor.shared.snapshot())",
+            level: .info, module: "player-audio"
+        )
         onEvent?(.stateChanged(.loading))
         // VLCKit 异步起播：opening/buffering/playing 状态经 delegate 回报
     }
@@ -159,6 +167,15 @@ final class VLCEngine: NSObject, PlaybackEngine {
     }
 
     fileprivate func handleStateChanged() {
+        // 状态变化面包屑（TODO 380）：去重记录，软解卡 opening / error 时可直接定位
+        let stateName = vlcStateName()
+        if lastStateLog != stateName {
+            lastStateLog = stateName
+            AppLogger.shared.log(
+                "软解状态 -> \(stateName) playing=\(player.isPlaying) time=\(Int(currentTime))s 网络=\(NetworkPathMonitor.shared.snapshot())",
+                level: .debug, module: "player-audio"
+            )
+        }
         switch player.state {
         case .opening:
             emit(.loading)
@@ -185,9 +202,32 @@ final class VLCEngine: NSObject, PlaybackEngine {
         case .ended:
             emit(.ended)
         case .error:
+            AppLogger.shared.log(
+                "软解播放错误 url=\(player.media?.url?.absoluteString ?? "nil") time=\(Int(currentTime))s 网络=\(NetworkPathMonitor.shared.snapshot())",
+                level: .error, module: "player-audio"
+            )
             emit(.failed("软解引擎播放失败"))
         default:
             break
+        }
+    }
+
+    /// 引擎内部状态快照（诊断日志用，TODO 380）
+    var diagnosticSnapshot: String {
+        "vlcState=\(vlcStateName()) playing=\(player.isPlaying) time=\(Int(currentTime))s"
+    }
+
+    /// VLC 状态可读名（诊断日志用，TODO 380）
+    private func vlcStateName() -> String {
+        switch player.state {
+        case .opening: return "opening"
+        case .buffering: return "buffering"
+        case .playing: return "playing"
+        case .paused: return "paused"
+        case .stopped: return "stopped"
+        case .ended: return "ended"
+        case .error: return "error"
+        default: return "other(\(player.state.rawValue))"
         }
     }
 
@@ -206,6 +246,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
     private func applyPendingStartIfNeeded() {
         guard !didApplyStartAt, player.state == .playing, let start = pendingStartAt, start > 1 else { return }
         didApplyStartAt = true
+        AppLogger.shared.log("软解恢复历史进度 seek=\(Int(start))s", level: .debug, module: "player-audio")
         seek(to: start)
         player.rate = desiredRate
     }

@@ -220,7 +220,9 @@ struct BrowseDirectoryView: View {
         .navigationBarBackButtonHidden(showsPlainBack)
         .toolbar { toolbar }
         .background(swipeBackEnabler)
-        .overlay(alignment: .bottom) { bottomOverlay }
+        // 底部覆盖层（多选操作栏 / 传输横幅 / 轻提示）经 safeAreaInset 注入：
+        // 自动叠在全局悬浮页签栏（含 mini 播放器）上方，不再被页签栏遮挡（TODO 379）
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomOverlay }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.item],
@@ -510,7 +512,8 @@ struct BrowseDirectoryView: View {
             }
         }
         .animation(.appQuick, value: viewModel.viewMode)
-        .padding(.bottom, viewModel.isSelecting ? 64 : 0)   // 给多选操作栏留位
+        // 底部覆盖层已由 safeAreaInset 注入，ScrollView 自动预留内容内边距（TODO 379），
+        // 不再手工叠加 64pt 底部留白
     }
 
     private func gridView(_ items: [FileEntry], adapter: StorageAdapter) -> some View {
@@ -639,9 +642,15 @@ struct BrowseDirectoryView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.bottom, 10)
+        // 无内容时高度为 0：safeAreaInset 不额外预留底部空间（TODO 379）
+        .padding(.bottom, hasBottomOverlayContent ? 10 : 0)
         .animation(.appQuick, value: viewModel.isSelecting)
         .animation(.appQuick, value: viewModel.toast)
+    }
+
+    /// 底部覆盖层是否有内容（传输横幅 / 轻提示 / 多选操作栏任一在场）
+    private var hasBottomOverlayContent: Bool {
+        viewModel.transfer != nil || viewModel.toast != nil || viewModel.isSelecting
     }
 
     private func transferBanner(_ progress: BrowseDirectoryViewModel.TransferProgress) -> some View {

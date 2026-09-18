@@ -27,6 +27,8 @@ enum AppColors {
     static let cardBorder = Color(light: Color(hex: 0xEDF0F3), dark: Color(hex: 0x262626))
     /// 底部页签栏灰边框：与白色主界面分割（TODO 376 方案 C 悬浮圆角胶囊）
     static let tabBarBorder = Color(light: Color(hex: 0xD1D5DB), dark: Color(hex: 0x3A3A3C))
+    /// 胶囊内浅灰填充块（地址栏 / 标签数 chip，TODO 377 方案 A 悬浮单胶囊操作栏）
+    static let fieldFill = Color(light: Color(hex: 0xF3F4F6), dark: Color(hex: 0x2C2C2E))
     static let sidebarBackground = Color(light: Color(hex: 0xFFFFFF), dark: Color(hex: 0x0A0A0A))
     static let textPrimary = Color(light: Color(hex: 0x1A1A2E), dark: Color(hex: 0xE0E0E0))
     static let textSecondary = Color(light: Color(hex: 0x6B7280), dark: Color(hex: 0x888888))

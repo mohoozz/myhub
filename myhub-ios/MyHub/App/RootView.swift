@@ -44,9 +44,8 @@ struct RootView: View {
             // dismiss 转场已结束，此时恢复竖屏是安全的：requestGeometryUpdate 不与转场并发。
             // onDisappear 在转场「进行中」触发，若在那一刻旋转会与 dismiss 并发，导致 iOS 16 崩溃。
             AppLogger.shared.log("fullScreenCover onDismiss isLandscape=\(OrientationController.shared.isLandscape)", module: "player")
-            if OrientationController.shared.isLandscape {
-                OrientationController.shared.lockPortrait()
-            }
+            // 退出播放页：恢复竖屏并停止自动跟随（方向偏好保留，下次播放沿用）
+            OrientationController.shared.exitPlayer()
         }) {
             PlayerView()
         }

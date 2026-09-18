@@ -32,14 +32,11 @@ struct AddressBar: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(AppColors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(AppColors.separator, lineWidth: 0.5)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(height: 38)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // 胶囊内浅灰填充块（TODO 377 方案 A）：不再描边，靠填充色与白胶囊区分
+        .background(Capsule().fill(AppColors.fieldFill))
+        .contentShape(Capsule())
         .onTapGesture {
             guard !isEditing else { return }
             beginEditing()
