@@ -17,7 +17,8 @@ struct PlaybackProgressReport {
 /// - startAt：历史进度恢复位置，引擎在首帧就绪后一次性精准 seek（精准续播见 TODO §4.2）。
 struct PlaybackRequest {
     let item: PlayableItem
-    let url: URL
+    /// 本地串流代理被重建后可换新端口重用同一会话（`LocalStreamProxy.revivedURL`），故为 var
+    var url: URL
     let mediaType: MediaType
     var startAt: TimeInterval? = nil
     /// 缺省跟随全局偏好 `AppSettings.Player.decodePreference`
@@ -56,6 +57,8 @@ final class PlayerCore: ObservableObject {
     private var engine: PlaybackEngine?
     private var pendingRequest: PlaybackRequest?
     private var didBecomeReady = false
+    /// 本地串流代理连接被拒后是否已做过「换端口重建重试」（同一会话只重试一次，避免死循环）
+    private var didRetryAfterProxyRebuild = false
     private var lastReportAt: TimeInterval = 0
     /// 时间刷新节流：软解引擎（VLC）时间回调可达数十次/秒，限制 UI 时间刷新到约 4 次/秒，避免高频重绘发热
     private var lastTimeRefreshAt: TimeInterval = 0
@@ -108,6 +111,7 @@ final class PlayerCore: ObservableObject {
         lastReportAt = 0
         lastTimeRefreshAt = 0
         pausedAt = nil
+        didRetryAfterProxyRebuild = false
         state = .loading
 
         let kind = await EngineRouter.resolve(url: request.url, preference: request.decodePreference ?? .auto)
@@ -278,6 +282,29 @@ final class PlayerCore: ObservableObject {
     /// 失败处理：自动模式下硬解起播失败回退软解（探测容器/编码选择引擎的兜底路径）
     private func handleFailure(_ error: Error, from kind: PlayerEngineKind) {
         let preference = pendingRequest?.decodePreference ?? .auto
+
+        // 本地串流代理端口已失效（App 挂起后回环监听被系统回收，且被动标记不会翻转）：
+        // 硬解与软解都会以 -1004 立即失败，回退软解毫无意义。
+        // 此时重建代理、用新端口复用同一会话重试一次（TODO 366）
+        if !didRetryAfterProxyRebuild, isLoopbackConnectFailure(error), let request = pendingRequest {
+            didRetryAfterProxyRebuild = true
+            AppLogger.shared.log(
+                "检测到本地串流代理连接被拒（回环监听可能已被系统回收），重建代理换端口重试一次 error=\(error.localizedDescription) kind=\(kind.rawValue) 代理=\(LocalStreamProxy.shared.healthSnapshot())",
+                level: .warn, module: "player-audio"
+            )
+            do {
+                let revivedURL = try LocalStreamProxy.shared.revivedURL(for: request.url)
+                pendingRequest?.url = revivedURL
+                startEngine(kind: kind)
+                return
+            } catch {
+                AppLogger.shared.log(
+                    "本地串流代理换端口复用失败 error=\(error.localizedDescription)",
+                    level: .error, module: "player-audio"
+                )
+            }
+        }
+
         if kind == .hardware, preference == .auto, !didBecomeReady {
             // 回退面包屑（TODO 380）：同时出现「硬解失败 + 软解失败」才最终失败，缺此条会误判卡点
             AppLogger.shared.log(
@@ -294,6 +321,20 @@ final class PlayerCore: ObservableObject {
             level: .error, module: "player-audio"
         )
         state = .failed(error.localizedDescription)
+    }
+
+    /// 判断错误是否为「本地串流代理回环连接被拒」：目标地址是回环且属于连接失败。
+    /// 仅连接被拒（NSURLErrorCannotConnectToHost）才说明端口无人监听；
+    /// 其余失败（网络不可达、媒体损坏）不在此列，避免误触发重建重试。
+    private func isLoopbackConnectFailure(_ error: Error) -> Bool {
+        guard let host = pendingRequest?.url.host,
+              host == "127.0.0.1" || host == "localhost" else { return false }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCannotConnectToHost {
+            return true
+        }
+        // 软解（VLC）错误多被包装成字符串，按文案兜底识别
+        return nsError.localizedDescription.contains("Could not connect to the server")
     }
 
     private func refreshTracks() {

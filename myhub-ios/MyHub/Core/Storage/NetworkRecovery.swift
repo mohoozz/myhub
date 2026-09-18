@@ -6,11 +6,14 @@ import Foundation
 /// ① 内外网地址锁定（`RoutedWebDAVAdapter` 进程级共享）停留在熄屏前的网络环境——
 ///    WiFi 重连换 IP / 出门或回家等网络变化后该地址不可达，音视频分片读取全部失败，
 ///    且锁定不再重新判定，重试永远走同一个不可达地址；
-/// ② 本地串流代理（`LocalStreamProxy` 的 127.0.0.1 监听）长期挂起后可能进入
-///    waiting/failed，端口不再可用，解码器连接回环地址被拒 → 所有音视频无法加载。
+/// ② 本地串流代理（`LocalStreamProxy` 的 127.0.0.1 监听）在 App 被系统挂起期间会被
+///    iOS 回收回环监听 socket，端口不再可用，解码器连接回环地址被拒 → 所有音视频无法加载。
+///    注意：此场景 `NWListener` 不会回调 waiting/failed/cancelled，被动健康标记仍为 ready，
+///    必须靠真实回环探活才能发现（详见 `LocalStreamProxy.probe`）。
 ///
-/// 回到前台且后台时长超过阈值时：清除地址锁定（下次请求自动重新竞速判定可达地址）
-/// 并检查本地代理监听健康（异常则重建）。阈值用于避免频繁切换 App 时反复判定。
+/// 回到前台时：本地代理监听做一次探活（成本约 1ms，故每次前台都做）；
+/// 后台时长超过阈值时再清除地址锁定（下次请求自动重新竞速判定可达地址）。
+/// 阈值用于避免频繁切换 App 时反复做竞速判定。
 @MainActor
 final class NetworkRecovery {
     static let shared = NetworkRecovery()
@@ -32,7 +35,7 @@ final class NetworkRecovery {
         )
     }
 
-    /// App 回到前台：后台时长超过阈值时执行网络自愈
+    /// App 回到前台：本地代理探活每次必做，地址重判定按后台时长阈值执行
     func recoverAfterReturningToForeground() {
         guard let backgroundAt else {
             AppLogger.shared.log(
@@ -43,10 +46,16 @@ final class NetworkRecovery {
         }
         let elapsed = Date().timeIntervalSince(backgroundAt)
         self.backgroundAt = nil
+
+        // ③ 本地串流代理：与后台时长无关——挂起十几秒就足以让系统回收回环监听 socket，
+        //    且被动标记不会翻转，故每次回前台都做一次真实探活（成本约 1ms），
+        //    不健康即重建；健康的监听不动，避免打断后台音频仍在进行的分片连接（TODO 366）
+        LocalStreamProxy.shared.recoverIfNeeded()
+
         guard elapsed >= minimumBackgroundDuration else {
-            // 短切换也留面包屑（debug）：确认「熄屏回来了、但时长未达自愈阈值」这类情况
+            // 短切换也留面包屑（debug）：确认「熄屏回来了、但时长未达地址重判定阈值」这类情况
             AppLogger.shared.log(
-                "后台 \(Int(elapsed))s 后回到前台（未达 \(Int(minimumBackgroundDuration))s 自愈阈值，跳过）网络=\(NetworkPathMonitor.shared.snapshot())",
+                "后台 \(Int(elapsed))s 后回到前台（未达 \(Int(minimumBackgroundDuration))s 地址重判定阈值，跳过；已做代理探活）代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot())",
                 level: .debug, module: "network-route"
             )
             return
@@ -59,9 +68,6 @@ final class NetworkRecovery {
         )
         // ① 地址锁定失效：下次请求重新竞速判定（网络环境可能已变化，如 WiFi 重连换 IP）
         RoutedWebDAVAdapter.invalidateAllLocks(reason: "后台 \(Int(elapsed))s 回前台")
-        // ② 本地串流代理：监听不健康（waiting/failed）时异步重建；
-        //    健康的监听不动，避免打断后台音频仍在进行的分片连接
-        LocalStreamProxy.shared.recoverIfNeeded()
         AppLogger.shared.log(
             "网络自愈执行完毕 锁定=[\(RoutedWebDAVAdapter.lockSnapshot())] 代理=\(LocalStreamProxy.shared.healthSnapshot())",
             level: .info, module: "network-route"
