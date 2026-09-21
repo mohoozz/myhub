@@ -25,7 +25,6 @@ struct ComicReaderView: View {
     @State private var dragPage = 0
     /// 毛玻璃胶囊宽度 / 进度轨在胶囊内的位置（气泡跟随手柄用）
     @State private var capsuleWidth: CGFloat = 0
-    @State private var railFrame: CGRect = .zero
     @State private var showThumbnails = false
     @State private var showBrightness = false
 
@@ -65,12 +64,15 @@ struct ComicReaderView: View {
                     Spacer()
                     Text(toast)
                         .font(.caption)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(spec.text)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
-                        .background(.black.opacity(0.75))
+                        .background(LightGlassBackground(shape: Capsule(), material: .ultraThinMaterial))
+                        .overlay(Capsule().stroke(AppColors.tabBarBorder, lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
                         .clipShape(Capsule())
-                        .padding(.bottom, 90)
+                        // 底栏已与小说阅读器同高（胶囊 82 + 手柄下探 14 + 下边距 10），提示上移到其上方
+                        .padding(.bottom, 118)
                 }
                 .transition(.opacity)
             }
@@ -324,7 +326,11 @@ struct ComicReaderView: View {
             )
     }
 
-    // MARK: - 控制层（方案 A：现状式顶栏 + 底部毛玻璃胶囊）
+    // MARK: - 控制层（白色 UI：对齐小说阅读器，白玻璃底 + 深灰字 + primary 强调）
+
+    /// 白色 UI 风格色板：整层直接复用小说阅读器的日间配方
+    /// （底 `#FFFFFF` 72% 毛玻璃 / 主字 `#1F2937` / 次字 `#6B7280` / 描边 `AppColors.tabBarBorder`）
+    private var spec: ReaderThemeSpec { ReaderThemeSpec.spec(for: .day) }
 
     @ViewBuilder
     private var controlsOverlay: some View {
@@ -339,6 +345,8 @@ struct ComicReaderView: View {
     }
 
     /// 顶栏（现状式裸显示）：✕ + 书名 + ⋯ 菜单（模式 / 双页方向 / 亮度）
+    /// 不套容器、不用白玻璃条——只靠一层顶部压暗的黑色渐变托住白字：漫画页黑白线条多变，
+    /// 白条压在画面上会把页面「切」成两段，裸标题行则完全融进画面
     private var topBar: some View {
         HStack(spacing: 2) {
             Button { onClose() } label: {
@@ -365,9 +373,18 @@ struct ComicReaderView: View {
         .padding(.bottom, 10)
         .background(
             LinearGradient(
-                colors: [.black.opacity(0.78), .clear],
+                // 原来是两段线性（0.78 → clear），纯白漫画页上渐变收尾会留下一条可辨的暗带；
+                // 改四段让它在中段就基本化开，同时顶部压到 0.80 保证状态栏白字也读得清
+                stops: [
+                    .init(color: .black.opacity(0.80), location: 0),
+                    .init(color: .black.opacity(0.55), location: 0.42),
+                    .init(color: .black.opacity(0.20), location: 0.74),
+                    .init(color: .clear, location: 1),
+                ],
                 startPoint: .top, endPoint: .bottom
             )
+            // 渐变向上盖住状态栏区域（白图标 / 时间压在白漫画页上也能看清）
+            .ignoresSafeArea(edges: .top)
         )
     }
 
@@ -409,42 +426,46 @@ struct ComicReaderView: View {
         }
     }
 
-    /// 底部控制区：细字读数 + 毛玻璃主胶囊 + 快捷 chip（内缩 12pt）
+    /// 底部控制区：单行毛玻璃主胶囊（图标行 + 细字读数 + 内嵌进度轨），与小说阅读器底栏同构同高
+    /// 细字读数收进胶囊内部（见 progressReadout），「下一本」收进图标行，不再有额外的 chip 行
     private var bottomControls: some View {
-        VStack(spacing: 8) {
-            progressCaption
-            glassCapsule
-            quickChips
-        }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
+        glassCapsule
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
     }
 
-    /// 胶囊上方一行细字读数；拖动中变为深色气泡并横向跟随手柄
-    private var progressCaption: some View {
-        ZStack {
-            if let ratio = dragRatio {
-                Text("松手跳到 第 \(dragPage + 1) 页 · \(Int((ratio * 100).rounded()))%")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                    .fixedSize()
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color(red: 0.09, green: 0.11, blue: 0.16)))
-                    .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
-                    .offset(x: bubbleOffsetX)
-            } else {
-                Text(captionText)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
-                    .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
-            }
+    /// 胶囊内一行细字读数（对应小说 progressReadout：11.5pt 居中、距胶囊下沿 12pt、紧贴在进度轨上方）
+    private func progressReadout(width: CGFloat) -> some View {
+        Text(captionText)
+            .font(.system(size: 11.5))
+            .monospacedDigit()
+            .foregroundStyle(spec.secondaryText)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .frame(width: max(width - railInset * 2, 1), height: 14)
+            .padding(.bottom, readoutBottomInset)
+            .frame(width: width, height: capsuleHeight, alignment: .bottom)
+            // 细字不可点：手指压在字上也能拖动手柄
+            .allowsHitTesting(false)
+    }
+
+    /// 拖动中的目标页气泡：白玻璃 + primary 字，横向跟随手柄、浮在胶囊上沿外（overlay 不占布局高度）
+    @ViewBuilder
+    private var dragBubble: some View {
+        if let ratio = dragRatio {
+            Text("松手跳到 第 \(dragPage + 1) 页 · \(Int((ratio * 100).rounded()))%")
+                .font(.system(size: 11.5, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(AppColors.primary)
+                .fixedSize()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(LightGlassBackground(shape: Capsule(), material: .thinMaterial))
+                .overlay(Capsule().stroke(AppColors.tabBarBorder, lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                .offset(x: bubbleOffsetX, y: -34)
+                .transition(.opacity)
         }
-        .frame(height: 24)
-        .frame(maxWidth: .infinity)
-        .animation(.appQuick, value: dragRatio == nil)
     }
 
     /// 「第 12 / 186 页 · 6% · 单页」：进度三种表达合并成一行细字
@@ -453,28 +474,37 @@ struct ComicReaderView: View {
         return "第 \(displayPage) / \(viewModel.pageCount) 页 · \(percent)% · \(viewModel.mode.displayName)"
     }
 
-    /// 主胶囊：‹ ｜可拖进度轨 + 手柄｜页码｜☰｜›（高 58、圆角 29、0.5pt 描边 + 阴影保证辨识）
+    /// 主胶囊：图标行（缩略图 / 上一页 / 下一页 / 下一本）+ 细字读数 + 贴下沿可拖进度轨
+    /// 结构与小说阅读器 capsuleBar 完全一致：高 82、图标距上沿 12、读数距下沿 12、轨 3pt、手柄下探 14
     private var glassCapsule: some View {
-        HStack(spacing: 2) {
-            glassBarButton("chevron.left") { viewModel.previousPage() }
-            progressRail
-                .frame(height: railStripHeight)
-            Text("\(displayPage)/\(viewModel.pageCount)")
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.85))
-                .fixedSize()
-                .padding(.horizontal, 4)
-            glassBarButton("list.bullet") { showThumbnails = true }
-            glassBarButton("chevron.right") { viewModel.nextPage() }
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            ZStack(alignment: .top) {
+                HStack(spacing: 0) {
+                    capsuleButton("缩略图", symbol: "list.bullet") { showThumbnails = true }
+                    capsuleButton("上一页", symbol: "chevron.left", enabled: viewModel.page > 0) {
+                        viewModel.previousPage()
+                    }
+                    capsuleButton("下一页", symbol: "chevron.right",
+                                  enabled: viewModel.page + 1 < viewModel.pageCount) {
+                        viewModel.nextPage()
+                    }
+                    capsuleButton("下一本", symbol: "arrow.down.to.line") {
+                        viewModel.requestNextComic()
+                    }
+                }
+                .frame(height: capsuleHeight, alignment: .top)
+                // 白色毛玻璃（对齐小说阅读器底栏胶囊）：薄材质 + 白 72% tint + 1pt tabBarBorder 描边
+                .background(LightGlassBackground(shape: Capsule(), material: .thinMaterial))
+                .overlay(Capsule().strokeBorder(AppColors.tabBarBorder, lineWidth: 1))
+                .shadow(color: .black.opacity(0.10), radius: 6, y: 3)
+
+                progressRail(width: width)
+                // 细字读数压在进度轨上方、手柄之上
+                progressReadout(width: width)
+            }
         }
-        .padding(.horizontal, 6)
-        .frame(height: capsuleHeight)
-        .background(.ultraThinMaterial)
-        .background(Color.black.opacity(0.4))
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.38), radius: 10, y: 6)
-        .coordinateSpace(name: "capsule")
+        .frame(height: capsuleHeight + railOverhang)
         .background(
             GeometryReader { proxy in
                 Color.clear
@@ -482,83 +512,80 @@ struct ComicReaderView: View {
                     .onChange(of: proxy.size.width) { capsuleWidth = $0 }
             }
         )
+        .overlay(alignment: .top) { dragBubble }
     }
 
-    /// 胶囊内圆形图标按钮（40pt 命中区）
-    private func glassBarButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 16))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// 可拖动进度轨：3pt 轨 + 14pt 手柄（拖动中放大到 20pt）；拖动只改本地值，松手才跳页
-    private var progressRail: some View {
-        GeometryReader { proxy in
-            let usable = max(proxy.size.width - railInset * 2, 1)
-            let ratio = min(max(dragRatio ?? viewModel.currentPercent, 0), 1)
-            let knobX = railInset + usable * ratio
-            let fillWidth = max(knobX - railInset, 0)
-            let lineY = proxy.size.height / 2
-            let dragging = dragRatio != nil
-            ZStack {
-                Capsule()
-                    .fill(.white.opacity(0.24))
-                    .frame(width: usable, height: 3)
-                    .position(x: railInset + usable / 2, y: lineY)
-                Capsule()
-                    .fill(.white)
-                    .frame(width: fillWidth, height: 3)
-                    .position(x: railInset + fillWidth / 2, y: lineY)
-                Circle()
-                    .fill(.white)
-                    .frame(width: dragging ? 20 : 14, height: dragging ? 20 : 14)
-                    .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
-                    .position(x: knobX, y: lineY)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        updateDrag(x: value.location.x, usable: usable)
-                    }
-                    .onEnded { _ in commitDrag() }
-            )
-            .animation(.easeOut(duration: 0.12), value: dragging)
-            .onAppear { railFrame = proxy.frame(in: .named("capsule")) }
-            .onChange(of: proxy.frame(in: .named("capsule"))) { railFrame = $0 }
-        }
-    }
-
-    /// 快捷 chip：缩略图 / 下一本 / 亮度（方案 A 相比现状的增量入口）
-    private var quickChips: some View {
-        HStack(spacing: 6) {
-            quickChip("square.grid.2x2", "缩略图") { showThumbnails = true }
-            quickChip("arrow.down.to.line", "下一本") { viewModel.requestNextComic() }
-            quickChip("sun.max", "亮度") { showBrightness = true }
-        }
-    }
-
-    private func quickChip(
-        _ symbol: String, _ title: String, action: @escaping () -> Void
+    /// 胶囊内按钮：图标 + 文字（对齐小说 bottomButton：图标 18pt、文字 11.5pt、距上沿 12pt）
+    private func capsuleButton(
+        _ title: String, symbol: String, enabled: Bool = true, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: symbol).font(.system(size: 10))
-                Text(title).font(.system(size: 10.5))
+            VStack(spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.system(size: 18))
+                    .foregroundStyle(enabled ? spec.text : spec.secondaryText.opacity(0.4))
+                Text(title)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(enabled ? spec.secondaryText : spec.secondaryText.opacity(0.4))
             }
-            .foregroundStyle(.white.opacity(0.72))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(.white.opacity(0.1)))
-            .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5))
+            .padding(.top, iconRowTopPadding)
+            .frame(maxWidth: .infinity)
+            .frame(height: capsuleHeight, alignment: .top)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    /// 可拖动进度轨：3pt 轨贴胶囊下沿（胶囊同形裁剪，两端随圆角收口）+ 白手柄 primary 描边
+    /// 手柄 16pt、拖动中放大到 22pt 并下探到胶囊外；拖动只改本地值，松手才跳页
+    private func progressRail(width: CGFloat) -> some View {
+        let usable = max(width - railInset * 2, 1)
+        let ratio = min(max(dragRatio ?? viewModel.currentPercent, 0), 1)
+        let knobX = railInset + usable * ratio
+        // 已读段自胶囊左沿起铺到手柄圆心，两端都由胶囊形状裁掉毛边
+        let fillWidth = max(knobX, 0)
+        let dragging = dragRatio != nil
+        let lineY = capsuleHeight - railThickness / 2
+
+        let visuals = ZStack(alignment: .top) {
+            ZStack(alignment: .bottomLeading) {
+                Rectangle()
+                    .fill(Color(hex: 0x6B7280).opacity(0.22))
+                    .frame(width: width, height: railThickness)
+                Capsule()
+                    .fill(AppColors.primary)
+                    .frame(width: fillWidth, height: railThickness)
+            }
+            .frame(width: width, height: capsuleHeight, alignment: .bottom)
+            .clipShape(Capsule())
+            .position(x: width / 2, y: capsuleHeight / 2)
+
+            Circle()
+                .fill(.white)
+                .frame(width: dragging ? 22 : 16, height: dragging ? 22 : 16)
+                .overlay(Circle().stroke(AppColors.primary, lineWidth: 2))
+                .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
+                .position(x: knobX, y: lineY)
+        }
+        .frame(width: width, height: capsuleHeight + railOverhang)
+        .allowsHitTesting(false)
+
+        return ZStack(alignment: .bottom) {
+            visuals
+            // 命中区只占胶囊下沿一条带（自胶囊顶部 54pt 起，含胶囊外手柄区）：细字读数与进度轨、
+            // 手柄都能直接按下去拖；图标行与按钮文字（至 ~48pt）不受影响
+            Color.clear
+                .frame(width: width, height: railStripHeight)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in updateDrag(x: value.location.x, usable: usable) }
+                        .onEnded { _ in commitDrag() }
+                )
+        }
+        .frame(width: width, height: capsuleHeight + railOverhang, alignment: .top)
+        .animation(.easeOut(duration: 0.12), value: dragging)
     }
 
     /// 拖动中写入吸附页（本地状态，不发跳页指令）
@@ -578,17 +605,22 @@ struct ComicReaderView: View {
 
     /// 气泡横向跟随手柄（夹紧在胶囊内，避免越界）
     private var bubbleOffsetX: CGFloat {
-        guard let ratio = dragRatio, capsuleWidth > 0, railFrame.width > 0 else { return 0 }
-        let usable = max(railFrame.width - railInset * 2, 1)
-        let knobX = railFrame.minX + railInset + usable * min(max(ratio, 0), 1)
+        guard let ratio = dragRatio, capsuleWidth > 0 else { return 0 }
+        let usable = max(capsuleWidth - railInset * 2, 1)
+        let knobX = railInset + usable * min(max(ratio, 0), 1)
         let limit = max(capsuleWidth / 2 - 112, 0)
         return min(max(knobX - capsuleWidth / 2, -limit), limit)
     }
 
-    /// 胶囊 / 进度轨几何常量（对齐原型 A：胶囊高 58、轨带高 30、轨左右内缩 8）
-    private var capsuleHeight: CGFloat { 58 }
-    private var railStripHeight: CGFloat { 30 }
-    private var railInset: CGFloat { 8 }
+    /// 胶囊 / 进度轨几何常量：与小说阅读器底栏 capsuleBar 同一套
+    /// （胶囊高 82、图标距上沿 12、读数距下沿 12、轨 3pt、手柄下探 14、拖动带 42、轨内缩 8）
+    private let capsuleHeight: CGFloat = 82
+    private let iconRowTopPadding: CGFloat = 12
+    private let readoutBottomInset: CGFloat = 12
+    private let railThickness: CGFloat = 3
+    private let railOverhang: CGFloat = 14
+    private let railStripHeight: CGFloat = 42
+    private let railInset: CGFloat = 8
 
     // MARK: - 交互与布局
 
@@ -874,6 +906,27 @@ private struct ComicThumbnailSheet: View {
     /// 格子高宽比（取第 1 页比例兜底 1.4）
     private var cellRatio: CGFloat {
         max(viewModel.pageRatios[0] ?? viewModel.fallbackRatio ?? 1.4, 0.5)
+    }
+}
+
+// MARK: - 白色毛玻璃底衬
+
+/// 白色毛玻璃底衬（对齐小说阅读器控制层：`themeSpec.controlBackground` 72% + 系统薄材质）：
+/// 固定白 tint，与漫画页面本身的深浅解耦，同时保住玻璃质感。
+/// 材质强制走浅色变体——App 处于深色模式时 `.thinMaterial` 会变暗，会把白 tint 一起压成灰。
+private struct LightGlassBackground<S: Shape>: View {
+    let shape: S
+    var material: Material = .thinMaterial
+    var tintOpacity: Double = 0.72
+
+    var body: some View {
+        shape
+            .fill(Color(hex: 0xFFFFFF).opacity(tintOpacity))
+            .background(
+                shape
+                    .fill(material)
+                    .environment(\.colorScheme, .light)
+            )
     }
 }
 

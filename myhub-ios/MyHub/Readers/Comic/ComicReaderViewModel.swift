@@ -635,7 +635,7 @@ final class ComicReaderViewModel: ObservableObject {
         let task = Task.detached(priority: .utility) { [weak self] () -> UIImage? in
             guard let self else { return nil }
             // 已解码大图命中：直接缩略，省一次解压
-            if let decoded = await MainActor.run({ self.images[index] }) {
+            if let decoded = await MainActor.run(body: { self.images[index] }) {
                 return decoded.preparingThumbnail(of: Self.thumbnailSize)
             }
             let identity = await MainActor.run { self.cacheIdentity }

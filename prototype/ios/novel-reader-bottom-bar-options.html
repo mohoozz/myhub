@@ -73,8 +73,8 @@ h1{font-size:22px;margin-bottom:6px}
 .board.wide{width:100%;max-width:1088px}
 .row3{display:flex;gap:20px;flex-wrap:wrap}
 .rbar.b{position:relative}
-.pillbar.slim.dragbar{overflow:visible}
-.dragrail{position:absolute;left:0;right:0;bottom:0;height:30px;cursor:grab;touch-action:none;z-index:3}
+.pillbar.slim.dragbar{overflow:visible;height:82px;border-radius:38px}
+.dragrail{position:absolute;left:0;right:0;bottom:0;height:42px;cursor:grab;touch-action:none;z-index:3}
 .dragrail:active{cursor:grabbing}
 .railhit{position:absolute;left:8px;right:8px;bottom:0;height:16px;border-radius:0 0 22px 22px;overflow:hidden}
 .railbg{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(107,114,128,.22)}
@@ -121,6 +121,13 @@ h1{font-size:22px;margin-bottom:6px}
 .knob{position:absolute;top:4px;width:18px;height:18px;border-radius:50%;background:#fff;border:2px solid var(--primary);box-shadow:0 1px 4px rgba(0,0,0,.25);transform:translateX(-9px)}
 .reader.night .knob{background:#141414}
 .sbubble{position:absolute;top:-28px;transform:translateX(-50%);background:#111827;color:#fff;font-size:10.5px;padding:4px 9px;border-radius:9px;white-space:nowrap}
+/* ===== 本次调整：那行「第 3 章 · x/y 页 · p%」放在胶囊内、紧贴进度轨上方 ===== */
+/* 胶囊 64 → 82px（图标 15 → 18px、文字 9.5 → 11.5px、细字条 10 → 11.5px）：三层不再互相挤压（四个按钮尺寸与排布仍不动）；胶囊内自下而上：下沿进度轨 + 手柄 → 细字条（底部 12pt，压在手柄上方）→ 图标行（贴胶囊上沿 8px，图标与文字间距 4px） */
+.pillbar.slim.dragbar .bcol{justify-content:flex-start;padding-top:8px;gap:4px;font-size:18px}
+.pillbar.slim.dragbar .bcol i{font-size:11.5px}
+.pillbar .dcap{position:absolute;left:8px;right:8px;bottom:12px;height:14px;min-height:0;padding:0 4px;font-size:11.5px;line-height:14px;border-radius:6px;pointer-events:none;z-index:4}
+.pillbar .dcap.on{background:none;box-shadow:none;color:var(--primary);font-weight:600;width:auto;margin:0;padding:0 4px}
+.reader.night .pillbar .dcap.on{background:none;color:#60A5FA}
 table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);width:100%;max-width:1120px}
 th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
 th{background:#F9FAFB;font-size:12px;color:var(--ts);white-space:nowrap}
@@ -136,7 +143,7 @@ tr:last-child td{border-bottom:none}
   现状底栏 <code>NovelReaderView.bottomBar</code> 是<b>两行通栏白条</b>（顶部 0.5pt 分割线）：
   第一行「<code>3/36</code> 页码 + 细进度条 + <code>32%</code> 全书百分比」，第二行「上一章 / 目录 / 设置 / 下一章」四个等宽按钮（SF Symbol 上、9.5pt 文字下）。<br>
   它叠在 TODO 376/377 已统一的<b>圆角悬浮胶囊</b>语言（内缩 12pt、圆角 26、1pt 灰描边 + 轻阴影）之上，是全局唯一还剩的「通栏直角白条 + 分割线」；<br>
-  以下为「现状 + 5 个候选方案」原型（B+ 为本次在 B 基础上新增的<b>可拖动进度条</b>版本，原型可真实拖动；顶栏各方案保持一致，仅作上下文；夜间主题见文末对照），确认后再实施到 Swift 代码。
+  以下为「现状 + 6 个候选方案」原型（B+ 为在 B 基础上新增<b>可拖动进度条</b>、并把<b>「章节 + 阅读进度」收进胶囊内部</b>的版本，原型可真实拖动；顶栏各方案保持一致，仅作上下文；夜间主题见文末对照），确认后再实施到 Swift 代码。
 </p>
 <div class="boards">
 <!-- ================= 现状 ================= -->
@@ -233,11 +240,12 @@ tr:last-child td{border-bottom:none}
 <div class="board wide">
   <h2>方案 B+ · 胶囊 + 可拖动进度轨<span class="tag rec">推荐</span><span class="tag">本原型可真实拖动</span></h2>
   <div class="desc" style="min-height:0">
-    在 B 的单行胶囊上，把下沿那条进度轨升级成<b>可拖动进度条</b>：轨道 3pt + 末端 16pt 圆手柄（所见即所得，看到手柄就知道能拖），手势命中区 30pt 高，细手指也拖得准；<br>
-    <b>拖动中</b>——手柄放大到 22pt 并带蓝色光圈，胶囊上方浮出深色气泡，实时显示「松手跳到 第 N 章 · 全书 p%」，气泡横向跟随手柄；<b>靠近章边界自动吸附</b>（±1.2% 内吸到该章起点，等价于 <code>goToPage(章首, 0)</code>），不会停在某章中间；<br>
-    <b>松手</b>——气泡收回为常驻细字（第 N 章 · x/y 页 · p%），并浮出 toast「已跳转 → 第 N 章」1.8s，进度条、页码、百分比同步到新位置；拖动期间不改动正文，松手才跳转（滚动模式也不会边拖边加载章节）。<br>
-    <span class="pros">优点：高度仍是最矮的一档（≈76pt），但进度条从「只能看」变成「能跳」——跨 10 章不用再开目录；与全局胶囊语言一致；改动集中在 <code>bottomBar</code> 的内部实现，不新增面板层级。</span><br>
-    <span class="cons">缺点：需做手势区域隔离（只有胶囊下沿 30pt 可拖，正文区不受影响）；气泡 / 吸附 / 松手是新增的 3 态状态机，阈值要单独调；拖动到「未加载章节」时需决定是「松手才加载」（推荐）还是「边拖边预载」。</span>
+    在 B 的单行胶囊上，把下沿那条进度轨升级成<b>可拖动进度条</b>：轨道 3pt + 末端 16pt 圆手柄（所见即所得，看到手柄就知道能拖），手势命中区 42pt 高，细手指也拖得准；<br>
+    <b>本次调整</b>——原先悬在胶囊<b>上方</b>的那行细字「第 3 章 · 3/36 页 · 32%」，改为放进<b>胶囊内部、紧贴进度轨上方</b>：胶囊内自下而上是「下沿进度轨 + 手柄 → 这行细字 → 图标行」，读数=它正下方那条进度条；胶囊高度 56pt → <b>82pt</b>（图标 15 → 18pt、按钮文字 9.5 → 11.5pt，图标行与细字不再被压扁），四个按钮的排布与尺寸<b>不动</b>，底栏仍少掉整整一行：呼出高度 90pt → <b>92pt</b>；<br>
+    <b>拖动中</b>——手柄放大到 22pt 并带蓝色光圈，胶囊内这行字就地变成蓝色读数「松手跳到 第 N 章 · 全书 p%」；<b>靠近章边界自动吸附</b>（±1.2% 内吸到该章起点，等价于 <code>goToPage(章首, 0)</code>），不会停在某章中间；<br>
+    <b>松手</b>——这行字回到常驻细字并更新为新章（第 N 章 · x/y 页 · p%），同时浮出 toast「已跳转 → 第 N 章」1.8s，进度条、页码、百分比同步到新位置；拖动期间不改动正文，松手才跳转（滚动模式也不会边拖边加载章节）。<br>
+    <span class="pros">优点：呼出高度 <b>≈92pt</b>（现状 ≈88pt，为放大后的图标与文字让出净空），同时进度条从「只能看」变成「能跳」——跨 10 章不用再开目录；读数与操作同处一颗胶囊，视线不用上下跳；胶囊加高到 82pt、图标与文字各放大一档（18pt / 11.5pt）后三层不再挤在一起（图标行上边距 8pt、细字与图标文字间距 4pt）；改动集中在 <code>bottomBar</code> 内部（去掉 caption 行 + 把同一行字放进胶囊 + 胶囊高度 +26pt），不新增面板层级。</span><br>
+    <span class="cons">缺点：胶囊内这行细字只有 11.5pt，读数仍比原来弱；82pt 内要叠三层（图标行 + 细字 + 进度轨），拖动时手柄放大到 22pt 会轻微压到这行字的下沿；需做手势区域隔离（只有胶囊下沿 42pt 可拖，正文区不受影响）；吸附 / 松手是新增状态机，阈值要单独调；拖动到「未加载章节」时需决定是「松手才加载」（推荐）还是「边拖边预载」。</span>
   </div>
   <div class="phone"><div class="reader" id="bReader">
     <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
@@ -249,8 +257,8 @@ tr:last-child td{border-bottom:none}
       <p>“走了七日，就为这一句话？”他问。</p>
     </div>
     <div class="rbar b" id="bDemo">
-      <div class="dcap" id="bCap">第 3 章 · 3/36 页 · 32%</div>
       <div class="pillbar slim dragbar">
+        <div class="dcap" id="bCap">第 3 章 · 3/36 页 · 32%</div>
         <div class="bcol">☰<i>目录</i></div>
         <div class="bcol">‹<i>上一章</i></div>
         <div class="bcol">›<i>下一章</i></div>
@@ -264,16 +272,16 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="home"><span></span></div>
   </div></div>
-  <div class="dhint" id="bHint">按住下方进度条拖动 → 气泡显示目标章节，<b>松手跳转</b></div>
+  <div class="dhint" id="bHint">按住下方进度条拖动 → 胶囊内那行字就地显示目标章节，<b>松手跳转</b></div>
 </div>
 
 <!-- 三态分解（静态） -->
 <div class="board wide">
   <h2>B+ 三态分解<span class="tag">静止 / 拖动中 / 松手后</span></h2>
   <div class="desc" style="min-height:0">
-    左：<b>静止</b>——胶囊上方一行细字显示「第 3 章 · 3/36 页 · 32%」，下沿进度轨 + 16pt 手柄（可拖暗示）。<br>
-    中：<b>拖动中</b>——手柄放大并加光圈，深色气泡随手柄移动，实时显示目标位置「松手跳到 第 12 章 · 33%」；此时<b>正文不变</b>，靠近章边界自动吸附。<br>
-    右：<b>松手后</b>——气泡收回为细字并更新为新章（第 12 章 · 1/28 页 · 33%），进度轨与页码同步，浮出 toast「已跳转 → 第 12 章」。
+    左：<b>静止</b>——胶囊<b>内、紧贴进度轨上方</b>一行细字显示「第 3 章 · 3/36 页 · 32%」（其上是图标行，其下是进度轨 + 16pt 手柄）。<br>
+    中：<b>拖动中</b>——手柄放大到 22pt 并加光圈，胶囊内这行字就地变蓝，实时显示目标位置「松手跳到 第 12 章 · 33%」；此时<b>正文不变</b>，靠近章边界自动吸附。<br>
+    右：<b>松手后</b>——这行字回到细字并更新为新章（第 12 章 · 1/28 页 · 33%），进度轨与页码同步，浮出 toast「已跳转 → 第 12 章」。
   </div>
   <div class="row3">
     <div class="phone"><div class="reader">
@@ -284,8 +292,8 @@ tr:last-child td{border-bottom:none}
         <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声。</p>
       </div>
       <div class="rbar b">
-        <div class="dcap">第 3 章 · 3/36 页 · 32%</div>
         <div class="pillbar slim dragbar">
+          <div class="dcap">第 3 章 · 3/36 页 · 32%</div>
           <div class="bcol">☰<i>目录</i></div>
           <div class="bcol">‹<i>上一章</i></div>
           <div class="bcol">›<i>下一章</i></div>
@@ -307,8 +315,8 @@ tr:last-child td{border-bottom:none}
         <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声。</p>
       </div>
       <div class="rbar b">
-        <div class="dcap on" style="transform:translateX(46px)">松手跳到 第 12 章 · 33%</div>
         <div class="pillbar slim dragbar">
+          <div class="dcap on">松手跳到 第 12 章 · 33%</div>
           <div class="bcol">☰<i>目录</i></div>
           <div class="bcol">‹<i>上一章</i></div>
           <div class="bcol">›<i>下一章</i></div>
@@ -330,8 +338,8 @@ tr:last-child td{border-bottom:none}
         <p>他把灯放在门内的石阶上，灯芯一暗一明，像有人在里面呼吸。</p>
       </div>
       <div class="rbar b">
-        <div class="dcap">第 12 章 · 1/28 页 · 33%</div>
         <div class="pillbar slim dragbar">
+          <div class="dcap">第 12 章 · 1/28 页 · 33%</div>
           <div class="bcol">☰<i>目录</i></div>
           <div class="bcol">‹<i>上一章</i></div>
           <div class="bcol">›<i>下一章</i></div>
@@ -483,14 +491,14 @@ tr:last-child td{border-bottom:none}
   <tr><td>现状</td><td>通栏白条 + 分割线，两行</td><td>页码 + 3pt 进度条 + 百分比（三段横切）</td><td>≈88pt</td><td>无</td><td>—</td><td>语言与全局冲突；分组缺失、字太小</td></tr>
   <tr><td>A 悬浮单胶囊</td><td>进度行 + 一颗胶囊，胶囊内分组</td><td>保留三段表达，进度条拉长</td><td>≈90pt</td><td>无</td><td>小（仅 <code>bottomBar</code>）</td><td>观感统一、改动最小；进度仍三段、无快捷调节</td></tr>
   <tr><td>B 原版 · 胶囊内嵌进度轨</td><td>单行胶囊，下沿 2pt 进度轨（静态）</td><td>合并一句「第 3 章 · 3/36 页 · 32%」</td><td>≈76pt</td><td>无</td><td>小（仅 <code>bottomBar</code>）</td><td>最省空间、进度归一；进度「只能看不能跳」、读数弱化</td></tr>
-  <tr><td><b>B+ 胶囊 + 可拖动进度轨</b></td><td>单行胶囊，下沿 3pt 可拖轨 + 16pt 手柄（命中区 30pt）</td><td>拖动中深色气泡「松手跳到 第 N 章 · 全书 p%」+ 松手后常驻细字</td><td>≈76pt</td><td>间接有（可跨章跳转）</td><td>中（胶囊内拖动 3 态状态机 + 吸附阈值）</td><td>最省空间且能跳章；需手势区域隔离、气泡/吸附阈值要调</td></tr>
+  <tr><td><b>B+ 胶囊 + 可拖动进度轨</b><br><span style="font-weight:400;color:var(--ts)">（本次把「第 N 章 · x/y 页 · p%」移入胶囊、紧贴进度轨上方）</span></td><td>单行胶囊 <b>82pt</b>：图标 18pt / 文字 11.5pt，图标行在上、细字紧贴进度轨上方、下沿 3pt 可拖轨 + 16pt 手柄（命中区 42pt）；四个按钮不动</td><td>这行字即读数：静止常驻细字，拖动中就地转蓝色「松手跳到 第 N 章 · 全书 p%」，松手后更新为新章</td><td><b>≈92pt</b>（比 B 少一整行 caption，胶囊比 B 高 26pt）</td><td>间接有（可跨章跳转）</td><td>小（<code>bottomBar</code> 内：去掉 caption 行 + 把那行字放进胶囊 + 胶囊高度 56→82pt；拖动仅改本地值，松手才 <code>goToPage</code>）</td><td>呼出高度与现状 ≈88pt 基本持平（换来更大的图标与文字）且能跳章、读数与拖动同处一栏；胶囊内细字只有 11.5pt 偏弱、三层叠在 82pt 内（拖动手柄放大时会轻压到字）；需手势区域隔离与吸附阈值</td></tr>
   <tr><td>C 底部快捷面板</td><td>圆角面板三行：进度 / 快捷调节 / 主按钮</td><td>章名 + 页码 → 进度条 → 全书百分比（各就各位）</td><td>≈178pt</td><td><b>有</b>（字号 · 行距 · 亮度 · 主题）</td><td>中大（新面板 + 复用 binding）</td><td>体验提升最大；呼出态最占空间</td></tr>
   <tr><td>D 章节刻度进度条</td><td>单行胶囊：目录 + 可拖动刻度条 + 设置</td><td>可拖动刻度条 + 拖动气泡</td><td>≈76pt</td><td>无</td><td>大（新拖动交互 + 刻度映射）</td><td>跳章最快、结构可见；实现量最大、手势待验证</td></tr>
 </table>
 
 <div class="footnote">
   <b>共同前提：</b>① 功能集不缩水——进度 / 上下章 / 目录 / 设置全部保留（D 的「上下章」由边界续章 + 拖动跳章承担，若你希望保留按钮可把两枚圆钮换成四枚）；② 圆角 / 描边 / 阴影统一走全局语言：内缩 12pt、圆角 26、1pt <code>AppColors.tabBarBorder</code>、阴影 <code>rgba(0,0,0,.10)</code>；③ 面板底色继续用 <code>themeSpec.controlBackground</code>（日间白 96% / 夜间 <code>#121212</code>），进度与强调色用 <code>AppColors.primary</code>；④ 底栏仅在呼出态显示，沉浸阅读时全部隐藏（与现状一致）。<br>
-  <b>推荐顺序：</b>① <b>B+（胶囊 + 可拖动进度轨）</b>——本次新增方案，保留单行最矮的形态，同时把「进度」变成可操作项：拖动时气泡预告目标章节、松手才跳，跨章不用开目录；实现集中在 <code>bottomBar</code> 内部，不动阅读引擎（拖动期间只改本地区间值，松手再调 <code>goToPage(章首, 0)</code>）。② 若还想顺手解决「调字号 / 亮度」，再叠一层 <b>C（底部快捷面板）</b>——把 B+ 的拖动进度条放在 C 的面板里同样成立，两者不冲突。③ 想先小步落地就先做 <b>A（悬浮单胶囊）</b>（改动只有一处）；④ <b>B 原版</b> 只作对照（不可拖）；⑤ <b>D</b> 建议作为后续独立迭代（通栏刻度拖动条更适合平板 / 大屏）。<br>
+  <b>推荐顺序：</b>① <b>B+（胶囊 + 可拖动进度轨，「第 N 章 · x/y 页 · p%」已移入胶囊内部）</b>——呼出高度 ≈92pt（现状 ≈88pt；胶囊 82px，含图标 18px / 文字 11.5px 放大后的净空），进度读数与拖动轨同处一栏、遮正文最少；实现只在 <code>bottomBar</code> 内部（去掉 caption 行 + 把同一行字放进胶囊），拖动期间只改本地值，松手再调 <code>goToPage(章首, 0)</code>。② 这行字的位置只由一条 CSS 决定（<code>.pillbar .dcap{bottom:12px}</code>，紧贴进度轨上方；图标行由 <code>.dragbar .bcol{justify-content:flex-start}</code> 上移让位）——若想放回胶囊外上方，等价于 B 原版的 caption 行（呼出高度回到 ≈76pt），其余不动。③ 若还想顺手解决「调字号 / 亮度」，再叠一层 <b>C（底部快捷面板）</b>——把可拖进度条放进 C 的面板里同样成立，不冲突。④ 想先小步落地就先做 <b>A（悬浮单胶囊）</b>（改动只有一处）；⑤ <b>B 原版</b> 只作对照（不可拖）；⑥ <b>D</b> 建议作为后续独立迭代（通栏刻度拖动条更适合平板 / 大屏）。<br>
   <b>可选增强（不计入本次四方案，勾选后一并实施）：</b>顶栏同步收成同语言（内缩 12pt 圆角面板，去掉 0.5pt 分割线）；目录抽屉 + 设置面板的圆角与底栏统一（现在 sheet 是系统样式）。
 </div>
 <script>
@@ -500,7 +508,7 @@ tr:last-child td{border-bottom:none}
       hint=document.getElementById('bHint'), toast=document.getElementById('bToast');
   if(!rail) return;
   var TOTAL=36, PAD=8, dragging=false;
-  var IDLE='按住下方进度条拖动 → 气泡显示目标章节，<b>松手跳转</b>';
+  var IDLE='按住下方进度条拖动 → 胶囊内那行字就地显示目标章节，<b>松手跳转</b>';
   function label(p){
     var ch=Math.max(1,Math.min(TOTAL,Math.round(p*TOTAL/100)));
     return {ch:ch,txt:'第 '+ch+' 章 · 全书 '+Math.round(p)+'%'};
@@ -518,8 +526,7 @@ tr:last-child td{border-bottom:none}
     var g=geom(), inner=g.railWidth-2*PAD;
     fill.style.width=p+'%';
     knob.style.left=(PAD+(p/100)*inner)+'px';
-    cap.style.transform='translateX('+(PAD+(p/100)*inner-g.railWidth/2)+'px)';
-    cap.textContent=text;
+    cap.textContent=text;   /* 这行字已在胶囊内部，原地更新即可，不再跟着手柄横移 */
   }
   rail.addEventListener('pointerdown',function(e){
     dragging=true; rail.classList.add('on'); cap.classList.add('on');
@@ -542,10 +549,10 @@ tr:last-child td{border-bottom:none}
     hint.innerHTML='已跳转 → 第 '+L.ch+' 章；继续拖动可再跳，<b>松手生效</b>';
   });
   rail.addEventListener('pointercancel',function(){
-    dragging=false; rail.classList.remove('on'); cap.classList.remove('on'); cap.style.transform='';
+    dragging=false; rail.classList.remove('on'); cap.classList.remove('on');
   });
   rail.addEventListener('pointerenter',function(){
-    if(!dragging) hint.innerHTML='按住拖动 → 气泡实时显示「第 N 章 · 全书 p%」，靠近章边界会自动吸附';
+    if(!dragging) hint.innerHTML='按住拖动 → 胶囊内就地显示「第 N 章 · 全书 p%」，靠近章边界会自动吸附';
   });
   rail.addEventListener('pointerleave',function(){ if(!dragging) hint.innerHTML=IDLE; });
 })();

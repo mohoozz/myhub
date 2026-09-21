@@ -110,6 +110,49 @@ tr:last-child td{border-bottom:none}
 .d-dock .ibtn{width:46px;height:46px}
 .d-dock .vdiv{height:24px;margin:0 6px}
 .d-center{font-size:11px;color:rgba(255,255,255,.66);text-align:center}
+/* ===== 底栏可读性修复（纯白页对比） ===== */
+.page.blank{display:block;padding:0;background:#fff;position:relative;overflow:hidden}
+.page.blank::before{content:"";position:absolute;left:50%;top:44%;width:112px;height:196px;transform:translate(-50%,-50%);background:#E7E9EE;border-radius:52% 52% 44% 44%/40% 40% 60% 60%}
+.page.blank::after{content:"";position:absolute;left:50%;top:68%;width:170px;height:140px;transform:translate(-50%,-50%);background:#F2F3F6;border-radius:50%}
+.fx-note{position:absolute;left:8px;top:8px;font-size:10px;color:#A6ABB5;border:1px solid #E5E7EB;border-radius:8px;padding:2px 6px}
+.bar-dim{background:rgba(12,12,14,.62);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);border:.5px solid rgba(255,255,255,.2);box-shadow:0 6px 20px rgba(0,0,0,.38)}
+.bar-tint{background:rgba(14,16,22,.72);-webkit-backdrop-filter:blur(26px) saturate(150%);backdrop-filter:blur(26px) saturate(150%);border:.5px solid rgba(255,255,255,.2);box-shadow:0 6px 20px rgba(0,0,0,.42)}
+.bar-edge{background:rgba(20,20,22,.44);-webkit-backdrop-filter:blur(22px) saturate(180%);backdrop-filter:blur(22px) saturate(180%);border:.5px solid rgba(255,255,255,.3);box-shadow:0 0 0 1.5px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.45)}
+.bar-edge .ibtn,.bar-edge .a-pg{filter:drop-shadow(0 1px 2px rgba(0,0,0,.95))}
+.bar-light{background:rgba(255,255,255,.95);border:.5px solid rgba(17,24,39,.14);box-shadow:0 6px 20px rgba(0,0,0,.22)}
+.bar-light .ibtn{color:#111827}
+.bar-light .a-pg{color:rgba(17,24,39,.78)}
+.bar-light .a-track{background:rgba(17,24,39,.18)}
+.bar-light .a-fill{background:#2563EB}
+.bar-light .a-knob{background:#fff;border:2px solid #2563EB}
+.cap-chip{display:inline-block;font-size:10.5px;color:#fff;background:rgba(17,24,39,.9);border-radius:11px;padding:3px 10px;font-variant-numeric:tabular-nums}
+.cap-chip.tint{background:rgba(14,16,22,.72);-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);border:.5px solid rgba(255,255,255,.18)}
+.a-foot.light .a-chip{color:rgba(17,24,39,.72);background:rgba(17,24,39,.06);border-color:rgba(17,24,39,.12)}
+.a-chip.tint{color:#fff;background:rgba(14,16,22,.72);-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);border-color:rgba(255,255,255,.16)}
+.a-chip.tint:hover{background:rgba(14,16,22,.84)}
+/* ③ 白色毛玻璃（对齐小说阅读器控制层：白 tint 72% + 薄材质 + 灰描边 + primary 强调） */
+.bar-glass{background:rgba(255,255,255,.72);-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);border:.5px solid rgba(17,24,39,.14);box-shadow:0 6px 20px rgba(0,0,0,.16)}
+.bar-glass .ibtn{color:#1F2937}
+.bar-glass .a-pg{color:#6B7280}
+.bar-glass .a-track{background:rgba(107,114,128,.22)}
+.bar-glass .a-fill{background:#2563EB}
+.bar-glass .a-knob{background:#fff;border:2px solid #2563EB}
+.cap-chip.glass{color:#6B7280;background:rgba(255,255,255,.72);-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);border:.5px solid rgba(17,24,39,.14)}
+.a-chip.glass{color:#6B7280;background:rgba(255,255,255,.72);-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);border-color:rgba(17,24,39,.14)}
+.a-chip.glass:hover{background:rgba(255,255,255,.86)}
+/* ③ 与小说阅读器同构的三层胶囊：图标行（距上沿 12）+ 细字读数（距下沿 12）+ 贴下沿 3pt 轨 + 下探手柄 */
+.bar-glass.tall{height:82px;border-radius:41px;position:relative;display:block;padding:0}
+.cbtn{position:absolute;top:12px;width:25%;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11.5px;color:#6B7280}
+.cbtn i{font-size:18px;font-style:normal;color:#1F2937}
+.cbtn.w1{left:0}.cbtn.w2{left:25%}.cbtn.w3{left:50%}.cbtn.w4{left:75%}
+.c-readout{position:absolute;left:8px;right:8px;bottom:12px;text-align:center;font-size:11.5px;color:#6B7280;font-variant-numeric:tabular-nums}
+.c-rail{position:absolute;left:8px;right:8px;bottom:1.5px;height:3px;border-radius:2px;background:rgba(107,114,128,.22)}
+.c-rail i{position:absolute;left:-8px;top:0;bottom:0;width:calc(2% + 8px);background:#2563EB;border-radius:2px}
+.c-rail b{position:absolute;left:2%;bottom:-6.5px;width:16px;height:16px;border-radius:50%;background:#fff;border:2px solid #2563EB;transform:translateX(-50%);box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.fix-strip{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.fix-strip .card{width:340px}
+.card h3{font-size:13px;margin-bottom:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.card p{font-size:11.5px;color:var(--ts);line-height:1.7;min-height:74px;margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -117,7 +160,8 @@ tr:last-child td{border-bottom:none}
 <p class="subtitle">
   现状控制层（<code>ComicReaderView.controlsOverlay</code>）是<b>上下两条黑色渐变通栏</b>：顶栏「✕ + 书名 + 模式菜单」，底栏两段「页码 + Slider + 双页方向（细线白点）/ 单页·双页·条漫三个等宽竖排按钮」。<br>
   问题：① 渐变通栏与全局「圆角悬浮胶囊 / 毛玻璃」语言不统一；② <b>模式切换（低频）占据底栏最显眼一行</b>，而跳页、下一本、缩略图（高频）没有入口；③ 系统 Slider 与深色渐变叠在一起观感割裂，进度条无手柄提示、无法「按住拖动看目标页」；④ 顶栏与底栏无圆角/无描边，像纯黑蒙层而不是控件；⑤ 条漫模式下滑动浏览无进度反馈位置。<br>
-  以下为「现状 + 4 个候选方案」原型（<b>点击手机框任一位置可切换控制层显隐</b>，方案 C 的进度条可真实拖动），确认后再实施到 Swift。
+  以下为「现状 + 4 个候选方案」原型（<b>点击手机框任一位置可切换控制层显隐</b>，方案 C 的进度条可真实拖动），确认后再实施到 Swift。<br>
+  文末另有<b>《底栏可读性修复 · 纯白页对比》</b>章节：白底漫画页（如截图）下胶囊里的白图标 / 白字页码看不清，同一张纯白页并排对比现状与三种修法，待你确认后再改 <code>ComicReaderView</code>。
 </p>
 <div class="boards">
 <!-- ================= 现状 ================= -->
@@ -332,6 +376,116 @@ tr:last-child td{border-bottom:none}
   <div class="hintbar">页码徽章在控制层隐藏时仍可见</div>
 </div>
 
+<!-- ================= 底栏可读性修复（纯白页对比） ================= -->
+<div class="board wide">
+  <h2>底栏可读性修复 · 纯白页对比<span class="tag before">问题复现</span><span class="tag rec">三选一</span></h2>
+  <div class="desc" style="min-height:0">
+    <b>截图里的现象</b>：漫画页大面积纯白时，方案 A 的<b>毛玻璃胶囊被背景「漂白」</b>——<code>.ultraThinMaterial</code> 会把页面亮色透上来，再叠 <code>Color.black.opacity(0.4)</code> 也只是中灰，于是白色图标、白字页码「4/194」、白色进度轨全糊进背景；胶囊上方那行 10.5pt 白色细字（只靠一层黑阴影）更弱。<br>
+    下面四张卡<b>用的是同一张纯白漫画页</b>，只有底栏处理方式不同：① 问题复现（现状 = 玻璃 + 黑 0.4）；② 加深玻璃（黑 0.4 → 0.62，其余不动）；③ 白色毛玻璃（白 tint + 深字，对齐小说阅读器，<b>已落地</b>）；④ 亮页自动反色（浅底 + 深字）。<br>
+  </div>
+  <div class="fix-strip">
+    <div class="card">
+      <h3>① 问题复现 · 现状</h3>
+      <p>玻璃 + 黑 0.4 + 0.5pt 白描边（<code>white.opacity(0.16)</code>）：白页上整条胶囊变成浅灰，白图标 / 白字页码 / 白轨对比度不足；上方读数细字只有黑阴影，白底上几乎不可见。</p>
+      <div class="phone" data-toggle>
+        <div class="reader">
+          <div class="comic"><div class="page blank"><span class="fx-note">纯白漫画页</span></div></div>
+          <div class="ctl">
+            <div class="a-top"><span class="ibtn">✕</span><span class="ttl">[Kmoe][膽大黨]卷 20</span><span class="ibtn">⋯</span></div>
+            <div class="a-foot">
+              <div class="a-cap">第 4 / 194 页 · 2% · 单页</div>
+              <div class="a-bar glass">
+                <span class="ibtn">‹</span>
+                <span class="a-rail"><span class="a-track"></span><span class="a-fill" style="width:calc((100% - 16px) * .02)"></span><span class="a-knob" style="left:calc(8px + (100% - 16px) * .02)"></span></span>
+                <span class="a-pg">4/194</span>
+                <span class="ibtn">☰</span>
+                <span class="ibtn">›</span>
+              </div>
+              <div class="a-mini"><span class="a-chip">☰ 缩略图</span><span class="a-chip">⤓ 下一本</span><span class="a-chip">◐ 亮度</span></div>
+            </div>
+          </div>
+          <div class="statusbar"><span>00:46</span><span>▮▮▮ ⌁ ▐</span></div>
+          <div class="home"><span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>② 加深玻璃<span class="tag">改动最小</span></h3>
+      <p>只把黑色压层从 0.4 提到 <b>0.62</b>（<code>thickMaterial</code> + <code>black.opacity(0.62)</code>），描边白 0.16 → 0.22：白页上明显变清楚，但底色仍随页面亮度飘（浅灰页最舒服、纯白页仍偏灰），上方读数细字照旧弱。</p>
+      <div class="phone" data-toggle>
+        <div class="reader">
+          <div class="comic"><div class="page blank"><span class="fx-note">纯白漫画页</span></div></div>
+          <div class="ctl">
+            <div class="a-top"><span class="ibtn">✕</span><span class="ttl">[Kmoe][膽大黨]卷 20</span><span class="ibtn">⋯</span></div>
+            <div class="a-foot">
+              <div class="a-cap">第 4 / 194 页 · 2% · 单页</div>
+              <div class="a-bar bar-dim">
+                <span class="ibtn">‹</span>
+                <span class="a-rail"><span class="a-track"></span><span class="a-fill" style="width:calc((100% - 16px) * .02)"></span><span class="a-knob" style="left:calc(8px + (100% - 16px) * .02)"></span></span>
+                <span class="a-pg">4/194</span>
+                <span class="ibtn">☰</span>
+                <span class="ibtn">›</span>
+              </div>
+              <div class="a-mini"><span class="a-chip">☰ 缩略图</span><span class="a-chip">⤓ 下一本</span><span class="a-chip">◐ 亮度</span></div>
+            </div>
+          </div>
+          <div class="statusbar"><span>00:46</span><span>▮▮▮ ⌁ ▐</span></div>
+          <div class="home"><span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>③ 白色毛玻璃胶囊<span class="tag rec">推荐</span><span class="tag">对齐小说阅读器</span></h3>
+      <p>与小说阅读器<b>同构同高</b>：<b>82pt 单行胶囊</b>内叠三层 —— 图标行（图标 18pt + 文字 11.5pt，距上沿 12）、细字读数（距下沿 12）、贴下沿 3pt 进度轨 + 下探手柄；配色整套换白：薄材质 + <b>白 72% tint</b>（<code>#FFFFFF / 0.72</code>）、1pt <code>AppColors.tabBarBorder</code> 描边、阴影 <code>black 0.10</code>，图标 / 书名 <code>#1F2937</code>、读数与按钮文字 <code>#6B7280</code>、进度 <code>AppColors.primary</code>（轨 <code>#6B7280 / 0.22</code>、白手柄 + primary 2pt 描边）；顶栏仍走<b>现状式裸标题行</b>（仅顶部黑色渐变压暗、不套任何容器，见「共同约定」）。原先「读数一行 + 三颗 chip」全部并进胶囊（读数入胶囊、缩略图与下一本入图标行、亮度留在顶栏菜单），底栏由 ≈130pt 收到 <b>≈106pt</b>，与小说阅读器底栏完全等高。</p>
+      <div class="phone" data-toggle>
+        <div class="reader">
+          <div class="comic"><div class="page blank"><span class="fx-note">纯白漫画页</span></div></div>
+          <div class="ctl">
+            <div class="a-top"><span class="ibtn">✕</span><span class="ttl">[Kmoe][膽大黨]卷 20</span><span class="ibtn">⋯</span></div>
+            <div class="a-foot">
+              <div class="a-bar bar-glass tall">
+                <span class="cbtn w1"><i>☰</i><span>缩略图</span></span>
+                <span class="cbtn w2"><i>‹</i><span>上一页</span></span>
+                <span class="cbtn w3"><i>›</i><span>下一页</span></span>
+                <span class="cbtn w4"><i>⤓</i><span>下一本</span></span>
+                <span class="c-readout">第 4 / 194 页 · 2% · 单页</span>
+                <span class="c-rail"><i></i><b></b></span>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>00:46</span><span>▮▮▮ ⌁ ▐</span></div>
+          <div class="home"><span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>④ 亮页自动反色<span class="tag">最贴合页面</span></h3>
+      <p>采样当前页平均亮度（解码阶段已可顺手算一个均值）：<b>亮页</b>用白色实底胶囊 + 深字，<b>暗页</b>沿用深色胶囊 + 白字，跨页时淡入过渡。每页都能拿到最高对比，代价是要多一次亮度采样、并处理翻页瞬间的换肤闪动。</p>
+      <div class="phone" data-toggle>
+        <div class="reader">
+          <div class="comic"><div class="page blank"><span class="fx-note">纯白漫画页 → 反色</span></div></div>
+          <div class="ctl">
+            <div class="a-top"><span class="ibtn">✕</span><span class="ttl">[Kmoe][膽大黨]卷 20</span><span class="ibtn">⋯</span></div>
+            <div class="a-foot light">
+              <div class="a-cap"><span class="cap-chip" style="background:rgba(255,255,255,.95);color:#111827;border:.5px solid rgba(17,24,39,.14)">第 4 / 194 页 · 2% · 单页</span></div>
+              <div class="a-bar bar-light">
+                <span class="ibtn">‹</span>
+                <span class="a-rail"><span class="a-track"></span><span class="a-fill" style="width:calc((100% - 16px) * .02)"></span><span class="a-knob" style="left:calc(8px + (100% - 16px) * .02)"></span></span>
+                <span class="a-pg">4/194</span>
+                <span class="ibtn">☰</span>
+                <span class="ibtn">›</span>
+              </div>
+              <div class="a-mini"><span class="a-chip">☰ 缩略图</span><span class="a-chip">⤓ 下一本</span><span class="a-chip">◐ 亮度</span></div>
+            </div>
+          </div>
+          <div class="statusbar"><span>00:46</span><span>▮▮▮ ⌁ ▐</span></div>
+          <div class="home"><span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 </div>
 <table>
   <tr><th>方案</th><th>控制层高度</th><th>视觉语言</th><th>模式切换入口</th><th>进度可拖</th><th>主要增量</th><th>落地改动</th><th>推荐度</th></tr>
@@ -340,11 +494,15 @@ tr:last-child td{border-bottom:none}
   <tr><td>B 沉浸极简</td><td>≈100pt（含贴底 3pt 轨）</td><td>现状式顶栏 + 贴底进度轨</td><td>底部 dock 图标（无文字）</td><td>否（仅展示）</td><td>贴底 3pt 全宽进度轨（条漫滚动跟随）</td><td>小：顶栏/底栏精简，无需新面板</td><td>★★★★</td></tr>
   <tr><td>C 抽屉工作台</td><td>≈150pt（抽屉三行）</td><td>现状式顶栏 + 毛玻璃抽屉 + 分段控件</td><td>抽屉内分段控件（替代三按钮）</td><td>是（4pt 轨 + 22pt 手柄 + 气泡）</td><td>拖动气泡预览 + 「下一本」主按钮</td><td>中大：抽屉组件 + 拖动状态机（复用小说 B+ 逻辑）</td><td>★★★★</td></tr>
   <tr><td>D 徽章 + 刻度轨</td><td>≈140pt（刻度 + 细字 + dock）</td><td>现状式顶栏 + 页码徽章 + 刻度轨</td><td>dock 中间图标</td><td>是（刻度轨 + 手柄）</td><td>控制层隐藏时页码仍可见；刻度段落感</td><td>中大：刻度轨分层绘制 + 点按定位手势</td><td>★★★</td></tr>
+  <tr><td>② 加深玻璃</td><td>不变（A 的 58pt 胶囊）</td><td>毛玻璃保留，压层 0.4 → 0.62</td><td>不变（顶栏 ⋯）</td><td>不变（可拖）</td><td>白页上对比度提升，但底色仍随页面亮度浮动</td><td>最小：<code>black.opacity</code> + <code>thickMaterial</code> 各一处</td><td>★★★</td></tr>
+  <tr><td>③ 白色毛玻璃</td><td><b>≈106pt</b>（胶囊 82 + 手柄下探 14 + 下边距 10，与小说底栏等高）</td><td>薄毛玻璃 + 白 72% tint（<code>#FFFFFF / 0.72</code>）+ 深灰字 <code>#1F2937 / #6B7280</code>；细字读数与 chip 一并收进胶囊</td><td>不变（现状式裸标题行，只靠顶部黑色渐变托白字）</td><td>不变（可拖）</td><td>底栏与小说阅读器同构同高：白玻璃 + <code>tabBarBorder</code> 描边 + <code>primary</code> 进度；深色字在纯白页上也读得清。白玻璃只用在底栏，顶栏不套容器</td><td>中：胶囊重构为三层（图标行 / 读数 / 轨），改动集中在 <code>bottomControls</code></td><td>★★★★★</td></tr>
+  <tr><td>④ 亮页自动反色</td><td>不变（A 的 58pt 胶囊）</td><td>亮页白胶囊 + 深字，暗页深胶囊 + 白字</td><td>不变（顶栏 ⋯）</td><td>不变（可拖）</td><td>每页都拿到最高对比；翻页时淡入换肤</td><td>中大：新增页面亮度采样 + 换肤过渡</td><td>★★★★</td></tr>
 </table>
 <p class="footnote">
   <b>共同约定</b>：四个方案的<b>顶栏标题完全沿用现状显示方案</b>（仅顶部渐变压暗、不套胶囊）——✕ 为 40×40 圆钮、距屏幕左缘 10pt，书名取 <code>entry.name</code> 去扩展名、13pt semibold、单行、紧随 ✕ 左对齐（间距 6pt）、超长省略；不新增副标题 / 章节行。四个方案顶栏一律不套胶囊 / 药丸容器（原型已全部改为现状式裸标题行）；控制层由「点击正文中央」呼出/隐藏（<code>controlsVisible</code> 现成）；所有可点元素命中区 ≥ 44×44pt；控制层显隐时状态栏同步显隐（现状已如此）；条漫模式下进度轨/徽章随 <code>WebtoonVisibleKey</code> 回写的当前页实时更新（现成数据源）。<br>
   <b>实施建议</b>：先落 <b>方案 A</b>（观感收益最大、与全局语言统一、改动集中在 <code>ComicReaderView.controlsOverlay</code>）；方案 B 的「贴底 3pt 进度轨」可作为 A 的补充选项（条漫模式单用）；方案 C 的拖动进度条建议只取「拖动 + 气泡」，与 A 的进度轨合并实现（同一套 <code>jumpToPage</code> / <code>scrollIntent</code> 路径）；D 的常驻页码徽章可独立叠加到任一方案。<br>
-  <b>原型交互</b>：点击任一手机框切换控制层显隐；方案 C 的进度条可真实拖动（气泡实时显示目标页，松手生效）；方案 A/D 的进度轨为静态展示。
+  <b>原型交互</b>：点击任一手机框切换控制层显隐；方案 C 的进度条可真实拖动（气泡实时显示目标页，松手生效）；方案 A/D 的进度轨为静态展示。<br>
+  <b>底栏可读性修复（对应 <code>ComicReaderView.glassCapsule</code> / <code>progressReadout</code> / <code>capsuleButton</code>）</b>：现状胶囊是 <code>.ultraThinMaterial</code> + <code>Color.black.opacity(0.4)</code>，而前景全是白色（图标、页码 <code>white.opacity(0.85)</code>、进度轨、描边 <code>white.opacity(0.16)</code>）——亮页上材质把页面亮色透上来，白字白轨对比度不足（截图即此例）；上方读数只有一层黑阴影、chip 用 <code>white.opacity(0.1)</code> 底，白页上更弱。<b>已落地 ③ 白色毛玻璃</b>（与小说阅读器底栏同构同高）：胶囊材质改 <code>LightGlassBackground</code>（薄材质 + 白 72% tint，材质强制走浅色变体以免深色模式下压灰）、1pt <code>AppColors.tabBarBorder</code> 描边、图标 / 书名 <code>#1F2937</code>、读数 / 按钮文字 <code>#6B7280</code>、进度轨「<code>#6B7280 / 0.22</code> 轨 + <code>primary</code> 填充 + 白手柄 primary 描边」；结构上胶囊由 58pt 单行改为 <b>82pt 三层</b>（图标行距上沿 12、细字读数距下沿 12、3pt 轨贴下沿 + 手柄下探 14），细字读数收进胶囊、缩略图与下一本收进图标行、亮度留在顶栏菜单，底栏总高与小说阅读器一致；顶栏<b>保持现状式裸标题行</b>（✕ / 书名 / ⋯ 白字压在一层顶部黑色渐变上，不套白玻璃条——白条会把漫画页切成两段），白玻璃只用在底栏。想更黑就取 <b>②</b>（白页仍偏灰）；要让每页都拿最高对比再上 <b>④</b>（需新增亮度采样）。
 </p>
 <script>
 document.querySelectorAll('.phone').forEach(function(phone){
