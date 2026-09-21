@@ -84,7 +84,7 @@ struct ReadingProgress: Codable, FetchableRecord, PersistableRecord, Identifiabl
     var mediaType: MediaType
     var title: String
     var cover: String?
-    /// 秒数(音视频) / 全局字节偏移(txt) / EpubAnchor(epub) / 页码(漫画) 的 JSON
+    /// 秒数(音视频) / 全局字节偏移(txt) / spine 锚点(epub) / 页码(漫画) 的 JSON
     var progressJSON: String
     var percent: Double
     var finished: Bool
@@ -98,13 +98,6 @@ struct ReadingProgress: Codable, FetchableRecord, PersistableRecord, Identifiabl
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
-}
-
-/// epub 排版无关进度锚点（IOS-205/206）：spine 序号 + 段内偏移；不实现完整 CFI
-struct EpubAnchor: Codable {
-    var spineIndex: Int
-    var paragraphIndex: Int
-    var characterOffset: Int
 }
 
 // MARK: - 小说章节索引（可重建缓存）
@@ -129,6 +122,8 @@ struct NovelIndex: Codable, FetchableRecord, PersistableRecord, Identifiable {
 struct ChapterInfo: Codable {
     var title: String
     var startOffset: Int64      // 全局字节偏移
+    /// 该章由哪条分章规则识别（仅首章记录）：索引缓存复核时用同一条规则校验，避免规则漂移反复重建
+    var ruleID: String? = nil
 }
 
 // MARK: - 浏览器（IOS-403 / 402）

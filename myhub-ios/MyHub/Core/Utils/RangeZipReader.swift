@@ -39,39 +39,70 @@ struct RangeZipReader {
         guard let eocdOffset = Self.locateEOCD(in: tail) else { throw ZipError.malformed }
 
         let eocd = Data(tail[eocdOffset...])   // 转为 0 起始索引的 Data 便于解析
-        let entryCount = Int(Self.uint16(eocd, at: 10))
-        let cdSize = Self.uint32(eocd, at: 12)
-        let cdOffset = Self.uint32(eocd, at: 16)
+        var entryCount = Int(Self.uint16(eocd, at: 10))
+        var cdSize = Int64(Self.uint32(eocd, at: 12))
+        var cdOffset = Int64(Self.uint32(eocd, at: 16))
+
+        // ZIP64（>4GB 或 >65535 条目）：常规字段为哨兵值时改读 ZIP64 EOCD
+        //（locator 位于 EOCD 前 20 字节；仅大小/偏移为哨兵却缺记录时才算损坏）
+        if entryCount == 0xFFFF || cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF {
+            if let zip64 = try await readZip64EOCD(
+                eocdGlobalOffset: totalSize - window + Int64(eocdOffset)
+            ) {
+                entryCount = Int(clamping: zip64.entryCount)
+                cdSize = zip64.cdSize
+                cdOffset = zip64.cdOffset
+            } else if cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF {
+                throw ZipError.malformed
+            }
+            // entryCount 恰为 0xFFFF 且无 ZIP64 记录：普通 ZIP 合法值，按原值继续
+        }
         guard entryCount > 0, cdSize > 0 else { return [] }
 
-        let cdRange = Int64(cdOffset)..<(Int64(cdOffset) + Int64(cdSize))
+        let cdRange = cdOffset..<(cdOffset + cdSize)
         let cd = try await read(cdRange)
 
         var result: [Entry] = []
-        result.reserveCapacity(entryCount)
+        result.reserveCapacity(min(entryCount, 8192))
         var cursor = 0
         while cursor + 46 <= cd.count {
             guard Self.uint32(cd, at: cursor) == 0x02014B50 else { break }   // central file header
             let method = Self.uint16(cd, at: cursor + 10)
-            let compressed = Self.uint32(cd, at: cursor + 20)
-            let uncompressed = Self.uint32(cd, at: cursor + 24)
+            let compressed32 = Self.uint32(cd, at: cursor + 20)
+            let uncompressed32 = Self.uint32(cd, at: cursor + 24)
             let nameLength = Int(Self.uint16(cd, at: cursor + 28))
             let extraLength = Int(Self.uint16(cd, at: cursor + 30))
             let commentLength = Int(Self.uint16(cd, at: cursor + 32))
-            let localOffset = Self.uint32(cd, at: cursor + 42)
+            let localOffset32 = Self.uint32(cd, at: cursor + 42)
             let nameStart = cursor + 46
             let nameEnd = nameStart + nameLength
             guard nameEnd <= cd.count else { break }
             let nameData = cd[nameStart..<nameEnd]
+            // ZIP64 条目：常规字段为哨兵值时，从扩展字段（header id 0x0001）取 64 位真值
+            var compressed = Int64(compressed32)
+            var uncompressed = Int64(uncompressed32)
+            var localOffset = Int64(localOffset32)
+            if compressed32 == 0xFFFF_FFFF || uncompressed32 == 0xFFFF_FFFF || localOffset32 == 0xFFFF_FFFF {
+                let extraEnd = min(nameEnd + extraLength, cd.count)
+                let zip64 = Self.zip64ExtraValues(
+                    cd, start: nameEnd, end: extraEnd,
+                    needUncompressed: uncompressed32 == 0xFFFF_FFFF,
+                    needCompressed: compressed32 == 0xFFFF_FFFF,
+                    needOffset: localOffset32 == 0xFFFF_FFFF
+                )
+                if let value = zip64.uncompressed { uncompressed = value }
+                if let value = zip64.compressed { compressed = value }
+                if let value = zip64.localOffset { localOffset = value }
+            }
             // ZIP 文件名可能为 UTF-8（通用标志位 bit 11）或 CP437/GBK；优先 UTF-8，回退 GB18030
             let flag = Self.uint16(cd, at: cursor + 8)
             let name = Self.decodeName(Data(nameData), utf8Flag: (flag & 0x0800) != 0)
             result.append(Entry(
                 name: name,
-                compressedSize: Int64(compressed),
-                uncompressedSize: Int64(uncompressed),
+                compressedSize: compressed,
+                uncompressedSize: uncompressed,
                 compressionMethod: method,
-                localHeaderOffset: Int64(localOffset)
+                localHeaderOffset: localOffset
             ))
             cursor = nameEnd + extraLength + commentLength
         }
@@ -116,6 +147,70 @@ struct RangeZipReader {
         case unsupportedMethod(UInt16)
     }
 
+    // MARK: - ZIP64
+
+    private struct Zip64EOCD {
+        let entryCount: Int64
+        let cdSize: Int64
+        let cdOffset: Int64
+    }
+
+    private struct Zip64Extra {
+        var uncompressed: Int64?
+        var compressed: Int64?
+        var localOffset: Int64?
+    }
+
+    /// 读取 ZIP64 EOCD 记录：locator（签名 0x07064B50）位于 EOCD 前 20 字节，
+    /// 记录（签名 0x06064B50）携带 64 位条目数与中央目录偏移/大小；不存在则返回 nil。
+    private func readZip64EOCD(eocdGlobalOffset: Int64) async throws -> Zip64EOCD? {
+        guard eocdGlobalOffset >= 20 else { return nil }
+        let locator = try await read((eocdGlobalOffset - 20)..<eocdGlobalOffset)
+        guard locator.count >= 20, Self.uint32(locator, at: 0) == 0x07064B50 else { return nil }
+        let recordOffset = Int64(bitPattern: Self.uint64(locator, at: 8))
+        guard recordOffset >= 0, recordOffset + 56 <= totalSize else { return nil }
+        let record = try await read(recordOffset..<(recordOffset + 56))
+        guard record.count >= 56, Self.uint32(record, at: 0) == 0x06064B50 else { return nil }
+        return Zip64EOCD(
+            entryCount: Int64(bitPattern: Self.uint64(record, at: 32)),
+            cdSize: Int64(bitPattern: Self.uint64(record, at: 40)),
+            cdOffset: Int64(bitPattern: Self.uint64(record, at: 48))
+        )
+    }
+
+    /// 解析中央目录条目的 ZIP64 扩展字段（header id 0x0001）：按需依次为
+    /// 原始大小 / 压缩大小 / 本地头偏移（各 8 字节，仅哨兵字段才有对应值）。
+    private static func zip64ExtraValues(
+        _ data: Data, start: Int, end: Int,
+        needUncompressed: Bool, needCompressed: Bool, needOffset: Bool
+    ) -> Zip64Extra {
+        var result = Zip64Extra()
+        var cursor = start
+        while cursor + 4 <= end {
+            let headerID = uint16(data, at: cursor)
+            let bodySize = Int(uint16(data, at: cursor + 2))
+            let body = cursor + 4
+            if headerID == 0x0001 {
+                var pointer = body
+                if needUncompressed, pointer + 8 <= end {
+                    result.uncompressed = Int64(bitPattern: uint64(data, at: pointer))
+                    pointer += 8
+                }
+                if needCompressed, pointer + 8 <= end {
+                    result.compressed = Int64(bitPattern: uint64(data, at: pointer))
+                    pointer += 8
+                }
+                if needOffset, pointer + 8 <= end {
+                    result.localOffset = Int64(bitPattern: uint64(data, at: pointer))
+                    pointer += 8
+                }
+                break
+            }
+            cursor = body + bodySize
+        }
+        return result
+    }
+
     private static func locateEOCD(in data: Data) -> Int? {
         let signature: [UInt8] = [0x50, 0x4B, 0x05, 0x06]
         guard data.count >= 22 else { return nil }
@@ -137,6 +232,10 @@ struct RangeZipReader {
     private static func uint32(_ data: Data, at offset: Int) -> UInt32 {
         UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8)
             | (UInt32(data[offset + 2]) << 16) | (UInt32(data[offset + 3]) << 24)
+    }
+
+    private static func uint64(_ data: Data, at offset: Int) -> UInt64 {
+        (UInt64(uint32(data, at: offset + 4)) << 32) | UInt64(uint32(data, at: offset))
     }
 
     private static func decodeName(_ data: Data, utf8Flag: Bool) -> String {

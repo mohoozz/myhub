@@ -16,6 +16,7 @@
 - [x] Xcode 工程 / Swift Package 初始化（Bundle ID `com.myhub.MyHub`、v1.0.0、最低 iOS 16；采用 XcodeGen，`project.yml` 生成 `MyHub.xcodeproj`）
 - [x] 目录结构搭建（`App/`、`Core/`、`Player/`、`Readers/`、`Features/`、`Domain/`、`Resources/`）
 - [x] 依赖引入（SPM）：AMSMB2、MobileVLCKit（VLCKit 4.x）、ZIPFoundation、UnrarKit、GRDB、Nuke
+      - 后续评估：ZIPFoundation / Nuke 实际未被引用，已从 `project.yml` 移除；zip/cbz 按需解包为自研 `RangeZipReader`（含 ZIP64），封面加载为自研 `RemoteCoverImage` + `ImageDownsampler`
 - [x] `Info.plist` 配置：`NSAppTransportSecurity`（局域网 HTTP + Web 内容）、`NSLocalNetworkUsageDescription`（SMB）、`UIBackgroundModes: audio`、`NSFaceIDUsageDescription`
 - [x] 能力开启：后台音频（`UIBackgroundModes: audio`）、后台传输（background `URLSession`，无需额外 entitlement）、Keychain Sharing（entitlements 已配置）
 - [x] 应用图标与启动屏（品牌图标 `AppIcon` + `UILaunchScreen`：`BrandLogo` + 亮/暗 `LaunchBackground`）
@@ -159,7 +160,7 @@
 
 ---
 
-## 6. 漫画阅读（IOS-207 / 208）
+## 6. 漫画阅读（IOS-207 / 208 / 210）
 
 - [x] `ArchiveDecoder`：zip/cbz/epub 按需解页（`ArchiveDecoder`：复用 `RangeZipReader` Range 解包不整包下载，仅拉中央目录 + 目标条目；rar/cbr 经 UnrarKit——本地直读（security-scoped 逐次进入访问作用域），远程源流式落地临时文件带下载进度；页名自然排序）
 - [x] `ComicDetector`：扩展名优先（cbz/cbr 直接放行）+ 图片占比≥90%且自然序列命名嗅探（zip/rar/epub 打开时校验，非漫画报「不是漫画文件」）+ 手动覆盖（浏览页右键/长按菜单「以漫画阅读打开」支持 zip/rar/epub）
@@ -169,6 +170,7 @@
 - [x] **进度记录 + 恢复：直接恢复到上次页码（首次构建即定位，不从第一页开始）**，条漫恢复页码显示（`ComicProgressStore`：页码 + fileSize/modTime 文件指纹，文件替换提示归零；恢复页在 load 完成即定位；条漫经 ScrollViewReader 程序滚动 + PreferenceKey 可见页回写页码）
 - [x] **弱网点击漫画：先展示 UI 进入加载界面 + 点击防抖去重**（Presenter `open` 同项去重；打开即 fullScreenCover 进加载态——解析归档转圈 / 远程 rar 下载百分比进度条）
 - [x] 翻完推荐下一本（底部提示，需用户点击才打开（已去除 5s 倒计时自动打开），可取消；复用 `NextMediaTip` UI + 同目录按浏览排序偏好找下一本漫画）
+- [x] 控制层重设计（方案 A：现状式顶栏 + 底部毛玻璃胶囊）（顶栏保留裸显示：✕ + 书名 + ⋯ 菜单承载模式切换 / 双页方向 / 亮度，底栏不再放设置按钮；底部悬浮毛玻璃胶囊 58pt（material + 0.5pt 描边 + 阴影）：‹ ｜可拖进度轨 3pt + 14pt 手柄｜页码｜☰｜›，拖动只改本地值、**松手才跳页**，拖动中深色气泡跟随手柄（复用小说拖动/气泡手感，出界夹紧）；胶囊上方 10.5pt 细字「第 x / N 页 · y% · 模式」；下方快捷 chip：缩略图 / 下一本 / 亮度——新增 `ComicThumbnailSheet`（缩略图网格点击跳页，按需小尺寸解码 256px + LRU 48 张，不占阅读解压并发）与 `ComicBrightnessSheet`（复用全局 `reader.brightness`，与小说同档、退出恢复系统亮度）；「下一本」chip 立即查找下一本并复用 `NextMediaTip` 提示条）
 
 ---
 
@@ -377,7 +379,7 @@
 - [x] 目前内置浏览器，底部的操作栏太难看了，需要优化下，给出几个优化的方案，先给出原型，列出几个方案我再选择（已完成，选定方案 A「悬浮单胶囊」，原型见 `prototype/ios/browser-bottom-toolbar-options.html`。已实现：①`BrowserToolbar` 由「通栏直角白条 + 顶部 Divider」改为与全局悬浮页签栏同语言的圆角胶囊——左右内缩 12pt、条高 52、圆角 26、1pt `AppColors.tabBarBorder` 描边 + 轻阴影（黑 8% / 半径 8 / y3），删掉通栏背景与分割线，形成上下「双胶囊」节奏；②内部重排：三个导航键改 34×44 命中区 + 半高圆角 22 的弱填充按压圆底（原 38×40 直角高亮块），去掉左右等宽死区（原左侧 118pt 死宽挤压地址栏），地址栏由「描边圆角块」改为胶囊内浅灰填充块（新增 `AppColors.fieldFill` #F3F4F6 / 暗色 #2C2C2E，高 38 胶囊、无描边），标签数收为同款浅灰填充 chip（高 36），iPhone 上地址栏可用宽由约 120pt 增至约 160pt；③`BrowserHomeView` 收起态小胶囊描边由 `separator` 0.5pt 统一为 `tabBarBorder` 1pt、阴影对齐（黑 10% / 8 / y3）；④操作栏与 mini 播放器同时在场时补 8pt 间距，避免两颗悬浮胶囊相贴）
 - [x] 播放视频时app切换到后台，会自动触发画中画模式，增加一个设置项，默认关闭这个功能（已完成：新增「设置 → 播放器偏好 → 播放 → 退后台自动画中画」开关，默认关闭。设置项 `AppSettings.Player.autoPiPOnBackground`（UserDefaults key `player.autoPiPOnBackground`，默认 false）；`PiPState.attach` 原先固定 `canStartPictureInPictureAutomaticallyFromInline = true`，现改为读取该开关值，默认不再随退后台自动进入画中画，仍可通过播放页画中画按钮手动开启（该按钮不受开关影响）；配置导入导出快照 `PreferencesSnapshot` 同步该字段（声明为可选，兼容不含此项的旧快照，nil 时不覆盖当前设置）；自动触发仅硬解 AVPlayer 播放路径生效，软解 VLC 路径本就无画中画）
 - [x] 进入多选的模式后，之前底部的多选操作栏，被目前底部的tab栏遮挡了（已修复。根因：TODO 376 将「mini 播放器 + 页签栏」改为经 `safeAreaInset` 注入的悬浮圆角胶囊后，页签内容不再物理让位（可滚动到胶囊下方），而浏览目录页 `BrowseDirectoryView`、阅读页 `ReadingHomeView` 的多选操作栏仍以 `.overlay(alignment: .bottom)` 对齐到内容视图底边（即屏幕底），于是落到悬浮页签栏之下被遮挡。已修复：①两处底部覆盖层由 `.overlay(alignment: .bottom)` 改为 `.safeAreaInset(edge: .bottom)` 注入——系统会把插入视图置于当前安全区（已包含页签栏与 mini 播放器占位）之上，多选操作栏/传输横幅/轻提示自动叠在页签栏上方；②覆盖层无内容时高度归零（底部 padding 随内容条件归零），非多选态不额外预留空间；③删除原先手工叠加的「给多选操作栏留位」64pt 内容内边距，改由 ScrollView 依据安全区自动预留，避免双重留白）
-- [ ] 熄屏一段时间打开后，视频就无法播放了，加一下相关的日志，等我复现后再处理下（日志埋点已完成，待复现定位。已覆盖：①`lifecycle`——scenePhase 每次变化（含 inactive/background/active 时序）记录播放状态 / 引擎诊断 / 地址锁定 / 串流代理 / 网络路径快照；②新增 `NetworkPathMonitor`（NWPathMonitor）——记录熄屏期间网络路径变化（WiFi 断开/重连、切蜂窝、断网、昂贵/受限网络）并提供只读快照，不做行为干预；③`network-route`——进入后台基准快照、回前台后台时长（未达 60s 自愈阈值也记 debug）、自愈前后锁定与代理快照；④`stream`——串流会话注册（端口/缓存/离线/预取/内容长度）、监听健康快照、自愈健康判定；⑤`player-audio`——点击播放 → 数据源解析（耗时/URL/离线兜底命中）→ open 上下文 → engine.load 开始/返回/抛错（各段耗时）→ 引擎内部（硬解媒体探测耗时、加载提交轨道数、item failed + errorLog(HTTP 状态码)、等待态 reason/缓冲水位、`playbackStalled` 停滞通知、软解状态迁移与 error 详情、恢复进度 seek）→ 失败全量快照（锁定/代理/网络/引擎诊断/state）与硬解回退软解标记；⑥退/回前台音频会话与中断开始/结束重激活结果；⑦渲染桥挂载类型。复现后按时间线对照上述模块日志定位卡点）
+- [x] 熄屏一段时间打开后，视频就无法播放了，加一下相关的日志，等我复现后再处理下（日志埋点已完成，待复现定位。已覆盖：①`lifecycle`——scenePhase 每次变化（含 inactive/background/active 时序）记录播放状态 / 引擎诊断 / 地址锁定 / 串流代理 / 网络路径快照；②新增 `NetworkPathMonitor`（NWPathMonitor）——记录熄屏期间网络路径变化（WiFi 断开/重连、切蜂窝、断网、昂贵/受限网络）并提供只读快照，不做行为干预；③`network-route`——进入后台基准快照、回前台后台时长（未达 60s 自愈阈值也记 debug）、自愈前后锁定与代理快照；④`stream`——串流会话注册（端口/缓存/离线/预取/内容长度）、监听健康快照、自愈健康判定；⑤`player-audio`——点击播放 → 数据源解析（耗时/URL/离线兜底命中）→ open 上下文 → engine.load 开始/返回/抛错（各段耗时）→ 引擎内部（硬解媒体探测耗时、加载提交轨道数、item failed + errorLog(HTTP 状态码)、等待态 reason/缓冲水位、`playbackStalled` 停滞通知、软解状态迁移与 error 详情、恢复进度 seek）→ 失败全量快照（锁定/代理/网络/引擎诊断/state）与硬解回退软解标记；⑥退/回前台音频会话与中断开始/结束重激活结果；⑦渲染桥挂载类型。复现后按时间线对照上述模块日志定位卡点）
 - [x] 视频播放时候，我已经设置了横屏播放，但退出换其他视频播放后，还是会从竖屏播放开始，这个设置需要缓存下（已修复：方向偏好持久化到 `AppSettings.Player.landscapePreferred`（UserDefaults key `player.landscapePreferred`）——手动模式下点播放页左中旋转按钮切换方向即写入缓存，退出播放页仍恢复竖屏但**不重置偏好**，下次进入任意视频播放页由 `OrientationController.enterPlayer()` 按缓存方向初始化（延迟 400ms 到 fullScreenCover 呈现转场结束后再旋转，避免与转场并发触发 iOS 16 崩溃）；该缓存属设备级偏好，不纳入配置导入导出）
 - [x] 设置里的播放器偏好，增加一个横竖屏切换的设置项，可以设置手动切换（用户手动点击切换按钮，需要缓存下）、自动切换（根据手机目前是横放还是竖放自动切换）（已完成：新增「设置 → 播放器偏好 → 播放 → 横竖屏切换」Picker，`AppSettings.Player.orientationMode`（UserDefaults key `player.orientationMode`，默认「手动切换」）。手动模式：播放页左中按钮可见，点击切换并缓存方向（见上一条）；自动模式：隐藏旋转按钮，进入播放页后放开方向掩码为 `.allButUpsideDown` 并同步设备物理方向（`UIDevice.orientationDidChangeNotification` 监听 + `requestGeometryUpdate` 纠偏，正/倒横屏与界面方向定义相反已映射，倒置/朝向未知不响应），设备转动时系统自动旋转、通知兜底纠偏；退出播放页统一经 `RootView.fullScreenCover(onDismiss:)` → `OrientationController.exitPlayer()` 停止监听并将掩码归位竖屏；切纯音频仍强制竖屏、切回视频时自动模式重新同步设备方向；配置导入导出快照 `PreferencesSnapshot` 同步该字段（声明为可选，兼容旧快照））
 - [x] 浏览界面的目录，文件夹名称的底部小字，不用显示内部有多少个文件（已处理：目录项底部的子项数文案去掉。①`FileGridCell` 网格卡目录 caption 由「N 项 / 文件夹」改为固定「文件夹」；②`FileListRow` 列表行目录 caption 由「目录 · N 项」改为固定「目录」；③该子项数原本靠懒加载子目录列表统计（`loadChildCountIfNeeded`，进入可视区触发 `adapter.list(path).count`，限并发 3、会话内缓存），既然不再展示即整套移除——`BrowseDirectoryViewModel` 删掉 `childCounts` / `childCountInFlight` / `childCountAttempted` 与 `loadChildCountIfNeeded`，`BrowseDirectoryView` 删掉两处 `childCount:` 传参与 `.onAppear` 触发，`FileGridCell` / `FileListRow` 删掉 `childCount` 入参。顺带省掉每个目录一次列举请求）

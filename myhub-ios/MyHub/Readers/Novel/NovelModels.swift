@@ -19,24 +19,92 @@ struct NovelTocEntry: Identifiable, Equatable {
 
 // MARK: - 统一进度锚点（IOS-205/206，排版无关）
 
-/// 排版无关进度锚点（《需求分析文档》v1.2）：
-/// - txt：存全局字节偏移（offset），恢复时直接 seek 该字节 → 章节索引二分反查章节，一步定位；
-/// - epub：存 (spineIndex, paragraphIndex, characterOffset)，不实现完整 CFI；
-/// - 附文件指纹（fileSize + modTime），文件被替换时校验提示并重建索引。
+/// 排版无关进度锚点（方案 C：结构锚点 + 片段重定位）：
+/// - 结构锚点：章序号 + 章标题 + 段落序号 + 段内 UTF-16 偏移（与排版解耦，不依赖字节换编码）；
+/// - 内容校验：锚点位置的后续文本片段（textAfter），恢复时按内容搜索重定位，
+///   编码变化、字号重排、分章规则微调、文件轻微编辑都不再漂移；
+/// - 兜底：全书百分比 percent；
+/// - 兼容：`offset`（txt 全局字节偏移）仅为读取历史进度保留，新写入恒为 0，读取时经索引换算一次。
 struct NovelAnchor: Codable {
     var kind: Kind
-    /// txt：全局字节偏移
+    /// txt 旧版字段：全局字节偏移（只读兼容，新写入恒 0）
     var offset: Int64 = 0
     /// epub：spine 序号 / 段落序号 / 段内字符偏移
     var spineIndex: Int = 0
     var paragraphIndex: Int = 0
     var characterOffset: Int = 0
+    /// 结构锚点：章序号（txt 章下标 / epub spine 下标）
+    var chapterIndex: Int? = nil
+    /// 章标题（分章规则变化时校验章号是否仍在同一章）
+    var chapterTitle: String? = nil
+    /// 章内 UTF-16 字符位置：片段搜索的 hint（消歧 + 搜索失败时直接使用）
+    var chapterCharOffset: Int? = nil
+    /// 定位片段：锚点位置的后续纯文本（重定位的核心依据）
+    var textAfter: String? = nil
+    /// 全书百分比（兜底定位）
+    var percent: Double? = nil
     /// 文件指纹
     var fileSize: Int64 = 0
     var modTime: TimeInterval = 0
 
     enum Kind: String, Codable {
         case txt, epub
+    }
+
+    /// 是否带内容/结构信息（旧版纯字节锚点为 false，需经索引换算一次）
+    var hasStructure: Bool {
+        chapterIndex != nil || chapterCharOffset != nil || textAfter?.isEmpty == false
+    }
+
+    /// 旧版 txt 字节偏移锚点（需要按索引换算成章内字符位置）
+    var isLegacyByteOffset: Bool {
+        kind == .txt && !hasStructure && offset > 0
+    }
+
+    /// txt 结构锚点
+    static func txt(
+        chapterIndex: Int, chapterTitle: String,
+        paragraphIndex: Int, offsetInParagraph: Int,
+        chapterCharOffset: Int, textAfter: String?, percent: Double,
+        fileSize: Int64, modTime: Date
+    ) -> NovelAnchor {
+        NovelAnchor(
+            kind: .txt,
+            offset: 0,
+            spineIndex: chapterIndex,
+            paragraphIndex: paragraphIndex,
+            characterOffset: offsetInParagraph,
+            chapterIndex: chapterIndex,
+            chapterTitle: chapterTitle,
+            chapterCharOffset: chapterCharOffset,
+            textAfter: textAfter,
+            percent: percent,
+            fileSize: fileSize,
+            modTime: modTime.timeIntervalSince1970
+        )
+    }
+
+    /// epub 结构锚点
+    static func epub(
+        spineIndex: Int, chapterTitle: String,
+        paragraphIndex: Int, offsetInParagraph: Int,
+        chapterCharOffset: Int, textAfter: String?, percent: Double,
+        fileSize: Int64, modTime: Date
+    ) -> NovelAnchor {
+        NovelAnchor(
+            kind: .epub,
+            offset: 0,
+            spineIndex: spineIndex,
+            paragraphIndex: paragraphIndex,
+            characterOffset: offsetInParagraph,
+            chapterIndex: spineIndex,
+            chapterTitle: chapterTitle,
+            chapterCharOffset: chapterCharOffset,
+            textAfter: textAfter,
+            percent: percent,
+            fileSize: fileSize,
+            modTime: modTime.timeIntervalSince1970
+        )
     }
 
     /// 解析进度 JSON；兼容旧版纯 Int64 字符串（txt 全局字节偏移，无指纹）
@@ -59,9 +127,14 @@ struct NovelAnchor: Codable {
         return string
     }
 
-    /// 指纹是否匹配当前文件（不匹配说明文件被替换，进度需重置防错乱）
+    /// 指纹是否匹配当前文件（不匹配说明文件被替换）
     func fingerprintMatches(fileSize: Int64, modTime: Date) -> Bool {
         self.fileSize == fileSize && abs(self.modTime - modTime.timeIntervalSince1970) < 2
+    }
+
+    /// 文件大小一致、仅 mtime 差异（服务端精度/时区漂移）：锚点仍然可用，不重置进度
+    func sizeMatches(_ fileSize: Int64) -> Bool {
+        self.fileSize == fileSize
     }
 }
 

@@ -74,12 +74,18 @@ final class ComicReaderViewModel: ObservableObject {
     /// 翻完推荐下一本（IOS-208）
     @Published private(set) var nextCandidate: FileEntry?
 
+    /// 缩略图（IOS-210 控制层重设计·缩略图面板）：小尺寸解码缓存，LRU 上限 48 张
+    @Published private(set) var thumbnails: [Int: UIImage] = [:]
+
     private let adapter: StorageAdapter?
     private var source: ComicPageSource?
     /// 页磁盘缓存身份（在线：entry 指纹；离线：缓存反查身份，IOS-605）
     private var cacheIdentity: SegmentCache.FileIdentity?
     private var loadTask: Task<Void, Never>?
     private var pageTasks: [Int: Task<UIImage?, Never>] = [:]
+    private var thumbTasks: [Int: Task<UIImage?, Never>] = [:]
+    /// 缩略图 LRU 顺序（插入序，超限逐出最早）
+    private var thumbnailOrder: [Int] = []
     private var reportTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     private var nextTask: Task<Void, Never>?
@@ -87,6 +93,8 @@ final class ComicReaderViewModel: ObservableObject {
     private var coverKey: String?
     /// 上次翻页方向（预加载前向/后向优先）
     private var lastForward = true
+    /// 进入阅读器前的系统亮度（-1 = 未记录；退出时恢复，与小说阅读器一致）
+    private var systemBrightness: CGFloat = -1
 
     init(connection: Connection, entry: FileEntry) {
         self.connection = connection
@@ -99,6 +107,7 @@ final class ComicReaderViewModel: ObservableObject {
     deinit {
         loadTask?.cancel()
         pageTasks.values.forEach { $0.cancel() }
+        thumbTasks.values.forEach { $0.cancel() }
         reportTask?.cancel()
         toastTask?.cancel()
         nextTask?.cancel()
@@ -290,6 +299,28 @@ final class ComicReaderViewModel: ObservableObject {
 
     // MARK: - 页面加载（内存 LRU + in-flight 去重，最多并发 3）
 
+    /// 归档解压并发限流：超过上限时挂起于 continuation（替代原 60ms 轮询等待）
+    private static let maxConcurrentDecodes = 3
+    private var inflightDecodes = 0
+    private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireDecodeSlot() async {
+        if inflightDecodes < Self.maxConcurrentDecodes {
+            inflightDecodes += 1
+            return
+        }
+        await withCheckedContinuation { decodeWaiters.append($0) }
+    }
+
+    /// 归还名额：有等待者则直接转交（名额不回落，避免唤醒间隙被新任务抢占）
+    private func releaseDecodeSlot() {
+        if decodeWaiters.isEmpty {
+            inflightDecodes -= 1
+        } else {
+            decodeWaiters.removeFirst().resume()
+        }
+    }
+
     private func loadPage(_ index: Int) async {
         guard source != nil, index >= 0, index < pageCount, images[index] == nil else { return }
         if let task = pageTasks[index] {
@@ -303,7 +334,7 @@ final class ComicReaderViewModel: ObservableObject {
             guard let source else { return nil }
             // 先查磁盘缓存：命中直接解码返回，不占并发名额、不参与排队。
             // 条漫模式滚动定位会批量触发 loadPage（渲染 index 0~N），若命中页也排队，
-            // 全部 task 卡在并发上限 while 循环、无人执行到缓存读取，running 永不下降 → 死锁。
+            // 全部 task 会卡在并发名额之外、无人执行到缓存读取 → 必须让缓存读取先于 acquireDecodeSlot。
             let identity = await MainActor.run { self.cacheIdentity }
             let pageName = source.pageNames.indices.contains(index) ? source.pageNames[index] : nil
             if let identity, let pageName,
@@ -311,14 +342,11 @@ final class ComicReaderViewModel: ObservableObject {
                 AppLogger.shared.log("单页缓存命中: 第\(index + 1)页 \(pageName)", module: "comic-reader")
                 return ImageDownsampler.downsample(data: cached, maxPixel: 2200)
             }
-            // 未命中需归档解压（重资源）：并发上限 3，排队等待
-            while true {
-                if Task.isCancelled { return nil }
-                let running = await MainActor.run {
-                    self.pageTasks.values.filter { !$0.isCancelled }.count
-                }
-                if running <= 3 { break }
-                try? await Task.sleep(nanoseconds: 60_000_000)
+            // 未命中需归档解压（重资源）：并发上限 3，挂起排队（continuation 唤醒，无轮询）
+            await self.acquireDecodeSlot()
+            if Task.isCancelled {
+                await self.releaseDecodeSlot()
+                return nil
             }
             AppLogger.shared.log(
                 "单页缓存未命中: 第\(index + 1)页 \(pageName ?? "-")，走归档解压",
@@ -335,6 +363,8 @@ final class ComicReaderViewModel: ObservableObject {
                 }
                 if attempt == 0 { try? await Task.sleep(nanoseconds: 300_000_000) }
             }
+            // 重活（网络 + 解压）结束即归还名额；后续下采样不再占用解压并发
+            await self.releaseDecodeSlot()
             let cost = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             guard let data else {
                 AppLogger.shared.log(
@@ -400,10 +430,6 @@ final class ComicReaderViewModel: ObservableObject {
     }
 
     // MARK: - 翻页 / 跳转
-
-    var pageName: String {
-        source?.pageNames.indices.contains(page) == true ? source?.pageNames[page] ?? "" : ""
-    }
 
     /// 切回条漫前标记恢复定位中（防止 LazyVStack 顶部布局提前回写覆盖当前页）
     func beginWebtoonRestore() { isRestoring = true }
@@ -517,7 +543,12 @@ final class ComicReaderViewModel: ObservableObject {
         persistRatios()
         loadTask?.cancel()
         pageTasks.values.forEach { $0.cancel() }
+        thumbTasks.values.forEach { $0.cancel() }
+        thumbTasks.removeAll()
+        thumbnails = [:]
+        thumbnailOrder = []
         nextTask?.cancel()
+        restoreSystemBrightness()
         source?.close()
         source = nil
     }
@@ -568,6 +599,100 @@ final class ComicReaderViewModel: ObservableObject {
         guard let index = sorted.firstIndex(where: { $0.path == entry.path }),
               index + 1 < sorted.count else { return nil }
         return sorted[index + 1]
+    }
+
+    // MARK: - 亮度（IOS-210 控制层重设计：复用全局阅读亮度偏好，与小说阅读器同档）
+
+    /// 进入阅读器：记录系统亮度并按用户偏好施加（偏好 <0 表示跟随系统，不改动）
+    func applyReaderBrightness() {
+        systemBrightness = UIScreen.main.brightness
+        let stored = AppSettings.Reader.brightness
+        if stored >= 0 { UIScreen.main.brightness = CGFloat(stored) }
+    }
+
+    func setBrightness(_ value: Double) {
+        AppSettings.Reader.brightness = value
+        if value >= 0 {
+            UIScreen.main.brightness = CGFloat(value)
+        } else if systemBrightness >= 0 {
+            UIScreen.main.brightness = systemBrightness   // 跟随系统：恢复进入前亮度
+        }
+    }
+
+    /// 退出阅读器：恢复进入前的系统亮度
+    private func restoreSystemBrightness() {
+        if systemBrightness >= 0 { UIScreen.main.brightness = systemBrightness }
+    }
+
+    // MARK: - 缩略图（IOS-210 控制层重设计：☰ 缩略图面板）
+
+    /// 单页缩略图（小尺寸解码，独立于阅读大图缓存）：已解码页直接缩略 → 磁盘缓存解码 →
+    /// 归档按需解压（复用解压并发名额，防抢占阅读预加载）。
+    func thumbnail(for index: Int) async -> UIImage? {
+        guard state == .ready, index >= 0, index < pageCount else { return nil }
+        if let cached = thumbnails[index] { return cached }
+        if let running = thumbTasks[index] { return await running.value }
+        let task = Task.detached(priority: .utility) { [weak self] () -> UIImage? in
+            guard let self else { return nil }
+            // 已解码大图命中：直接缩略，省一次解压
+            if let decoded = await MainActor.run({ self.images[index] }) {
+                return decoded.preparingThumbnail(of: Self.thumbnailSize)
+            }
+            let identity = await MainActor.run { self.cacheIdentity }
+            let source = await MainActor.run { self.source }
+            let pageName = source?.pageNames.indices.contains(index) == true
+                ? source?.pageNames[index] : nil
+            // 页磁盘缓存命中：解码缩略，不占归档解压名额
+            if let identity, let pageName,
+               let data = await ComicPageCache.page(file: identity, name: pageName) {
+                return ImageDownsampler.downsample(data: data, maxPixel: Self.thumbnailSize.width)
+            }
+            guard let source else { return nil }
+            await self.acquireDecodeSlot()
+            let data = try? await source.pageData(at: index)
+            await self.releaseDecodeSlot()
+            guard let data else { return nil }
+            if let identity, let pageName {
+                await ComicPageCache.storePage(data, file: identity, name: pageName)
+            }
+            return ImageDownsampler.downsample(data: data, maxPixel: Self.thumbnailSize.width)
+        }
+        thumbTasks[index] = task
+        let image = await task.value
+        thumbTasks[index] = nil
+        if let image { storeThumbnail(image, at: index) }
+        return image
+    }
+
+    /// 缩略图目标边长（4 列网格 @3x 约 300px，取 256 兼顾清晰与内存）
+    private static let thumbnailSize = CGSize(width: 256, height: 256)
+
+    /// 写入缩略图缓存 + LRU 逐出（上限 48 张，长漫画集不撑内存）
+    private func storeThumbnail(_ image: UIImage, at index: Int) {
+        if thumbnails[index] == nil { thumbnailOrder.append(index) }
+        thumbnails[index] = image
+        while thumbnailOrder.count > 48 {
+            let oldest = thumbnailOrder.removeFirst()
+            if oldest != index { thumbnails[oldest] = nil }
+        }
+    }
+
+    // MARK: - 「下一本」快捷（IOS-210 控制层重设计：⤓ 下一本 chip）
+
+    /// 立即查找同目录下一本漫画（不等待翻完）；结果仍走 NextMediaTip 提示条，点击才打开
+    func requestNextComic() {
+        guard nextCandidate == nil, nextTask == nil else { return }
+        nextTask = Task {
+            let found = await Self.findNextComic(after: entry, connection: connection)
+            await MainActor.run {
+                self.nextTask = nil
+                if let found {
+                    self.nextCandidate = found
+                } else {
+                    self.showToast("同目录没有下一本漫画了")
+                }
+            }
+        }
     }
 
     // MARK: - 工具

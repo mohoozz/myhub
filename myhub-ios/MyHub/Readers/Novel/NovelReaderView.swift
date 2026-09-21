@@ -215,7 +215,7 @@ struct NovelReaderView: View {
                                     GeometryReader { geo in
                                         Color.clear.preference(
                                             key: NovelVisibleKey.self,
-                                            value: [page: geo.frame(in: .named("novelScroll")).midY]
+                                            value: [page: geo.frame(in: .named("novelScroll"))]
                                         )
                                     }
                                 )
@@ -242,19 +242,30 @@ struct NovelReaderView: View {
                 .onPreferenceChange(ScrollTopKey.self) { minY in
                     viewModel.scrollReachTop(minY >= 0)
                 }
-                .onPreferenceChange(NovelVisibleKey.self) { values in
+                .onPreferenceChange(NovelVisibleKey.self) { frames in
                     // 最接近视口中点的页视为当前页（程序滚动期间由 scrollIntent 锁定忽略回写）
                     guard viewModel.scrollIntent == nil else {
                         AppLogger.shared.log("NovelVisible 忽略 scrollIntent=\(String(describing: viewModel.scrollIntent))", module: "novel-reader")
                         return
                     }
-                    guard !values.isEmpty else {
+                    guard !frames.isEmpty else {
                         AppLogger.shared.log("NovelVisible values 为空", module: "novel-reader")
                         return
                     }
                     let mid = viewport.size.height / 2
-                    if let best = values.min(by: { abs($0.value - mid) < abs($1.value - mid) })?.key {
+                    if let best = frames.min(by: { abs($0.value.midY - mid) < abs($1.value.midY - mid) })?.key {
                         viewModel.scrollVisiblePage(best)
+                    }
+                    // 视口顶部所在页：页内纵向偏移 → 连续字符位置（行映射，行级精度上报）
+                    if let top = frames
+                        .filter({ $0.value.maxY > 0 })
+                        .min(by: { $0.value.minY < $1.value.minY }) {
+                        let rect = top.value
+                        viewModel.scrollVisibleTop(
+                            page: top.key,
+                            offsetY: max(0, -rect.minY),
+                            pageHeight: max(rect.height, 1)
+                        )
                     }
                 }
                 .onChange(of: viewModel.scrollIntentRevision) { _ in
@@ -350,56 +361,198 @@ struct NovelReaderView: View {
         }
     }
 
-    private var bottomBar: some View {
-        VStack(spacing: 10) {
-            // 进度：章内页码 + 全书百分比
-            HStack(spacing: 10) {
-                Text("\(viewModel.page + 1)/\(max(viewModel.pageCount, 1))")
-                    .font(.caption2)
-                    .foregroundStyle(viewModel.themeSpec.secondaryText)
-                    .frame(width: 52, alignment: .leading)
-                ProgressView(value: chapterProgress)
-                    .tint(AppColors.primary)
-                Text(percentText)
-                    .font(.caption2)
-                    .foregroundStyle(viewModel.themeSpec.secondaryText)
-                    .frame(width: 44, alignment: .trailing)
-            }
+    // MARK: - 底栏（方案 B+：单行胶囊 + 下沿可拖动进度轨）
 
-            HStack(spacing: 0) {
-                bottomButton("上一章", symbol: "chevron.left", enabled: viewModel.chapter > 0) {
-                    viewModel.goToChapter(viewModel.chapter - 1)
-                }
-                bottomButton("目录", symbol: "list.bullet") {
-                    showCatalog = true
-                }
-                bottomButton("设置", symbol: "textformat.size") {
-                    showSettings = true
-                }
-                bottomButton("下一章", symbol: "chevron.right", enabled: viewModel.chapter + 1 < viewModel.toc.count) {
-                    viewModel.goToChapter(viewModel.chapter + 1)
-                }
-            }
+    /// 拖动中的目标区间（0...1，nil = 未拖动）。拖动期间只改本地区间值，**松手才真正跳章**。
+    @State private var dragRatio: Double?
+    /// 拖动中吸附到的章号（0 基）
+    @State private var dragChapterIndex = 0
+    /// 胶囊宽度（气泡跟随手柄用，由几何读取写入）
+    @State private var barWidth: CGFloat = 0
+
+    /// 轨道左右内缩（对应原型 8pt，这里留 10pt 与胶囊圆角贴合）
+    private let railInset: CGFloat = 10
+    /// 胶囊高度：按钮带 48pt（含 12pt 下沿拖动带）+ 进度轨带 12pt
+    private let capsuleHeight: CGFloat = 60
+    /// 下沿拖动带高度：仅此条带响应拖动，正文 / 胶囊其余区域手势不受影响
+    private let railStripHeight: CGFloat = 24
+    /// 轨道线中心距胶囊底边的高度
+    private let railLineInset: CGFloat = 7
+
+    private var bottomBar: some View {
+        VStack(spacing: 6) {
+            progressLine
+            capsuleBar
         }
         .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
         .background(viewModel.themeSpec.controlBackground.opacity(0.96))
         .overlay(alignment: .top) {
             Rectangle().fill(viewModel.themeSpec.secondaryText.opacity(0.2)).frame(height: 0.5)
         }
     }
 
-    private var chapterProgress: Double {
-        guard viewModel.pageCount > 1 else { return 0 }
-        return Double(viewModel.page) / Double(viewModel.pageCount - 1)
+    /// 胶囊上方一行细字读数；拖动中变为深色气泡（随手柄横向移动，出界自动夹紧）
+    private var progressLine: some View {
+        ZStack {
+            if let ratio = dragRatio {
+                Text("松手跳到 第 \(dragChapterIndex + 1) 章 · 全书 \(percentString(ratio))%")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color(hex: 0x111827).opacity(0.92)))
+                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                    .fixedSize()
+                    .offset(x: bubbleOffsetX)
+                    .transition(.opacity)
+            } else {
+                Text(progressCaption)
+                    .font(.system(size: 10))
+                    .foregroundStyle(viewModel.themeSpec.secondaryText)
+                    .lineLimit(1)
+            }
+        }
+        .frame(height: 24)
+        .frame(maxWidth: .infinity)
+        .animation(.appQuick, value: dragRatio == nil)
     }
 
-    private var percentText: String {
-        guard viewModel.pageCount > 0 else { return "0%" }
-        let inChapter = Double(viewModel.page) / Double(viewModel.pageCount)
-        let total = (Double(viewModel.chapter) + inChapter) / Double(max(viewModel.toc.count, 1))
-        return "\(Int((total * 100).rounded()))%"
+    /// 单行胶囊：左起 目录 / 上一章 / 下一章 / 设置，下沿内嵌可拖动进度轨
+    private var capsuleBar: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let usable = max(width - railInset * 2, 1)
+            ZStack(alignment: .top) {
+                HStack(spacing: 0) {
+                    bottomButton("目录", symbol: "list.bullet") { showCatalog = true }
+                    bottomButton("上一章", symbol: "chevron.left", enabled: viewModel.chapter > 0) {
+                        viewModel.goToChapter(viewModel.chapter - 1)
+                    }
+                    bottomButton("下一章", symbol: "chevron.right",
+                                 enabled: viewModel.chapter + 1 < viewModel.toc.count) {
+                        viewModel.goToChapter(viewModel.chapter + 1)
+                    }
+                    bottomButton("设置", symbol: "textformat.size") { showSettings = true }
+                }
+                .frame(height: capsuleHeight, alignment: .top)
+                .background(Capsule().fill(capsuleFill))
+
+                progressRail(usable: usable)
+                    .frame(height: railStripHeight)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            .onAppear { barWidth = width }
+            .onChange(of: proxy.size.width) { barWidth = $0 }
+        }
+        .frame(height: capsuleHeight)
+    }
+
+    /// 可拖动进度轨：3pt 轨 + 16pt 手柄（拖动中放大到 22pt 并带光圈），命中区即整条下沿带
+    private func progressRail(usable: CGFloat) -> some View {
+        let ratio = min(max(dragRatio ?? totalProgress, 0), 1)
+        let knobX = railInset + usable * ratio
+        let fillWidth = max(knobX - railInset, 0)
+        let dragging = dragRatio != nil
+        let lineY = railStripHeight - railLineInset
+        return ZStack {
+            Capsule()
+                .fill(viewModel.themeSpec.secondaryText.opacity(0.22))
+                .frame(width: usable, height: 3)
+                .position(x: railInset + usable / 2, y: lineY)
+            Capsule()
+                .fill(AppColors.primary)
+                .frame(width: fillWidth, height: 3)
+                .position(x: railInset + fillWidth / 2, y: lineY)
+            Circle()
+                .fill(knobFill)
+                .frame(width: dragging ? 22 : 16, height: dragging ? 22 : 16)
+                .overlay(Circle().stroke(AppColors.primary, lineWidth: 2))
+                .background(
+                    Circle()
+                        .fill(AppColors.primary.opacity(0.16))
+                        .frame(width: dragging ? 36 : 0, height: dragging ? 36 : 0)
+                )
+                .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
+                .position(x: knobX, y: lineY)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: railStripHeight)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    updateDrag(x: value.location.x, width: usable + railInset * 2)
+                }
+                .onEnded { _ in commitDrag() }
+        )
+        .animation(.easeOut(duration: 0.12), value: dragging)
+        .allowsHitTesting(viewModel.toc.count > 1)
+    }
+
+    /// 拖动 → 区间值：临近章边界（±1.2%，且不超过章宽 40%）自动吸附，避免停在章中间
+    private func updateDrag(x: CGFloat, width: CGFloat) {
+        let usable = max(width - railInset * 2, 1)
+        var ratio = min(max((x - railInset) / usable, 0), 1)
+        let count = max(viewModel.toc.count, 1)
+        let step = 1 / Double(count)
+        let boundary = (ratio / step).rounded() * step
+        let snapWindow = min(0.012, step * 0.4)
+        if abs(boundary - ratio) <= snapWindow {
+            ratio = min(max(boundary, 0), 1)
+        }
+        dragChapterIndex = min(max(Int((ratio / step).rounded(.down)), 0), count - 1)
+        dragRatio = ratio
+    }
+
+    /// 松手才跳章：命中缓存直接切章不闪加载，未命中走既有 goToChapter 加载路径
+    private func commitDrag() {
+        guard let ratio = dragRatio else { return }
+        dragRatio = nil
+        guard viewModel.toc.indices.contains(dragChapterIndex) else { return }
+        guard dragChapterIndex != viewModel.chapter else {
+            viewModel.flashToast("已在本章 · 第 \(dragChapterIndex + 1) 章")
+            return
+        }
+        viewModel.goToChapter(dragChapterIndex)
+        viewModel.flashToast("已跳转 → 第 \(dragChapterIndex + 1) 章 · 全书 \(percentString(ratio))%")
+    }
+
+    /// 气泡横向跟随手柄（预留气泡半宽，避免越出底栏）
+    private var bubbleOffsetX: CGFloat {
+        guard let ratio = dragRatio, barWidth > 0 else { return 0 }
+        let usable = max(barWidth - railInset * 2, 1)
+        let knobX = railInset + usable * min(max(ratio, 0), 1)
+        let limit = max(barWidth / 2 - 112, 0)
+        return min(max(knobX - barWidth / 2, -limit), limit)
+    }
+
+    /// 全书进度（口径与 ViewModel.currentPercent 一致：章号 + 章内页占比）
+    private var totalProgress: Double {
+        let total = Double(max(viewModel.toc.count, 1))
+        let inChapter = viewModel.pageCount > 0 ? Double(viewModel.page) / Double(viewModel.pageCount) : 0
+        return min(max((Double(viewModel.chapter) + inChapter) / total, 0), 1)
+    }
+
+    private var progressCaption: String {
+        let chapter = viewModel.toc.isEmpty ? 0 : viewModel.chapter + 1
+        let pages = max(viewModel.pageCount, 1)
+        return "第 \(chapter) 章 · \(min(viewModel.page + 1, pages))/\(pages) 页 · \(percentString(totalProgress))%"
+    }
+
+    private func percentString(_ ratio: Double) -> String {
+        "\(Int((min(max(ratio, 0), 1) * 100).rounded()))"
+    }
+
+    /// 胶囊底色：浅色主题下比底栏略深一档，夜间主题下略浅一档，保证胶囊边界可见
+    private var capsuleFill: Color {
+        viewModel.themeSpec.secondaryText.opacity(0.12)
+    }
+
+    /// 手柄底色：夜间用近黑（原型 #1C1C1E），其余用白
+    private var knobFill: Color {
+        viewModel.appearance.theme == .night ? Color(hex: 0x1C1C1E) : .white
     }
 
     private func bottomButton(
@@ -408,12 +561,14 @@ struct NovelReaderView: View {
         Button(action: action) {
             VStack(spacing: 3) {
                 Image(systemName: symbol)
-                    .font(.body)
+                    .font(.system(size: 15))
                 Text(title)
-                    .font(.caption2)
+                    .font(.system(size: 10))
             }
             .foregroundStyle(enabled ? viewModel.themeSpec.text : viewModel.themeSpec.secondaryText.opacity(0.4))
+            .padding(.top, 7)
             .frame(maxWidth: .infinity)
+            .frame(height: capsuleHeight, alignment: .top)
         }
         .disabled(!enabled)
     }
@@ -631,8 +786,9 @@ private struct ScrollTopKey: PreferenceKey {
 }
 
 private struct NovelVisibleKey: PreferenceKey {
-    static var defaultValue: [ScrollPage: CGFloat] = [:]
-    static func reduce(value: inout [ScrollPage: CGFloat], nextValue: () -> [ScrollPage: CGFloat]) {
+    /// 各可见页在 "novelScroll"（视口）坐标空间中的 frame
+    static var defaultValue: [ScrollPage: CGRect] = [:]
+    static func reduce(value: inout [ScrollPage: CGRect], nextValue: () -> [ScrollPage: CGRect]) {
         value.merge(nextValue()) { $1 }
     }
 }

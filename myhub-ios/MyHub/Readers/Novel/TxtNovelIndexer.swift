@@ -87,9 +87,10 @@ enum TxtNovelIndexer {
             module: "novel-index"
         )
 
-        // 2. 字节级行扫描（分块流式，跨块行拼接），正则识别章节标题
+        // 2. 字节级行扫描（分块流式，跨块行拼接），按规则表识别章节标题
+        //    每条规则各自收集候选，扫描结束后统一选规则（见 ChapterRuleTable.selectBest）
         let isUTF16 = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
-        var chapters: [ChapterInfo] = []
+        var candidatesByRule: [String: [ChapterInfo]] = [:]
         var pending = Data()
         var pendingGlobalStart: Int64 = 0
         var offset: Int64 = 0
@@ -116,23 +117,16 @@ enum TxtNovelIndexer {
                 if scannedLines < 15 {
                     let decoded = String(data: lineData, encoding: encoding) ?? "<decode-fail>"
                     AppLogger.shared.log(
-                        "TXT行[\(scannedLines)] offset=\(global) hit=\(matched != nil) text=\(Self.visible(decoded))",
+                        "TXT行[\(scannedLines)] offset=\(global) hit=\(matched?.title ?? "无") rule=\(matched?.ruleID ?? "-") text=\(Self.visible(decoded))",
                         module: "novel-index"
                     )
                 }
                 scannedLines += 1
 
-                if let chapter = matched {
-                    // 同偏移去重（个别书重复标题行）
-                    if chapters.last?.startOffset != global {
-                        chapters.append(ChapterInfo(title: chapter, startOffset: global))
-                        if chapters.count <= 12 {
-                            AppLogger.shared.log(
-                                "TXT章节[\(chapters.count - 1)] offset=\(global) title=\(chapter)",
-                                module: "novel-index"
-                            )
-                        }
-                    }
+                if let matched {
+                    appendCandidate(
+                        title: matched.title, ruleID: matched.ruleID, offset: global, into: &candidatesByRule
+                    )
                 }
                 cursor = hit.nextStart
             }
@@ -143,20 +137,38 @@ enum TxtNovelIndexer {
         }
         // 文件末尾无换行的最后一行
         if !pending.isEmpty,
-           let chapter = matchChapterTitle(lineData: pending, encoding: encoding) {
-            if chapters.last?.startOffset != pendingGlobalStart {
-                chapters.append(ChapterInfo(title: chapter, startOffset: pendingGlobalStart))
-            }
+           let matched = matchChapterTitle(lineData: pending, encoding: encoding) {
+            appendCandidate(
+                title: matched.title, ruleID: matched.ruleID, offset: pendingGlobalStart, into: &candidatesByRule
+            )
         }
 
-        // 3. 无章节命中（短篇/无标题）：整本单章
-        if chapters.isEmpty {
+        // 3. 选规则：通过校验者中取章节数最多的规则（正文里偶然出现的「第一章」数量远少于真规则，
+        //    自然落选）；无规则通过校验则退回首条命中的规则，仍为空则整本单章
+        var chapters: [ChapterInfo]
+        var appliedRule: ChapterRuleTable.Rule?
+        if let selected = ChapterRuleTable.selectBest(
+            candidatesByRule: candidatesByRule, fileSize: entry.size
+        ) {
+            chapters = selected.chapters
+            appliedRule = selected.rule
+        } else if let hitRule = ChapterRuleTable.rules.first(
+            where: { !(candidatesByRule[$0.id] ?? []).isEmpty }
+        ) {
+            chapters = candidatesByRule[hitRule.id] ?? []
+            appliedRule = hitRule
+        } else {
             chapters = [ChapterInfo(title: "正文", startOffset: 0)]
+        }
+        // 首章记录所用规则：索引缓存复核时用同一条规则校验，避免规则漂移导致反复重建
+        if let appliedRule, var first = chapters.first {
+            first.ruleID = appliedRule.id
+            chapters[0] = first
         }
         progress?(1)
 
         AppLogger.shared.log(
-            "TXT索引完成 name=\(entry.name) chapters=\(chapters.count) first=\"\(chapters.first?.title ?? "无")\" second=\"\(chapters.count > 1 ? chapters[1].title : "无")\" last=\"\(chapters.last?.title ?? "无")\"",
+            "TXT索引完成 name=\(entry.name) chapters=\(chapters.count) rule=\(appliedRule?.id ?? "无（整本单章）") 候选规则数=\(candidatesByRule.count) first=\"\(chapters.first?.title ?? "无")\" second=\"\(chapters.count > 1 ? chapters[1].title : "无")\" last=\"\(chapters.last?.title ?? "无")\"",
             module: "novel-index"
         )
         return IndexData(
@@ -168,16 +180,7 @@ enum TxtNovelIndexer {
         )
     }
 
-    // MARK: - 章节标题正则
-
-    private static let chapterPatterns: [NSRegularExpression] = {
-        let patterns = [
-            #"^第[0-9０-９零〇一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+[章节回卷集部篇][^\n]{0,38}$"#,
-            #"^(楔子|序章|序言|前言|引子|终章|尾声|后记|番外篇?)([^\n]{0,30})?$"#,
-            #"^(Chapter|CHAPTER|chapter)\s+[0-9０-９IVXLCivxlc]+[^\n]{0,38}$"#,
-        ]
-        return patterns.compactMap { try? NSRegularExpression(pattern: $0) }
-    }()
+    // MARK: - 章节标题正则（规则表见 ChapterRuleTable）
 
     /// 将不可见字符转义，便于在日志中排查 BOM / 零宽字符导致的漏检
     private static func visible(_ text: String) -> String {
@@ -198,8 +201,12 @@ enum TxtNovelIndexer {
         return out
     }
 
-    /// 行字节 → 解码 → trim → 正则匹配；标题行长度受限且不以句号收尾（过滤正文）
-    private static func matchChapterTitle(lineData: Data, encoding: String.Encoding) -> String? {
+    /// 行字节 → 解码 → trim → 规则匹配；标题行长度受限且不以句号收尾（过滤正文）
+    /// - Parameter ruleID: 指定只测某条规则（索引缓存复核用）；nil = 按规则表顺序取首条命中
+    /// - Returns: 命中的标题文本 + 规则 ID（多规则各自收集候选，扫描结束后统一选规则）
+    private static func matchChapterTitle(
+        lineData: Data, encoding: String.Encoding, ruleID: String? = nil
+    ) -> (title: String, ruleID: String)? {
         guard lineData.count <= 140, !lineData.isEmpty else { return nil }
         guard var text = String(data: lineData, encoding: encoding) else { return nil }
         // 去掉文件头 BOM：UTF-8/UTF-16 BOM 解码后为 \u{FEFF}，会挡住正则 ^第 导致第一章漏检
@@ -208,10 +215,33 @@ enum TxtNovelIndexer {
         guard !text.isEmpty, text.count <= 42 else { return nil }
         if text.hasSuffix("。") || text.hasSuffix("，") || text.hasSuffix("；") { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        for pattern in chapterPatterns where pattern.firstMatch(in: text, range: range) != nil {
-            return text
+        if let ruleID {
+            guard let rule = ChapterRuleTable.rules.first(where: { $0.id == ruleID }) else { return nil }
+            return rule.firstMatch(in: text, range: range) ? (text, rule.id) : nil
+        }
+        for rule in ChapterRuleTable.rules where rule.mayMatch(text) {
+            if rule.firstMatch(in: text, range: range) {
+                return (text, rule.id)
+            }
         }
         return nil
+    }
+
+    /// 候选章节收集：同规则内按偏移去重（个别书重复标题行），并按上限截断防内存失控
+    private static func appendCandidate(
+        title: String, ruleID: String, offset: Int64, into store: inout [String: [ChapterInfo]]
+    ) {
+        var list = store[ruleID] ?? []
+        guard list.last?.startOffset != offset, list.count < ChapterRuleTable.maxCandidates else { return }
+        list.append(ChapterInfo(title: title, startOffset: offset))
+        store[ruleID] = list
+        // 每 200 条抽样打点：规则选错时可直接看出哪条规则命中多少章、命中在哪
+        if list.count % 200 == 0 {
+            AppLogger.shared.log(
+                "TXT分章候选 rule=\(ruleID) count=\(list.count) last=\"\(title)\" offset=\(offset)",
+                module: "novel-index"
+            )
+        }
     }
 
     // MARK: - 换行扫描（字节级）
@@ -345,10 +375,21 @@ enum TxtNovelIndexer {
         let isUTF16 = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
         let newline = newlineScanner(isUTF16: isUTF16, littleEndian: encoding == .utf16LittleEndian)
 
+        // 用索引时实际命中的规则复核（旧缓存无 ruleID 时按规则表全量匹配）：
+        // 否则规则表更新后校验基准变化 → 首章对不上 → 反复重建索引
+        let ruleID = first.ruleID
+        if let ruleID, ChapterRuleTable.rules.first(where: { $0.id == ruleID }) == nil {
+            AppLogger.shared.log(
+                "TXT索引规则已下线 rule=\(ruleID)，跳过首章复核 path=\(path)",
+                level: .warn, module: "novel-index"
+            )
+            return true
+        }
+
         var cursor = head.startIndex
         while let hit = newline(head, cursor) {
             let lineData = Data(head[cursor..<hit.lineEnd])
-            if matchChapterTitle(lineData: lineData, encoding: encoding) != nil {
+            if matchChapterTitle(lineData: lineData, encoding: encoding, ruleID: ruleID) != nil {
                 let global = Int64(cursor - head.startIndex)
                 if global != first.startOffset {
                     AppLogger.shared.log(

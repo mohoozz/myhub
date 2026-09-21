@@ -12,12 +12,22 @@ struct ComicReaderView: View {
     var onOpenNext: (FileEntry) -> Void = { _ in }
 
     @StateObject private var viewModel: ComicReaderViewModel
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var controlsVisible = false
     /// 条漫模式程序滚动目标（ScrollViewReader 消费）
     @State private var scrollIntent: Int?
     /// 左滑退出的跟手位移（屏幕左边缘右滑时内容整体右移，松手超过阈值关闭阅读器）
     @State private var edgeDragOffset: CGFloat = 0
+
+    // MARK: 方案 A 控制层（IOS-210）
+    /// 拖动中的进度区间（0...1，nil = 未拖动）；拖动期间只改本地值，**松手才跳页**
+    @State private var dragRatio: Double?
+    /// 拖动中吸附到的目标页（0 基）
+    @State private var dragPage = 0
+    /// 毛玻璃胶囊宽度 / 进度轨在胶囊内的位置（气泡跟随手柄用）
+    @State private var capsuleWidth: CGFloat = 0
+    @State private var railFrame: CGRect = .zero
+    @State private var showThumbnails = false
+    @State private var showBrightness = false
 
     init(
         context: NovelOpenContext,
@@ -108,7 +118,18 @@ struct ComicReaderView: View {
         .animation(.appQuick, value: viewModel.nextCandidate != nil)
         .animation(.appQuick, value: viewModel.toast)
         .statusBarHidden(!controlsVisible)
-        .onAppear { viewModel.load() }
+        .sheet(isPresented: $showThumbnails) {
+            ComicThumbnailSheet(viewModel: viewModel) { index in
+                jumpToPage(index)
+            }
+        }
+        .sheet(isPresented: $showBrightness) {
+            ComicBrightnessSheet(viewModel: viewModel)
+        }
+        .onAppear {
+            viewModel.applyReaderBrightness()
+            viewModel.load()
+        }
         .onDisappear { viewModel.teardown() }
     }
 
@@ -303,115 +324,271 @@ struct ComicReaderView: View {
             )
     }
 
-    // MARK: - 控制层
+    // MARK: - 控制层（方案 A：现状式顶栏 + 底部毛玻璃胶囊）
 
     @ViewBuilder
     private var controlsOverlay: some View {
         VStack(spacing: 0) {
-            // 顶栏：关闭 / 书名 / 模式菜单
-            HStack(spacing: 12) {
-                Button { onClose() } label: {
-                    Image(systemName: "xmark")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-                Text((context.entry.name as NSString).deletingPathExtension)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                Spacer()
-                Menu {
-                    ForEach(ComicReadMode.allCases, id: \.self) { mode in
-                        Button {
-                            switchMode(mode)
-                        } label: {
-                            Label(
-                                mode.displayName,
-                                systemImage: viewModel.mode == mode ? "checkmark" : mode.symbol
-                            )
-                        }
-                    }
-                } label: {
-                    Image(systemName: viewModel.mode.symbol)
-                        .font(.body)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
-            .background(
-                LinearGradient(
-                    colors: [.black.opacity(0.75), .clear],
-                    startPoint: .top, endPoint: .bottom
-                )
-            )
-
-            Spacer()
-
-            // 底栏：页码进度 / 方向切换 / 模式切换
-            VStack(spacing: 8) {
-                HStack(spacing: 12) {
-                    Text("\(displayPage)/\(viewModel.pageCount)")
-                        .font(.caption.monospacedDigit())
-                    Slider(
-                        value: Binding(
-                            get: { Double(viewModel.page) },
-                            set: { jumpToPage(Int($0.rounded())) }
-                        ),
-                        in: 0...Double(max(viewModel.pageCount - 1, 1)),
-                        step: 1
-                    )
-                    .tint(.white)
-                    // 双页方向（含自动）；条漫模式隐藏（纵向滚动无方向）
-                    if viewModel.mode == .double {
-                        Button {
-                            viewModel.direction = isRightToLeft ? .leftToRight : .rightToLeft
-                        } label: {
-                            Image(systemName: isRightToLeft
-                                  ? "arrow.left.to.line" : "arrow.right.to.line")
-                                .font(.caption)
-                                .frame(width: 32, height: 32)
-                                .contentShape(Rectangle())
-                        }
-                    }
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-
-                HStack(spacing: 0) {
-                    ForEach(ComicReadMode.allCases, id: \.self) { mode in
-                        Button {
-                            switchMode(mode)
-                        } label: {
-                            VStack(spacing: 3) {
-                                Image(systemName: mode.symbol)
-                                    .font(.body)
-                                Text(mode.displayName)
-                                    .font(.caption2)
-                            }
-                            .foregroundStyle(viewModel.mode == mode ? .white : .white.opacity(0.45))
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                }
-                .padding(.bottom, 6)
-            }
-            .padding(.top, 10)
-            .padding(.bottom, 10)
-            .background(
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.8)],
-                    startPoint: .top, endPoint: .bottom
-                )
-            )
+            topBar
+            Spacer(minLength: 0)
+            bottomControls
         }
         .opacity(controlsVisible ? 1 : 0)
         .allowsHitTesting(controlsVisible)
         .animation(.appQuick, value: controlsVisible)
     }
+
+    /// 顶栏（现状式裸显示）：✕ + 书名 + ⋯ 菜单（模式 / 双页方向 / 亮度）
+    private var topBar: some View {
+        HStack(spacing: 2) {
+            Button { onClose() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            Text((context.entry.name as NSString).deletingPathExtension)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 6)
+            Menu { topMenuItems } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.78), .clear],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+    }
+
+    /// ⋯ 菜单：低频设置入口（模式切换 / 双页方向 / 亮度），底栏不再放设置按钮
+    @ViewBuilder
+    private var topMenuItems: some View {
+        Section("阅读模式") {
+            ForEach(ComicReadMode.allCases, id: \.self) { mode in
+                Button {
+                    switchMode(mode)
+                } label: {
+                    Label(
+                        mode.displayName,
+                        systemImage: viewModel.mode == mode ? "checkmark" : mode.symbol
+                    )
+                }
+            }
+        }
+        // 双页方向（含自动）；条漫模式隐藏（纵向滚动无方向）
+        if viewModel.mode == .double {
+            Section("双页方向") {
+                Button {
+                    viewModel.direction = isRightToLeft ? .leftToRight : .rightToLeft
+                } label: {
+                    Label(
+                        "切换为\(isRightToLeft ? "从左向右" : "从右向左")",
+                        systemImage: "arrow.left.arrow.right"
+                    )
+                }
+            }
+        }
+        Section {
+            Button {
+                // 菜单关闭后再弹 sheet，避免转场被打断
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { showBrightness = true }
+            } label: {
+                Label("亮度", systemImage: "sun.max")
+            }
+        }
+    }
+
+    /// 底部控制区：细字读数 + 毛玻璃主胶囊 + 快捷 chip（内缩 12pt）
+    private var bottomControls: some View {
+        VStack(spacing: 8) {
+            progressCaption
+            glassCapsule
+            quickChips
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
+    }
+
+    /// 胶囊上方一行细字读数；拖动中变为深色气泡并横向跟随手柄
+    private var progressCaption: some View {
+        ZStack {
+            if let ratio = dragRatio {
+                Text("松手跳到 第 \(dragPage + 1) 页 · \(Int((ratio * 100).rounded()))%")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .fixedSize()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color(red: 0.09, green: 0.11, blue: 0.16)))
+                    .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
+                    .offset(x: bubbleOffsetX)
+            } else {
+                Text(captionText)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
+            }
+        }
+        .frame(height: 24)
+        .frame(maxWidth: .infinity)
+        .animation(.appQuick, value: dragRatio == nil)
+    }
+
+    /// 「第 12 / 186 页 · 6% · 单页」：进度三种表达合并成一行细字
+    private var captionText: String {
+        let percent = Int((viewModel.currentPercent * 100).rounded())
+        return "第 \(displayPage) / \(viewModel.pageCount) 页 · \(percent)% · \(viewModel.mode.displayName)"
+    }
+
+    /// 主胶囊：‹ ｜可拖进度轨 + 手柄｜页码｜☰｜›（高 58、圆角 29、0.5pt 描边 + 阴影保证辨识）
+    private var glassCapsule: some View {
+        HStack(spacing: 2) {
+            glassBarButton("chevron.left") { viewModel.previousPage() }
+            progressRail
+                .frame(height: railStripHeight)
+            Text("\(displayPage)/\(viewModel.pageCount)")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.85))
+                .fixedSize()
+                .padding(.horizontal, 4)
+            glassBarButton("list.bullet") { showThumbnails = true }
+            glassBarButton("chevron.right") { viewModel.nextPage() }
+        }
+        .padding(.horizontal, 6)
+        .frame(height: capsuleHeight)
+        .background(.ultraThinMaterial)
+        .background(Color.black.opacity(0.4))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.38), radius: 10, y: 6)
+        .coordinateSpace(name: "capsule")
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { capsuleWidth = proxy.size.width }
+                    .onChange(of: proxy.size.width) { capsuleWidth = $0 }
+            }
+        )
+    }
+
+    /// 胶囊内圆形图标按钮（40pt 命中区）
+    private func glassBarButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 可拖动进度轨：3pt 轨 + 14pt 手柄（拖动中放大到 20pt）；拖动只改本地值，松手才跳页
+    private var progressRail: some View {
+        GeometryReader { proxy in
+            let usable = max(proxy.size.width - railInset * 2, 1)
+            let ratio = min(max(dragRatio ?? viewModel.currentPercent, 0), 1)
+            let knobX = railInset + usable * ratio
+            let fillWidth = max(knobX - railInset, 0)
+            let lineY = proxy.size.height / 2
+            let dragging = dragRatio != nil
+            ZStack {
+                Capsule()
+                    .fill(.white.opacity(0.24))
+                    .frame(width: usable, height: 3)
+                    .position(x: railInset + usable / 2, y: lineY)
+                Capsule()
+                    .fill(.white)
+                    .frame(width: fillWidth, height: 3)
+                    .position(x: railInset + fillWidth / 2, y: lineY)
+                Circle()
+                    .fill(.white)
+                    .frame(width: dragging ? 20 : 14, height: dragging ? 20 : 14)
+                    .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+                    .position(x: knobX, y: lineY)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        updateDrag(x: value.location.x, usable: usable)
+                    }
+                    .onEnded { _ in commitDrag() }
+            )
+            .animation(.easeOut(duration: 0.12), value: dragging)
+            .onAppear { railFrame = proxy.frame(in: .named("capsule")) }
+            .onChange(of: proxy.frame(in: .named("capsule"))) { railFrame = $0 }
+        }
+    }
+
+    /// 快捷 chip：缩略图 / 下一本 / 亮度（方案 A 相比现状的增量入口）
+    private var quickChips: some View {
+        HStack(spacing: 6) {
+            quickChip("square.grid.2x2", "缩略图") { showThumbnails = true }
+            quickChip("arrow.down.to.line", "下一本") { viewModel.requestNextComic() }
+            quickChip("sun.max", "亮度") { showBrightness = true }
+        }
+    }
+
+    private func quickChip(
+        _ symbol: String, _ title: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 10))
+                Text(title).font(.system(size: 10.5))
+            }
+            .foregroundStyle(.white.opacity(0.72))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(.white.opacity(0.1)))
+            .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 拖动中写入吸附页（本地状态，不发跳页指令）
+    private func updateDrag(x: CGFloat, usable: CGFloat) {
+        let ratio = min(max((x - railInset) / usable, 0), 1)
+        dragRatio = ratio
+        let maxIndex = max(viewModel.pageCount - 1, 0)
+        dragPage = min(max(Int((ratio * Double(maxIndex)).rounded()), 0), maxIndex)
+    }
+
+    /// 松手才跳页（条漫模式由 jumpToPage 走程序滚动定位）
+    private func commitDrag() {
+        guard dragRatio != nil else { return }
+        dragRatio = nil
+        jumpToPage(dragPage)
+    }
+
+    /// 气泡横向跟随手柄（夹紧在胶囊内，避免越界）
+    private var bubbleOffsetX: CGFloat {
+        guard let ratio = dragRatio, capsuleWidth > 0, railFrame.width > 0 else { return 0 }
+        let usable = max(railFrame.width - railInset * 2, 1)
+        let knobX = railFrame.minX + railInset + usable * min(max(ratio, 0), 1)
+        let limit = max(capsuleWidth / 2 - 112, 0)
+        return min(max(knobX - capsuleWidth / 2, -limit), limit)
+    }
+
+    /// 胶囊 / 进度轨几何常量（对齐原型 A：胶囊高 58、轨带高 30、轨左右内缩 8）
+    private var capsuleHeight: CGFloat { 58 }
+    private var railStripHeight: CGFloat { 30 }
+    private var railInset: CGFloat { 8 }
 
     // MARK: - 交互与布局
 
@@ -615,5 +792,128 @@ private struct WebtoonVisibleKey: PreferenceKey {
     static var defaultValue: [Int: CGRect] = [:]
     static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
         value.merge(nextValue()) { $1 }
+    }
+}
+
+// MARK: - 缩略图面板（IOS-210 控制层重设计：☰ / 「缩略图」chip）
+
+/// 页面缩略图网格：点击跳页；缩略图按需加载（已解码页直接缩略 / 磁盘缓存解码 / 归档解压）
+private struct ComicThumbnailSheet: View {
+    @ObservedObject var viewModel: ComicReaderViewModel
+    let onSelect: (Int) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 8) {
+                        ForEach(0..<viewModel.pageCount, id: \.self) { index in
+                            cell(index).id(index)
+                        }
+                    }
+                    .padding(12)
+                }
+                .onAppear { proxy.scrollTo(viewModel.page, anchor: .center) }
+            }
+            .navigationTitle("缩略图")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func cell(_ index: Int) -> some View {
+        Button {
+            onSelect(index)
+            dismiss()
+        } label: {
+            ZStack {
+                Color(white: 0.16)
+                if let image = viewModel.thumbnails[index] {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    ProgressView().tint(.white.opacity(0.5))
+                }
+            }
+            .aspectRatio(1 / cellRatio, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(alignment: .bottomTrailing) {
+                Text("\(index + 1)")
+                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(.black.opacity(0.6)))
+                    .padding(3)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(
+                        viewModel.page == index ? AppColors.primary : Color.white.opacity(0.12),
+                        lineWidth: viewModel.page == index ? 2 : 0.5
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .task {
+            if viewModel.thumbnails[index] == nil {
+                _ = await viewModel.thumbnail(for: index)
+            }
+        }
+    }
+
+    /// 格子高宽比（取第 1 页比例兜底 1.4）
+    private var cellRatio: CGFloat {
+        max(viewModel.pageRatios[0] ?? viewModel.fallbackRatio ?? 1.4, 0.5)
+    }
+}
+
+// MARK: - 亮度面板（IOS-210 控制层重设计：⋯ 菜单 / 「亮度」chip）
+
+/// 亮度调节：复用全局阅读亮度偏好（reader.brightness），与小说阅读器同档；-1 = 跟随系统
+private struct ComicBrightnessSheet: View {
+    @ObservedObject var viewModel: ComicReaderViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("亮度")
+                .font(.headline)
+                .foregroundStyle(AppColors.textPrimary)
+            HStack(spacing: 12) {
+                Image(systemName: "sun.min").font(.caption)
+                Slider(
+                    value: Binding(
+                        get: { max(AppSettings.Reader.brightness, 0) },
+                        set: { viewModel.setBrightness($0) }
+                    ),
+                    in: 0...1
+                )
+                Image(systemName: "sun.max").font(.body)
+            }
+            .foregroundStyle(AppColors.textSecondary)
+            HStack {
+                Text(AppSettings.Reader.brightness >= 0
+                     ? "\(Int((AppSettings.Reader.brightness * 100).rounded()))%"
+                     : "跟随系统")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(AppColors.textSecondary)
+                Spacer()
+                Button("跟随系统") { viewModel.setBrightness(-1) }
+                    .font(.caption)
+            }
+        }
+        .padding(20)
+        .presentationDetents([.height(176)])
+        .presentationDragIndicator(.visible)
     }
 }

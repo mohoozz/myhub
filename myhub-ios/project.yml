@@ -20,17 +20,11 @@ packages:
   VLCKit:                              # 全格式软解兜底（MobileVLCKit 3.x）
     url: https://github.com/tylerjonesio/vlckit-spm.git
     from: 3.6.0                         # 官方 3.x 无 SPM，用社区 3.6.0 包装器（模块名仍为 MobileVLCKit）
-  ZIPFoundation:                       # zip / cbz / epub
-    url: https://github.com/weichsel/ZIPFoundation.git
-    from: 0.9.19
   UnrarKit:                            # rar / cbr（本地 vendor：官方仓库不支持 SPM）
     path: ThirdParty/UnrarKit
   GRDB:                                # SQLite 结构化存储
     url: https://github.com/groue/GRDB.swift.git
     from: 6.29.0
-  Nuke:                                # 图片加载与缓存（封面/缩略图）
-    url: https://github.com/kean/Nuke.git
-    from: 12.8.0
 
 targets:
   MyHub:
@@ -80,14 +74,10 @@ targets:
         embed: true
       - package: VLCKit
         product: VLCKitSPM
-      - package: ZIPFoundation
-        product: ZIPFoundation
       - package: UnrarKit
         product: UnrarKit
       - package: GRDB
         product: GRDB
-      - package: Nuke
-        product: Nuke
 
 schemes:
   MyHub:

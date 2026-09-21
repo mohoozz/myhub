@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>漫画阅读器 · 控制层重设计原型</title>
+<style>
+:root{--primary:#2563EB;--tp:#1A1A2E;--ts:#6B7280;--glass:rgba(30,30,32,.66);--gline:rgba(255,255,255,.16)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:26px;line-height:1.75;max-width:1120px}
+.subtitle code,.desc code,.footnote code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:340px}.board.wide{width:100%;max-width:1088px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.before{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.7;min-height:150px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:340px;height:680px;border:8px solid #111827;border-radius:40px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#000;cursor:pointer}
+.hintbar{font-size:11px;color:var(--ts);text-align:center;padding:6px 4px 0}
+.hintbar b{color:#1D4ED8}
+.reader{flex:1;position:relative;overflow:hidden;background:#0B0B0C;display:flex;flex-direction:column}
+.statusbar{position:absolute;top:0;left:0;right:0;height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;font-size:11px;font-weight:600;color:#fff;z-index:4;pointer-events:none;transition:opacity .2s}
+.ctl.off~.statusbar{opacity:0}
+.home{flex:none;height:18px;display:flex;align-items:center;justify-content:center;background:#000;position:relative;z-index:5}
+.home span{width:104px;height:4px;border-radius:3px;background:rgba(255,255,255,.45)}
+.comic{flex:1;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 80% at 50% 0%,#1A1A1D,#08080A 70%);padding:8px 0}
+.page{height:100%;width:236px;background:#F7F7F5;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1.15fr .95fr 1.05fr;gap:5px;padding:6px;box-shadow:0 6px 22px rgba(0,0,0,.55)}
+.panel{background:linear-gradient(158deg,#E4E5E9,#C6C9D1);position:relative;overflow:hidden;border-radius:1px}
+.panel::after{content:"";position:absolute;left:-20%;right:-20%;bottom:-45%;height:72%;background:radial-gradient(58% 100% at 50% 100%,rgba(255,255,255,.9),transparent 72%)}
+.panel.fig::before{content:"";position:absolute;left:22%;top:16%;width:56%;height:74%;background:#8E95A3;border-radius:50% 50% 42% 42%/62% 62% 38% 38%;opacity:.9}
+.panel.fig2::before{content:"";position:absolute;left:34%;top:30%;width:32%;height:56%;background:#7C8391;border-radius:50% 50% 46% 46%/58% 58% 42% 42%;opacity:.85}
+.panel.dark{background:linear-gradient(158deg,#3A3D46,#20222A)}.panel.dark::after{opacity:.35}
+.bub{position:absolute;background:#fff;border:1.5px solid #23262E;border-radius:50% 50% 50% 9px;color:#3A3F4B;font-size:8.5px;line-height:1.15;display:flex;align-items:center;justify-content:center;text-align:center;padding:4px;font-style:italic}
+.bub.b1{left:8%;top:9%;width:58px;height:38px}
+.bub.b2{right:7%;top:16%;width:52px;height:34px;border-radius:50% 50% 9px 50%}
+.ctl{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;justify-content:space-between;transition:opacity .22s ease}
+.ctl.off{opacity:0;pointer-events:none}
+.glass{background:var(--glass);-webkit-backdrop-filter:blur(22px) saturate(180%);backdrop-filter:blur(22px) saturate(180%);border:.5px solid var(--gline);box-shadow:0 6px 20px rgba(0,0,0,.38)}
+.ibtn{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;flex:none}
+.ibtn.sm{width:34px;height:34px;font-size:14px}
+.ibtn.act{background:rgba(255,255,255,.16)}
+.ttl{flex:1;min-width:0;font-size:13px;font-weight:600;color:#fff;line-height:1.35;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.vdiv{width:1px;height:22px;background:rgba(255,255,255,.18);margin:0 4px;flex:none}
+table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);width:100%;max-width:1120px}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts);white-space:nowrap}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1120px}
+.footnote b{color:var(--tp)}
+/* ===== 现状 ===== */
+.cur-top{flex:none;display:flex;align-items:center;gap:6px;padding:44px 10px 10px;background:linear-gradient(180deg,rgba(0,0,0,.78),transparent)}
+.cur-bottom{flex:none;padding:8px 8px 4px;background:linear-gradient(0deg,rgba(0,0,0,.82),transparent)}
+.cur-row1{display:flex;align-items:center;gap:10px;padding:0 8px;color:#fff}
+.cur-pg{font-size:11px;font-variant-numeric:tabular-nums;opacity:.9}
+.cur-slider{flex:1;height:2px;border-radius:1px;background:rgba(255,255,255,.35);position:relative}
+.cur-slider i{position:absolute;left:0;top:0;bottom:0;width:6.4%;background:#fff;border-radius:1px}
+.cur-slider b{position:absolute;left:6.4%;top:50%;width:15px;height:15px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.cur-row2{display:flex;margin-top:6px}
+.mcol{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:16px;color:rgba(255,255,255,.45);padding:4px 0}
+.mcol i{font-size:9.5px;font-style:normal}.mcol.on{color:#fff}
+/* ===== A 双胶囊 ===== */
+.a-top,.b-top,.c-top,.d-top{flex:none;display:flex;align-items:center;gap:6px;padding:44px 10px 10px;background:linear-gradient(180deg,rgba(0,0,0,.78),transparent)}
+.a-foot{padding:0 12px 10px;display:flex;flex-direction:column;gap:8px}
+.a-cap{font-size:10.5px;color:rgba(255,255,255,.72);text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+.a-bar{height:58px;border-radius:29px;display:flex;align-items:center;gap:2px;padding:0 6px}
+.a-rail{flex:1;height:30px;position:relative}
+.a-track{position:absolute;left:8px;right:8px;top:50%;transform:translateY(-50%);height:3px;border-radius:2px;background:rgba(255,255,255,.24)}
+.a-fill{position:absolute;left:8px;top:50%;transform:translateY(-50%);height:3px;border-radius:2px;background:#fff;width:calc((100% - 16px) * .064)}
+.a-knob{position:absolute;left:calc(8px + (100% - 16px) * .064);top:50%;width:14px;height:14px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 1px 5px rgba(0,0,0,.45)}
+.a-pg{font-size:11px;color:rgba(255,255,255,.85);font-variant-numeric:tabular-nums;flex:none;padding-right:4px}
+.a-mini{display:flex;gap:6px;justify-content:center}
+.a-chip{font-size:10.5px;color:rgba(255,255,255,.72);background:rgba(255,255,255,.1);border:.5px solid var(--gline);border-radius:12px;padding:3px 10px}
+/* ===== B 沉浸 ===== */
+.b-foot{padding:0 14px 14px;display:flex;flex-direction:column;align-items:center;gap:10px}
+.b-row{display:flex;align-items:center;gap:10px}
+.b-pill{height:32px;border-radius:16px;padding:0 12px;display:flex;align-items:center;gap:6px;font-size:11px;color:#fff;font-variant-numeric:tabular-nums}
+.b-edge{height:3px;border-radius:2px;background:rgba(255,255,255,.22);position:relative;overflow:hidden;width:100%}
+.b-edge i{position:absolute;left:0;top:0;bottom:0;width:6.4%;background:#fff}
+.b-dock{height:56px;border-radius:28px;display:flex;align-items:center;gap:4px;padding:0 6px}
+.b-dock .ibtn{width:44px;height:44px}
+/* ===== C 抽屉 ===== */
+.c-drawer{margin:0 10px 10px;border-radius:26px;padding:12px 12px 10px;display:flex;flex-direction:column;gap:10px}
+.c-seg{display:flex;background:rgba(255,255,255,.12);border-radius:12px;padding:3px}
+.c-seg span{flex:1;text-align:center;font-size:12px;font-weight:600;color:rgba(255,255,255,.62);padding:7px 0;border-radius:9px}
+.c-seg span.on{background:#fff;color:#111}
+.c-prog{display:flex;align-items:center;gap:10px;padding:2px 4px}
+.c-prog .n{font-size:11px;color:#fff;font-variant-numeric:tabular-nums;flex:none;min-width:58px}
+.c-track{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.22);position:relative;cursor:grab;touch-action:none}
+.c-track i{position:absolute;left:0;top:0;bottom:0;width:6.4%;background:#fff;border-radius:2px}
+.c-track b{position:absolute;left:6.4%;top:50%;width:22px;height:22px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 2px 8px rgba(0,0,0,.45)}
+.c-bub{position:absolute;top:-30px;left:6.4%;transform:translateX(-50%);background:#111827;color:#fff;font-size:10.5px;padding:4px 9px;border-radius:9px;white-space:nowrap;opacity:0;transition:opacity .12s;pointer-events:none}
+.c-track.on .c-bub{opacity:1}
+.c-brow{display:flex;gap:8px}
+.c-k{flex:1;height:42px;border-radius:14px;background:rgba(255,255,255,.12);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;font-size:14px;color:#fff}
+.c-k i{font-size:9px;font-style:normal;color:rgba(255,255,255,.6)}
+.c-main{flex:1.5;height:42px;border-radius:14px;background:#2563EB;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12.5px;font-weight:600;color:#fff}
+/* ===== D HUD ===== */
+.d-badge{height:26px;margin-left:auto;border-radius:13px;background:rgba(0,0,0,.55);border:.5px solid var(--gline);color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 10px;font-variant-numeric:tabular-nums}
+.d-foot{padding:0 14px 14px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.d-scale{width:100%;height:26px;position:relative}
+.d-line{position:absolute;left:0;right:0;top:12px;height:3px;border-radius:2px;background:rgba(255,255,255,.22)}
+.d-line i{position:absolute;left:0;top:0;bottom:0;width:6.4%;background:#fff;border-radius:2px}
+.d-tick{position:absolute;top:8px;width:2px;height:11px;border-radius:1px;background:rgba(255,255,255,.45)}
+.d-knob{position:absolute;top:4px;left:6.4%;width:19px;height:19px;border-radius:50%;background:#fff;transform:translateX(-50%);box-shadow:0 1px 5px rgba(0,0,0,.45)}
+.d-dock{height:60px;border-radius:30px;display:flex;align-items:center;gap:2px;padding:0 6px}
+.d-dock .ibtn{width:46px;height:46px}
+.d-dock .vdiv{height:24px;margin:0 6px}
+.d-center{font-size:11px;color:rgba(255,255,255,.66);text-align:center}
+</style>
+</head>
+<body>
+<h1>漫画阅读器 · 控制层重设计</h1>
+<p class="subtitle">
+  现状控制层（<code>ComicReaderView.controlsOverlay</code>）是<b>上下两条黑色渐变通栏</b>：顶栏「✕ + 书名 + 模式菜单」，底栏两段「页码 + Slider + 双页方向（细线白点）/ 单页·双页·条漫三个等宽竖排按钮」。<br>
+  问题：① 渐变通栏与全局「圆角悬浮胶囊 / 毛玻璃」语言不统一；② <b>模式切换（低频）占据底栏最显眼一行</b>，而跳页、下一本、缩略图（高频）没有入口；③ 系统 Slider 与深色渐变叠在一起观感割裂，进度条无手柄提示、无法「按住拖动看目标页」；④ 顶栏与底栏无圆角/无描边，像纯黑蒙层而不是控件；⑤ 条漫模式下滑动浏览无进度反馈位置。<br>
+  以下为「现状 + 4 个候选方案」原型（<b>点击手机框任一位置可切换控制层显隐</b>，方案 C 的进度条可真实拖动），确认后再实施到 Swift。
+</p>
+<div class="boards">
+<!-- ================= 现状 ================= -->
+<div class="board">
+  <h2>现状<span class="tag before">Before</span></h2>
+  <div class="desc">
+    上下两条<b>黑色渐变通栏</b>（<code>LinearGradient</code> 黑 0.75/0.8 → 透明）：顶栏「✕ + 书名 + 模式菜单」，底栏「页码 + 系统 <code>Slider</code>（白色 tint）+ 双页方向钮」一行、<code>ComicReadMode</code> 三个等宽竖排按钮（图标 17pt / 文字 11pt）一行，约 <b>110pt</b> 高。<br>
+    <span class="cons">问题：① 通栏渐变无圆角、无描边，与全站胶囊语言不一致；② 模式切换是<b>一次性设置</b>，却在底栏占最显眼一行、每次呼出都出现；③ 系统 Slider 细轨无手柄，看不出「可拖动跳页」，也无目标页预览；④ 高频的「下一本 / 缩略图 / 亮度」没有入口；⑤ 条漫模式纵向滚动时，进度只在底栏小字，滚动中无任何位置感。</span>
+  </div>
+  <div class="phone" data-toggle>
+    <div class="reader">
+      <div class="comic"><div class="page">
+        <div class="panel dark"><span class="bub b1">…真的要去？</span></div>
+        <div class="panel fig2"></div>
+        <div class="panel fig"><span class="bub b2">再等三天</span></div>
+        <div class="panel"></div>
+        <div class="panel dark"></div>
+        <div class="panel"></div>
+      </div></div>
+      <div class="ctl">
+        <div class="cur-top"><span class="ibtn">✕</span><span class="ttl">进击的巨人 第 12 卷</span><span class="ibtn">▤</span></div>
+        <div class="cur-bottom">
+          <div class="cur-row1"><span class="cur-pg">12/186</span><span class="cur-slider"><i></i><b></b></span><span class="ibtn sm">⇥</span></div>
+          <div class="cur-row2"><span class="mcol on">▯<i>单页</i></span><span class="mcol">▯▯<i>双页</i></span><span class="mcol">☰<i>条漫</i></span></div>
+        </div>
+      </div>
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="home"><span></span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 方案 A ================= -->
+<div class="board">
+  <h2>方案 A · 底部毛玻璃胶囊<span class="tag rec">推荐</span></h2>
+  <div class="desc">
+    <b>顶栏不做容器，完全沿用现状显示</b>（只用顶部渐变压暗，不套胶囊）。<b>底部换成一颗悬浮毛玻璃胶囊</b>（<code>.ultraThinMaterial</code>/深色等效 + 0.5pt 白描边，与全局页签栏、小说阅读器胶囊同语言），内缩 12pt、圆角 24~29。<br>
+    <b>顶栏标题按现状裸显示</b>：✕（40pt 圆钮、距屏幕左缘 10pt）+ 书名（去扩展名、13pt semibold、单行、紧随 ✕ 左对齐、超长省略），两者尺寸与位置和现状完全一致、不套任何容器；右侧仅放 ⋯（模式切换 / 亮度菜单），不新增副标题/章节行。<br>
+    底部主胶囊按语义分组：<b>‹ ›（翻页）｜可拖进度轨 + 白色圆手柄｜页码｜☰（缩略图）</b>，胶囊上方一行 10.5pt 细字「第 12/186 页 · 6% · 单页」合并三种进度表达；模式切换（低频）走顶栏 <b>⋯ 菜单</b>（单页/双页/条漫 + 双页方向 + 亮度），底栏不放设置入口。<br>
+    <span class="pros">优点：观感与全局统一（毛玻璃 + 圆角 + 描边），高频操作全部进主胶囊；模式改动后底栏高度不变；进度轨带手柄即可拖动跳页，复用小说 B+ 的拖动/气泡交互。</span><br>
+    <span class="cons">缺点：毛玻璃在纯黑漫画页上对比度低，需加 1pt 描边 + 阴影保证可辨识；模式切换收进顶栏菜单、层级略深，改动量小。</span>
+  </div>
+  <div class="phone" data-toggle>
+    <div class="reader">
+      <div class="comic"><div class="page">
+        <div class="panel dark"><span class="bub b1">…真的要去？</span></div>
+        <div class="panel fig2"></div>
+        <div class="panel fig"><span class="bub b2">再等三天</span></div>
+        <div class="panel"></div>
+        <div class="panel dark"></div>
+        <div class="panel"></div>
+      </div></div>
+      <div class="ctl">
+        <div class="a-top">
+          <span class="ibtn">✕</span>
+          <span class="ttl">进击的巨人 第 12 卷</span>
+          <span class="ibtn">⋯</span>
+        </div>
+        <div class="a-foot">
+          <div class="a-cap">第 12 / 186 页 · 6%</div>
+          <div class="a-bar glass">
+            <span class="ibtn">‹</span>
+            <span class="a-rail"><span class="a-track"></span><span class="a-fill"></span><span class="a-knob"></span></span>
+            <span class="a-pg">12/186</span>
+            <span class="ibtn">☰</span>
+            <span class="ibtn">›</span>
+          </div>
+          <div class="a-mini"><span class="a-chip">☰ 缩略图</span><span class="a-chip">⤓ 下一本</span><span class="a-chip">◐ 亮度</span></div>
+        </div>
+      </div>
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="home"><span></span></div>
+    </div>
+  </div>
+  <div class="hintbar">点击手机框 → 控制层显隐切换</div>
+</div>
+
+<!-- ================= 方案 B ================= -->
+<div class="board">
+  <h2>方案 B · 沉浸极简<span class="tag">内容最大化</span></h2>
+  <div class="desc">
+    控制层降到最轻：<b>顶栏不做容器，完全沿用现状显示</b>（✕ + 书名 + 下一本，只用顶部渐变压暗，不套胶囊），<b>底部不设通栏</b>——只在屏底贴一条 3pt 全宽进度轨（白色填充，滚动/翻页实时跟随），上方并排两个小胶囊「12 / 186」与当前模式名。<br>
+    呼出时底部居中浮出一个 <b>56pt 胶囊 dock</b>（☰ 缩略图 ｜ ▯▯ 模式切换），两个 44pt 圆钮、无文字标签；再次点击正文即刻隐藏，回到全屏看图。<br>
+    <span class="pros">优点：看图面积最大（控制层总高 ≈ 100pt，去掉浮层后仅剩 3pt 进度轨）；进度轨贴底符合条漫滑动习惯（滚动即见进度）；层次最少的「胶囊 + 贴底轨」组合。</span><br>
+    <span class="cons">缺点：模式切换只剩图标、无文字（首次使用需猜）；两个小胶囊 + dock 是三个独立浮块，视觉略碎；无翻页箭头，纯靠滑动（iPad 双页模式可能需要保留箭头）。</span>
+  </div>
+  <div class="phone" data-toggle>
+    <div class="reader">
+      <div class="comic"><div class="page">
+        <div class="panel dark"><span class="bub b1">…真的要去？</span></div>
+        <div class="panel fig2"></div>
+        <div class="panel fig"><span class="bub b2">再等三天</span></div>
+        <div class="panel"></div>
+        <div class="panel dark"></div>
+        <div class="panel"></div>
+      </div></div>
+      <div class="ctl">
+        <div class="b-top">
+          <span class="ibtn">✕</span>
+          <span class="ttl">进击的巨人 第 12 卷</span>
+          <span class="ibtn">⤓</span>
+        </div>
+        <div class="b-foot">
+          <div class="b-row"><span class="b-pill glass">12 / 186</span><span class="b-pill glass">单页</span></div>
+          <div class="b-dock glass">
+            <span class="ibtn">☰</span><span class="vdiv"></span>
+            <span class="ibtn">▯▯</span>
+          </div>
+          <div class="b-edge"><i></i></div>
+        </div>
+      </div>
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="home"><span></span></div>
+    </div>
+  </div>
+  <div class="hintbar">点击手机框 → 控制层显隐切换</div>
+</div>
+
+<!-- ================= 方案 C ================= -->
+<div class="board">
+  <h2>方案 C · 抽屉工作台<span class="tag">功能最全</span><span class="tag">进度条可拖动</span></h2>
+  <div class="desc">
+    底部是一张<b>圆角 26 毛玻璃抽屉</b>（内缩 10pt），三行成组：<b>① 分段控件</b>「单页 / 双页 / 条漫」（选中白底黑字，iOS 分段控件语言，替代三个平铺按钮）；<b>② 可拖动进度条</b>——4pt 轨 + 22pt 白色手柄，拖动中浮出深色气泡实时显示「第 N 页」，松手跳转；<b>③ 操作行</b>「⟲ 方向｜☰ 缩略图｜⤓ 下一本」主按钮（<code>primary</code> 填充，唯一蓝色块）。<br>
+    顶栏不做容器，沿用现状标题行（✕ / 书名 / 亮度，仅顶部渐变压暗）。<br>
+    <span class="pros">优点：把「设置类」与「操作类」彻底分层，模式切换从底栏一行按钮变成一行分段控件（语义清晰、可扩展更多模式）；拖动进度条 + 气泡是本方案的核心增量；主按钮给「下一本」——翻完后引导阅读。</span><br>
+    <span class="cons">缺点：抽屉总高 ≈ 150pt，是四个方案里最高的（用「缩略图/亮度」等低频项换来的）；分段控件与「顶部模式菜单」功能重复，需删掉其一避免两处入口。</span>
+  </div>
+  <div class="phone" data-toggle>
+    <div class="reader">
+      <div class="comic"><div class="page">
+        <div class="panel dark"><span class="bub b1">…真的要去？</span></div>
+        <div class="panel fig2"></div>
+        <div class="panel fig"><span class="bub b2">再等三天</span></div>
+        <div class="panel"></div>
+        <div class="panel dark"></div>
+        <div class="panel"></div>
+      </div></div>
+      <div class="ctl">
+        <div class="c-top">
+          <span class="ibtn">✕</span>
+          <span class="ttl">进击的巨人 第 12 卷</span>
+          <span class="ibtn">◐</span>
+        </div>
+        <div class="c-drawer glass">
+          <div class="c-seg"><span class="on">单页</span><span>双页</span><span>条漫</span></div>
+          <div class="c-prog">
+            <span class="n">12 / 186</span>
+            <span class="c-track" id="cTrack"><i></i><b></b><span class="c-bub" id="cBub">第 12 页</span></span>
+          </div>
+          <div class="c-brow">
+            <span class="c-k">⟲<i>方向</i></span>
+            <span class="c-k">☰<i>缩略图</i></span>
+            <span class="c-main">⤓ 下一本</span>
+          </div>
+        </div>
+      </div>
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="home"><span></span></div>
+    </div>
+  </div>
+  <div class="hintbar">拖动进度条 → 气泡显示目标页，<b>松手跳转</b></div>
+</div>
+
+<!-- ================= 方案 D ================= -->
+<div class="board">
+  <h2>方案 D · 页码徽章 + 刻度轨<span class="tag">长篇友好</span></h2>
+  <div class="desc">
+    <b>页码徽章常驻右上角</b>（半透明黑底胶囊「12/186」，控制层隐藏时也可保留，翻页时轻微淡入切换）；<b>标题完全沿用现状显示方案</b>：✕ + 书名单行左对齐、只用顶部渐变压暗，不套胶囊 / 药丸底；底部是<b>刻度进度轨</b>——3pt 主轨 + 每隔约 10% 一根 2pt 刻度（长篇一眼可见「读到哪一段」），白色手柄可拖；<br>
+    刻度下方一行 11pt 细字「第 34 话 · 第 12 / 186 页」，再下是 <b>60pt 胶囊 dock</b>「‹ ｜ ☰ ｜ ⤓（主位高亮）｜ ▯▯ ｜ ›」，左右翻页箭头回到 dock 两端，便于 iPad 双页模式点按翻页。<br>
+    <span class="pros">优点：页码在控制层隐藏时仍可见（解决「沉浸看图时不知道第几页」）；刻度轨让 186 页的长篇有段落感，点击刻度末尾附近可快速跳转；翻页箭头回归，双页/平板场景可点按翻页。</span><br>
+    <span class="cons">缺点：常驻徽章需要在纯黑页面上做对比处理（半透明底 + 描边）；5 个 dock 项偏多，视觉密度最高；刻度轨的点按定位需新增手势命中区。</span>
+  </div>
+  <div class="phone" data-toggle>
+    <div class="reader">
+      <div class="comic"><div class="page">
+        <div class="panel dark"><span class="bub b1">…真的要去？</span></div>
+        <div class="panel fig2"></div>
+        <div class="panel fig"><span class="bub b2">再等三天</span></div>
+        <div class="panel"></div>
+        <div class="panel dark"></div>
+        <div class="panel"></div>
+      </div></div>
+      <div class="ctl">
+        <div class="d-top">
+          <span class="ibtn">✕</span>
+          <span class="ttl">进击的巨人 第 12 卷</span>
+          <span class="d-badge">12/186</span>
+        </div>
+        <div class="d-foot">
+          <div class="d-scale">
+            <span class="d-line"><i></i></span>
+            <span class="d-tick" style="left:15%"></span><span class="d-tick" style="left:25%"></span>
+            <span class="d-tick" style="left:35%"></span><span class="d-tick" style="left:45%"></span>
+            <span class="d-tick" style="left:55%"></span><span class="d-tick" style="left:65%"></span>
+            <span class="d-tick" style="left:75%"></span><span class="d-tick" style="left:85%"></span>
+            <span class="d-knob"></span>
+          </div>
+          <div class="d-center">第 34 话 · 第 12 / 186 页 · 6%</div>
+          <div class="d-dock glass">
+            <span class="ibtn">‹</span><span class="vdiv"></span>
+            <span class="ibtn">☰</span><span class="vdiv"></span>
+            <span class="ibtn act">⤓</span><span class="vdiv"></span>
+            <span class="ibtn">▯▯</span><span class="vdiv"></span>
+            <span class="ibtn">›</span>
+          </div>
+        </div>
+      </div>
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="home"><span></span></div>
+    </div>
+  </div>
+  <div class="hintbar">页码徽章在控制层隐藏时仍可见</div>
+</div>
+
+</div>
+<table>
+  <tr><th>方案</th><th>控制层高度</th><th>视觉语言</th><th>模式切换入口</th><th>进度可拖</th><th>主要增量</th><th>落地改动</th><th>推荐度</th></tr>
+  <tr><td>现状</td><td>≈110pt（两段通栏）</td><td>纯黑渐变，无圆角/描边</td><td>底栏三按钮 + 顶栏菜单（重复）</td><td>否（系统 Slider）</td><td>—</td><td>—</td><td>—</td></tr>
+  <tr><td>A 底部胶囊</td><td>≈130pt（现状式顶栏 + 底 58 + 细字）</td><td>现状式顶栏 + 底部毛玻璃胶囊（圆角 + 0.5pt 描边）</td><td>顶栏 ⋯ 菜单（底栏无设置入口）</td><td>是（3pt 轨 + 14pt 手柄）</td><td>☰ 缩略图 / 下一本 / 亮度 快捷 chip</td><td>中小：<code>controlsOverlay</code> 重写 + 顶栏菜单补模式/亮度项（不新增面板）</td><td>★★★★★</td></tr>
+  <tr><td>B 沉浸极简</td><td>≈100pt（含贴底 3pt 轨）</td><td>现状式顶栏 + 贴底进度轨</td><td>底部 dock 图标（无文字）</td><td>否（仅展示）</td><td>贴底 3pt 全宽进度轨（条漫滚动跟随）</td><td>小：顶栏/底栏精简，无需新面板</td><td>★★★★</td></tr>
+  <tr><td>C 抽屉工作台</td><td>≈150pt（抽屉三行）</td><td>现状式顶栏 + 毛玻璃抽屉 + 分段控件</td><td>抽屉内分段控件（替代三按钮）</td><td>是（4pt 轨 + 22pt 手柄 + 气泡）</td><td>拖动气泡预览 + 「下一本」主按钮</td><td>中大：抽屉组件 + 拖动状态机（复用小说 B+ 逻辑）</td><td>★★★★</td></tr>
+  <tr><td>D 徽章 + 刻度轨</td><td>≈140pt（刻度 + 细字 + dock）</td><td>现状式顶栏 + 页码徽章 + 刻度轨</td><td>dock 中间图标</td><td>是（刻度轨 + 手柄）</td><td>控制层隐藏时页码仍可见；刻度段落感</td><td>中大：刻度轨分层绘制 + 点按定位手势</td><td>★★★</td></tr>
+</table>
+<p class="footnote">
+  <b>共同约定</b>：四个方案的<b>顶栏标题完全沿用现状显示方案</b>（仅顶部渐变压暗、不套胶囊）——✕ 为 40×40 圆钮、距屏幕左缘 10pt，书名取 <code>entry.name</code> 去扩展名、13pt semibold、单行、紧随 ✕ 左对齐（间距 6pt）、超长省略；不新增副标题 / 章节行。四个方案顶栏一律不套胶囊 / 药丸容器（原型已全部改为现状式裸标题行）；控制层由「点击正文中央」呼出/隐藏（<code>controlsVisible</code> 现成）；所有可点元素命中区 ≥ 44×44pt；控制层显隐时状态栏同步显隐（现状已如此）；条漫模式下进度轨/徽章随 <code>WebtoonVisibleKey</code> 回写的当前页实时更新（现成数据源）。<br>
+  <b>实施建议</b>：先落 <b>方案 A</b>（观感收益最大、与全局语言统一、改动集中在 <code>ComicReaderView.controlsOverlay</code>）；方案 B 的「贴底 3pt 进度轨」可作为 A 的补充选项（条漫模式单用）；方案 C 的拖动进度条建议只取「拖动 + 气泡」，与 A 的进度轨合并实现（同一套 <code>jumpToPage</code> / <code>scrollIntent</code> 路径）；D 的常驻页码徽章可独立叠加到任一方案。<br>
+  <b>原型交互</b>：点击任一手机框切换控制层显隐；方案 C 的进度条可真实拖动（气泡实时显示目标页，松手生效）；方案 A/D 的进度轨为静态展示。
+</p>
+<script>
+document.querySelectorAll('.phone').forEach(function(phone){
+  phone.addEventListener('click',function(e){
+    if(e.target.closest && e.target.closest('#cTrack')) return;
+    var ctl=phone.querySelector('.ctl');
+    if(ctl) ctl.classList.toggle('off');
+  });
+});
+(function(){
+  var track=document.getElementById('cTrack');
+  if(!track) return;
+  var fill=track.querySelector('i'), knob=track.querySelector('b'), bub=document.getElementById('cBub');
+  var TOTAL=186, dragging=false;
+  function pct(x){var r=track.getBoundingClientRect();return Math.max(0,Math.min(100,(x-r.left)/r.width*100));}
+  function paint(p){
+    fill.style.width=p+'%';knob.style.left=p+'%';bub.style.left=p+'%';
+    bub.textContent='第 '+Math.max(1,Math.round(p/100*TOTAL))+' 页';
+  }
+  track.addEventListener('pointerdown',function(e){
+    dragging=true;track.classList.add('on');
+    if(track.setPointerCapture)track.setPointerCapture(e.pointerId);
+    paint(pct(e.clientX));e.preventDefault();
+  });
+  track.addEventListener('pointermove',function(e){if(dragging)paint(pct(e.clientX));});
+  track.addEventListener('pointerup',function(e){if(!dragging)return;dragging=false;track.classList.remove('on');paint(pct(e.clientX));});
+  track.addEventListener('pointercancel',function(){dragging=false;track.classList.remove('on');});
+})();
+</script>
+</body>
+</html>

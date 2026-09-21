@@ -128,16 +128,35 @@ final class NovelReaderViewModel: ObservableObject {
             state = .failed("连接不可用，请检查连接源配置")
             return
         }
-        // 历史进度锚点 + 文件指纹校验（文件被替换则提示并归零，防跳转错乱）
+        // 历史进度锚点 + 文件指纹校验（文件被替换时降级为按内容大致恢复，不再直接归零）
         let saved = NovelProgressStore.loadAnchor(
             connectionID: connectionID, path: entry.path, isEpub: isEpub,
             fileSize: entry.size, modTime: entry.modTime
         )
         var anchor = saved
         if let saved, !saved.fingerprintMatches(fileSize: entry.size, modTime: entry.modTime) {
-            anchor = nil
-            showToast("文件已更新，进度已重置")
+            if saved.sizeMatches(entry.size) {
+                // 仅 mtime 差异（服务端精度/时区漂移）：锚点依然可用，不重置
+                AppLogger.shared.log(
+                    "指纹差异仅 modTime（size 一致），继续使用锚点",
+                    level: .warn, module: "novel-reader"
+                )
+            } else if saved.hasStructure {
+                // 文件被替换/编辑：结构锚点 + 内容片段仍可重定位，降级为“大致位置”而非清零
+                AppLogger.shared.log(
+                    "文件指纹变化（size \(saved.fileSize) → \(entry.size)），按内容片段恢复位置",
+                    level: .warn, module: "novel-reader"
+                )
+                showToast("文件已更新，已按大致位置恢复")
+            } else {
+                anchor = nil
+                showToast("文件已更新，进度已重置")
+            }
         }
+        // 清理上一次加载遗留的待定位信息（重试/换书时避免误用）
+        pendingTxtLocator = nil
+        gatedVisibleChapter = nil
+        gatedVisibleCharOffset = nil
         do {
             if isEpub {
                 try await loadEpub(adapter: adapter, anchor: anchor)
@@ -184,21 +203,69 @@ final class NovelReaderViewModel: ObservableObject {
         )
         toc = index.chapters.enumerated().map { NovelTocEntry(id: $0, title: $1.title) }
 
-        // 一步定位：全局字节偏移 → 二分反查章 → 章内字节 → 行表映射章内字符
-        let offset = max(0, min(anchor?.offset ?? 0, index.fileSize - 1))
-        let targetChapter = index.chapterIndex(forOffset: offset)
+        // 一步定位：结构锚点（章号 + 标题双重校验）→ 旧字节锚点二分反查 → 百分比兜底
+        let targetChapter = resolveTxtChapter(anchor, index: index)
         // 越界前置日志：chapters[targetChapter] 若 targetChapter 越界会 fatalError 闪退，崩前留痕
         AppLogger.shared.log(
-            "txt 定位: offset=\(offset) targetChapter=\(targetChapter) chapters.count=\(index.chapters.count)",
+            "txt 定位: 锚点章=\(anchor?.chapterIndex ?? -1) 标题=\"\(anchor?.chapterTitle ?? "无")\" legacy=\(anchor?.isLegacyByteOffset ?? false) targetChapter=\(targetChapter) chapters.count=\(index.chapters.count)",
             module: "novel-reader"
         )
-        let chapterStart = index.chapters[targetChapter].startOffset
         let loaded = try await loadChapter(targetChapter)
         chapter = targetChapter
         txtChapter = loaded.txtChapter
-        let offsetInChapter = max(0, offset - chapterStart)
-        lastAnchorCharOffset = txtByteOffsetToCharOffset(offsetInChapter)
         blocks = loaded.blocks
+        // 章内字符位置：结构锚点直接取用；旧字节锚点用行表做一次性迁移（不重编码）
+        var hint = anchor?.chapterCharOffset ?? 0
+        if let anchor, anchor.isLegacyByteOffset {
+            let chapterStart = index.chapters[targetChapter].startOffset
+            hint = txtByteOffsetToCharOffset(max(0, anchor.offset - chapterStart))
+            AppLogger.shared.log(
+                "txt 旧字节锚点迁移 offset=\(anchor.offset) → 章内字符=\(hint)",
+                module: "novel-reader"
+            )
+        }
+        lastAnchorCharOffset = max(0, hint)
+        // 片段/段号级精确落位依赖分页产物的文本与块位置映射，延后到首次分页完成（见 repaginate 回调）
+        if let anchor, !anchor.isLegacyByteOffset {
+            pendingTxtLocator = PendingTxtLocator(
+                chapterCharOffset: anchor.chapterCharOffset,
+                paragraphIndex: anchor.paragraphIndex,
+                offsetInParagraph: anchor.characterOffset,
+                fragment: anchor.textAfter
+            )
+        }
+    }
+
+    /// txt 锚点 → 目标章序号
+    /// 1) 章号 + 标题双重校验（分章规则变化时章号语义会变，标题不一致则以标题为准）；
+    /// 2) 标题全局查找；3) 旧字节锚点二分反查（编码无关）；4) 百分比兜底
+    private func resolveTxtChapter(_ anchor: NovelAnchor?, index: TxtNovelIndexer.IndexData) -> Int {
+        let count = index.chapters.count
+        guard count > 0 else { return 0 }
+        guard let anchor else { return 0 }
+        if let ci = anchor.chapterIndex, index.chapters.indices.contains(ci) {
+            let title = anchor.chapterTitle ?? ""
+            if title.isEmpty || index.chapters[ci].title == title {
+                return ci
+            }
+            if let hit = index.chapters.firstIndex(where: { $0.title == title }) {
+                AppLogger.shared.log(
+                    "txt 章号校验失败（章号=\(ci) 标题=\"\(title)\"）→ 按标题重定位到 \(hit)",
+                    level: .warn, module: "novel-reader"
+                )
+                return hit
+            }
+        } else if let title = anchor.chapterTitle, !title.isEmpty,
+                  let hit = index.chapters.firstIndex(where: { $0.title == title }) {
+            return hit
+        }
+        if anchor.isLegacyByteOffset {
+            return index.chapterIndex(forOffset: max(0, min(anchor.offset, index.fileSize - 1)))
+        }
+        if let percent = anchor.percent {
+            return max(0, min(Int(percent * Double(count)), count - 1))
+        }
+        return 0
     }
 
     private func loadEpub(adapter: StorageAdapter, anchor: NovelAnchor?) async throws {
@@ -251,21 +318,74 @@ final class NovelReaderViewModel: ObservableObject {
             }
         }
 
-        // 一步定位：spine 序号 → 段落序号/段内偏移 → 组装文本字符位置
-        let targetSpine = max(0, min(anchor?.spineIndex ?? 0, book.spine.count - 1))
+        // 一步定位：spine（章号 + 标题校验）→ 段落序号/段内偏移 → 组装文本字符位置
+        var targetSpine = max(0, min(anchor?.chapterIndex ?? anchor?.spineIndex ?? 0, book.spine.count - 1))
+        if let anchor, let ci = anchor.chapterIndex, book.toc.indices.contains(ci),
+           let title = anchor.chapterTitle, !title.isEmpty, book.toc[ci].title != title,
+           let hit = book.toc.firstIndex(where: { $0.title == title }) {
+            AppLogger.shared.log(
+                "epub 章号校验失败（章号=\(ci) 标题=\"\(title)\"）→ 按标题重定位 spine=\(book.toc[hit].spineIndex)",
+                level: .warn, module: "novel-reader"
+            )
+            targetSpine = max(0, min(book.toc[hit].spineIndex, book.spine.count - 1))
+        } else if let percent = anchor?.percent, anchor?.chapterIndex == nil, book.spine.count > 0 {
+            targetSpine = max(0, min(Int(percent * Double(book.spine.count)), book.spine.count - 1))
+        }
         AppLogger.shared.log(
-            "epub 定位 targetSpine=\(targetSpine) spine.count=\(book.spine.count)",
+            "epub 定位 targetSpine=\(targetSpine) spine.count=\(book.spine.count) 标题=\"\(anchor?.chapterTitle ?? "无")\"",
             module: "novel-reader"
         )
         let loaded = try await loadChapter(targetSpine)
         chapter = targetSpine
         blocks = loaded.blocks
         txtChapter = nil
-        // 段落锚点依赖分页产物的块位置映射，延迟到首次分页完成时换算（见 repaginate 回调）
-        pendingEpubParagraph = anchor.map { ($0.paragraphIndex, $0.characterOffset) }
+        // 段落/片段锚点依赖分页产物的块位置映射，延迟到首次分页完成时换算（见 repaginate 回调）
+        if let anchor {
+            pendingTxtLocator = PendingTxtLocator(
+                chapterCharOffset: anchor.chapterCharOffset,
+                paragraphIndex: anchor.paragraphIndex,
+                offsetInParagraph: anchor.characterOffset,
+                fragment: anchor.textAfter
+            )
+        }
     }
 
-    private var pendingEpubParagraph: (paragraph: Int, offset: Int)?
+    /// 待落位的锚点（txt / epub 通用）：分页产物就绪后按「片段搜索 → 段号换算 → hint」依次尝试
+    private struct PendingTxtLocator {
+        let chapterCharOffset: Int?
+        let paragraphIndex: Int
+        let offsetInParagraph: Int
+        let fragment: String?
+    }
+
+    private var pendingTxtLocator: PendingTxtLocator?
+
+    /// 重排闸门期间用户实际看到的内容（章 + 章内字符位置）。
+    /// 页号会随排版失效，字符坐标与排版无关，重排完成后可按它精确恢复位置。
+    private var gatedVisibleChapter: Int?
+    private var gatedVisibleCharOffset: Int?
+
+    /// 滚动模式：视口顶部的连续字符位置（行映射换算，取代「页首」的页块粒度上报基准）。
+    /// 由 View 的滚动回调持续更新；仅在同章且落在本章文本范围内时被上报采用。
+    private var scrollTopCharOffset: (chapter: Int, offset: Int)?
+
+    /// 排版失效闸门截止时间：重排窗口内忽略滚动可见页回写。
+    /// 用时间戳而非布尔量，避免分页任务被取消/降代后闸门永久卡死（滚动回写彻底失效）。
+    private var paginationGateUntil: Date?
+    private var isPaginationGated: Bool {
+        guard let until = paginationGateUntil else { return false }
+        return Date() < until
+    }
+
+    /// 使分页产物失效（尺寸/字号变化）：清缓存 + 开闸门 + 递增代数丢弃在途结果。
+    /// 注意不清 gatedVisible*：连续拖动字号时若每次都清，闸门期间用户滚到的位置会被丢掉；
+    /// 跨书污染由 performLoad 显式清理 + 消费时的 toc 越界校验双重兜底。
+    private func invalidatePagination() {
+        paginationGateUntil = Date().addingTimeInterval(1.5)
+        paginationCache.removeAll()
+        paginationGeneration += 1
+        scrollTopCharOffset = nil   // 旧排版的连续位置随之失效（重排后由可见页回调重建）
+    }
 
     // MARK: - 分页（View 报告可用尺寸后触发）
 
@@ -273,7 +393,7 @@ final class NovelReaderViewModel: ObservableObject {
         guard size.width > 20, size.height > 20, size != pageSize, !blocks.isEmpty else { return }
         let preserved = pageSize == .zero ? lastAnchorCharOffset : currentCharOffset()
         pageSize = size
-        paginationCache.removeAll()   // 尺寸变化，预分页结果全部失效
+        invalidatePagination()   // 尺寸变化：预分页结果失效，重排窗口内忽略滚动回写
         repaginate(anchorCharOffset: preserved)
     }
 
@@ -281,7 +401,7 @@ final class NovelReaderViewModel: ObservableObject {
     /// `didSet`，若逐次立即分页会堆积大量整章 CoreText 排版任务 → CPU 打满发热、卡死。
     /// 这里把连续变化合并为最后一次（150ms 窗口内重置计时），只在停顿后分页一次。
     private func repaginatePreservingAnchor() {
-        paginationCache.removeAll()   // 字号/行距等变化，预分页结果全部失效
+        invalidatePagination()   // 字号/行距等变化：预分页结果失效，重排窗口内忽略滚动回写
         let target = currentCharOffset()
         repaginateDebounceTask?.cancel()
         repaginateDebounceTask = Task { [weak self] in
@@ -292,7 +412,10 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     private func repaginate(anchorCharOffset: Int) {
-        guard pageSize != .zero, !blocks.isEmpty else { return }
+        guard pageSize != .zero, !blocks.isEmpty else {
+            paginationGateUntil = nil   // 无排版可做：立即解闸，避免滚动回写被误锁
+            return
+        }
         let appearance = self.appearance
         let blocks = self.blocks
         let textColor = UIColor(themeSpec.text)
@@ -320,22 +443,32 @@ final class NovelReaderViewModel: ObservableObject {
                       self.chapter == chapterSnapshot else { return }
                 self.pagination = result
                 self.paginationCache[chapterSnapshot] = result
+                self.paginationGateUntil = nil   // 新分页就绪，恢复滚动可见页回写
                 AppLogger.shared.log(
                     "repaginate 完成 chapter=\(chapterSnapshot) 页数=\(result.pages.count) 文本长度=\(result.attributedText.length)",
                     module: "novel-reader"
                 )
                 var offset = anchorCharOffset
-                // epub 首次定位：段落锚点换算为组装文本字符位置（需分页产物的块位置映射）
-                if let pending = self.pendingEpubParagraph {
-                    offset = result.charOffset(
-                        forParagraph: pending.paragraph,
-                        offsetInParagraph: pending.offset,
-                        blocks: self.blocks
-                    )
-                    self.pendingEpubParagraph = nil
+                // 首次定位：片段内容搜索 → 段号换算 → 章内字符 hint（见 resolvePendingLocator）
+                if let pending = self.pendingTxtLocator {
+                    offset = self.resolvePendingLocator(pending, pagination: result)
+                    self.pendingTxtLocator = nil
                 }
                 let maxOffset = max(result.attributedText.length - 1, 0)
                 self.page = result.pageIndex(forCharOffset: min(offset, maxOffset))
+                // 重排窗口内用户仍在滚动：按记住的字符坐标恢复可见位置（内容优先于重排前的页号）
+                if let gatedChapter = self.gatedVisibleChapter, self.toc.indices.contains(gatedChapter),
+                   let gatedOffset = self.gatedVisibleCharOffset {
+                    self.gatedVisibleChapter = nil
+                    self.gatedVisibleCharOffset = nil
+                    if gatedChapter == self.chapter {
+                        self.page = result.pageIndex(forCharOffset: min(gatedOffset, maxOffset))
+                    } else if self.activateChapter(gatedChapter), let pag = self.pagination {
+                        self.page = pag.pageIndex(
+                            forCharOffset: min(gatedOffset, max(pag.attributedText.length - 1, 0))
+                        )
+                    }
+                }
                 if self.appearance.pageMode == .scrolling {
                     self.rebuildScrollStream(anchorPage: self.page)
                 }
@@ -343,10 +476,36 @@ final class NovelReaderViewModel: ObservableObject {
         }
     }
 
+    /// 待落位锚点 → 章内字符位置：
+    /// 片段搜索（抗编码变化/重排/分章微调/轻微编辑）→ 段号+段内偏移 → 章内偏移 hint
+    private func resolvePendingLocator(_ pending: PendingTxtLocator, pagination: ChapterPagination) -> Int {
+        let hint = pending.chapterCharOffset ?? pagination.charOffset(
+            forParagraph: pending.paragraphIndex,
+            offsetInParagraph: pending.offsetInParagraph,
+            blocks: blocks
+        )
+        if let fragment = pending.fragment, !fragment.isEmpty {
+            if let found = pagination.charOffset(forLocatorFragment: fragment, hint: hint) {
+                AppLogger.shared.log(
+                    "txt 片段重定位命中 hint=\(hint) found=\(found) 片段长度=\(fragment.count)",
+                    module: "novel-reader"
+                )
+                return found
+            }
+            AppLogger.shared.log(
+                "txt 片段重定位未命中，退化到段号/hint=\(hint) 片段=\"\(fragment.prefix(12))\"",
+                level: .warn, module: "novel-reader"
+            )
+        }
+        return max(0, hint)
+    }
+
     /// 设置程序滚动目标并在滚动窗口期后自动清除（期间忽略可见页回写）
     private func armScrollIntent(_ target: String?) {
         scrollIntent = target
         scrollIntentRevision += 1
+        // 程序滚动期间可见页回调被抑制：清空旧连续位置，避免落位前的上报沿用上一处位置
+        scrollTopCharOffset = nil
         scrollIntentTask?.cancel()
         guard target != nil else { return }
         scrollIntentTask = Task {
@@ -422,8 +581,21 @@ final class NovelReaderViewModel: ObservableObject {
     func scrollVisiblePage(_ p: ScrollPage) {
         guard appearance.pageMode == .scrolling else { return }
         guard scrollIntent == nil else { return }
+        // 重排窗口（字号/尺寸变化已清空预分页缓存）内不回写 page（旧页号在新排版下无意义），
+        // 但把可见内容换算成排版无关的字符坐标记住，重排完成后据此恢复，避免这段滚动被丢弃
+        guard !isPaginationGated else {
+            rememberVisibleContent(p)
+            return
+        }
         if p.chapter != chapter {
-            activateChapter(p.chapter)
+            // 上下文未就绪必须整帧丢弃：否则 page 会带着新章页码留在旧章 → 锚点错位
+            guard activateChapter(p.chapter) else {
+                AppLogger.shared.log(
+                    "scrollVisiblePage 丢弃回写：章上下文未就绪 target=\(p.chapter) 当前=\(chapter) page=\(p.page)",
+                    level: .warn, module: "novel-reader"
+                )
+                return
+            }
         }
         if p.page != page {
             page = p.page
@@ -481,10 +653,22 @@ final class NovelReaderViewModel: ObservableObject {
             // 设置/尺寸在分页期间变化则丢弃过期结果
             guard self.appearance == appearance, self.pageSize == size else { return }
             self.paginationCache[targetChapter] = result
-            // LRU：保留当前 ±2 与滚动流正在渲染的章节
-            var keep: Set<Int> = [self.chapter - 2, self.chapter - 1, self.chapter, self.chapter + 1, self.chapter + 2]
+            // LRU：保留当前 ±2、刚分页完成的章、滚动流正在渲染的章节。
+            // targetChapter 必须显式保留：它尚未拼入滚动流，只按“当前章 ±2”过滤会被自己立刻淘汰，
+            // 导致 insertChapterIntoStream 取不到分页、滚动流无法延伸（并诱发 chapter/page 错位）
+            var keep: Set<Int> = [
+                targetChapter,
+                self.chapter - 2, self.chapter - 1, self.chapter, self.chapter + 1, self.chapter + 2,
+            ]
             keep.formUnion(self.scrollStream.map(\.chapter))
             self.paginationCache = self.paginationCache.filter { keep.contains($0.key) }
+            guard self.paginationCache[targetChapter] != nil else {
+                AppLogger.shared.log(
+                    "prepaginate 结果被 LRU 淘汰 target=\(targetChapter) chapter=\(self.chapter)",
+                    level: .warn, module: "novel-reader"
+                )
+                return
+            }
             // 增量拼入滚动流（向下追加 / 向上插入并补偿滚动位置）
             self.insertChapterIntoStream(targetChapter)
         }
@@ -504,6 +688,41 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     // MARK: - 滚动模式连续页流（多章节无缝拼接）
+
+    /// 取某页对应的分页产物（当前章走 pagination，其余走预分页缓存）
+    private func paginationFor(_ p: ScrollPage) -> ChapterPagination? {
+        if p.chapter == chapter, let pagination { return pagination }
+        return paginationCache[p.chapter]
+    }
+
+    /// 重排窗口内记录可见内容（章 + 章内字符位置）。
+    /// 旧页号在新排版下失效，但字符坐标与排版无关，重排完成后可直接定位；否则闸门期间
+    /// 的滚动会被整个丢弃 → 恢复出的位置比用户实际停留处偏前。
+    /// - Parameter charOffset: 行映射换算的连续位置（nil 时退回当前页页首）
+    private func rememberVisibleContent(_ p: ScrollPage, charOffset: Int? = nil) {
+        guard let pag = paginationFor(p), pag.pages.indices.contains(p.page) else { return }
+        gatedVisibleChapter = p.chapter
+        gatedVisibleCharOffset = charOffset ?? pag.pages[p.page].lowerBound
+    }
+
+    /// 滚动模式：「视口顶部所在页 + 页内纵向偏移」→ 连续字符位置（行映射，行级精度）。
+    /// 与 `scrollVisiblePage`（页粒度：当前页 / 预分页扩展）分工，这里只更新上报基准：
+    /// 页内滚动不跨页也能推进进度，页块离散化带来的累计误差不再按页放大。
+    /// - Parameters:
+    ///   - offsetY: 视口顶部相对页块顶部的纵向偏移（点）；页块顶部在视口下方时传 0
+    ///   - pageHeight: 页块渲染高度（无行映射时的插值分母）
+    func scrollVisibleTop(page: ScrollPage, offsetY: CGFloat, pageHeight: CGFloat) {
+        guard appearance.pageMode == .scrolling else { return }
+        guard scrollIntent == nil else { return }
+        guard let pag = paginationFor(page), pag.pages.indices.contains(page.page) else { return }
+        let offset = pag.charOffset(inPage: page.page, offsetY: offsetY, pageHeight: pageHeight)
+        guard !isPaginationGated else {
+            // 重排窗口：页号已失效但字符坐标有效，记下供重排完成后恢复
+            rememberVisibleContent(page, charOffset: offset)
+            return
+        }
+        scrollTopCharOffset = (chapter: page.chapter, offset: offset)
+    }
 
     /// 取滚动流中某页的富文本内容
     func scrollPageContent(_ p: ScrollPage) -> NSAttributedString {
@@ -564,18 +783,32 @@ final class NovelReaderViewModel: ObservableObject {
         }
     }
 
-    /// 滚动跨章时切换当前章上下文（更新进度基准，不动滚动流）
-    private func activateChapter(_ target: Int) {
-        guard target != chapter, toc.indices.contains(target) else { return }
-        guard let cached = chapterCache[target], let pag = paginationCache[target] else { return }
+    /// 滚动跨章时切换当前章上下文（更新进度基准，不动滚动流）。
+    /// 返回 false = 上下文未就绪（缓存缺失/越界），调用方必须丢弃本次回写：
+    /// 否则 chapter 与 page 分属两章，currentCharOffset / 行表用错章 → 写库锚点错位（漂移主因）。
+    @discardableResult
+    private func activateChapter(_ target: Int) -> Bool {
+        guard toc.indices.contains(target) else { return false }
+        guard target != chapter else { return true }
+        guard let cached = chapterCache[target], let pag = paginationCache[target] else {
+            AppLogger.shared.log(
+                "activateChapter 上下文未就绪 target=\(target) chapterCache=\(chapterCache[target] != nil) paginationCache=\(paginationCache[target] != nil)，已触发预分页",
+                level: .warn, module: "novel-reader"
+            )
+            prepaginate(target)   // 补齐后下一帧可见页回调即可正常切换
+            return false
+        }
         report(force: true)
         chapter = target
         txtChapter = cached.txtChapter
         blocks = cached.blocks
         pagination = pag
+        // page 立即收敛到新章范围，防止切换瞬间的强制上报读到越界页
+        page = min(page, max(pag.pages.count - 1, 0))
         chapterLoading = false
         prepaginate(target - 1)
         prepaginate(target + 1)
+        return true
     }
 
     // MARK: - 章节加载（缓存 ±1 预加载）
@@ -671,28 +904,24 @@ final class NovelReaderViewModel: ObservableObject {
 
     // MARK: - 进度上报
 
-    /// 当前页首在章组装文本中的字符位置
+    /// 当前阅读位置（章内字符位置）：滚动模式优先取行映射换算的视口顶部连续位置，
+    /// 无有效连续位置时退回当前页页首（页块粒度）。
     private func currentCharOffset() -> Int {
         guard let pagination, pagination.pages.indices.contains(page) else { return 0 }
+        if appearance.pageMode == .scrolling, let top = scrollTopCharOffset,
+           top.chapter == chapter, top.offset >= 0,
+           top.offset < max(pagination.attributedText.length, 1) {
+            return top.offset
+        }
         return pagination.pages[page].lowerBound
     }
 
     private func makeAnchor() -> NovelAnchor {
         let charOffset = currentCharOffset()
-        if isEpub {
-            let anchor = pagination?.paragraphAnchor(forCharOffset: charOffset, blocks: blocks)
-                ?? (paragraph: 0, offsetInParagraph: 0)
-            return NovelAnchor(
-                kind: .epub,
-                spineIndex: chapter,
-                paragraphIndex: anchor.paragraph,
-                characterOffset: anchor.offsetInParagraph,
-                fileSize: entry.size,
-                modTime: entry.modTime.timeIntervalSince1970
-            )
-        }
-        // txt：组装文本字符位置 → 行表映射章内字节偏移 → + 章起始 → 全局字节偏移
-        let offsetInChapter = txtCharOffsetToByteOffset(charOffset)
+        // 结构锚点：段号 + 段内偏移（与排版无关）；片段用于下次按内容重定位
+        let para = pagination?.paragraphAnchor(forCharOffset: charOffset, blocks: blocks)
+            ?? (paragraph: 0, offsetInParagraph: 0)
+        let snippet = pagination?.locatorSnippet(from: charOffset)
         // 越界前置日志：chapters[chapter] 若 chapter 越界会 fatalError 闪退，崩前留痕
         if let txtIndex, !txtIndex.chapters.indices.contains(chapter) {
             AppLogger.shared.log(
@@ -700,47 +929,25 @@ final class NovelReaderViewModel: ObservableObject {
                 level: .warn, module: "novel-reader"
             )
         }
-        let chapterStart = txtIndex?.chapters[chapter].startOffset ?? 0
-        return NovelAnchor(
-            kind: .txt,
-            offset: chapterStart + offsetInChapter,
-            fileSize: entry.size,
-            modTime: entry.modTime.timeIntervalSince1970
+        if isEpub {
+            return NovelAnchor.epub(
+                spineIndex: chapter, chapterTitle: currentChapterTitle,
+                paragraphIndex: para.paragraph, offsetInParagraph: para.offsetInParagraph,
+                chapterCharOffset: charOffset, textAfter: snippet, percent: currentPercent,
+                fileSize: entry.size, modTime: entry.modTime
+            )
+        }
+        return NovelAnchor.txt(
+            chapterIndex: chapter, chapterTitle: currentChapterTitle,
+            paragraphIndex: para.paragraph, offsetInParagraph: para.offsetInParagraph,
+            chapterCharOffset: charOffset, textAfter: snippet, percent: currentPercent,
+            fileSize: entry.size, modTime: entry.modTime
         )
     }
 
-    /// txt 锚点换算：组装文本字符位置 → 章内字节偏移（行字节范围映射，与排版无关）
-    /// charOffset 来自分页器（CoreText），为 **UTF-16 坐标**，行累计与行内截取统一用 utf16 视图，
-    /// 避免 emoji 等代理对字符（1 Character = 2 UTF-16 码元）导致锚点漂移。
-    private func txtCharOffsetToByteOffset(_ charOffset: Int) -> Int64 {
-        guard let chapterText = txtChapter, !chapterText.lines.isEmpty else { return 0 }
-        var consumed = 0
-        var lineIndex = 0
-        var inLine = 0
-        for (index, line) in chapterText.lines.enumerated() {
-            // 必须取 >=：页首恰落在段间分隔 \n 位置（consumed + count == charOffset）时归到上一段末尾。
-            // 若用 >，consumed 会越过 charOffset，下一行 break 时 inLine = -1 → prefix(-1) 必崩（SIGTRAP）
-            if consumed + line.text.utf16.count >= charOffset {
-                lineIndex = index
-                inLine = max(0, charOffset - consumed)
-                break
-            }
-            consumed += line.text.utf16.count + 1   // 段（UTF-16）+ 段间分隔 \n
-            lineIndex = index
-            inLine = line.text.utf16.count
-        }
-        let line = chapterText.lines[lineIndex]
-        // utf16 下标用于 String 截取时自动向下对齐字素边界，不会截断代理对
-        let end = line.text.utf16.index(
-            line.text.startIndex, offsetBy: inLine, limitedBy: line.text.endIndex
-        ) ?? line.text.endIndex
-        let inLineBytes = String(line.text[..<end])
-            .data(using: chapterText.encoding)?.count ?? 0
-        return line.byteRange.lowerBound + Int64(inLineBytes)
-    }
-
-    /// txt 锚点换算：章内字节偏移 → 组装文本字符位置（行二分 + 行内前缀解码，码元边界回退）
-    /// 返回值为 **UTF-16 坐标**（与分页器 pages 范围一致），供 pageIndex(forCharOffset:) 定位
+    /// 旧版字节锚点迁移：章内字节偏移 → 组装文本字符位置（行表定位，**不做行内重编码**）
+    /// 编码不可逆（无法表示的字符、有损回退的替换符）正是历史漂移根因，这里只用到行字节边界，
+    /// 精度落在行首（一行 ≈ 40 字，不足一屏），一次性迁移后即升级为结构锚点。
     private func txtByteOffsetToCharOffset(_ byteOffset: Int64) -> Int {
         guard let chapterText = txtChapter, !chapterText.lines.isEmpty else { return 0 }
         var lineIndex = 0
@@ -748,22 +955,7 @@ final class NovelReaderViewModel: ObservableObject {
         where line.byteRange.lowerBound <= byteOffset {
             lineIndex = index
         }
-        let line = chapterText.lines[lineIndex]
-        let inLineByte = max(0, Int(byteOffset - line.byteRange.lowerBound))
-        // 行内字节 → 行内字符：原始字节前缀解码，截在多字节字符中间时回退码元边界
-        let rawStart = max(0, Int(line.byteRange.lowerBound - chapterText.baseOffset))
-        let raw = chapterText.rawData.dropFirst(rawStart).prefix(inLineByte)
-        var inLineChars = 0
-        var probe = raw.count
-        while probe >= 0 {
-            if let decoded = String(data: raw.prefix(probe), encoding: chapterText.encoding) {
-                inLineChars = decoded.utf16.count
-                break
-            }
-            probe -= 1
-        }
-        // 组装文本字符位置（UTF-16）= Σ(前序行 utf16 长度 + 1) + 行内字符
-        var charOffset = inLineChars
+        var charOffset = 0
         for prior in 0..<lineIndex {
             charOffset += chapterText.lines[prior].text.utf16.count + 1
         }
@@ -771,13 +963,9 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     private var currentPercent: Double {
-        if isEpub {
-            let spineCount = max(toc.count, 1)
-            let inChapter = pageCount > 0 ? Double(page) / Double(pageCount) : 0
-            return (Double(chapter) + inChapter) / Double(spineCount)
-        }
-        guard let txtIndex, txtIndex.fileSize > 0 else { return 0 }
-        return Double(makeAnchor().offset) / Double(txtIndex.fileSize)
+        let total = max(toc.count, 1)
+        let inChapter = pageCount > 0 ? Double(page) / Double(pageCount) : 0
+        return min(1, max(0, (Double(chapter) + inChapter) / Double(total)))
     }
 
     /// 翻页/滚动触发：3s 节流上报
@@ -860,6 +1048,11 @@ final class NovelReaderViewModel: ObservableObject {
     func pageContent(_ target: Int) -> NSAttributedString {
         guard let pagination else { return NSAttributedString() }
         return pagination.pageContent(target)
+    }
+
+    /// 供 View 层展示一次性提示（如底栏拖动跳章后的 toast）
+    func flashToast(_ message: String) {
+        showToast(message)
     }
 
     private func showToast(_ message: String) {

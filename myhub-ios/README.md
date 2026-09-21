@@ -57,10 +57,10 @@ myhub-ios/
 | --- | --- |
 | AMSMB2 | SMB2/3 直连 |
 | VLCKit（MobileVLCKit） | 全格式软解兜底 |
-| ZIPFoundation | zip / cbz / epub 解包 |
 | UnrarKit | rar / cbr 解析 |
 | GRDB | SQLite 结构化存储 |
-| Nuke | 图片加载与缓存（封面/缩略图） |
+
+> zip / cbz 解包为自研 `RangeZipReader`（按需 Range 读取，支持 ZIP64），封面/缩略图用自研 `RemoteCoverImage` + `ImageDownsampler`，无额外图片库依赖。
 
 ## 备注
 

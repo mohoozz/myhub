@@ -16,7 +16,9 @@ enum NovelProgressStore {
                   try ReadingProgress
                       .filter(Column("connectionID") == connectionID && Column("filePath") == path)
                       .fetchOne(database)
-              }), !record.finished else { return nil }
+              }) else { return nil }
+        // 已读完（finished）不再丢弃锚点：清零会让“每次打开都回到开头”，表现为最刺眼的假漂移。
+        // 恢复到最后阅读位置，用户可自行回看；《正在阅读》列表仍以 record.percent/finished 展示
         return NovelAnchor.parse(record.progressJSON, fileSize: fileSize, modTime: modTime, isEpub: isEpub)
     }
 

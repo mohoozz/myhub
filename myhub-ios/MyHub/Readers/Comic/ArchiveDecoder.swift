@@ -65,6 +65,32 @@ enum ArchiveDecoder {
         }
     }
 
+    // MARK: - 内容校验（zip / rar 本地 / rar 远程落地三处复用）
+
+    /// 校验归档内容为漫画并返回自然排序的图片页名。
+    /// 嗅探兜底（识别策略 2）：cbz/cbr 扩展名直接放行；zip/rar 需图片占比 ≥90% + 自然序列。
+    private static func validatedComicPageNames(
+        ext: String, entryNames: [String], logLabel: String
+    ) throws -> [String] {
+        AppLogger.shared.log("\(logLabel) 条目数=\(entryNames.count) ext=\(ext)", module: "comic-reader")
+        if !ComicDetector.isComicExtension(ext), !ComicDetector.sniff(entryNames: entryNames) {
+            AppLogger.shared.log(
+                "\(logLabel) 内容嗅探未通过（判定非漫画）: 条目数=\(entryNames.count)",
+                level: .warn, module: "comic-reader"
+            )
+            throw ArchiveDecodeError.noPages
+        }
+        let names = entryNames
+            .filter { !$0.hasSuffix("/") && ComicDetector.isImageName($0) }
+            .naturalSorted()
+        AppLogger.shared.log("\(logLabel) 图片页数=\(names.count)", module: "comic-reader")
+        guard !names.isEmpty else {
+            AppLogger.shared.log("\(logLabel) 无图片页 → noPages", level: .warn, module: "comic-reader")
+            throw ArchiveDecodeError.noPages
+        }
+        return names
+    }
+
     // MARK: - zip / cbz（Range 解包，不整包下载）
 
     private static func openZipFamily(entry: FileEntry, adapter: StorageAdapter) async throws -> ComicPageSource {
@@ -79,24 +105,12 @@ enum ArchiveDecoder {
             return data
         }
         let all = try await reader.entries()
-        AppLogger.shared.log("zip/cbz 条目数=\(all.count) ext=\(entry.ext)", module: "comic-reader")
-        // 内容嗅探兜底（识别策略 2）：cbz 扩展名直接放行；zip 需图片占比 ≥90% + 自然序列
-        if !ComicDetector.isComicExtension(entry.ext),
-           !ComicDetector.sniff(entryNames: all.map(\.name)) {
-            AppLogger.shared.log(
-                "zip 内容嗅探未通过（判定非漫画）: 条目数=\(all.count)",
-                level: .warn, module: "comic-reader"
-            )
-            throw ArchiveDecodeError.noPages
-        }
-        let pages = all
-            .filter { !$0.isDirectory && ComicDetector.isImageName($0.name) }
-            .sorted { $0.name.naturalCompare($1.name) == .orderedAscending }
-        AppLogger.shared.log("zip/cbz 图片页数=\(pages.count)", module: "comic-reader")
-        guard !pages.isEmpty else {
-            AppLogger.shared.log("zip/cbz 无图片页 → noPages", level: .warn, module: "comic-reader")
-            throw ArchiveDecodeError.noPages
-        }
+        let pageNames = try validatedComicPageNames(
+            ext: entry.ext, entryNames: all.map(\.name), logLabel: "zip/cbz"
+        )
+        // 名字唯一化后再映射，按自然序页名还原条目顺序
+        let entriesByName = Dictionary(all.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let pages = pageNames.compactMap { entriesByName[$0] }
         return ZipComicSource(reader: reader, pages: pages)
     }
 
@@ -144,25 +158,10 @@ enum ArchiveDecoder {
             // 本地源：直接引用文件 URL，security-scoped 目录在每次操作时进入访问作用域
             return try await local.withLocalAccess {
                 let archive = try URKArchive(url: url)
-                let all = try archive.listFilenames()
-                AppLogger.shared.log("rar/cbr 本地条目数=\(all.count) ext=\(entry.ext)", module: "comic-reader")
-                // 内容嗅探兜底：cbr 直接放行；rar 需图片占比 ≥90% + 自然序列
-                if !ComicDetector.isComicExtension(entry.ext), !ComicDetector.sniff(entryNames: all) {
-                    AppLogger.shared.log(
-                        "rar/cbr 本地内容嗅探未通过（判定非漫画）: 条目数=\(all.count)",
-                        level: .warn, module: "comic-reader"
-                    )
-                    throw ArchiveDecodeError.noPages
-                }
-                let names = all.filter { ComicDetector.isImageName($0) }
-                AppLogger.shared.log("rar/cbr 本地图片页数=\(names.count)", module: "comic-reader")
-                guard !names.isEmpty else {
-                    AppLogger.shared.log("rar/cbr 本地无图片页 → noPages", level: .warn, module: "comic-reader")
-                    throw ArchiveDecodeError.noPages
-                }
-                return LocalRarComicSource(
-                    archive: archive, pageNames: names.naturalSorted(), local: local
+                let names = try validatedComicPageNames(
+                    ext: entry.ext, entryNames: try archive.listFilenames(), logLabel: "rar/cbr 本地"
                 )
+                return LocalRarComicSource(archive: archive, pageNames: names, local: local)
             }
         }
         // 远程源：UnrarKit 不支持 Range，需流式落地文件。
@@ -240,23 +239,11 @@ enum ArchiveDecoder {
         at url: URL, entry: FileEntry, tempURL: URL, keepFile: Bool
     ) throws -> ComicPageSource {
         let archive = try URKArchive(url: url)
-        let all = try archive.listFilenames()
-        AppLogger.shared.log("rar/cbr 条目数=\(all.count) ext=\(entry.ext)", module: "comic-reader")
-        if !ComicDetector.isComicExtension(entry.ext), !ComicDetector.sniff(entryNames: all) {
-            AppLogger.shared.log(
-                "rar/cbr 内容嗅探未通过（判定非漫画）: 条目数=\(all.count)",
-                level: .warn, module: "comic-reader"
-            )
-            throw ArchiveDecodeError.noPages
-        }
-        let names = all.filter { ComicDetector.isImageName($0) }
-        AppLogger.shared.log("rar/cbr 图片页数=\(names.count)", module: "comic-reader")
-        guard !names.isEmpty else {
-            AppLogger.shared.log("rar/cbr 无图片页 → noPages", level: .warn, module: "comic-reader")
-            throw ArchiveDecodeError.noPages
-        }
+        let names = try validatedComicPageNames(
+            ext: entry.ext, entryNames: try archive.listFilenames(), logLabel: "rar/cbr"
+        )
         return TempRarComicSource(
-            archive: archive, pageNames: names.naturalSorted(), tempURL: tempURL, keepFile: keepFile
+            archive: archive, pageNames: names, tempURL: tempURL, keepFile: keepFile
         )
     }
 }

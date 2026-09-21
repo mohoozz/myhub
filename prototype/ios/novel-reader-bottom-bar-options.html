@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小说阅读器 · 底部控制栏重设计原型</title>
+<style>
+:root{
+  --primary:#2563EB;--tb-line:#D1D5DB;--sep:#E5E7EB;--tp:#1A1A2E;--ts:#6B7280;--fill:#F3F4F6;
+  --rbg:#FAF7F2;--rtx:#1F2937;--rts:#6B7280;--rctl:rgba(255,255,255,.96);--rline:rgba(107,114,128,.20);
+  --nctl:rgba(18,18,18,.96);--nline:rgba(122,122,122,.20);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:26px;line-height:1.75;max-width:1080px}
+.subtitle code,.footnote code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:340px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.before{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.7;min-height:152px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:340px;height:680px;border:8px solid #111827;border-radius:40px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+/* ===== 阅读器容器 ===== */
+.reader{flex:1;display:flex;flex-direction:column;background:var(--rbg);color:var(--rtx);position:relative;overflow:hidden}
+.reader.night{background:#000;color:#B3B3B3}
+.statusbar{flex:none;height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;font-weight:600}
+.reader.night .statusbar{color:#E5E7EB}
+.rtop{flex:none;display:flex;align-items:center;gap:10px;padding:9px 16px;background:var(--rctl);border-bottom:.5px solid var(--rline)}
+.reader.night .rtop{background:var(--nctl);border-bottom-color:var(--nline)}
+.rtop .bk{font-size:15px;font-weight:600}
+.rtop .tt{font-size:12.5px;font-weight:600;line-height:1.4}
+.rtop .tt i{display:block;font-style:normal;font-size:10.5px;font-weight:400;opacity:.62}
+.rbody{flex:1;overflow:hidden;padding:14px 20px 0;font-size:13.5px;line-height:2;letter-spacing:.2px;opacity:.9}
+.rbody p{margin-bottom:9px;text-indent:2em}
+.rbody h3{font-size:14px;font-weight:700;text-indent:0;margin:2px 0 10px}
+.home{flex:none;height:18px;display:flex;align-items:center;justify-content:center}
+.home span{width:104px;height:4px;border-radius:3px;background:rgba(31,41,55,.35)}
+.reader.night .home span{background:rgba(229,231,235,.4)}
+/* ===== 通用底栏元素 ===== */
+.prow{display:flex;align-items:center;gap:8px;font-size:10.5px;line-height:1.3;color:var(--rts)}
+.pbar{flex:1;height:3px;border-radius:2px;background:rgba(107,114,128,.25);position:relative;overflow:hidden}
+.pbar i{position:absolute;left:0;top:0;bottom:0;background:var(--primary);border-radius:2px}
+.vdiv{width:1px;height:18px;background:var(--rline);flex:none}
+/* ===== 现状：通栏白条 + 进度行 + 4 等宽按钮 ===== */
+.rbar.cur{flex:none;background:var(--rctl);border-top:.5px solid var(--rline);padding:9px 16px 4px}
+.reader.night .rbar.cur{background:var(--nctl);border-top-color:var(--nline)}
+.rbar.cur .prow{margin-bottom:9px}
+.rbar.cur .pg{width:44px;flex:none}
+.rbar.cur .pc{width:34px;flex:none;text-align:right}
+.brow{display:flex;align-items:stretch}
+.b4{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:15px;line-height:1}
+.b4 i{font-size:9.5px;font-style:normal;color:var(--rts)}
+/* ===== 方案 A：悬浮单胶囊 ===== */
+.rbar.a{flex:none;padding:0 12px 10px}
+.rbar.a .prow{padding:0 6px 8px}
+.pillbar{height:56px;display:flex;align-items:center;gap:4px;padding:0 8px;background:var(--rctl);border:1px solid var(--tb-line);border-radius:26px;box-shadow:0 3px 8px rgba(0,0,0,.10)}
+.reader.night .pillbar{background:#141414;border-color:#3A3A3C;box-shadow:none}
+.pbtn{height:44px;border-radius:22px;display:flex;align-items:center;justify-content:center;font-size:15px;color:inherit;flex:none}
+.pbtn.ico{width:44px}
+.pbtn.wide{width:98px;gap:6px;font-size:12.5px;background:var(--fill)}
+.reader.night .pbtn.wide{background:#2C2C2E}
+/* ===== 方案 B：单行胶囊内嵌进度轨 ===== */
+.rbar.b{flex:none;padding:0 12px 10px}
+.bcaption{font-size:10px;color:var(--rts);text-align:center;padding:0 6px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pillbar.slim{position:relative;overflow:hidden;padding:0 4px;gap:0}
+.bcol{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:15px;line-height:1;height:100%}
+.bcol i{font-size:9.5px;font-style:normal;color:var(--rts)}
+.track{position:absolute;left:0;bottom:0;height:2px;background:var(--primary);border-radius:0 2px 2px 0}
+/* ===== 方案 B+：胶囊内嵌「可拖动」进度轨 ===== */
+.board.wide{width:100%;max-width:1088px}
+.row3{display:flex;gap:20px;flex-wrap:wrap}
+.rbar.b{position:relative}
+.pillbar.slim.dragbar{overflow:visible}
+.dragrail{position:absolute;left:0;right:0;bottom:0;height:30px;cursor:grab;touch-action:none;z-index:3}
+.dragrail:active{cursor:grabbing}
+.railhit{position:absolute;left:8px;right:8px;bottom:0;height:16px;border-radius:0 0 22px 22px;overflow:hidden}
+.railbg{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(107,114,128,.22)}
+.railfill{position:absolute;left:0;bottom:0;height:3px;background:var(--primary);border-radius:0 2px 2px 0}
+.rknob{position:absolute;bottom:-6px;width:16px;height:16px;border-radius:50%;background:#fff;border:2px solid var(--primary);box-shadow:0 1px 4px rgba(0,0,0,.28);transform:translateX(-50%);transition:width .12s,height .12s,bottom .12s,box-shadow .12s;z-index:2}
+.reader.night .rknob{background:#1C1C1E}
+.dragrail.on .rknob{width:22px;height:22px;bottom:-9px;box-shadow:0 0 0 7px rgba(37,99,235,.16),0 2px 6px rgba(0,0,0,.3)}
+.dcap{font-size:10px;color:var(--rts);text-align:center;padding:0 6px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .15s,color .15s;min-height:24px;display:flex;align-items:center;justify-content:center}
+.dcap.on{padding:4px 10px;margin-bottom:2px;border-radius:11px;background:#111827;color:#fff;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.22);overflow:visible;width:max-content;margin-left:auto;margin-right:auto}
+.reader.night .dcap.on{background:#2C2C2E}
+.dcap.follow{transition:background .15s,color .15s}
+.dhint{font-size:11px;text-align:center;padding:6px 6px 0;color:var(--rts)}
+.dhint b{color:#1D4ED8}
+.dtoast{position:absolute;left:50%;bottom:104px;transform:translateX(-50%) translateY(6px);background:rgba(17,24,39,.92);color:#fff;font-size:11.5px;padding:6px 12px;border-radius:14px;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;white-space:nowrap;z-index:4}
+.dtoast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.bcap2{font-size:10px;color:var(--rts);text-align:center;padding:0 6px 6px;white-space:nowrap}
+/* ===== 方案 C：底部快捷面板（进度 / 快捷调节 / 主按钮 三行） ===== */
+.rbar.c{flex:none;padding:0 12px 10px}
+.panel{background:var(--rctl);border:1px solid var(--rline);border-radius:24px;box-shadow:0 6px 18px rgba(17,24,39,.10);padding:14px 14px 12px}
+.reader.night .panel{background:#141414;border-color:#3A3A3C;box-shadow:none}
+.rbar.c .prow{margin-bottom:12px}
+.rbar.c .pg{flex:none}
+.rbar.c .pc{flex:none;text-align:right}
+.quick{display:flex;gap:8px;margin-bottom:12px}
+.qgrp{flex:1;height:38px;border-radius:12px;background:var(--fill);display:flex;align-items:center;justify-content:center;gap:4px;font-size:12.5px;font-weight:600}
+.reader.night .qgrp{background:#2C2C2E}
+.qgrp span{flex:1;text-align:center}
+.mains{display:flex;align-items:center;gap:8px}
+.mbtn{height:46px;border-radius:23px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:15px;flex:none}
+.mbtn.wide{flex:1;background:var(--fill);font-size:12.5px;font-weight:600}
+.reader.night .mbtn.wide{background:#2C2C2E}
+.mbtn.ico{width:46px;border:1px solid var(--tb-line)}
+.reader.night .mbtn.ico{border-color:#3A3A3C}
+/* ===== 方案 D：章节刻度进度条 + 双侧圆钮 ===== */
+.rbar.d{flex:none;padding:0 12px 10px}
+.scalebar{height:56px;display:flex;align-items:center;gap:8px;padding:0 6px;background:var(--rctl);border:1px solid var(--tb-line);border-radius:26px;box-shadow:0 3px 8px rgba(0,0,0,.10)}
+.reader.night .scalebar{background:#141414;border-color:#3A3A3C;box-shadow:none}
+.sbtn{width:44px;height:44px;border-radius:22px;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+.strack{flex:1;height:26px;position:relative;display:flex;align-items:center}
+.sline{position:absolute;left:0;right:0;top:11px;height:4px;border-radius:2px;background:rgba(107,114,128,.25)}
+.sfill{position:absolute;left:0;top:11px;height:4px;border-radius:2px;background:var(--primary)}
+.stick{position:absolute;top:8px;width:2px;height:10px;border-radius:1px;background:rgba(107,114,128,.5)}
+.stick.on{top:5px;height:16px;background:#1D4ED8}
+.knob{position:absolute;top:4px;width:18px;height:18px;border-radius:50%;background:#fff;border:2px solid var(--primary);box-shadow:0 1px 4px rgba(0,0,0,.25);transform:translateX(-9px)}
+.reader.night .knob{background:#141414}
+.sbubble{position:absolute;top:-28px;transform:translateX(-50%);background:#111827;color:#fff;font-size:10.5px;padding:4px 9px;border-radius:9px;white-space:nowrap}
+table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);width:100%;max-width:1120px}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts);white-space:nowrap}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1120px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>小说阅读器 · 底部控制栏重设计</h1>
+<p class="subtitle">
+  现状底栏 <code>NovelReaderView.bottomBar</code> 是<b>两行通栏白条</b>（顶部 0.5pt 分割线）：
+  第一行「<code>3/36</code> 页码 + 细进度条 + <code>32%</code> 全书百分比」，第二行「上一章 / 目录 / 设置 / 下一章」四个等宽按钮（SF Symbol 上、9.5pt 文字下）。<br>
+  它叠在 TODO 376/377 已统一的<b>圆角悬浮胶囊</b>语言（内缩 12pt、圆角 26、1pt 灰描边 + 轻阴影）之上，是全局唯一还剩的「通栏直角白条 + 分割线」；<br>
+  以下为「现状 + 5 个候选方案」原型（B+ 为本次在 B 基础上新增的<b>可拖动进度条</b>版本，原型可真实拖动；顶栏各方案保持一致，仅作上下文；夜间主题见文末对照），确认后再实施到 Swift 代码。
+</p>
+<div class="boards">
+<!-- ================= 现状 ================= -->
+<div class="board">
+  <h2>现状<span class="tag before">Before</span></h2>
+  <div class="desc">
+    通栏白条（<code>controlBackground</code> 96% 不透明）+ 顶部 0.5pt 分割线，内部两行：进度行（页码 44pt + 进度条 + 百分比 34pt，均 10.5pt 字）+ 四个等宽按钮（约 79×40，图标 15pt / 文字 9.5pt）。<br>
+    <span class="cons">问题：① 全局只剩它是「通栏直角 + 分割线」，与悬浮胶囊语言冲突；② <b>1/36、进度条、32%</b> 是同一进度的三种表达，横向被切三段后每段都很小；③ 翻章（上下章）与面板（目录/设置）语义不同却等宽平铺，最高频的「目录」没有主位；④ 图标 + 9.5pt 文字的低对比竖排，在深色主题下更显单薄；⑤ 进度条 3pt 太细，滚动模式跨章时几乎看不出变化。</span>
+  </div>
+  <div class="phone"><div class="reader">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声，只把手里那盏灯往前递了半寸。</p>
+      <p>风从山口灌进来，灯焰晃了晃，却没有灭。</p>
+      <p>“走了七日，就为这一句话？”他问。</p>
+    </div>
+    <div class="rbar cur">
+      <div class="prow"><span class="pg">3/36</span><span class="pbar"><i style="width:34%"></i></span><span class="pc">32%</span></div>
+      <div class="brow">
+        <div class="b4">‹<i>上一章</i></div><div class="b4">☰<i>目录</i></div>
+        <div class="b4">Aa<i>设置</i></div><div class="b4">›<i>下一章</i></div>
+      </div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+</div>
+
+<!-- ================= 方案 A ================= -->
+<div class="board">
+  <h2>方案 A · 悬浮单胶囊<span class="tag">改动最小</span></h2>
+  <div class="desc">
+    底栏整体换成<b>一颗悬浮胶囊</b>（内缩 12pt、圆角 26、1pt 灰描边 + 轻阴影，与全局页签栏 / mini 播放器同语言），进度行收为胶囊上方一行 10.5pt 细字 + 细进度条。<br>
+    胶囊内部<b>按语义分组</b>：左侧「目录」主位（icon + 文字 + 浅灰填充，最高频入口有视觉权重）｜中间上下章（两个 44pt 圆底，中间 1pt 竖分隔线）｜右侧「设置」圆底。<br>
+    <span class="pros">优点：垂直占用与现状持平（≈90pt），收益全在观感与分组；改动集中在 <code>bottomBar</code> 一层，圆角 / 描边 / 阴影变量可复用全局。</span><br>
+    <span class="cons">缺点：仍是「进度行 + 按钮行」两段式，未解决进度三冗余（页码与百分比保留，仅把进度条拉长）；未提供字号 / 亮度等快捷调节。</span>
+  </div>
+  <div class="phone"><div class="reader">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声，只把手里那盏灯往前递了半寸。</p>
+      <p>风从山口灌进来，灯焰晃了晃，却没有灭。</p>
+      <p>“走了七日，就为这一句话？”他问。</p>
+    </div>
+    <div class="rbar a">
+      <div class="prow"><span class="pg">3/36</span><span class="pbar"><i style="width:34%"></i></span><span class="pc">32%</span></div>
+      <div class="pillbar">
+        <div class="pbtn wide">☰ 目录</div>
+        <div class="vdiv"></div>
+        <div class="pbtn ico">‹</div><div class="pbtn ico">›</div>
+        <span style="flex:1"></span>
+        <div class="pbtn ico">Aa</div>
+      </div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+</div>
+
+<!-- ================= 方案 B ================= -->
+<div class="board">
+  <h2>B 原版 · 静态进度轨<span class="tag">对照</span></h2>
+  <div class="desc">
+    单行胶囊，四个按钮等宽铺开（目录 / 上一章 / 下一章 / 设置，图标 + 9.5pt 文字）；<b>进度不再单独占行</b>——胶囊下沿内嵌一条 2pt 进度轨（<code>primary</code>），胶囊正上方一行 10pt 居中细字「第 3 章 · 3/36 页 · 32%」把三种进度表达<b>合并成一句</b>。<br>
+    <span class="pros">优点：呼出层最矮（≈76pt，现状 ≈88pt）；进度表达归一，不再三段横切；胶囊本身仍是全局语言，观感轻。</span><br>
+    <span class="cons">缺点：2pt 进度轨只能给「粗粒度感知」，适合滚动模式，翻页模式下不如 3pt 进度条直观；页码 / 百分比退成小字，数值读数弱化；四个按钮回到等宽平铺，分组感不如 A/C。</span>
+  </div>
+  <div class="phone"><div class="reader">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声，只把手里那盏灯往前递了半寸。</p>
+      <p>风从山口灌进来，灯焰晃了晃，却没有灭。</p>
+      <p>“走了七日，就为这一句话？”他问。</p>
+    </div>
+    <div class="rbar b">
+      <div class="bcaption">第 3 章 · 3/36 页 · 32%</div>
+      <div class="pillbar slim">
+        <div class="bcol">☰<i>目录</i></div>
+        <div class="bcol">‹<i>上一章</i></div>
+        <div class="bcol">›<i>下一章</i></div>
+        <div class="bcol">Aa<i>设置</i></div>
+        <span class="track" style="width:34%"></span>
+      </div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+</div>
+
+<!-- ================= 方案 B+：胶囊 + 可拖动进度轨 ================= -->
+<div class="board wide">
+  <h2>方案 B+ · 胶囊 + 可拖动进度轨<span class="tag rec">推荐</span><span class="tag">本原型可真实拖动</span></h2>
+  <div class="desc" style="min-height:0">
+    在 B 的单行胶囊上，把下沿那条进度轨升级成<b>可拖动进度条</b>：轨道 3pt + 末端 16pt 圆手柄（所见即所得，看到手柄就知道能拖），手势命中区 30pt 高，细手指也拖得准；<br>
+    <b>拖动中</b>——手柄放大到 22pt 并带蓝色光圈，胶囊上方浮出深色气泡，实时显示「松手跳到 第 N 章 · 全书 p%」，气泡横向跟随手柄；<b>靠近章边界自动吸附</b>（±1.2% 内吸到该章起点，等价于 <code>goToPage(章首, 0)</code>），不会停在某章中间；<br>
+    <b>松手</b>——气泡收回为常驻细字（第 N 章 · x/y 页 · p%），并浮出 toast「已跳转 → 第 N 章」1.8s，进度条、页码、百分比同步到新位置；拖动期间不改动正文，松手才跳转（滚动模式也不会边拖边加载章节）。<br>
+    <span class="pros">优点：高度仍是最矮的一档（≈76pt），但进度条从「只能看」变成「能跳」——跨 10 章不用再开目录；与全局胶囊语言一致；改动集中在 <code>bottomBar</code> 的内部实现，不新增面板层级。</span><br>
+    <span class="cons">缺点：需做手势区域隔离（只有胶囊下沿 30pt 可拖，正文区不受影响）；气泡 / 吸附 / 松手是新增的 3 态状态机，阈值要单独调；拖动到「未加载章节」时需决定是「松手才加载」（推荐）还是「边拖边预载」。</span>
+  </div>
+  <div class="phone"><div class="reader" id="bReader">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声，只把手里那盏灯往前递了半寸。</p>
+      <p>风从山口灌进来，灯焰晃了晃，却没有灭。</p>
+      <p>“走了七日，就为这一句话？”他问。</p>
+    </div>
+    <div class="rbar b" id="bDemo">
+      <div class="dcap" id="bCap">第 3 章 · 3/36 页 · 32%</div>
+      <div class="pillbar slim dragbar">
+        <div class="bcol">☰<i>目录</i></div>
+        <div class="bcol">‹<i>上一章</i></div>
+        <div class="bcol">›<i>下一章</i></div>
+        <div class="bcol">Aa<i>设置</i></div>
+        <div class="dragrail" id="bRail">
+          <div class="railhit"><div class="railbg"></div><div class="railfill" id="bFill" style="width:32%"></div></div>
+          <span class="rknob" id="bKnob" style="left:calc(8px + (100% - 16px) * 0.32)"></span>
+        </div>
+      </div>
+      <div class="dtoast" id="bToast"></div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+  <div class="dhint" id="bHint">按住下方进度条拖动 → 气泡显示目标章节，<b>松手跳转</b></div>
+</div>
+
+<!-- 三态分解（静态） -->
+<div class="board wide">
+  <h2>B+ 三态分解<span class="tag">静止 / 拖动中 / 松手后</span></h2>
+  <div class="desc" style="min-height:0">
+    左：<b>静止</b>——胶囊上方一行细字显示「第 3 章 · 3/36 页 · 32%」，下沿进度轨 + 16pt 手柄（可拖暗示）。<br>
+    中：<b>拖动中</b>——手柄放大并加光圈，深色气泡随手柄移动，实时显示目标位置「松手跳到 第 12 章 · 33%」；此时<b>正文不变</b>，靠近章边界自动吸附。<br>
+    右：<b>松手后</b>——气泡收回为细字并更新为新章（第 12 章 · 1/28 页 · 33%），进度轨与页码同步，浮出 toast「已跳转 → 第 12 章」。
+  </div>
+  <div class="row3">
+    <div class="phone"><div class="reader">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+      <div class="rbody">
+        <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+        <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声。</p>
+      </div>
+      <div class="rbar b">
+        <div class="dcap">第 3 章 · 3/36 页 · 32%</div>
+        <div class="pillbar slim dragbar">
+          <div class="bcol">☰<i>目录</i></div>
+          <div class="bcol">‹<i>上一章</i></div>
+          <div class="bcol">›<i>下一章</i></div>
+          <div class="bcol">Aa<i>设置</i></div>
+          <div class="dragrail">
+            <div class="railhit"><div class="railbg"></div><div class="railfill" style="width:32%"></div></div>
+            <span class="rknob" style="left:calc(8px + (100% - 16px) * 0.32)"></span>
+          </div>
+        </div>
+      </div>
+      <div class="home"><span></span></div>
+    </div></div>
+
+    <div class="phone"><div class="reader">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+      <div class="rbody">
+        <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+        <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声。</p>
+      </div>
+      <div class="rbar b">
+        <div class="dcap on" style="transform:translateX(46px)">松手跳到 第 12 章 · 33%</div>
+        <div class="pillbar slim dragbar">
+          <div class="bcol">☰<i>目录</i></div>
+          <div class="bcol">‹<i>上一章</i></div>
+          <div class="bcol">›<i>下一章</i></div>
+          <div class="bcol">Aa<i>设置</i></div>
+          <div class="dragrail on">
+            <div class="railhit"><div class="railbg"></div><div class="railfill" style="width:33%"></div></div>
+            <span class="rknob" style="left:calc(8px + (100% - 16px) * 0.33)"></span>
+          </div>
+        </div>
+      </div>
+      <div class="home"><span></span></div>
+    </div></div>
+
+    <div class="phone"><div class="reader">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 12 章 · 雨里的灯</i></span></div>
+      <div class="rbody">
+        <p>雨落在瓦上，密得像有人在夜里翻书，一页接着一页。</p>
+        <p>他把灯放在门内的石阶上，灯芯一暗一明，像有人在里面呼吸。</p>
+      </div>
+      <div class="rbar b">
+        <div class="dcap">第 12 章 · 1/28 页 · 33%</div>
+        <div class="pillbar slim dragbar">
+          <div class="bcol">☰<i>目录</i></div>
+          <div class="bcol">‹<i>上一章</i></div>
+          <div class="bcol">›<i>下一章</i></div>
+          <div class="bcol">Aa<i>设置</i></div>
+          <div class="dragrail">
+            <div class="railhit"><div class="railbg"></div><div class="railfill" style="width:33%"></div></div>
+            <span class="rknob" style="left:calc(8px + (100% - 16px) * 0.33)"></span>
+          </div>
+        </div>
+        <div class="dtoast on">已跳转 → 第 12 章 · 全书 33%</div>
+      </div>
+      <div class="home"><span></span></div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ================= 方案 C ================= -->
+<div class="board">
+  <h2>方案 C · 底部快捷面板<span class="tag rec">推荐</span></h2>
+  <div class="desc">
+    呼出时底部升起一块<b>圆角 24 面板</b>，三行信息分层：① 进度行（章名 + 页码 → 细进度条 → 全书百分比）；② <b>快捷调节行</b>（字号 A−/A+ · 行距 · 亮度 · 主题，各自 38pt 高浅灰块）；③ 主按钮行（「目录」主位 96pt + 上下章 46pt 圆钮 + 设置）。<br>
+    <span class="pros">优点：把阅读器最高频的「调字号 / 调亮度 / 换主题」从设置 sheet 提到呼出层，省掉「进面板 → 调 → 关」的往返（binding 可直接复用 <code>ReaderSettingsPanel</code> 已有实现）；信息分组最清晰，进度三种表达终于各就各位。</span><br>
+    <span class="cons">缺点：呼出态最高（≈178pt），会盖住约 5 行正文（仅呼出时；沉浸阅读时不显示）；实现量最大，需新增快捷调节组件与「面板高度随翻页 / 滚动模式微调」。</span>
+  </div>
+  <div class="phone"><div class="reader">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声，只把手里那盏灯往前递了半寸。</p>
+    </div>
+    <div class="rbar c">
+      <div class="panel">
+        <div class="prow"><span class="pg">第 3 章 · 3/36 页</span><span class="pbar"><i style="width:34%"></i></span><span class="pc">全书 32%</span></div>
+        <div class="quick">
+          <div class="qgrp"><span>A−</span><span>A+</span></div>
+          <div class="qgrp"><span>行距</span></div>
+          <div class="qgrp"><span>亮度</span></div>
+          <div class="qgrp"><span>主题</span></div>
+        </div>
+        <div class="mains">
+          <div class="mbtn wide">☰ 目录</div>
+          <div class="mbtn ico">‹</div><div class="mbtn ico">›</div>
+          <div class="mbtn ico">Aa</div>
+        </div>
+      </div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+</div>
+
+<!-- ================= 方案 D ================= -->
+<div class="board">
+  <h2>方案 D · 章节刻度进度条<span class="tag">新交互</span></h2>
+  <div class="desc">
+    单行胶囊（56pt）内只留三件事：左「目录」圆钮、<b>可拖动的全书进度条</b>、右「设置」圆钮。进度条上按章节边界打<b>刻度点</b>（当前章加粗高亮），拖动时轨道上方浮出「第 3 章 · 32%」气泡，松手即跳章。<br>
+    <span class="pros">优点：把「进度感知」与「跳章」合二为一——想跳到第 20 章不必再开目录；全书结构（章节密度）在底栏可见；上下章按钮可省（<code>goToPage</code> 已支持翻到末页自动续下一章）。</span><br>
+    <span class="cons">缺点：拖动跳章是<b>新交互</b>（刻度生成 + 拖动气泡 + 松手定位 + 与滚动模式手势的冲突验证），实现量最大；现有 <code>percent</code> 为「章序号 + 章内页比」，细化刻度需重新映射；细手指拖 4pt 轨道的命中精度要单独调。</span>
+  </div>
+  <div class="phone"><div class="reader">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声，只把手里那盏灯往前递了半寸。</p>
+      <p>风从山口灌进来，灯焰晃了晃，却没有灭。</p>
+      <p>“走了七日，就为这一句话？”他问。</p>
+    </div>
+    <div class="rbar d">
+      <div class="scalebar">
+        <div class="sbtn">☰</div>
+        <div class="strack">
+          <span class="sbubble" style="left:34%">第 3 章 · 32%</span>
+          <div class="sline"></div>
+          <div class="sfill" style="width:34%"></div>
+          <span class="stick" style="left:9%"></span><span class="stick" style="left:19%"></span>
+          <span class="stick on" style="left:29%"></span><span class="stick" style="left:44%"></span>
+          <span class="stick" style="left:58%"></span><span class="stick" style="left:72%"></span>
+          <span class="stick" style="left:86%"></span><span class="stick" style="left:97%"></span>
+          <span class="knob" style="left:34%"></span>
+        </div>
+        <div class="sbtn">Aa</div>
+      </div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+</div>
+
+<!-- ================= 夜间主题对照 ================= -->
+<div class="board">
+  <h2>夜间 · 现状<span class="tag">对照</span></h2>
+  <div class="desc">
+    夜间纯黑背景（<code>ReaderTheme.night</code>）下，通栏 <code>#121212</code> 面板与纯黑正文几乎无边界，仅靠 0.5pt 分隔线区分；9.5pt 灰字（<code>#7A7A7A</code>）在细条上进一步变弱，四个按钮像一排「灰提示」。
+  </div>
+  <div class="phone"><div class="reader night">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声。</p>
+    </div>
+    <div class="rbar cur">
+      <div class="prow"><span class="pg">3/36</span><span class="pbar"><i style="width:34%"></i></span><span class="pc">32%</span></div>
+      <div class="brow">
+        <div class="b4">‹<i>上一章</i></div><div class="b4">☰<i>目录</i></div>
+        <div class="b4">Aa<i>设置</i></div><div class="b4">›<i>下一章</i></div>
+      </div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+</div>
+
+<div class="board">
+  <h2>夜间 · 方案 C<span class="tag rec">推荐</span></h2>
+  <div class="desc">
+    夜间下把「面板」改成<b>深灰胶囊 + 1pt 描边</b>（<code>#141414</code> + <code>#3A3A3C</code>，与全局页签栏夜间同款），与纯黑正文拉开一层；进度条与快捷调节块用 <code>#2C2C2E</code> 填充保持可辨；文字层级改为「面板主文字 = 正文色、辅助 = 80% 正文色」，不再用更暗的灰。
+  </div>
+  <div class="phone"><div class="reader night">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="rtop"><span class="bk">‹</span><span class="tt">山海拾遗<i>第 3 章 · 石阶上的雾</i></span></div>
+    <div class="rbody">
+      <p>他站在山门之外，石阶被夜露浸得发亮，云雾沿着台阶一层层涌上来。</p>
+      <p>远处钟声敲了三下，守门的道人抬了抬眼皮，没有作声。</p>
+    </div>
+    <div class="rbar c">
+      <div class="panel">
+        <div class="prow"><span class="pg">第 3 章 · 3/36 页</span><span class="pbar"><i style="width:34%"></i></span><span class="pc">全书 32%</span></div>
+        <div class="quick">
+          <div class="qgrp"><span>A−</span><span>A+</span></div>
+          <div class="qgrp"><span>行距</span></div>
+          <div class="qgrp"><span>亮度</span></div>
+          <div class="qgrp"><span>主题</span></div>
+        </div>
+        <div class="mains">
+          <div class="mbtn wide">☰ 目录</div>
+          <div class="mbtn ico">‹</div><div class="mbtn ico">›</div>
+          <div class="mbtn ico">Aa</div>
+        </div>
+      </div>
+    </div>
+    <div class="home"><span></span></div>
+  </div></div>
+</div>
+
+</div><!-- /boards -->
+
+<table>
+  <tr><th>方案</th><th>形态</th><th>进度表达</th><th>呼出态高度</th><th>快捷调节</th><th>实现改动</th><th>主要取舍</th></tr>
+  <tr><td>现状</td><td>通栏白条 + 分割线，两行</td><td>页码 + 3pt 进度条 + 百分比（三段横切）</td><td>≈88pt</td><td>无</td><td>—</td><td>语言与全局冲突；分组缺失、字太小</td></tr>
+  <tr><td>A 悬浮单胶囊</td><td>进度行 + 一颗胶囊，胶囊内分组</td><td>保留三段表达，进度条拉长</td><td>≈90pt</td><td>无</td><td>小（仅 <code>bottomBar</code>）</td><td>观感统一、改动最小；进度仍三段、无快捷调节</td></tr>
+  <tr><td>B 原版 · 胶囊内嵌进度轨</td><td>单行胶囊，下沿 2pt 进度轨（静态）</td><td>合并一句「第 3 章 · 3/36 页 · 32%」</td><td>≈76pt</td><td>无</td><td>小（仅 <code>bottomBar</code>）</td><td>最省空间、进度归一；进度「只能看不能跳」、读数弱化</td></tr>
+  <tr><td><b>B+ 胶囊 + 可拖动进度轨</b></td><td>单行胶囊，下沿 3pt 可拖轨 + 16pt 手柄（命中区 30pt）</td><td>拖动中深色气泡「松手跳到 第 N 章 · 全书 p%」+ 松手后常驻细字</td><td>≈76pt</td><td>间接有（可跨章跳转）</td><td>中（胶囊内拖动 3 态状态机 + 吸附阈值）</td><td>最省空间且能跳章；需手势区域隔离、气泡/吸附阈值要调</td></tr>
+  <tr><td>C 底部快捷面板</td><td>圆角面板三行：进度 / 快捷调节 / 主按钮</td><td>章名 + 页码 → 进度条 → 全书百分比（各就各位）</td><td>≈178pt</td><td><b>有</b>（字号 · 行距 · 亮度 · 主题）</td><td>中大（新面板 + 复用 binding）</td><td>体验提升最大；呼出态最占空间</td></tr>
+  <tr><td>D 章节刻度进度条</td><td>单行胶囊：目录 + 可拖动刻度条 + 设置</td><td>可拖动刻度条 + 拖动气泡</td><td>≈76pt</td><td>无</td><td>大（新拖动交互 + 刻度映射）</td><td>跳章最快、结构可见；实现量最大、手势待验证</td></tr>
+</table>
+
+<div class="footnote">
+  <b>共同前提：</b>① 功能集不缩水——进度 / 上下章 / 目录 / 设置全部保留（D 的「上下章」由边界续章 + 拖动跳章承担，若你希望保留按钮可把两枚圆钮换成四枚）；② 圆角 / 描边 / 阴影统一走全局语言：内缩 12pt、圆角 26、1pt <code>AppColors.tabBarBorder</code>、阴影 <code>rgba(0,0,0,.10)</code>；③ 面板底色继续用 <code>themeSpec.controlBackground</code>（日间白 96% / 夜间 <code>#121212</code>），进度与强调色用 <code>AppColors.primary</code>；④ 底栏仅在呼出态显示，沉浸阅读时全部隐藏（与现状一致）。<br>
+  <b>推荐顺序：</b>① <b>B+（胶囊 + 可拖动进度轨）</b>——本次新增方案，保留单行最矮的形态，同时把「进度」变成可操作项：拖动时气泡预告目标章节、松手才跳，跨章不用开目录；实现集中在 <code>bottomBar</code> 内部，不动阅读引擎（拖动期间只改本地区间值，松手再调 <code>goToPage(章首, 0)</code>）。② 若还想顺手解决「调字号 / 亮度」，再叠一层 <b>C（底部快捷面板）</b>——把 B+ 的拖动进度条放在 C 的面板里同样成立，两者不冲突。③ 想先小步落地就先做 <b>A（悬浮单胶囊）</b>（改动只有一处）；④ <b>B 原版</b> 只作对照（不可拖）；⑤ <b>D</b> 建议作为后续独立迭代（通栏刻度拖动条更适合平板 / 大屏）。<br>
+  <b>可选增强（不计入本次四方案，勾选后一并实施）：</b>顶栏同步收成同语言（内缩 12pt 圆角面板，去掉 0.5pt 分割线）；目录抽屉 + 设置面板的圆角与底栏统一（现在 sheet 是系统样式）。
+</div>
+<script>
+(function(){
+  var rail=document.getElementById('bRail'), fill=document.getElementById('bFill'),
+      knob=document.getElementById('bKnob'), cap=document.getElementById('bCap'),
+      hint=document.getElementById('bHint'), toast=document.getElementById('bToast');
+  if(!rail) return;
+  var TOTAL=36, PAD=8, dragging=false;
+  var IDLE='按住下方进度条拖动 → 气泡显示目标章节，<b>松手跳转</b>';
+  function label(p){
+    var ch=Math.max(1,Math.min(TOTAL,Math.round(p*TOTAL/100)));
+    return {ch:ch,txt:'第 '+ch+' 章 · 全书 '+Math.round(p)+'%'};
+  }
+  function geom(){
+    var hit=rail.querySelector('.railhit'), r=hit.getBoundingClientRect(), rr=rail.getBoundingClientRect();
+    return {left:r.left,width:r.width,railLeft:rr.left,railWidth:rr.width};
+  }
+  function pctFromX(x){
+    var g=geom(), p=Math.max(0,Math.min(100,(x-g.left)/g.width*100));
+    var step=100/TOTAL, snap=Math.round(p/step)*step;
+    return Math.abs(snap-p)<=1.2 ? snap : p;
+  }
+  function paint(p,text){
+    var g=geom(), inner=g.railWidth-2*PAD;
+    fill.style.width=p+'%';
+    knob.style.left=(PAD+(p/100)*inner)+'px';
+    cap.style.transform='translateX('+(PAD+(p/100)*inner-g.railWidth/2)+'px)';
+    cap.textContent=text;
+  }
+  rail.addEventListener('pointerdown',function(e){
+    dragging=true; rail.classList.add('on'); cap.classList.add('on');
+    if(rail.setPointerCapture) rail.setPointerCapture(e.pointerId);
+    var p=pctFromX(e.clientX); paint(p,'松手跳到 '+label(p).txt);
+    e.preventDefault();
+  });
+  rail.addEventListener('pointermove',function(e){
+    if(!dragging) return;
+    var p=pctFromX(e.clientX); paint(p,'松手跳到 '+label(p).txt);
+  });
+  rail.addEventListener('pointerup',function(e){
+    if(!dragging) return; dragging=false;
+    rail.classList.remove('on'); cap.classList.remove('on');
+    var p=pctFromX(e.clientX), L=label(p);
+    paint(p,'第 '+L.ch+' 章 · 1/'+(18+L.ch%11)+' 页 · '+Math.round(p)+'%');
+    toast.textContent='已跳转 → 第 '+L.ch+' 章 · 全书 '+Math.round(p)+'%';
+    toast.classList.add('on');
+    setTimeout(function(){ toast.classList.remove('on'); },1800);
+    hint.innerHTML='已跳转 → 第 '+L.ch+' 章；继续拖动可再跳，<b>松手生效</b>';
+  });
+  rail.addEventListener('pointercancel',function(){
+    dragging=false; rail.classList.remove('on'); cap.classList.remove('on'); cap.style.transform='';
+  });
+  rail.addEventListener('pointerenter',function(){
+    if(!dragging) hint.innerHTML='按住拖动 → 气泡实时显示「第 N 章 · 全书 p%」，靠近章边界会自动吸附';
+  });
+  rail.addEventListener('pointerleave',function(){ if(!dragging) hint.innerHTML=IDLE; });
+})();
+</script>
+</body>
+</html>

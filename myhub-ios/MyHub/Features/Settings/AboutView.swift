@@ -14,10 +14,8 @@ struct AboutView: View {
     private static let licenses: [License] = [
         License(name: "AMSMB2", detail: "SMB2/3 直连（基于 libsmb2）· MIT"),
         License(name: "VLCKit (MobileVLCKit)", detail: "全格式软解兜底 · LGPL"),
-        License(name: "ZIPFoundation", detail: "zip / cbz / epub 解包 · MIT"),
         License(name: "UnrarKit", detail: "rar / cbr 解析"),
         License(name: "GRDB.swift", detail: "SQLite 结构化存储 · MIT"),
-        License(name: "Nuke", detail: "图片加载与缓存 · MIT"),
     ]
 
     private var version: String {

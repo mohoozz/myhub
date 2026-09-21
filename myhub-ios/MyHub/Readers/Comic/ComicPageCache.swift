@@ -107,10 +107,14 @@ final class DiskCachedComicSource: ComicPageSource {
 
 /// 缓存优先漫画源（缓存秒开）：页名列表来自缓存，单页数据优先命中磁盘缓存；
 /// 后台归档源（fallback）补齐后，缓存未命中的页回退到归档按需解压，保证完整性。
-/// fallback 用锁保护（`pageData` 在后台线程调用，`setFallback`/`markFallbackFailed` 在 MainActor 调用）。
+/// fallback 等待挂起于 continuation（`setFallback`/`markFallbackFailed`/超时/取消唤醒），无轮询。
+/// fallback 状态用锁保护（`pageData` 在后台线程调用，`setFallback`/`markFallbackFailed` 在 MainActor 调用）。
 final class CachedFirstComicSource: ComicPageSource {
     let identity: SegmentCache.FileIdentity
     let pageNames: [String]
+
+    /// fallback 就绪等待上限（后台归档打开远快于此；超时按离线占位报错）
+    private static let fallbackTimeout: TimeInterval = 8
 
     private enum FallbackState {
         case pending
@@ -120,6 +124,8 @@ final class CachedFirstComicSource: ComicPageSource {
 
     private let lock = NSLock()
     private var fallbackState: FallbackState = .pending
+    /// pending 期间等待 fallback 就绪的 continuation（按标识逐个唤醒，支持超时/取消）
+    private var waiters: [UUID: CheckedContinuation<ComicPageSource?, Never>] = [:]
 
     init(identity: SegmentCache.FileIdentity, pageNames: [String]) {
         self.identity = identity
@@ -128,10 +134,12 @@ final class CachedFirstComicSource: ComicPageSource {
 
     func setFallback(_ source: ComicPageSource) {
         lock.lock(); fallbackState = .ready(source); lock.unlock()
+        drainWaiters().forEach { $0.resume(returning: source) }
     }
 
     func markFallbackFailed() {
         lock.lock(); fallbackState = .failed; lock.unlock()
+        drainWaiters().forEach { $0.resume(returning: nil) }
     }
 
     func pageData(at index: Int) async throws -> Data {
@@ -141,41 +149,85 @@ final class CachedFirstComicSource: ComicPageSource {
             AppLogger.shared.log("CachedFirst 缓存命中兜底: 第\(index + 1)页", module: "comic-reader")
             return data
         }
-        // 等 fallback 就绪（后台归档打开中，最多 ~8s）；失败/超时按离线占位报错
+        // 等 fallback 就绪（后台归档打开中，最多 8s）；失败/超时按离线占位报错
         let t0 = CFAbsoluteTimeGetCurrent()
-        var waitedMs = 0
-        while true {
-            lock.lock()
-            let state = fallbackState
-            lock.unlock()
-            switch state {
-            case .ready(let source):
-                let waited = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-                AppLogger.shared.log(
-                    String(format: "CachedFirst 等 fallback 就绪: 第%d页 等待=%.0fms", index + 1, waited),
-                    module: "comic-reader"
-                )
-                return try await source.pageData(at: index)
-            case .failed:
-                throw StorageError.offline("第 \(index + 1) 页")
-            case .pending:
-                break
-            }
-            if waitedMs >= 8_000 { throw StorageError.offline("第 \(index + 1) 页") }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            waitedMs += 100
+        guard let fallback = await awaitFallback() else {
             if Task.isCancelled { throw CancellationError() }
+            throw StorageError.offline("第 \(index + 1) 页")
         }
+        let waited = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        if waited > 1 {
+            AppLogger.shared.log(
+                String(format: "CachedFirst 等 fallback 就绪: 第%d页 等待=%.0fms", index + 1, waited),
+                module: "comic-reader"
+            )
+        }
+        return try await fallback.pageData(at: index)
     }
 
     func close() {
         lock.lock()
-        if case .ready(let source) = fallbackState {
-            fallbackState = .failed
-            lock.unlock()
-            source.close()
-        } else {
-            lock.unlock()
+        let ready: ComicPageSource?
+        if case .ready(let source) = fallbackState { ready = source } else { ready = nil }
+        fallbackState = .failed
+        lock.unlock()
+        ready?.close()
+        drainWaiters().forEach { $0.resume(returning: nil) }
+    }
+
+    // MARK: - fallback 等待
+
+    /// 等待 fallback 就绪：已就绪/已失败立即返回；pending 挂起于 continuation，
+    /// 由 setFallback / markFallbackFailed / 超时 / 任务取消唤醒。
+    private func awaitFallback() async -> ComicPageSource? {
+        let id = UUID()
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.fallbackTimeout * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.finishWaiter(id, result: nil)
         }
+        let source: ComicPageSource? = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                switch fallbackState {
+                case .ready(let source):
+                    lock.unlock()
+                    continuation.resume(returning: source)
+                case .failed:
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                case .pending:
+                    // onCancel 可能先于注册触发：此处补检，避免注册后无人唤醒、只能等 8s 超时
+                    if Task.isCancelled {
+                        lock.unlock()
+                        continuation.resume(returning: nil)
+                    } else {
+                        waiters[id] = continuation
+                        lock.unlock()
+                    }
+                }
+            }
+        } onCancel: { [weak self] in
+            self?.finishWaiter(id, result: nil)
+        }
+        timeout.cancel()
+        return source
+    }
+
+    /// 取出并清空全部等待者（调用方随后逐个 resume）
+    private func drainWaiters() -> [CheckedContinuation<ComicPageSource?, Never>] {
+        lock.lock()
+        defer { lock.unlock() }
+        let pending = Array(waiters.values)
+        waiters.removeAll()
+        return pending
+    }
+
+    /// 唤醒单个等待者（超时 / 取消；已被其他路径唤醒则为 no-op）
+    private func finishWaiter(_ id: UUID, result: ComicPageSource?) {
+        lock.lock()
+        let continuation = waiters.removeValue(forKey: id)
+        lock.unlock()
+        continuation?.resume(returning: result)
     }
 }
