@@ -1,7 +1,7 @@
 [project]
 name = "myhub-feed"
 version = "0.1.0"
-description = "MyHub 动态抓取服务：B站/YouTube/抖音订阅抓取，HTTP API 供 myhub-server 调用"
+description = "MyHub 动态抓取服务：B站/YouTube/抖音订阅抓取，对外提供 HTTP API"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

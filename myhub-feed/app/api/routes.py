@@ -1,4 +1,4 @@
-"""HTTP API：供 myhub-server 及后续前端调用。
+"""HTTP API：对外提供动态抓取接口。
 
 接口一览：
   GET  /health                                  健康检查

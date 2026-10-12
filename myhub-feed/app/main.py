@@ -1,7 +1,7 @@
 """myhub-feed 动态抓取服务。
 
 用法：
-    python -m app serve                  # 启动 HTTP 服务（默认 127.0.0.1:8100，供 myhub-server 调用）
+    python -m app serve                  # 启动 HTTP 服务（默认 127.0.0.1:8100）
     python -m app fetch [platform]       # 手动执行一次抓取（可指定平台，供计划任务调用）
     python -m app sync [platform]        # 同步账号关注/订阅列表为订阅源（默认 bilibili）
     python -m app export [输出路径]       # 导出静态 HTML 报告（默认 data/feed_report.html）

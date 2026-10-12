@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================
 # 编译并安装 myhub-ios（原生 iOS 客户端）到真机（Debug 模式）
-# 注意：与 deploy/install-ios.sh（针对 Flutter 的 myhub_flutter）区分
 #
 # 用法:
 #   ./install-myhub-ios.sh            # 自动检测唯一连接的真机

@@ -1,4 +1,4 @@
-"""数据模型：与 myhub-server internal/model/feed.go 的表结构保持一致。"""
+"""数据模型：动态抓取服务的表结构定义。"""
 from datetime import datetime
 
 from sqlalchemy import UniqueConstraint
