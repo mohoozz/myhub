@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 · 正在阅读首页与收藏｜MyHub PC 原型</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+.dpair { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.bp .cap { font-size: 12px; color: var(--text-secondary); margin-bottom: 7px; max-width: 560px; }
+.bp .cap b { color: var(--text-primary); }
+
+.rgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(146px, 1fr)); gap: 14px; }
+.rcard {
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--r-card);
+  padding: 9px; position: relative; cursor: pointer; transition: transform .14s ease, box-shadow .14s ease;
+}
+.rcard:hover { background: rgba(37,99,235,.04); }
+.rcard.sel {
+  transform: scale(1.03); z-index: 3; background: rgba(37,99,235,.04);
+  box-shadow: var(--shadow-lift), inset 0 0 0 1px rgba(37,99,235,.55);
+}
+.rcard .cv {
+  width: 100%; aspect-ratio: 1.3; border-radius: 9px; background: #F5F7FA;
+  display: grid; place-items: center; font-size: 32px; color: var(--text-faint);
+  position: relative; overflow: hidden;
+}
+.rcard .nm {
+  font-size: 11.5px; margin-top: 8px; line-height: 1.45; font-weight: 500;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.pie-wrap { display: flex; flex-direction: column; align-items: center; gap: 5px; margin-top: 7px; }
+.pie { width: 30px; height: 30px; }
+.pie circle { fill: none; stroke-width: 4; }
+.pie .bg { stroke: var(--separator); }
+.pie .fg { stroke: var(--primary); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; }
+.pie-txt { font-size: 10.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.pie-txt.done { color: var(--primary); font-weight: 600; }
+.rtime { font-size: 10px; color: var(--text-faint); text-align: center; margin-top: 3px; }
+
+.rlist .rrow {
+  display: flex; align-items: center; gap: 13px; padding: 12px 10px; border-radius: 11px;
+  cursor: pointer; position: relative; transition: transform .14s ease, box-shadow .14s ease;
+}
+.rlist .rrow:hover { background: rgba(37,99,235,.05); }
+.rlist .rrow.sel {
+  transform: scale(1.012); z-index: 3; background: rgba(37,99,235,.04);
+  box-shadow: var(--shadow-lift), inset 0 0 0 1px rgba(37,99,235,.45);
+}
+.rlist .th { width: 52px; height: 52px; border-radius: 9px; flex: none; background: #F5F7FA; display: grid; place-items: center; font-size: 23px; color: var(--text-faint); }
+.rlist .mt { flex: 1; min-width: 0; }
+.rlist .n1 { font-size: 13px; font-weight: 600; }
+.rlist .n2 { font-size: 11px; color: var(--text-secondary); margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+.empty { display: grid; place-items: center; height: 100%; gap: 12px; color: var(--text-secondary); font-size: 12.5px; }
+.empty .big { font-size: 42px; color: var(--text-faint); }
+.confirm { position: absolute; inset: 0; z-index: 40; background: rgba(17,24,39,.3); display: grid; place-items: center; }
+.confirm .box {
+  width: 330px; background: #fff; border-radius: 16px; padding: 22px; text-align: center;
+  box-shadow: 0 20px 50px rgba(17,24,39,.28);
+}
+.confirm .box h4 { font-size: 15px; margin-bottom: 9px; }
+.confirm .box p { font-size: 12px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 18px; }
+.confirm .btns { display: flex; gap: 10px; }
+.confirm .btns span { flex: 1; padding: 9px; border-radius: var(--r-button); font-size: 12.5px; cursor: pointer; }
+.confirm .cancel { background: var(--field-fill); }
+.confirm .ok { background: var(--danger); color: #fff; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>05 · 正在阅读首页与收藏</h1>
+<p class="subtitle">
+  对应需求：<b>PC-209</b> 阅读进度记录与「正在阅读」首页 · <b>PC-107</b> 文件收藏与收藏页 · <b>PC-110</b> 文件属性 · <b>PC-705</b> 进度与记录细则<br>
+  这是应用的<b>默认首页</b>。核心约束：饼状进度图 + 下方百分比、已读完记录保留至手动删除、进度上报后自动刷新、封面与浏览页同源同缓存。
+</p>
+<a class="reflink" href="index.html"><i data-i="arrow-left"></i>返回原型总览</a>
+
+<!-- ============ 1. 网格视图 ============ -->
+<div class="secttl">1. 正在阅读 · 网格视图（PC-209）<span class="tag rec">默认首页</span></div>
+<div class="window w-full" style="height:600px">
+  <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span><div class="winbtns"><span><i data-i="minus"></i></span><span><i data-i="maximize"></i></span><span><i data-i="x"></i></span></div></div>
+  <div class="body-row">
+    <div class="sidebar">
+      <div class="nav-item on"><i data-i="book"></i>阅读</div>
+      <div class="nav-item"><i data-i="star"></i>收藏</div>
+      <div class="nav-item"><i data-i="zap"></i>动态</div>
+      <div class="nav-item"><i data-i="folder"></i>浏览</div>
+      <div class="nav-item"><i data-i="globe"></i>浏览器</div>
+      <div class="nav-item"><i data-i="settings"></i>设置</div>
+      <div class="spacer"></div>
+      <div class="profile"><span class="avatar"><i data-i="user"></i></span><div><div style="font-size:12px;color:var(--text-primary);font-weight:600">我的主页</div><div style="font-size:10px">缓存 1.2 GB / 2 GB</div></div></div>
+    </div>
+    <div class="content">
+      <div class="toolbar"><span class="dir-title">正在阅读</span><span class="grow"></span><span class="tbtn"><i data-i="grid"></i></span><span class="tbtn"><i data-i="more"></i></span></div>
+      <div class="scroll" style="padding-top:12px">
+        <div class="rgrid">
+          <div class="rcard">
+            <div class="cv"><i data-i="film"></i><span class="badge-kind">视频</span></div>
+            <div class="nm">第01话 致两千年后的你.mkv</div>
+            <div class="pie-wrap">
+              <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="33"/></svg>
+              <span class="pie-txt">65%</span>
+            </div>
+            <div class="rtime">12 分钟前</div>
+          </div>
+          <div class="rcard sel">
+            <div class="cv"><i data-i="book-open"></i><span class="badge-kind">小说</span></div>
+            <div class="nm">三体.epub</div>
+            <div class="pie-wrap">
+              <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="83"/></svg>
+              <span class="pie-txt">12%</span>
+            </div>
+            <div class="rtime">昨天</div>
+          </div>
+          <div class="rcard">
+            <div class="cv"><i data-i="comic"></i><span class="badge-kind">漫画</span></div>
+            <div class="nm">进击的巨人 第01卷.cbz</div>
+            <div class="pie-wrap">
+              <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="45"/></svg>
+              <span class="pie-txt">52%</span>
+            </div>
+            <div class="rtime">2 小时前</div>
+          </div>
+          <div class="rcard">
+            <div class="cv"><i data-i="music"></i><span class="badge-kind">音频</span></div>
+            <div class="nm">深夜电台 EP.128.mp3</div>
+            <div class="pie-wrap">
+              <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="0"/></svg>
+              <span class="pie-txt done">已听完</span>
+            </div>
+            <div class="rtime">3 天前</div>
+          </div>
+          <div class="rcard">
+            <div class="cv"><i data-i="film"></i><span class="badge-kind">视频</span></div>
+            <div class="nm">星际穿越.mkv</div>
+            <div class="pie-wrap">
+              <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="0"/></svg>
+              <span class="pie-txt done">已看完</span>
+            </div>
+            <div class="rtime">上周</div>
+          </div>
+          <div class="rcard">
+            <div class="cv"><i data-i="book-open"></i><span class="badge-kind">小说</span></div>
+            <div class="nm">球状闪电.txt</div>
+            <div class="pie-wrap">
+              <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="0"/></svg>
+              <span class="pie-txt done">已读完</span>
+            </div>
+            <div class="rtime">上周</div>
+          </div>
+        </div>
+      </div>
+      <div class="anno" data-k="规则" style="left:178px;top:150px">选中＝浮起抬升（与浏览页同一 <code>CellPressHighlight</code> 组件）</div>
+      <div class="anno" data-k="验收" style="left:530px;top:272px"><b>饼状图 + 下方百分比</b>，间距适中（iOS TODO 实战条目）</div>
+      <div class="anno" data-k="注意" style="right:18px;top:150px">已读完记录<b>保留至手动删除</b>；文案按类型区分：已看完 / 已听完 / 已读完</div>
+      <div class="anno" data-k="规则" style="left:18px;top:112px">封面优先复用阅读时提取的缩略图（epub/漫画零网络秒出）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 2. 列表视图 + 多选 ============ -->
+<div class="secttl">2. 列表视图与多选（PC-209 / PC-705）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>列表视图</b>：封面 / 标题 / 类型徽标 / 饼状进度 / 相对时间；<b>行间无分割线</b></div>
+    <div class="window" style="width:578px;height:400px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item on"><i data-i="book"></i></div><div class="nav-item"><i data-i="star"></i></div><div class="nav-item"><i data-i="folder"></i></div></div>
+        <div class="content">
+          <div class="toolbar"><span class="dir-title">正在阅读</span><span class="grow"></span><span class="tbtn"><i data-i="list"></i></span><span class="tbtn"><i data-i="more"></i></span></div>
+          <div class="scroll" style="padding-top:10px">
+            <div class="rlist">
+              <div class="rrow">
+                <div class="th"><i data-i="film"></i></div>
+                <div class="mt"><div class="n1">第01话 致两千年后的你.mkv</div>
+                  <div class="n2"><span class="ktag"><i data-i="film"></i>视频</span>12 分钟前</div></div>
+                <div class="pie-wrap" style="margin-top:0">
+                  <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="33"/></svg>
+                  <span class="pie-txt">65%</span>
+                </div>
+              </div>
+              <div class="rrow">
+                <div class="th"><i data-i="book-open"></i></div>
+                <div class="mt"><div class="n1">三体.epub</div>
+                  <div class="n2"><span class="ktag"><i data-i="book-open"></i>小说</span>昨天</div></div>
+                <div class="pie-wrap" style="margin-top:0">
+                  <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="83"/></svg>
+                  <span class="pie-txt">12%</span>
+                </div>
+              </div>
+              <div class="rrow">
+                <div class="th"><i data-i="comic"></i></div>
+                <div class="mt"><div class="n1">进击的巨人 第01卷.cbz</div>
+                  <div class="n2"><span class="ktag"><i data-i="comic"></i>漫画</span>2 小时前</div></div>
+                <div class="pie-wrap" style="margin-top:0">
+                  <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="45"/></svg>
+                  <span class="pie-txt">52%</span>
+                </div>
+              </div>
+              <div class="rrow">
+                <div class="th"><i data-i="music"></i></div>
+                <div class="mt"><div class="n1">深夜电台 EP.128.mp3</div>
+                  <div class="n2"><span class="ktag"><i data-i="music"></i>音频</span>3 天前</div></div>
+                <div class="pie-wrap" style="margin-top:0">
+                  <svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="0"/></svg>
+                  <span class="pie-txt done">已听完</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>多选模式</b>：批量删记录 / 删源文件；<b>隐藏 mini 播放条，操作栏落底</b></div>
+    <div class="window" style="width:578px;height:400px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item on"><i data-i="book"></i></div><div class="nav-item"><i data-i="star"></i></div><div class="nav-item"><i data-i="folder"></i></div></div>
+        <div class="content">
+          <div class="toolbar"><span class="tbtn"><i data-i="check-square"></i></span><span class="dir-title">已选 2 项</span><span class="grow"></span>
+            <span class="linkbtn">全选</span><span class="linkbtn" style="margin-left:14px">完成</span>
+          </div>
+          <div class="scroll" style="padding-top:10px">
+            <div class="rlist">
+              <div class="rrow sel">
+                <div class="th"><i data-i="film"></i></div>
+                <div class="mt"><div class="n1">第01话.mkv</div><div class="n2"><span class="ktag"><i data-i="film"></i>视频</span>12 分钟前</div></div>
+                <div class="pie-wrap" style="margin-top:0"><svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="33"/></svg><span class="pie-txt">65%</span></div>
+                <div class="tick on"><i data-i="check"></i></div>
+              </div>
+              <div class="rrow sel">
+                <div class="th"><i data-i="book-open"></i></div>
+                <div class="mt"><div class="n1">三体.epub</div><div class="n2"><span class="ktag"><i data-i="book-open"></i>小说</span>昨天</div></div>
+                <div class="pie-wrap" style="margin-top:0"><svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="83"/></svg><span class="pie-txt">12%</span></div>
+                <div class="tick on"><i data-i="check"></i></div>
+              </div>
+              <div class="rrow">
+                <div class="th"><i data-i="comic"></i></div>
+                <div class="mt"><div class="n1">进击的巨人 第01卷.cbz</div><div class="n2"><span class="ktag"><i data-i="comic"></i>漫画</span>2 小时前</div></div>
+                <div class="pie-wrap" style="margin-top:0"><svg class="pie" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="94.2" stroke-dashoffset="45"/></svg><span class="pie-txt">52%</span></div>
+                <div class="tick"></div>
+              </div>
+            </div>
+          </div>
+          <div class="bottom-float">
+            <div class="selbar">
+              <div class="sb"><i data-i="target"></i>定位</div>
+              <div class="sb"><i data-i="info"></i>属性</div>
+              <div class="sb danger"><i data-i="check-square"></i>删记录</div>
+              <div class="sb danger"><i data-i="trash"></i>删源文件</div>
+            </div>
+          </div>
+          <div class="anno" data-k="验收" style="left:300px;top:118px">多选态进度饼图与勾选标记<b>并列可见</b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. 菜单、确认框、空态 ============ -->
+<div class="secttl">3. 右键菜单、确认框与空状态（PC-209 / PC-704）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>右键菜单</b>：iOS 的「标记已读完」已改为<b>「删除阅读记录」</b></div>
+    <div class="window" style="width:578px;height:330px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="dir-title">正在阅读</span></div>
+        <div class="scroll" style="padding-top:10px"><div class="rlist">
+          <div class="rrow"><div class="th"><i data-i="film"></i></div><div class="mt"><div class="n1">第01话.mkv</div><div class="n2">视频 · 12 分钟前</div></div></div>
+          <div class="rrow" style="background:rgba(37,99,235,.05)"><div class="th"><i data-i="book-open"></i></div><div class="mt"><div class="n1">三体.epub</div><div class="n2">小说 · 昨天</div></div></div>
+        </div></div>
+        <div class="ctxmenu" style="left:190px;top:138px">
+          <div class="mi"><i data-i="check-square"></i>多选</div>
+          <div class="sep"></div>
+          <div class="mi"><i data-i="play"></i>继续阅读</div>
+          <div class="mi"><i data-i="target"></i>定位到原路径</div>
+          <div class="mi"><i data-i="info"></i>属性</div>
+          <div class="sep"></div>
+          <div class="mi danger"><i data-i="check-square"></i>删除阅读记录</div>
+          <div class="mi danger"><i data-i="trash"></i>删除源文件</div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>确认框</b>：<b>居中 + 完全圆角矩形</b>（不得用带尖角的锚点气泡）· 注明不影响源文件</div>
+    <div class="window" style="width:578px;height:330px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="dir-title">正在阅读</span></div>
+        <div class="scroll" style="padding-top:10px"><div class="rlist">
+          <div class="rrow"><div class="th"><i data-i="film"></i></div><div class="mt"><div class="n1">第01话.mkv</div><div class="n2">视频</div></div></div>
+        </div></div>
+        <div class="confirm">
+          <div class="box">
+            <h4>删除 2 条阅读记录？</h4>
+            <p>仅移除阅读进度记录，<b style="color:var(--text-primary)">不会删除源文件</b>。此操作无法撤销。</p>
+            <div class="btns"><span class="cancel">取消</span><span class="ok">删除记录</span></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>空状态</b>：图标 + 引导文案</div>
+    <div class="window" style="width:578px;height:300px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item on"><i data-i="book"></i></div><div class="nav-item"><i data-i="folder"></i></div></div>
+        <div class="content">
+          <div class="toolbar"><span class="dir-title">正在阅读</span></div>
+          <div class="scroll"><div class="empty">
+            <span class="big"><i data-i="book"></i></span>
+            <span>还没有阅读记录</span>
+            <span style="font-size:11px">去「浏览」打开一个视频、小说或漫画试试</span>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>收藏页</b>（PC-107）：网格/列表切换，<b>封面与浏览页一致</b>，与浏览页星标双向实时同步</div>
+    <div class="window" style="width:578px;height:300px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item"><i data-i="book"></i></div><div class="nav-item on"><i data-i="star"></i></div><div class="nav-item"><i data-i="folder"></i></div></div>
+        <div class="content">
+          <div class="toolbar"><span class="dir-title">收藏</span><span class="grow"></span><span class="tbtn"><i data-i="grid"></i></span><span class="tbtn"><i data-i="more"></i></span></div>
+          <div class="scroll" style="padding-top:10px">
+            <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(110px,1fr))">
+              <div class="gcard"><div class="cover"><i data-i="folder"></i></div><div class="cname">动漫</div><div class="ccap">文件夹</div></div>
+              <div class="gcard"><div class="cover"><i data-i="film"></i><span class="badge-dur">24:15</span></div><div class="cname">第01话.mkv</div><div class="ccap">视频</div></div>
+              <div class="gcard"><div class="cover"><i data-i="comic"></i><span class="badge-kind">漫画</span></div><div class="cname">第01卷.cbz</div><div class="ccap">漫画</div></div>
+              <div class="gcard"><div class="cover"><i data-i="music"></i></div><div class="cname">紅蓮の弓矢.flac</div><div class="ccap">音频</div></div>
+            </div>
+          </div>
+          <div class="anno" data-k="规则" style="left:16px;bottom:12px">点击文件直达播放器/阅读器；文件夹跳浏览页并定位</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>要素</th><th>规则</th><th>需求编号</th></tr>
+  <tr><td>进度展示</td><td><b>饼状图 + 下方百分比文字</b>，间距适中（非紧贴）</td><td>PC-209 / TODO §14.14</td></tr>
+  <tr><td>类型徽标</td><td><b>统一中性 chip</b>（图标 + 文字），<b>不用色相区分类型</b></td><td>§2.10</td></tr>
+  <tr><td>已读完文案</td><td>视频「已看完」/ 音频「已听完」/ 漫画·小说「已读完」，主色高亮 + 饼图满格</td><td>PC-209</td></tr>
+  <tr><td>记录保留</td><td>已读完记录<b>保留至用户手动删除</b></td><td>PC-705</td></tr>
+  <tr><td>删除语义</td><td>「删除阅读记录」（不影响源文件，有确认说明）与「删除源文件」分开</td><td>PC-209</td></tr>
+  <tr><td>自动刷新</td><td>进度上报后<b>自动刷新列表</b>（统一进度广播通道，无需手动刷新）</td><td>PC-705</td></tr>
+  <tr><td>封面策略</td><td>优先复用阅读时提取的缩略图；借助进度记录中的<b>文件指纹免 stat 直接命中磁盘缓存秒出</b>，后台静默校正</td><td>PC-209</td></tr>
+  <tr><td>点击恢复</td><td>视频/音频精准续播 · 小说锚点一步定位 · 漫画恢复页码</td><td>PC-209</td></tr>
+  <tr><td>跨模块联动</td><td>浏览页删除/移动 → 记录同步删除/更新路径；重命名 → 记录同步重命名</td><td>PC-705</td></tr>
+  <tr><td>收藏同步</td><td>收藏页与浏览页星标<b>双向实时同步</b>（全局唯一数据源 + 变更广播）</td><td>PC-107</td></tr>
+</table>
+
+<div class="footnote">
+  <b>stat 失败处理（iOS 实战经验）：</b>点击条目时 stat 解析最新文件信息以保证指纹校验准确；
+  <b>stat 失败不得永久放弃</b>（落兜底条目后应在 30s 冷却后自动重试），避免弱网一次失败导致封面永久占位。<br>
+  <b>与浏览页的一致性：</b>封面组件、选中高亮组件（浮起抬升）、右键菜单组件、文件名行数设置、列表无分割线、
+  类型图标与徽标样式等规则必须与 <a href="02-browse.html">02 浏览页</a> <b>完全一致</b>（共用同一套 QML 组件）。
+</div>
+
+<script src="_icons.js"></script>
+</body>
+</html>

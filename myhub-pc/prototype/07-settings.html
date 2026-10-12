@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · 设置与连接源｜MyHub PC 原型</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+.dpair { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.bp .cap { font-size: 12px; color: var(--text-secondary); margin-bottom: 7px; max-width: 560px; }
+.bp .cap b { color: var(--text-primary); }
+
+.set-nav { flex: none; width: 176px; border-right: 1px solid var(--card-border); padding: 10px 8px; overflow: auto; }
+.set-i { display: flex; align-items: center; gap: 10px; padding: 8px 11px; border-radius: 9px; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
+.set-i:hover { background: rgba(37,99,235,.06); }
+.set-i.on { background: #EEF4FB; color: var(--primary); font-weight: 600; }
+.set-i [data-i] { font-size: 15px; }
+.set-body { flex: 1; overflow: auto; padding: 16px 20px; }
+.group { background: #fff; border: 1px solid var(--card-border); border-radius: var(--r-card); overflow: hidden; margin-bottom: 16px; }
+.group .gh { font-size: 11px; font-weight: 700; color: var(--text-secondary); padding: 11px 14px 5px; }
+.srow { display: flex; align-items: center; gap: 12px; padding: 11px 14px; font-size: 12.5px; }
+.srow + .srow { border-top: 1px solid var(--separator); }
+.srow .lb { flex: 1; }
+.srow .lb small { display: block; font-size: 10.5px; color: var(--text-secondary); margin-top: 3px; line-height: 1.5; }
+.srow .val { color: var(--text-secondary); font-size: 12px; display: flex; align-items: center; gap: 5px; }
+.toggle { width: 38px; height: 22px; border-radius: 11px; background: #D1D5DB; position: relative; flex: none; cursor: pointer; }
+.toggle i { position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .16s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.toggle.on { background: var(--primary); } .toggle.on i { left: 18px; }
+.seg { display: flex; background: var(--field-fill); border-radius: 8px; padding: 2px; flex: none; }
+.seg span { padding: 4px 11px; border-radius: 6px; font-size: 11.5px; cursor: pointer; }
+.seg span.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); font-weight: 600; color: var(--primary); }
+.slider { width: 130px; height: 4px; background: var(--separator); border-radius: 2px; position: relative; flex: none; }
+.slider i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--primary); border-radius: 2px; display: block; }
+.slider b { position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #fff; top: -5px; box-shadow: 0 1px 4px rgba(0,0,0,.25); border: 1px solid rgba(0,0,0,.06); }
+
+.form { background: #fff; border: 1px solid var(--card-border); border-radius: var(--r-card); padding: 16px; }
+.fld { margin-bottom: 13px; }
+.fld label { display: block; font-size: 11.5px; color: var(--text-secondary); margin-bottom: 5px; }
+.fld .inp { height: 34px; background: var(--field-fill); border-radius: var(--r-input); display: flex; align-items: center; padding: 0 11px; font-size: 12.5px; }
+.fld .inp.ph { color: var(--text-faint); }
+.testrow { display: flex; align-items: center; gap: 10px; padding: 11px; background: var(--field-fill); border: 1px solid var(--card-border); border-radius: 10px; font-size: 12px; margin-bottom: 13px; }
+.btn { padding: 8px 18px; border-radius: var(--r-button); font-size: 12.5px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn.pri { background: var(--primary); color: #fff; font-weight: 600; }
+.btn.sec { background: #EEF4FB; color: var(--primary-ink); }
+.btn.gh { background: var(--field-fill); color: var(--text-primary); }
+.btn.sm { font-size: 11.5px; padding: 6px 14px; }
+
+.cache-row { display: flex; align-items: center; gap: 11px; padding: 11px 14px; font-size: 12.5px; }
+.cache-row + .cache-row { border-top: 1px solid var(--separator); }
+.cbar { flex: 1; height: 6px; background: var(--separator); border-radius: 3px; overflow: hidden; }
+.cbar i { display: block; height: 100%; border-radius: 3px; background: var(--primary); }
+.csize { font-size: 11.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; width: 76px; text-align: right; }
+.trash-row { display: flex; align-items: center; gap: 11px; padding: 10px 12px; font-size: 12.5px; border-radius: 10px; }
+.trash-row:hover { background: rgba(37,99,235,.05); }
+.trash-row [data-i] { font-size: 17px; color: var(--text-faint); }
+.license { font-size: 11px; color: var(--text-secondary); line-height: 1.85; background: var(--field-fill); border-radius: 10px; padding: 12px 14px; max-height: 150px; overflow: auto; font-family: ui-monospace, Consolas, monospace; white-space: pre; }
+.logbox { font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.85; background: #15181D; color: #C9CFD8; border-radius: 10px; padding: 12px; max-height: 190px; overflow: auto; }
+.logbox .mod { color: #93B4F8; font-weight: 600; }
+.logbox .w { color: #D1D5DB; } .logbox .w::before { content: '! '; }
+.logbox .e { color: #F0A3A3; } .logbox .e::before { content: '× '; }
+</style>
+</head>
+<body>
+
+<h1>07 · 设置与连接源管理</h1>
+<p class="subtitle">
+  对应需求：<b>PC-101/501</b> 连接源管理与配置 · <b>PC-502</b> 阅读器偏好 · <b>PC-503</b> 播放器偏好 · <b>PC-504</b> 存储与缓存 · <b>PC-505</b> 安全设置 · <b>PC-506</b> 配置导入导出 · <b>PC-507</b> 关于与日志 · <b>PC-605</b> 内容缓存本地化 · <b>PC-106</b> 回收站<br>
+  关键约束：<b>所有设置项改动即时生效</b>，不得需要重启应用或切换主题才刷新（iOS 实战经验 TODO §14.16）。
+</p>
+<a class="reflink" href="index.html"><i data-i="arrow-left"></i>返回原型总览</a>
+
+<!-- ============ 1. 设置主页 ============ -->
+<div class="secttl">1. 设置主页 · 双栏布局<span class="tag rec">基准</span></div>
+<div class="window w-full" style="height:640px">
+  <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span><div class="winbtns"><span><i data-i="minus"></i></span><span><i data-i="maximize"></i></span><span><i data-i="x"></i></span></div></div>
+  <div class="body-row">
+    <div class="sidebar collapsed">
+      <div class="nav-item"><i data-i="book"></i></div><div class="nav-item"><i data-i="star"></i></div>
+      <div class="nav-item"><i data-i="zap"></i></div><div class="nav-item"><i data-i="folder"></i></div>
+      <div class="nav-item"><i data-i="globe"></i></div><div class="nav-item on"><i data-i="settings"></i></div>
+    </div>
+    <div class="content">
+      <div class="toolbar"><span class="dir-title">设置</span><span class="grow"></span><span class="tbtn"><i data-i="more"></i></span></div>
+      <div class="body-row" style="border-top:1px solid var(--card-border)">
+        <div class="set-nav">
+          <div class="set-i"><i data-i="link"></i>连接源</div>
+          <div class="set-i"><i data-i="palette"></i>外观与显示</div>
+          <div class="set-i"><i data-i="book-open"></i>阅读器</div>
+          <div class="set-i on"><i data-i="play-circle"></i>播放器</div>
+          <div class="set-i"><i data-i="hard-drive"></i>存储与缓存</div>
+          <div class="set-i"><i data-i="trash"></i>回收站</div>
+          <div class="set-i"><i data-i="globe"></i>浏览器</div>
+          <div class="set-i"><i data-i="shield"></i>安全</div>
+          <div class="set-i"><i data-i="zap"></i>动态</div>
+          <div class="set-i"><i data-i="package"></i>数据</div>
+          <div class="set-i"><i data-i="info"></i>关于</div>
+        </div>
+        <div class="set-body">
+          <div class="group">
+            <div class="gh">解码与缓冲</div>
+            <div class="srow"><span class="lb">解码偏好<small>自动＝硬解优先、失败回退软解</small></span><div class="seg"><span class="on">自动</span><span>硬解</span><span>软解</span></div></div>
+            <div class="srow"><span class="lb">预读窗口<small>换算为解码器前向缓冲时长，弱网可调大</small></span><span class="val">30s</span><div class="slider"><i style="width:40%"></i><b style="left:calc(40% - 7px)"></b></div></div>
+            <div class="srow"><span class="lb">默认倍速</span><span class="val">1.0×</span><div class="seg"><span>0.75</span><span class="on">1.0</span><span>1.25</span><span>1.5</span></div></div>
+          </div>
+          <div class="group">
+            <div class="gh">播放</div>
+            <div class="srow"><span class="lb">纯音频模式默认开启<small>音频文件自动进入唱片封面界面</small></span><div class="toggle on"><i></i></div></div>
+            <div class="srow"><span class="lb">最小化时自动弹出悬浮小窗<small>替代 iOS「退后台自动画中画」· 默认关闭 · <b>运行期修改立即生效</b></small></span><div class="toggle"><i></i></div></div>
+            <div class="srow"><span class="lb">音量联动系统音量<small>关闭时仅调节播放器内部音量</small></span><div class="toggle"><i></i></div></div>
+            <div class="srow"><span class="lb">全屏启动<small>替代 iOS 横竖屏模式</small></span><div class="toggle"><i></i></div></div>
+          </div>
+          <div class="group">
+            <div class="gh">字幕与步长</div>
+            <div class="srow"><span class="lb">字幕字号</span><span class="val">16</span><div class="slider"><i style="width:45%"></i><b style="left:calc(45% - 7px)"></b></div></div>
+            <div class="srow"><span class="lb">字幕延迟</span><span class="val">0.0s</span><div class="slider"><i style="width:50%"></i><b style="left:calc(50% - 7px)"></b></div></div>
+            <div class="srow"><span class="lb">快进步长</span><span class="val">10s</span><div class="seg"><span>5</span><span class="on">10</span><span>15</span><span>30</span></div></div>
+            <div class="srow"><span class="lb">音量步进</span><span class="val">5%</span><div class="seg"><span class="on">5%</span><span>10%</span></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="anno" data-k="验收" style="right:18px;top:124px">所有设置项<b>改动即时生效</b>，不得需重启或切主题才刷新</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 2. 连接源 ============ -->
+<div class="secttl">2. 连接源管理与编辑表单（PC-101 / PC-501 / PC-708）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>连接源列表</b>：类型图标 / 挂载点 / 启用开关 / <b>绿红点 + 内外网文案</b>（与浏览页状态实时一致）</div>
+    <div class="window" style="width:578px;height:400px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">连接源</span><span class="grow"></span><span class="tbtn"><i data-i="plus"></i></span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="group">
+            <div class="srow"><i data-i="server" style="font-size:18px;color:var(--text-secondary)"></i>
+              <span class="lb">群晖 NAS<small><span class="dot ok" style="margin-right:5px"></span>WebDAV · /NAS · 内网可达</small></span>
+              <div class="toggle on"><i></i></div><span class="tbtn"><i data-i="more"></i></span></div>
+            <div class="srow"><i data-i="cloud" style="font-size:18px;color:var(--text-secondary)"></i>
+              <span class="lb">远程 WebDAV<small><span class="dot ok" style="margin-right:5px"></span>WebDAV · /WebDAV-A · 外网可达</small></span>
+              <div class="toggle on"><i></i></div><span class="tbtn"><i data-i="more"></i></span></div>
+            <div class="srow"><i data-i="database" style="font-size:18px;color:var(--text-secondary)"></i>
+              <span class="lb">办公室共享<small><span class="dot bad" style="margin-right:5px"></span>SMB · /SMB-Office · 连接失败</small></span>
+              <div class="toggle on"><i></i></div><span class="tbtn"><i data-i="more"></i></span></div>
+            <div class="srow"><i data-i="hard-drive" style="font-size:18px;color:var(--text-secondary)"></i>
+              <span class="lb">本机媒体库<small><span class="dot ok" style="margin-right:5px"></span>本地 · D:\Media</small></span>
+              <div class="toggle on"><i></i></div><span class="tbtn"><i data-i="more"></i></span></div>
+          </div>
+        </div>
+        <div class="anno" data-k="注意" style="left:14px;bottom:14px">状态持久化缓存 · 仅手动「测试连接」或重启才重判</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>WebDAV 编辑表单</b>：含<b>内网地址</b>（启用内外网竞速路由 PC-708）</div>
+    <div class="window" style="width:578px;height:400px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">编辑连接源</span><span class="grow"></span><span class="linkbtn">保存</span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="testrow"><span class="dot ok"></span><b style="font-weight:600">连接成功</b><span style="color:var(--text-secondary)">内网可达 · 耗时 86ms</span></div>
+          <div class="form">
+            <div class="fld"><label>名称</label><div class="inp">群晖 NAS</div></div>
+            <div class="fld"><label>类型</label><div class="seg" style="display:inline-flex"><span>本地</span><span class="on">WebDAV</span><span>SMB</span></div></div>
+            <div class="fld"><label>外网地址</label><div class="inp">https://nas.example.com:5006/dav</div></div>
+            <div class="fld"><label>内网地址（可选，启用竞速路由）</label><div class="inp">http://192.168.1.10:5005/dav</div></div>
+            <div class="fld"><label>账号</label><div class="inp">myhub</div></div>
+            <div class="fld"><label>密码</label><div class="inp">••••••••••</div></div>
+            <div class="fld"><label>根路径</label><div class="inp ph">/</div></div>
+            <div class="fld"><label>挂载点</label><div class="inp">/NAS</div></div>
+            <div style="display:flex;gap:10px"><span class="btn sec"><i data-i="wifi"></i>测试连接</span><span class="btn gh"><i data-i="trash"></i>删除</span></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. 缓存与回收站 ============ -->
+<div class="secttl">3. 存储与缓存、回收站（PC-504 / PC-605 / PC-106）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>缓存管理</b>：6 分区占用查看 + 单项/全部清理 + 总容量上限 + <b>内容缓存本地化开关</b></div>
+    <div class="window" style="width:578px;height:440px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">存储与缓存</span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="group">
+            <div class="gh">总览</div>
+            <div class="srow"><span class="lb">已用 1.24 GB / 上限 2 GB<small>超限自动按 LRU 淘汰</small></span><span class="btn gh sm"><i data-i="trash"></i>全部清理</span></div>
+            <div class="srow"><span class="lb">缓存总容量上限</span><span class="val">2048 MB</span><div class="slider"><i style="width:50%"></i><b style="left:calc(50% - 7px)"></b></div></div>
+            <div class="srow"><span class="lb">内容缓存本地化<small>关闭后不写入漫画页/小说章节/分片缓存，离线将不可用</small></span><div class="toggle on"><i></i></div></div>
+          </div>
+          <div class="group">
+            <div class="gh">分区占用（统一主色 + 透明度梯度，不用多色区分）</div>
+            <div class="cache-row"><span style="width:88px">媒体分片</span><div class="cbar"><i style="width:74%;opacity:1"></i></div><span class="csize">842 MB</span><span class="tbtn"><i data-i="trash"></i></span></div>
+            <div class="cache-row"><span style="width:88px">漫画页</span><div class="cbar"><i style="width:48%;opacity:.84"></i></div><span class="csize">268 MB</span><span class="tbtn"><i data-i="trash"></i></span></div>
+            <div class="cache-row"><span style="width:88px">封面缩略图</span><div class="cbar"><i style="width:36%;opacity:.68"></i></div><span class="csize">94 MB</span><span class="tbtn"><i data-i="trash"></i></span></div>
+            <div class="cache-row"><span style="width:88px">小说章节</span><div class="cbar"><i style="width:22%;opacity:.52"></i></div><span class="csize">28 MB</span><span class="tbtn"><i data-i="trash"></i></span></div>
+            <div class="cache-row"><span style="width:88px">小说索引</span><div class="cbar"><i style="width:9%;opacity:.4"></i></div><span class="csize">6 MB</span><span class="tbtn"><i data-i="trash"></i></span></div>
+            <div class="cache-row"><span style="width:88px">目录列表</span><div class="cbar"><i style="width:5%;opacity:.3"></i></div><span class="csize">3 MB</span><span class="tbtn"><i data-i="trash"></i></span></div>
+          </div>
+          <div class="group">
+            <div class="gh">目录</div>
+            <div class="srow"><span class="lb">下载目录<small>C:\Users\me\Downloads\MyHub</small></span><span class="btn gh sm">更改</span></div>
+            <div class="srow"><span class="lb">打开数据目录</span><span class="val"><i data-i="external"></i></span></div>
+            <div class="srow"><span class="lb">打开缓存目录</span><span class="val"><i data-i="external"></i></span></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>回收站</b>（PC-106）：还原 / 彻底删除 / 清空 / 自动清理（默认 30 天）</div>
+    <div class="window" style="width:578px;height:440px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">回收站 · 群晖 NAS</span><span class="grow"></span><span class="tbtn"><i data-i="trash"></i></span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="group">
+            <div class="gh">保留设置</div>
+            <div class="srow"><span class="lb">自动清理保留天数<small>进入页面即静默清理过期项</small></span><span class="val">30 天</span><div class="slider"><i style="width:33%"></i><b style="left:calc(33% - 7px)"></b></div></div>
+          </div>
+          <div style="background:#fff;border:1px solid var(--card-border);border-radius:12px;padding:6px">
+            <div class="trash-row"><i data-i="film"></i>
+              <span class="lb">旧版本.mkv<small>原路径 /NAS/动漫 · 2 天前删除</small></span>
+              <span class="btn sec sm">还原</span><span class="tbtn"><i data-i="trash"></i></span></div>
+            <div class="trash-row"><i data-i="file-text"></i>
+              <span class="lb">笔记草稿.txt<small>原路径 /NAS/文档 · 9 天前删除</small></span>
+              <span class="btn sec sm">还原</span><span class="tbtn"><i data-i="trash"></i></span></div>
+            <div class="trash-row"><i data-i="comic"></i>
+              <span class="lb">重复卷.cbz<small>原路径 /NAS/漫画 · 26 天前删除 · <b style="color:var(--text-primary)">4 天后自动清理</b></small></span>
+              <span class="btn sec sm">还原</span><span class="tbtn"><i data-i="trash"></i></span></div>
+          </div>
+        </div>
+        <div class="anno" data-k="注意" style="left:14px;bottom:14px">远端不支持 <code>.trash</code> 时降级真删，弹窗须展示<b>移动失败的具体原因</b></div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 4. 安全 / 数据 / 关于 ============ -->
+<div class="secttl">4. 安全、数据与关于（PC-505 / PC-506 / PC-507）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>安全与数据</b>：应用锁（Windows Hello / Touch ID）· 配置导入导出（<b>与 iOS 互导兼容</b>）</div>
+    <div class="window" style="width:578px;height:380px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">安全与数据</span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="group">
+            <div class="gh">安全</div>
+            <div class="srow"><span class="lb">应用锁<small>Windows Hello / Touch ID，回退本地 PIN · <b>开关需先验证身份</b></small></span><div class="toggle on"><i></i></div></div>
+            <div class="srow"><span class="lb">最小化后上锁<small>返回时需重新验证</small></span><div class="toggle on"><i></i></div></div>
+            <div class="srow"><span class="lb">凭据管理<small>密码存于 Credential Manager / Keychain，<b>不因会话过期被清空</b></small></span><span class="val"><i data-i="chevron-right"></i></span></div>
+          </div>
+          <div class="group">
+            <div class="gh">数据</div>
+            <div class="srow"><span class="lb">导出配置<small>连接源 + 全部偏好的 JSON 快照，<b>不含明文密码</b></small></span><span class="btn gh sm"><i data-i="upload"></i>导出</span></div>
+            <div class="srow"><span class="lb">导入配置<small>按挂载点 upsert，返回「新增 N / 更新 N」· 兼容 iOS 导出文件</small></span><span class="btn gh sm"><i data-i="download"></i>导入</span></div>
+            <div class="srow"><span class="lb">数据库自动备份<small>每日备份到 backup/，保留 7 份</small></span><div class="toggle on"><i></i></div></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>关于 · 开源许可</b>（PC-507）：<b>LGPL 合规必备</b> —— 列出 Qt 及各依赖许可证全文并明示使用 Qt</div>
+    <div class="window" style="width:578px;height:380px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">关于</span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="group">
+            <div class="srow"><i data-i="logo" style="font-size:24px;color:var(--primary)"></i><span class="lb">MyHub<small>版本 1.0.0 · Qt 6.8.1 · 构建 2026-10-12</small></span><span class="btn sec sm">检查更新</span></div>
+            <div class="srow"><span class="lb">存储用量</span><span class="val">数据 42 MB · 缓存 1.24 GB</span></div>
+            <div class="srow"><span class="lb">运行日志</span><span class="val">查看 / 导出 / 清空 <i data-i="chevron-right"></i></span></div>
+            <div class="srow"><span class="lb">打开日志文件夹</span><span class="val"><i data-i="external"></i></span></div>
+          </div>
+          <div class="group">
+            <div class="gh">开源许可</div>
+            <div style="padding:0 14px 14px">
+              <div class="license">本应用使用 Qt 6（LGPLv3）构建。
+Qt 动态库随本安装包分发且可被替换。
+
+Qt 6 .................. LGPLv3
+libmpv ................ LGPLv2.1+
+FFmpeg ................ LGPLv2.1+
+mpvqt (KDE) ........... LGPL
+libsmb2 ............... LGPL
+libarchive ............ BSD-2-Clause
+zlib .................. zlib License
+SQLite ................ Public Domain</div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>运行日志</b>（PC-707）：分模块 tag，按天滚动，可查看 / 导出 / 清空</div>
+    <div class="window" style="width:578px;height:330px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">运行日志</span><span class="grow"></span><span class="tbtn"><i data-i="download"></i></span><span class="tbtn"><i data-i="trash"></i></span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="logbox">
+<div>14:28:03 <span class="mod">[app]</span> 启动完成 耗时=1.42s</div>
+<div>14:28:03 <span class="mod">[network-route]</span> 竞速开始 内网=192.168.1.10 外网=nas.example.com</div>
+<div>14:28:04 <span class="mod">[network-route]</span> 锁定内网 耗时=86ms</div>
+<div>14:28:11 <span class="mod">[player-audio]</span> 数据源解析 耗时=34ms url=127.0.0.1:51734</div>
+<div>14:28:11 <span class="mod">[stream]</span> 会话注册 分片=1MB 预取=on 长度=1.4GB</div>
+<div>14:28:12 <span class="mod">[player]</span> engine.load kind=hardware 耗时=312ms</div>
+<div class="w">14:31:40 <span class="mod">[stream]</span> 停滞 15s 触发断点续传 offset=482MB</div>
+<div>14:31:42 <span class="mod">[network-route]</span> 清锁 原因=零进展 冷却=8s</div>
+<div>14:31:43 <span class="mod">[network-route]</span> 重新竞速 → 锁定外网 耗时=712ms</div>
+<div class="e">14:35:02 <span class="mod">[comic-reader]</span> 打开失败 noPages file=第03卷.cbr</div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>外观与显示</b>（PC-502 / §2.2.3）：<b>文件名行数六处生效且即时生效</b></div>
+    <div class="window" style="width:578px;height:330px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">外观与显示</span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="group">
+            <div class="gh">外观</div>
+            <div class="srow"><span class="lb">主题模式</span><div class="seg"><span class="on">跟随系统</span><span>亮</span><span>暗</span></div></div>
+          </div>
+          <div class="group">
+            <div class="gh">显示</div>
+            <div class="srow"><span class="lb">文件名行数<small>在浏览 / 收藏 / 阅读三页的<b>网格与列表共六处</b>生效</small></span><div class="seg"><span>1</span><span>2</span><span class="on">3</span><span>4</span><span>5</span></div></div>
+            <div class="srow"><span class="lb">默认视图</span><div class="seg"><span class="on">网格</span><span>列表</span></div></div>
+            <div class="srow"><span class="lb">打开方式</span><div class="seg"><span>单击</span><span class="on">双击</span></div></div>
+          </div>
+        </div>
+        <div class="anno" data-k="注意" style="left:14px;bottom:14px">修改后<b>立即生效</b>，不得需重进目录或切主题</div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>设置分组</th><th>关键项</th><th>编号</th></tr>
+  <tr><td>连接源</td><td>增删改查 + 测试（绿/红点 + 内外网提示）+ <b>内网地址配置</b></td><td>PC-101/501/708</td></tr>
+  <tr><td>外观与显示</td><td>主题模式 · <b>文件名行数（1~5，六处生效）</b> · 默认视图 · 单击/双击打开</td><td>§2.2.3 / PC-702</td></tr>
+  <tr><td>阅读器</td><td>字号 / 行距 / 主题 / 翻页模式 / 漫画方向（含自动）/ 漫画默认模式 / 衬线字体 / 亮度</td><td>PC-502</td></tr>
+  <tr><td>播放器</td><td>倍速 / 解码偏好 / 预读窗口 / 字幕 / 纯音频 / 快进步长 / 音量步进 / <b>最小化自动悬浮小窗（默认关闭，运行期即时生效）</b></td><td>PC-503</td></tr>
+  <tr><td>存储与缓存</td><td>6 分区占用 + 清理 + 容量上限 + <b>内容缓存本地化开关</b> + 下载目录 + 打开数据/缓存目录</td><td>PC-504/605</td></tr>
+  <tr><td>回收站</td><td>还原 / 彻底删除 / 清空 / 保留天数（1~90，默认 30）</td><td>PC-106</td></tr>
+  <tr><td>安全</td><td>应用锁（Hello / Touch ID，回退 PIN；<b>开关需先验证</b>）+ 凭据管理</td><td>PC-505</td></tr>
+  <tr><td>数据</td><td>导出 / 导入配置（不含明文密码，<b>与 iOS 互导兼容</b>）+ 数据库自动备份</td><td>PC-506</td></tr>
+  <tr><td>关于</td><td>版本 / <b>开源许可（LGPL 合规必备）</b> / 存储用量 / 日志查看导出清空 / 打开日志文件夹 / 检查更新</td><td>PC-507</td></tr>
+</table>
+
+<div class="footnote">
+  <b>配色纪律：</b>缓存分区条原先的六色区分已统一为<b>主色 + 透明度梯度</b>（占用越大越不透明），靠<b>文字标签</b>区分分区；
+  设置页图标全部单色线形；仅「清除数据 / 删除」等破坏性项使用语义红。<br>
+  <b>LGPL 合规（§4.5 / §7.2）：</b>「关于 → 开源许可」页是<b>发布前检查清单的强制项</b>，须包含 Qt 及全部依赖的许可证全文并明示使用 Qt；
+  同时须保证 Qt 全部<b>动态链接</b>、安装目录内动态库<b>可替换</b>（满足重链接义务）、CI 确认<b>未链接任何 GPL-only Qt 模块</b>。<br>
+  <b>偏好键名与 iOS 对齐（§5.4）：</b><code>reader.*</code> / <code>player.*</code> / <code>browser.*</code> / <code>cache.*</code> / <code>browse.*</code> 等键名与 iOS <code>UserDefaults</code> 保持一致，
+  便于配置 JSON 快照在两端互导（桌面新增键：<code>player.autoFloatOnMinimize</code> / <code>player.startFullscreen</code> / <code>player.syncSystemVolume</code> / <code>window.*</code>）。
+</div>
+
+<script src="_icons.js"></script>
+</body>
+</html>

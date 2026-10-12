@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 · 播放器｜MyHub PC 原型</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+.dpair { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.bp .cap { font-size: 12px; color: var(--text-secondary); margin-bottom: 7px; max-width: 560px; }
+.bp .cap b { color: var(--text-primary); }
+
+.player {
+  width: 1180px; height: 664px; background: #000; border-radius: 10px;
+  position: relative; overflow: hidden; box-shadow: 0 14px 38px rgba(17,24,39,.28);
+  margin-bottom: 14px; color: #fff;
+}
+.player.sm { width: 578px; height: 326px; }
+.video-area {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 45% 40%, #262B33 0%, #15181D 55%, #000 100%);
+  display: grid; place-items: center; font-size: 64px; color: rgba(255,255,255,.18);
+}
+.video-area.portrait::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 34%; background: #000; }
+.video-area.portrait::after  { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 34%; background: #000; }
+
+.p-top {
+  position: absolute; left: 0; right: 0; top: 0; height: 54px; z-index: 10;
+  display: flex; align-items: center; gap: 4px; padding: 0 14px;
+  background: linear-gradient(180deg, rgba(0,0,0,.72), transparent);
+}
+.p-top .ttl { font-size: 14px; font-weight: 600; flex: 1; margin-left: 6px; }
+.pbtn {
+  min-width: 34px; height: 30px; padding: 0 6px; display: grid; place-items: center;
+  border-radius: 8px; font-size: 16px; color: rgba(255,255,255,.88); cursor: pointer;
+}
+.pbtn:hover { background: rgba(255,255,255,.14); }
+.pbtn.txt { font-size: 12px; font-weight: 600; }
+.engine-tag {
+  font-size: 10px; padding: 2px 8px; border-radius: 7px;
+  background: rgba(255,255,255,.16); font-weight: 600; letter-spacing: .3px;
+}
+
+.p-bottom {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 10; padding: 0 14px 12px;
+  background: linear-gradient(0deg, rgba(0,0,0,.78), transparent);
+}
+.p-track { height: 20px; display: flex; align-items: center; position: relative; cursor: pointer; }
+.p-track .rail { position: absolute; left: 0; right: 0; height: 4px; background: rgba(255,255,255,.2); border-radius: 2px; }
+.p-track .buf { position: absolute; left: 0; height: 4px; background: rgba(255,255,255,.4); border-radius: 2px; }
+.p-track .played { position: absolute; left: 0; height: 4px; background: var(--primary); border-radius: 2px; }
+.p-track .knob { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+.p-ctrls { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
+.p-ctrls .time { font-size: 11.5px; color: rgba(255,255,255,.8); font-variant-numeric: tabular-nums; margin-left: 8px; }
+.p-ctrls .grow { flex: 1; }
+.pbtn.big { min-width: 42px; height: 38px; font-size: 21px; }
+
+.center-cap {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 20;
+  background: rgba(0,0,0,.66); backdrop-filter: blur(8px); border-radius: 14px;
+  padding: 10px 18px; display: flex; align-items: center; gap: 10px;
+  font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.center-cap [data-i] { font-size: 17px; }
+.center-play {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 20;
+  width: 68px; height: 68px; border-radius: 50%; background: rgba(0,0,0,.5);
+  backdrop-filter: blur(6px); display: grid; place-items: center; font-size: 28px;
+}
+.center-spin {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 20;
+  width: 46px; height: 46px; border: 3px solid rgba(255,255,255,.2);
+  border-top-color: #fff; border-radius: 50%; animation: sp .8s linear infinite;
+}
+@keyframes sp { to { transform: translate(-50%,-50%) rotate(360deg); } }
+.center-lock {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 22;
+  width: 56px; height: 56px; border-radius: 50%; background: rgba(0,0,0,.55);
+  backdrop-filter: blur(8px); display: grid; place-items: center; font-size: 22px;
+}
+
+.sub {
+  position: absolute; left: 0; right: 0; bottom: 76px; text-align: center; z-index: 15;
+  font-size: 17px; font-weight: 600; text-shadow: 0 2px 6px rgba(0,0,0,.9); padding: 0 60px;
+}
+.nexttip {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 18;
+  background: rgba(20,20,22,.94); backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,.14); border-radius: var(--r-capsule);
+  height: 46px; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 16px; font-size: 12.5px;
+}
+.nexttip .go { background: var(--primary); border-radius: 18px; padding: 6px 14px; font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 5px; }
+.dim { position: absolute; inset: 0; background: #000; opacity: .34; z-index: 5; pointer-events: none; }
+.zones { position: absolute; inset: 54px 0 70px; z-index: 6; display: flex; }
+.zone { flex: 1; border: 1px dashed rgba(255,255,255,.24); display: grid; place-items: center; font-size: 11px; color: rgba(255,255,255,.6); text-align: center; line-height: 1.7; }
+
+.disc {
+  width: 190px; height: 190px; border-radius: 50%;
+  background: conic-gradient(from 0deg, #1C1F24, #2E333A, #1C1F24, #121418, #1C1F24);
+  display: grid; place-items: center; animation: spin 10s linear infinite;
+  box-shadow: 0 10px 34px rgba(0,0,0,.55);
+}
+.disc .inner { width: 72px; height: 72px; border-radius: 50%; background: var(--primary); display: grid; place-items: center; font-size: 28px; color: #fff; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.floatwin {
+  width: 360px; background: #000; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 18px 44px rgba(17,24,39,.38); border: 1px solid rgba(255,255,255,.14);
+  position: relative; color: #fff;
+}
+.floatwin .fv { height: 202px; background: radial-gradient(ellipse at 45% 40%, #262B33, #000); display: grid; place-items: center; font-size: 38px; color: rgba(255,255,255,.2); }
+.floatwin .fbar { height: 40px; display: flex; align-items: center; gap: 4px; padding: 0 8px; background: rgba(0,0,0,.86); }
+.pin { position: absolute; right: 8px; top: 8px; background: rgba(0,0,0,.6); border-radius: 7px; padding: 3px 8px; font-size: 10px; display: flex; align-items: center; gap: 4px; }
+.smtc { width: 380px; background: #1A1A2E; border-radius: 12px; padding: 16px; color: #fff; box-shadow: var(--shadow-float); }
+.smtc .art { width: 64px; height: 64px; border-radius: 9px; background: var(--primary); display: grid; place-items: center; font-size: 26px; }
+.traymenu { width: 270px; background: #fff; border: 1px solid var(--card-border); border-radius: 10px; box-shadow: var(--shadow-float); padding: 6px; font-size: 12.5px; }
+.traymenu .mi { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 7px; }
+.traymenu .mi:hover { background: rgba(37,99,235,.08); color: var(--primary); }
+.traymenu .mi [data-i] { font-size: 14px; color: var(--text-secondary); }
+.traymenu .mi:hover [data-i] { color: var(--primary); }
+</style>
+</head>
+<body>
+
+<h1>03 · 播放器（视频 / 音频）</h1>
+<p class="subtitle">
+  对应需求：<b>PC-201/202</b> 视频音频播放 · <b>PC-203</b> 边下边播与精准续播 · <b>PC-204</b> 播完推荐下一个 · <b>PC-602</b> 系统媒体集成 · <b>PC-603</b> 悬浮小窗 · <b>PC-701</b> 播放器体验细则 · <b>PC-703</b> 键鼠映射<br>
+  Qt 实现要点：<code>MpvVideoItem</code>（<code>QQuickRhiItem</code> / mpvqt）使<b>视频成为普通 QML Item</b>，控制层、字幕浮层、反馈胶囊、mini 预览均为兄弟节点自然叠加。
+</p>
+<a class="reflink" href="index.html"><i data-i="arrow-left"></i>返回原型总览</a>
+
+<!-- ============ 1. 全屏播放器 ============ -->
+<div class="secttl">1. 全屏播放器 · 控制层显示态（PC-201 / PC-701）<span class="tag rec">基准</span></div>
+<div class="player">
+  <div class="video-area"><i data-i="film"></i></div>
+  <div class="p-top">
+    <span class="pbtn"><i data-i="x"></i></span>
+    <span class="ttl">第01话 致两千年后的你.mkv</span>
+    <span class="engine-tag">硬解 · D3D11VA</span>
+    <span class="pbtn"><i data-i="pip"></i></span><span class="pbtn"><i data-i="volume"></i></span>
+    <span class="pbtn"><i data-i="music"></i></span><span class="pbtn"><i data-i="chevron-down"></i></span><span class="pbtn"><i data-i="more"></i></span>
+  </div>
+  <div class="sub">我们生于这个残酷的世界，却仍要为自由而战。</div>
+  <div class="p-bottom">
+    <div class="p-track">
+      <div class="rail"></div>
+      <div class="buf" style="width:72%"></div>
+      <div class="played" style="width:64%"></div>
+      <div class="knob" style="left:calc(64% - 6px)"></div>
+    </div>
+    <div class="p-ctrls">
+      <span class="pbtn"><i data-i="rewind"></i></span><span class="pbtn big"><i data-i="pause"></i></span><span class="pbtn"><i data-i="forward"></i></span>
+      <span class="time">1:48:20 / 2:49:00</span>
+      <span class="grow"></span>
+      <span class="pbtn txt">1.0×</span><span class="pbtn"><i data-i="subtitle"></i></span>
+      <span class="pbtn"><i data-i="music"></i></span><span class="pbtn"><i data-i="lock"></i></span><span class="pbtn"><i data-i="maximize"></i></span>
+    </div>
+  </div>
+  <div class="anno" data-k="规则" style="left:16px;top:60px">控制层 3s 自动隐藏；<b>鼠标移动/点击立刻显示</b>（不得延迟）</div>
+  <div class="anno" data-k="验收" style="right:16px;top:60px">退出＝直接退出播放器（不进 mini）；单独按钮进 mini</div>
+  <div class="anno" data-k="注意" style="left:16px;bottom:96px">缓冲段（浅白）与已播放段（主色）分色；<b>点击任意位置立即跳转</b></div>
+  <div class="anno" data-k="规则" style="right:16px;bottom:96px">字幕 srt/ass/ssa 自动匹配同名；支持拖拽字幕文件进窗口</div>
+</div>
+
+<!-- ============ 2. 键鼠分区与反馈 ============ -->
+<div class="secttl">2. 键鼠交互与中央数值反馈（PC-703 / PC-701）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>快捷键分区</b>（替代 iOS 触控手势）：滚轮音量、<code>←/→</code> 快退快进、<code>Shift+↑/↓</code> 亮度蒙层</div>
+    <div class="player sm">
+      <div class="video-area"><i data-i="film"></i></div>
+      <div class="zones">
+        <div class="zone">Shift+↑/↓<br>亮度蒙层</div>
+        <div class="zone">点击播放暂停<br>双击全屏</div>
+        <div class="zone">滚轮 / ↑↓<br>音量</div>
+      </div>
+      <div class="p-top"><span class="pbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">第01话.mkv</span></div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>中央反馈胶囊</b>：进度 / 音量 / 亮度 / 倍速<b>必须有数值</b>，0.8s 自动隐去</div>
+    <div class="player sm">
+      <div class="video-area"><i data-i="film"></i></div>
+      <div class="center-cap"><i data-i="forward"></i>1:48:20 <span style="opacity:.6;font-size:12px">/ 2:49:00</span> <span style="color:#93B4F8">+10s</span></div>
+      <div class="p-bottom"><div class="p-track"><div class="rail"></div><div class="played" style="width:64%"></div><div class="knob" style="left:calc(64% - 6px)"></div></div></div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>起播态</b>：中央播放键与加载圈<b>互斥不重叠</b>（iOS 实战经验）</div>
+    <div class="player sm">
+      <div class="video-area"><i data-i="film"></i></div>
+      <div class="center-spin"></div>
+      <div class="p-bottom">
+        <div class="p-track"><div class="rail"></div><div class="buf" style="width:18%"></div><div class="played" style="width:64%"></div><div class="knob" style="left:calc(64% - 6px)"></div></div>
+        <div class="p-ctrls"><span class="pbtn big" style="opacity:.5"><i data-i="pause"></i></span><span class="time">正在缓冲… 1:48:20</span></div>
+      </div>
+      <div class="anno" data-k="注意" style="left:12px;bottom:66px">弱网点进度条：进度条<b>停在目标位置</b>，播放键显示加载指示</div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>界面锁定</b>：中央锁图标自动消失，点击画面重现，点锁解锁</div>
+    <div class="player sm">
+      <div class="video-area"><i data-i="film"></i></div>
+      <div class="center-lock"><i data-i="lock"></i></div>
+      <div class="anno" data-k="规则" style="left:12px;bottom:12px">锁定后屏蔽所有交互 · <code>L</code> 切换</div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>亮度蒙层</b>（替代 iOS 系统亮度）：与小说/漫画共用 <code>reader.brightness</code></div>
+    <div class="player sm">
+      <div class="video-area"><i data-i="film"></i></div>
+      <div class="dim"></div>
+      <div class="center-cap"><i data-i="sun"></i>亮度 34%</div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>竖屏视频适配</b>：不拉伸、不错误裁切，左右补黑边</div>
+    <div class="player sm">
+      <div class="video-area portrait"><i data-i="film"></i></div>
+      <div class="p-top"><span class="pbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">竖屏短片.mp4</span><span class="engine-tag">硬解</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. 播完推荐 / 重播 ============ -->
+<div class="secttl">3. 播完推荐下一个与重播（PC-204 / PC-701）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>下一个提示条</b>：<b>无倒计时、不自动播放</b>，需用户点击（iOS 已去除 5s 自动播放）</div>
+    <div class="player sm">
+      <div class="video-area"><i data-i="film"></i></div>
+      <div class="nexttip">
+        <span style="opacity:.7">下一个</span>
+        <b style="font-weight:600">第02话 那一天.mkv</b>
+        <span class="go"><i data-i="play"></i>播放</span>
+        <span class="pbtn"><i data-i="x"></i></span>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>播放完成态</b>：中央显示<b>重播按钮</b>；再次点击播放从头开始</div>
+    <div class="player sm">
+      <div class="video-area"><i data-i="film"></i></div>
+      <div class="center-play"><i data-i="replay"></i></div>
+      <div class="p-bottom">
+        <div class="p-track"><div class="rail"></div><div class="played" style="width:100%"></div><div class="knob" style="left:calc(100% - 6px)"></div></div>
+        <div class="p-ctrls"><span class="pbtn big"><i data-i="play"></i></span><span class="time">2:49:00 / 2:49:00</span><span class="grow"></span><span class="pbtn"><i data-i="maximize"></i></span></div>
+      </div>
+      <div class="anno" data-k="验收" style="left:12px;bottom:66px">从阅读历史重进已播完媒体也自动从头重播</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 4. 纯音频模式 ============ -->
+<div class="secttl">4. 纯音频播放模式 · 唱片封面（PC-202）</div>
+<div class="player" style="height:520px">
+  <div class="video-area" style="background:radial-gradient(ellipse at 50% 42%, #15181D, #000)">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:22px">
+      <div class="disc"><div class="inner"><i data-i="music"></i></div></div>
+      <div style="text-align:center;color:#fff">
+        <div style="font-size:17px;font-weight:700">紅蓮の弓矢</div>
+        <div style="font-size:12.5px;color:rgba(255,255,255,.6);margin-top:5px">Linked Horizon</div>
+      </div>
+    </div>
+  </div>
+  <div class="p-top">
+    <span class="pbtn"><i data-i="x"></i></span><span class="ttl">紅蓮の弓矢.flac</span>
+    <span class="engine-tag">纯音频</span>
+    <span class="pbtn"><i data-i="volume"></i></span><span class="pbtn"><i data-i="chevron-down"></i></span><span class="pbtn"><i data-i="more"></i></span>
+  </div>
+  <div class="p-bottom">
+    <div class="p-track"><div class="rail"></div><div class="buf" style="width:88%"></div><div class="played" style="width:45%"></div><div class="knob" style="left:calc(45% - 6px)"></div></div>
+    <div class="p-ctrls">
+      <span class="pbtn"><i data-i="skip-back"></i></span><span class="pbtn big"><i data-i="pause"></i></span><span class="pbtn"><i data-i="skip-fwd"></i></span>
+      <span class="time">02:21 / 05:12</span><span class="grow"></span>
+      <span class="pbtn txt">1.0×</span><span class="pbtn"><i data-i="music"></i></span><span class="pbtn"><i data-i="maximize"></i></span>
+    </div>
+  </div>
+  <div class="anno" data-k="规则" style="left:16px;top:60px">封面来源：同目录同名图 / cover / folder / front → ID3 内嵌 → 占位</div>
+  <div class="anno" data-k="验收" style="right:16px;top:60px">播放时旋转、暂停冻结；标题按「作者 - 标题」解析</div>
+  <div class="anno" data-k="注意" style="left:16px;bottom:96px">视频可一键切「仅音频」：关闭画面解码节电，与此界面一致</div>
+</div>
+
+<!-- ============ 5. mini 与悬浮小窗 ============ -->
+<div class="secttl">5. mini 播放条与置顶悬浮小窗（PC-603）<span class="tag rec">替代 iOS 画中画</span></div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>mini 播放条</b>：主窗口底部常驻，视频显示实时画面，音频显示封面；<b>音频无封面占位必须不透明</b></div>
+    <div class="window" style="width:578px;height:300px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item on"><i data-i="folder"></i></div><div class="nav-item"><i data-i="book"></i></div></div>
+        <div class="content">
+          <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">动漫</span></div>
+          <div class="scroll"><div class="list">
+            <div class="lrow"><div class="thumb"><i data-i="film"></i></div><div class="meta"><div class="n" style="color:var(--primary)">第01话.mkv</div><div class="s">正在播放</div></div><div class="bars"><i></i><i></i><i></i></div></div>
+            <div class="lrow"><div class="thumb"><i data-i="film"></i></div><div class="meta"><div class="n">第02话.mkv</div><div class="s">视频 · 1.3 GB</div></div></div>
+          </div></div>
+          <div class="bottom-float">
+            <div class="miniplayer">
+              <div class="mcover"><i data-i="film"></i></div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12.5px;font-weight:600">第01话 致两千年后的你.mkv</div>
+                <div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">1:48:20 / 2:49:00</div>
+              </div>
+              <span class="tbtn"><i data-i="pause"></i></span><span class="tbtn"><i data-i="maximize"></i></span><span class="tbtn"><i data-i="x"></i></span>
+              <div class="mprog"><i style="width:64%"></i></div>
+            </div>
+          </div>
+          <div class="anno" data-k="注意" style="left:12px;bottom:72px">标题下<b>不显示路径</b> · 1pt 统一描边 · 封面上浮 8pt</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>置顶悬浮小窗</b>：独立 always-on-top 窗口，可拖动缩放、记忆位置尺寸，<b>复用同一会话不重载</b></div>
+    <div style="padding:30px 60px;background:#E8EDF4;border-radius:12px;display:grid;place-items:center">
+      <div class="floatwin">
+        <div class="fv"><i data-i="film"></i><span class="pin"><i data-i="pip"></i>置顶</span></div>
+        <div class="fbar">
+          <span class="pbtn"><i data-i="pause"></i></span>
+          <div style="flex:1;height:3px;background:rgba(255,255,255,.2);border-radius:2px;position:relative">
+            <i style="position:absolute;left:0;top:0;bottom:0;width:64%;background:var(--primary);border-radius:2px;display:block"></i>
+          </div>
+          <span class="pbtn"><i data-i="volume"></i></span><span class="pbtn"><i data-i="maximize"></i></span><span class="pbtn"><i data-i="x"></i></span>
+        </div>
+      </div>
+    </div>
+    <div class="footnote" style="margin-top:10px">
+      设置项「最小化主窗口时自动弹出悬浮小窗」<b>默认关闭</b>，且<b>运行期修改立即生效</b>（不需重开视频）；手动按钮 <code>Ctrl+P</code> 不受开关影响。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 6. 系统媒体集成 ============ -->
+<div class="secttl">6. 系统媒体集成（PC-602）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>Windows SMTC</b> / <b>macOS NowPlaying</b>：标题、作者、封面、时长、进度、速率 + 媒体键</div>
+    <div class="smtc">
+      <div style="display:flex;gap:14px;align-items:center">
+        <div class="art"><i data-i="music"></i></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13.5px;font-weight:600">紅蓮の弓矢</div>
+          <div style="font-size:11.5px;opacity:.65;margin-top:3px">Linked Horizon — MyHub</div>
+          <div style="height:3px;background:rgba(255,255,255,.2);border-radius:2px;margin-top:9px"><i style="display:block;height:100%;width:45%;background:#fff;border-radius:2px"></i></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:center;gap:24px;margin-top:14px;font-size:18px;opacity:.9">
+        <i data-i="skip-back"></i><i data-i="rewind"></i><i data-i="pause"></i><i data-i="forward"></i><i data-i="skip-fwd"></i>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>托盘常驻</b>：窗口最小化后继续播放，托盘菜单可直接控制</div>
+    <div class="traymenu">
+      <div style="padding:8px 10px;font-weight:600;border-bottom:1px solid var(--separator);margin-bottom:4px;display:flex;align-items:center;gap:8px">
+        <i data-i="music" style="font-size:14px;color:var(--text-secondary)"></i>
+        <div>紅蓮の弓矢
+          <div style="font-size:10.5px;color:var(--text-secondary);font-weight:400;margin-top:2px">02:21 / 05:12</div>
+        </div>
+      </div>
+      <div class="mi"><i data-i="pause"></i>暂停</div>
+      <div class="mi"><i data-i="skip-fwd"></i>下一个</div>
+      <div class="mi"><i data-i="monitor"></i>显示主窗口</div>
+      <div style="height:1px;background:var(--separator);margin:5px 8px"></div>
+      <div class="mi"><i data-i="x"></i>退出 MyHub</div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>快捷键</th><th>功能</th><th>替代的 iOS 手势</th></tr>
+  <tr><td><code>Space</code> / <code>K</code></td><td>播放暂停</td><td>双击中央</td></tr>
+  <tr><td><code>←</code> / <code>→</code></td><td>快退快进（步长可配，默认 10s）</td><td>双击左右</td></tr>
+  <tr><td><code>Shift+←/→</code></td><td>精细 5s</td><td>水平滑动调进度</td></tr>
+  <tr><td><code>↑</code> / <code>↓</code> / 滚轮</td><td>音量 ±（步进可配）</td><td>右侧竖滑</td></tr>
+  <tr><td><code>Shift+↑/↓</code></td><td>窗口内亮度蒙层</td><td>左侧竖滑（系统亮度）</td></tr>
+  <tr><td>按住 <code>→</code> / 按住右键</td><td>2× 倍速，松开恢复</td><td>长按倍速</td></tr>
+  <tr><td><code>[</code> / <code>]</code></td><td>倍速 − / +（0.5~3.0×）</td><td>倍速菜单</td></tr>
+  <tr><td><code>F</code> / 双击</td><td>全屏切换</td><td>横竖屏切换按钮</td></tr>
+  <tr><td><code>Esc</code></td><td>退出全屏 / 退出播放器</td><td>退出按钮</td></tr>
+  <tr><td><code>Ctrl+M</code></td><td>进入 mini</td><td>中央下拉进 mini</td></tr>
+  <tr><td><code>Ctrl+P</code></td><td>弹出置顶悬浮小窗</td><td>画中画按钮</td></tr>
+  <tr><td><code>S</code> / <code>A</code> / <code>M</code> / <code>L</code></td><td>字幕 / 音轨 / 静音 / 界面锁定</td><td>对应菜单项</td></tr>
+</table>
+
+<div class="footnote">
+  <b>配色纪律：</b>播放器为沉浸纯黑场景，控制元素一律<b>白色 + 透明度</b>表达层级，进度条已播放段与「下一个」按钮用<b>主色</b>，
+  引擎徽标用半透明白底（<b>不用绿色/紫色等彩色标签</b>）。<br>
+  <b>PC-701 验收红线（逐条来自 iOS 实战经验）：</b>
+  中央开始按钮与加载圈不重叠 · 暂停/播放图标方向正确 · 不同分辨率（含竖屏）正确适配 ·
+  历史进度<b>直接从历史位置起播</b>（无「先 0 后跳」）· 弱网点进度条立即跳到目标位置且显示加载指示 ·
+  <b>缓冲恢复后不得残留加载菊花</b> · 连续切换视频<b>无残留请求</b>拖慢新视频 ·
+  多音轨容器硬解无音轨时<b>自动回退软解</b>（修复「有画面无声」）· 播放中/后可立即删除源文件（失败须给具体原因）。<br>
+  <b>PC-203 边下边播：</b>回环代理 <code>http://127.0.0.1:&lt;port&gt;/stream/&lt;id&gt;/&lt;name&gt;</code> + 1MB 分片 LRU 磁盘缓存 + 停滞看门狗 15s + 断点续传（严禁整块作废重下）+ 低优先级预读窗口。
+</div>
+
+<script src="_icons.js"></script>
+</body>
+</html>

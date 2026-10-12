@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 主窗口外壳与导航｜MyHub PC 原型</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+.dpair { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.bp .cap { font-size: 12px; color: var(--text-secondary); margin-bottom: 7px; max-width: 560px; }
+.bp .cap b { color: var(--text-primary); }
+.window.w-bp1 { width: 540px; height: 380px; }
+.window.w-bp2 { width: 400px; height: 380px; }
+.window.w-bp3 { width: 300px; height: 380px; }
+.drawer-mask { position: absolute; inset: 36px 0 0 0; background: rgba(17,24,39,.3); z-index: 30; }
+.drawer-panel {
+  position: absolute; top: 36px; left: 0; bottom: 0; width: 180px; z-index: 31;
+  background: #fff; border-right: 1px solid var(--card-border);
+  box-shadow: 6px 0 20px rgba(17,24,39,.16); padding: 10px;
+}
+.launch {
+  position: absolute; inset: 36px 0 0 0; background: #fff; z-index: 40;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+}
+.launch .logo {
+  width: 72px; height: 72px; border-radius: 18px; background: var(--primary);
+  display: grid; place-items: center; font-size: 34px; color: #fff;
+  box-shadow: 0 8px 24px rgba(37,99,235,.28);
+}
+.spin { width: 22px; height: 22px; border: 2.5px solid var(--separator); border-top-color: var(--primary); border-radius: 50%; animation: sp .8s linear infinite; }
+@keyframes sp { to { transform: rotate(360deg); } }
+.launch .txt { font-size: 12px; color: var(--text-secondary); }
+.lockmask {
+  position: absolute; inset: 36px 0 0 0; z-index: 40;
+  background: rgba(255,255,255,.72); backdrop-filter: blur(22px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+}
+.lockmask .ic { font-size: 40px; color: var(--text-secondary); }
+.lockmask .bt { background: var(--primary); color: #fff; font-size: 12.5px; padding: 8px 20px; border-radius: var(--r-button); }
+.ph { display: grid; place-items: center; height: 100%; color: var(--text-secondary); font-size: 13px; gap: 10px; }
+.ph .big { font-size: 40px; color: var(--text-faint); }
+</style>
+</head>
+<body>
+
+<h1>01 · 主窗口外壳与导航</h1>
+<p class="subtitle">
+  对应需求：<b>PC-001</b> 应用框架与自适应导航 · <b>PC-004</b> 窗口管理与系统集成 · <b>PC-601</b> 双端适配 · <b>PC-607</b> 多显示器/多窗口 · <b>PC-704</b> 启动 Loading · <b>PC-505</b> 应用锁<br>
+  桌面端以 <b>左侧侧边栏 + 内容区</b> 替代 iOS 的「iPhone 底部 TabView / iPad SplitView」。导航项与 iOS 完全一致：阅读 / 收藏 / 动态 / 浏览 / 浏览器 / 设置。
+</p>
+<a class="reflink" href="index.html"><i data-i="arrow-left"></i>返回原型总览</a>
+
+<!-- ============ 1. 标准形态 ============ -->
+<div class="secttl">1. 标准形态（窗口宽度 ≥ 1100px，侧边栏展开）<span class="tag rec">基准</span></div>
+<div class="window w-full">
+  <div class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <span class="title">MyHub</span>
+    <div class="winbtns"><span><i data-i="minus"></i></span><span><i data-i="maximize"></i></span><span><i data-i="x"></i></span></div>
+  </div>
+  <div class="body-row">
+    <div class="sidebar">
+      <div class="nav-item on"><i data-i="book"></i>阅读</div>
+      <div class="nav-item"><i data-i="star"></i>收藏</div>
+      <div class="nav-item"><i data-i="zap"></i>动态</div>
+      <div class="nav-item"><i data-i="folder"></i>浏览</div>
+      <div class="nav-item"><i data-i="globe"></i>浏览器</div>
+      <div class="nav-item"><i data-i="settings"></i>设置</div>
+      <div class="spacer"></div>
+      <div class="profile">
+        <span class="avatar"><i data-i="user"></i></span>
+        <div>
+          <div style="font-size:12px;color:var(--text-primary);font-weight:600">我的主页</div>
+          <div style="font-size:10px">缓存 1.2 GB / 2 GB</div>
+        </div>
+      </div>
+    </div>
+    <div class="content">
+      <div class="toolbar">
+        <span class="dir-title">正在阅读</span>
+        <span class="grow"></span>
+        <span class="tbtn"><i data-i="grid"></i></span><span class="tbtn"><i data-i="sort"></i></span><span class="tbtn"><i data-i="more"></i></span>
+      </div>
+      <div class="scroll">
+        <div class="ph">
+          <span class="big"><i data-i="book"></i></span>
+          <span>各模块内容区 —— 详见 02 / 03 / 04 / 05 / 06 / 07 各页原型</span>
+        </div>
+      </div>
+      <div class="bottom-float">
+        <div class="miniplayer">
+          <div class="mcover"><i data-i="film"></i></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:600">星际穿越.mkv</div>
+            <div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">1:48:20 / 2:49:00</div>
+          </div>
+          <span class="tbtn"><i data-i="skip-back"></i></span><span class="tbtn"><i data-i="pause"></i></span>
+          <span class="tbtn"><i data-i="skip-fwd"></i></span><span class="tbtn"><i data-i="maximize"></i></span><span class="tbtn"><i data-i="x"></i></span>
+          <div class="mprog"><i style="width:64%"></i></div>
+        </div>
+      </div>
+      <div class="anno" data-k="规则" style="right:16px;bottom:78px">mini 播放条跨页面常驻 · 点击展开全屏复用会话（PC-603）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 2. 宽度断点 ============ -->
+<div class="secttl">2. 窗口宽度自适应断点（§2.2.1）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>760 ~ 1100px</b>：侧边栏折叠为图标栏（64px），hover 浮出文字</div>
+    <div class="window w-bp1">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed">
+          <div class="nav-item"><i data-i="book"></i></div>
+          <div class="nav-item"><i data-i="star"></i></div>
+          <div class="nav-item"><i data-i="zap"></i></div>
+          <div class="nav-item on"><i data-i="folder"></i></div>
+          <div class="nav-item"><i data-i="globe"></i></div>
+          <div class="nav-item"><i data-i="settings"></i></div>
+          <div class="spacer"></div>
+          <div class="avatar" style="margin-bottom:6px"><i data-i="user"></i></div>
+        </div>
+        <div class="content">
+          <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">动漫</span><span class="grow"></span><span class="tbtn"><i data-i="more"></i></span></div>
+          <div class="scroll"><div class="ph"><span class="big"><i data-i="folder"></i></span><span>内容区自动加宽</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>&lt; 760px</b>：抽屉式覆盖层（汉堡唤出）</div>
+    <div class="window w-bp2">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="content">
+          <div class="toolbar"><span class="tbtn"><i data-i="menu"></i></span><span class="dir-title">浏览</span><span class="grow"></span><span class="tbtn"><i data-i="more"></i></span></div>
+          <div class="scroll"><div class="ph"><span class="big"><i data-i="folder"></i></span></div></div>
+        </div>
+      </div>
+      <div class="drawer-mask"></div>
+      <div class="drawer-panel">
+        <div class="nav-item"><i data-i="book"></i>阅读</div>
+        <div class="nav-item"><i data-i="star"></i>收藏</div>
+        <div class="nav-item"><i data-i="zap"></i>动态</div>
+        <div class="nav-item on"><i data-i="folder"></i>浏览</div>
+        <div class="nav-item"><i data-i="globe"></i>浏览器</div>
+        <div class="nav-item"><i data-i="settings"></i>设置</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>暗色主题</b>：纯黑背景 <code>#000</code>、卡片 <code>#121212</code>、侧栏 <code>#0A0A0A</code></div>
+    <div class="window dark w-bp3">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed">
+          <div class="nav-item on"><i data-i="book"></i></div>
+          <div class="nav-item"><i data-i="star"></i></div>
+          <div class="nav-item"><i data-i="folder"></i></div>
+          <div class="nav-item"><i data-i="globe"></i></div>
+          <div class="nav-item"><i data-i="settings"></i></div>
+        </div>
+        <div class="content">
+          <div class="toolbar"><span class="dir-title" style="color:var(--d-text-primary)">正在阅读</span></div>
+          <div class="scroll">
+            <div class="list">
+              <div class="lrow"><div class="thumb"><i data-i="film"></i></div><div class="meta"><div class="n" style="color:var(--d-text-primary)">星际穿越</div><div class="s">视频 · 已看 65%</div></div></div>
+              <div class="lrow"><div class="thumb"><i data-i="book-open"></i></div><div class="meta"><div class="n" style="color:var(--d-text-primary)">三体</div><div class="s">小说 · 已读 12%</div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. 启动与锁定 ============ -->
+<div class="secttl">3. 启动流程与应用锁（§2.2.4 / PC-505 / PC-704）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>启动 Loading</b>：品牌图标 + 旋转，<b>不得出现长白屏</b></div>
+    <div class="window w-sm">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="launch">
+        <div class="logo"><i data-i="logo"></i></div>
+        <div class="spin"></div>
+        <div class="txt">正在初始化连接源…</div>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>应用锁</b>：Windows Hello / macOS Touch ID，回退本地 PIN</div>
+    <div class="window w-sm">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item"><i data-i="book"></i></div><div class="nav-item"><i data-i="folder"></i></div></div>
+        <div class="content"><div class="scroll"></div></div>
+      </div>
+      <div class="lockmask">
+        <div class="ic"><i data-i="lock"></i></div>
+        <div style="font-size:13px;font-weight:600">MyHub 已锁定</div>
+        <div style="font-size:11.5px;color:var(--text-secondary)">使用 Windows Hello 验证身份以继续</div>
+        <div class="bt">验证身份</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>要素</th><th>桌面实现</th><th>对应 iOS</th><th>需求编号</th></tr>
+  <tr><td>导航形态</td><td>左侧侧边栏（200px 展开 / 64px 折叠 / &lt;760px 抽屉）</td><td>iPhone 底部 TabView / iPad SplitView</td><td>PC-001</td></tr>
+  <tr><td>导航项</td><td>阅读 / 收藏 / 动态 / 浏览 / 浏览器 / 设置（与 iOS 完全一致）</td><td>同左</td><td>PC-001</td></tr>
+  <tr><td>选中高亮</td><td>浅蓝胶囊（<code>#EEF4FB</code> 底 + 主色字与图标）</td><td>同左</td><td>§2.2.1</td></tr>
+  <tr><td>重复点击导航</td><td>回到该模块起始页（浏览页回连接源列表）</td><td><code>AppRouter.reselect</code></td><td>PC-001</td></tr>
+  <tr><td>页面保活</td><td>各模块常驻不销毁，保留滚动位置/搜索词/选择态</td><td>TabView 保活</td><td>§2.2.2</td></tr>
+  <tr><td>mini 播放条</td><td>内容区底部悬浮，跨页面常驻，可展开回全屏</td><td>MiniPlayer 悬浮条</td><td>PC-603</td></tr>
+  <tr><td>头像入口</td><td>侧边栏底部常驻，点击直达个人主页</td><td><code>ProfileEntryButton</code></td><td>PC-704</td></tr>
+  <tr><td>窗口按钮</td><td>Windows 自绘标题栏；macOS 原生交通灯 + 全屏 Space</td><td>—（新增）</td><td>PC-601</td></tr>
+  <tr><td>启动 Loading</td><td>品牌图标 + 旋转，无长白屏</td><td><code>LaunchLoadingView</code></td><td>PC-704</td></tr>
+  <tr><td>应用锁</td><td>全窗遮罩 + Windows Hello / Touch ID</td><td>Face ID / Touch ID</td><td>PC-505</td></tr>
+</table>
+
+<div class="footnote">
+  <b>与 iOS 的关键差异：</b>iOS 的底部页签栏在桌面端转为左侧边栏，因此 iOS TODO 中「多选态隐藏底部 tab 栏 + mini 播放器」在 PC 端表现为
+  <b>多选态隐藏底部 mini 播放条，让多选操作栏落到底部</b>（侧边栏不隐藏，详见 <a href="02-browse.html">02 浏览页原型</a>）。<br>
+  <b>毛玻璃：</b>标题栏、工具栏、底部悬浮装饰在 Windows 用 Acrylic/Mica（<code>DwmSetWindowAttribute</code>）、macOS 用 <code>NSVisualEffectView</code>，
+  原型以半透明 + <code>backdrop-filter</code> 近似演示。<br>
+  <b>统一描边：</b>卡片 / mini 播放条 / 工具栏 / 多选操作栏一律 1pt <code>#EDF0F3</code>（暗色 <code>#262626</code>），不得各自为政。<br>
+  <b>窗口控制点：</b>原型统一为中性灰圆点；实际实现 macOS 用系统原生交通灯（系统着色），Windows 用线形最小化/最大化/关闭按钮。
+</div>
+
+<script src="_icons.js"></script>
+</body>
+</html>

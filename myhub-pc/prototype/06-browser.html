@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · 内置浏览器｜MyHub PC 原型</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+.dpair { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.bp .cap { font-size: 12px; color: var(--text-secondary); margin-bottom: 7px; max-width: 560px; }
+.bp .cap b { color: var(--text-primary); }
+
+.tabstrip {
+  flex: none; height: 38px; display: flex; align-items: flex-end; gap: 3px;
+  padding: 0 8px; background: #F3F4F6; border-bottom: 1px solid var(--card-border);
+}
+.btab {
+  display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px;
+  border-radius: 9px 9px 0 0; font-size: 12px; max-width: 190px; cursor: pointer;
+  background: rgba(255,255,255,.5); color: var(--text-secondary);
+}
+.btab:hover { background: rgba(255,255,255,.8); }
+.btab.on { background: #fff; color: var(--text-primary); font-weight: 500; box-shadow: 0 -1px 3px rgba(0,0,0,.05); }
+.btab [data-i] { font-size: 12px; }
+.btab .tn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btab .x { font-size: 11px; opacity: .45; }
+.btab .x:hover { opacity: 1; }
+.btab.incog { background: #4B5058; color: #E5E7EB; }
+.newtab { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; font-size: 14px; color: var(--text-secondary); margin-bottom: 2px; cursor: pointer; }
+.newtab:hover { background: rgba(0,0,0,.06); }
+
+.btoolbar {
+  flex: none; margin: 8px 12px 6px; height: 46px;
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-radius: 23px; box-shadow: var(--shadow-card);
+  display: flex; align-items: center; gap: 2px; padding: 0 8px;
+}
+.bbtn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 16px; font-size: 15px; color: var(--text-secondary); cursor: pointer; }
+.bbtn:hover { background: rgba(37,99,235,.08); color: var(--primary); }
+.bbtn.disabled { opacity: .3; }
+.addr {
+  flex: 1; height: 34px; background: var(--field-fill); border-radius: 17px;
+  display: flex; align-items: center; gap: 8px; padding: 0 14px; font-size: 12.5px; margin: 0 6px;
+}
+.addr [data-i] { font-size: 12px; color: var(--text-secondary); }
+.addr .host { font-weight: 600; }
+.addr .path { color: var(--text-secondary); }
+.tabcount {
+  height: 30px; min-width: 30px; padding: 0 9px; background: var(--field-fill); border-radius: 15px;
+  display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--text-secondary); cursor: pointer;
+}
+.progbar { position: absolute; left: 12px; right: 12px; height: 2px; background: var(--primary); border-radius: 1px; z-index: 12; }
+
+.webarea { flex: 1; background: #fff; overflow: hidden; position: relative; }
+.fakepage { padding: 26px 34px; }
+.fakepage .hero { height: 86px; background: #EEF4FB; border-radius: 12px; margin-bottom: 18px; display: grid; place-items: center; color: var(--primary-ink); font-size: 15px; font-weight: 600; }
+.fakepage .ln { height: 11px; background: #F1F5F9; border-radius: 5px; margin-bottom: 9px; }
+.fakepage .ln.s { width: 62%; } .fakepage .ln.m { width: 84%; }
+.fakepage .cols { display: flex; gap: 14px; margin-top: 18px; }
+.fakepage .col { flex: 1; height: 90px; background: #F8FAFC; border: 1px solid var(--card-border); border-radius: 10px; }
+
+.startpage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; background: #fff; }
+.bigsearch {
+  width: 560px; height: 50px; background: var(--card-bg); border: 1px solid var(--card-border);
+  border-radius: 25px; box-shadow: var(--shadow-card); display: flex; align-items: center;
+  gap: 12px; padding: 0 20px; font-size: 13.5px; color: var(--text-secondary);
+}
+.bigsearch [data-i] { font-size: 16px; }
+.shortcuts { display: grid; grid-template-columns: repeat(5, 76px); gap: 16px; }
+.sc { display: flex; flex-direction: column; align-items: center; gap: 7px; cursor: pointer; }
+.sc .ic {
+  width: 52px; height: 52px; border-radius: 14px; background: var(--card-bg);
+  border: 1px solid var(--card-border); display: grid; place-items: center; font-size: 21px;
+  box-shadow: var(--shadow-card); color: var(--text-secondary);
+}
+.sc:hover .ic { background: #EEF4FB; color: var(--primary); }
+.sc .lb { font-size: 11px; color: var(--text-secondary); }
+.sc.add .ic { border-style: dashed; }
+
+.tabgrid { flex: 1; padding: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; align-content: start; background: #F3F4F6; overflow: auto; }
+.tcard { background: #fff; border: 1px solid var(--card-border); border-radius: var(--r-card); overflow: hidden; cursor: pointer; position: relative; }
+.tcard.on { outline: 2px solid var(--primary); }
+.tcard .shot { height: 96px; background: #F5F7FA; display: grid; place-items: center; font-size: 22px; color: var(--text-faint); }
+.tcard .bar { padding: 7px 9px; display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.tcard .bar [data-i] { font-size: 12px; color: var(--text-secondary); }
+.tcard .bar .tn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard .x { position: absolute; right: 6px; top: 6px; width: 20px; height: 20px; border-radius: 50%; background: rgba(26,26,46,.45); color: #fff; display: grid; place-items: center; font-size: 10px; }
+
+.panel-page { flex: 1; display: flex; flex-direction: column; background: #fff; }
+.hrow { display: flex; align-items: center; gap: 11px; padding: 9px 14px; font-size: 12.5px; cursor: pointer; }
+.hrow:hover { background: rgba(37,99,235,.05); }
+.hrow .fav { width: 22px; height: 22px; border-radius: 5px; background: var(--field-fill); display: grid; place-items: center; font-size: 12px; color: var(--text-secondary); flex: none; }
+.hrow .u { font-size: 11px; color: var(--text-secondary); }
+.daygroup { font-size: 11px; font-weight: 700; color: var(--text-secondary); padding: 12px 14px 6px; }
+.errpage { flex: 1; display: grid; place-items: center; gap: 12px; background: #fff; color: var(--text-secondary); font-size: 12.5px; }
+.errpage .big { font-size: 40px; color: var(--text-faint); }
+.errpage .bt { background: var(--primary); color: #fff; font-size: 12px; padding: 7px 18px; border-radius: var(--r-button); }
+.minicapsule {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 20;
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 19px;
+  box-shadow: var(--shadow-float); height: 38px; display: flex; align-items: center;
+  gap: 8px; padding: 0 16px; font-size: 12px;
+}
+.dlpanel {
+  position: absolute; right: 14px; top: 62px; width: 290px; background: #fff;
+  border: 1px solid var(--card-border); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(17,24,39,.18); padding: 12px; z-index: 30;
+}
+.setgroup { background: #fff; border: 1px solid var(--card-border); border-radius: 12px; overflow: hidden; }
+.setgroup .sp { height: 1px; background: var(--separator); margin: 0 14px; }
+</style>
+</head>
+<body>
+
+<h1>06 · 内置浏览器</h1>
+<p class="subtitle">
+  对应需求：<b>PC-401</b> 浏览器核心（多标签/保活/会话持久化）· <b>PC-402</b> 起始页与快捷入口 · <b>PC-403</b> 书签与历史 · <b>PC-404</b> 浏览器设置<br>
+  Qt 实现：<b>QtWebEngine</b>（内置 Chromium，两端同一内核）。每标签一个 <code>WebEngineView</code> 实例常驻保活；无痕用 off-the-record <code>QWebEngineProfile</code>。
+</p>
+<a class="reflink" href="index.html"><i data-i="arrow-left"></i>返回原型总览</a>
+
+<!-- ============ 1. 浏览器主界面 ============ -->
+<div class="secttl">1. 浏览器主界面 · 多标签（PC-401）<span class="tag rec">基准</span></div>
+<div class="window w-full" style="height:620px">
+  <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span><div class="winbtns"><span><i data-i="minus"></i></span><span><i data-i="maximize"></i></span><span><i data-i="x"></i></span></div></div>
+  <div class="body-row">
+    <div class="sidebar collapsed">
+      <div class="nav-item"><i data-i="book"></i></div><div class="nav-item"><i data-i="star"></i></div>
+      <div class="nav-item"><i data-i="zap"></i></div><div class="nav-item"><i data-i="folder"></i></div>
+      <div class="nav-item on"><i data-i="globe"></i></div><div class="nav-item"><i data-i="settings"></i></div>
+    </div>
+    <div class="content">
+      <div class="tabstrip">
+        <div class="btab on"><i data-i="globe"></i><span class="tn">Qt 6 Documentation</span><span class="x"><i data-i="x"></i></span></div>
+        <div class="btab"><i data-i="globe"></i><span class="tn">GitHub · KDE/mpvqt</span><span class="x"><i data-i="x"></i></span></div>
+        <div class="btab"><i data-i="search"></i><span class="tn">libsmb2 build windows</span><span class="x"><i data-i="x"></i></span></div>
+        <div class="btab incog"><i data-i="eye-off"></i><span class="tn">无痕标签</span><span class="x"><i data-i="x"></i></span></div>
+        <div class="newtab"><i data-i="plus"></i></div>
+      </div>
+      <div class="btoolbar">
+        <span class="bbtn"><i data-i="arrow-left"></i></span><span class="bbtn disabled"><i data-i="arrow-right"></i></span><span class="bbtn"><i data-i="refresh"></i></span>
+        <div class="addr">
+          <i data-i="lock"></i><span class="host">doc.qt.io</span><span class="path">/qt-6/qquickrhiitem.html</span>
+        </div>
+        <div class="tabcount">4</div>
+        <span class="bbtn"><i data-i="more"></i></span>
+      </div>
+      <div class="webarea">
+        <div class="progbar" style="width:58%;top:0"></div>
+        <div class="fakepage">
+          <div class="hero">QQuickRhiItem Class · Qt Quick</div>
+          <div class="ln m"></div><div class="ln"></div><div class="ln s"></div>
+          <div class="cols"><div class="col"></div><div class="col"></div><div class="col"></div></div>
+          <div class="ln m" style="margin-top:18px"></div><div class="ln s"></div>
+        </div>
+      </div>
+      <div class="anno" data-k="规则" style="left:16px;top:96px">每标签独立 <code>WebEngineView</code> 常驻保活 · 切标签不销毁、<b>历史栈不丢</b></div>
+      <div class="anno" data-k="验收" style="right:150px;top:96px">地址栏<b>居中且宽度受控</b>，不得撑满窗口</div>
+      <div class="anno" data-k="规则" style="left:16px;top:146px">2px 主色加载进度条（<code>loadProgress</code> 信号）</div>
+      <div class="anno" data-k="规则" style="left:420px;top:60px">标签支持<b>拖拽排序</b> · 无痕标签深灰底区分（不用彩色）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 2. 起始页 ============ -->
+<div class="secttl">2. 起始页与快捷入口（PC-402）</div>
+<div class="window w-full" style="height:560px">
+  <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span><div class="winbtns"><span><i data-i="minus"></i></span><span><i data-i="maximize"></i></span><span><i data-i="x"></i></span></div></div>
+  <div class="body-row">
+    <div class="sidebar collapsed">
+      <div class="nav-item"><i data-i="book"></i></div><div class="nav-item"><i data-i="star"></i></div>
+      <div class="nav-item"><i data-i="zap"></i></div><div class="nav-item"><i data-i="folder"></i></div>
+      <div class="nav-item on"><i data-i="globe"></i></div><div class="nav-item"><i data-i="settings"></i></div>
+    </div>
+    <div class="content">
+      <div class="tabstrip">
+        <div class="btab on"><i data-i="monitor"></i><span class="tn">新标签页</span><span class="x"><i data-i="x"></i></span></div>
+        <div class="btab"><i data-i="globe"></i><span class="tn">Qt 6 Documentation</span><span class="x"><i data-i="x"></i></span></div>
+        <div class="newtab"><i data-i="plus"></i></div>
+      </div>
+      <div class="btoolbar">
+        <span class="bbtn disabled"><i data-i="arrow-left"></i></span><span class="bbtn disabled"><i data-i="arrow-right"></i></span><span class="bbtn"><i data-i="refresh"></i></span>
+        <div class="addr" style="color:var(--text-faint)">搜索或输入网址</div>
+        <div class="tabcount">2</div>
+        <span class="bbtn"><i data-i="more"></i></span>
+      </div>
+      <div class="startpage">
+        <div style="font-size:26px;font-weight:700;letter-spacing:1px;color:var(--primary);display:flex;align-items:center;gap:10px">
+          <i data-i="logo" style="font-size:28px"></i>MyHub
+        </div>
+        <div class="bigsearch"><i data-i="search"></i><span>用 Bing 搜索，或输入网址</span></div>
+        <div class="shortcuts">
+          <div class="sc"><div class="ic"><i data-i="globe"></i></div><div class="lb">GitHub</div></div>
+          <div class="sc"><div class="ic"><i data-i="book-open"></i></div><div class="lb">Qt Docs</div></div>
+          <div class="sc"><div class="ic"><i data-i="film"></i></div><div class="lb">YouTube</div></div>
+          <div class="sc"><div class="ic"><i data-i="bookmark"></i></div><div class="lb">知乎</div></div>
+          <div class="sc add"><div class="ic"><i data-i="plus"></i></div><div class="lb">添加</div></div>
+        </div>
+      </div>
+      <div class="anno" data-k="验收" style="left:16px;bottom:96px">快捷入口支持增删改 + <b>拖拽排序</b> + 首启预置（<b>必须在数据库就绪后执行</b>）</div>
+      <div class="anno" data-k="注意" style="right:16px;bottom:96px">起始页<b>只保留一个搜索框</b>，地址栏退化为占位（iOS 实战经验）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. 标签管理 / 书签 / 历史 ============ -->
+<div class="secttl">3. 标签网格、书签与历史（PC-401 / PC-403）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>标签卡片网格</b>：新建 / 关闭 / 切换 / 拖拽排序 / 无痕开关</div>
+    <div class="window" style="width:578px;height:400px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item on"><i data-i="globe"></i></div><div class="nav-item"><i data-i="folder"></i></div></div>
+        <div class="content">
+          <div class="toolbar"><span class="dir-title">标签页（4）</span><span class="grow"></span>
+            <span class="tbtn txt"><i data-i="eye-off" style="margin-right:4px"></i>无痕</span>
+            <span class="tbtn"><i data-i="plus"></i></span><span class="tbtn"><i data-i="x"></i></span>
+          </div>
+          <div class="tabgrid">
+            <div class="tcard on"><div class="shot"><i data-i="globe"></i></div><div class="bar"><i data-i="globe"></i><span class="tn">Qt 6 Documentation</span></div><div class="x"><i data-i="x"></i></div></div>
+            <div class="tcard"><div class="shot"><i data-i="globe"></i></div><div class="bar"><i data-i="globe"></i><span class="tn">KDE/mpvqt</span></div><div class="x"><i data-i="x"></i></div></div>
+            <div class="tcard"><div class="shot"><i data-i="search"></i></div><div class="bar"><i data-i="search"></i><span class="tn">libsmb2 build</span></div><div class="x"><i data-i="x"></i></div></div>
+            <div class="tcard"><div class="shot" style="background:#4B5058;color:rgba(255,255,255,.7)"><i data-i="eye-off"></i></div><div class="bar"><i data-i="eye-off"></i><span class="tn">无痕标签</span></div><div class="x"><i data-i="x"></i></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>历史记录</b>：按日分组 + 搜索 + 单条删除 + 清空；<b>数据层必须在数据库就绪后装载</b></div>
+    <div class="window" style="width:578px;height:400px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row">
+        <div class="sidebar collapsed"><div class="nav-item on"><i data-i="globe"></i></div><div class="nav-item"><i data-i="folder"></i></div></div>
+        <div class="content">
+          <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">历史记录</span><span class="grow"></span><span class="tbtn"><i data-i="search"></i></span><span class="tbtn"><i data-i="trash"></i></span></div>
+          <div class="panel-page" style="overflow:auto">
+            <div class="daygroup">今天 · 10 月 12 日</div>
+            <div class="hrow"><div class="fav"><i data-i="globe"></i></div><div style="flex:1"><div>QQuickRhiItem Class</div><div class="u">doc.qt.io/qt-6/qquickrhiitem.html</div></div><span style="font-size:11px;color:var(--text-faint)">14:28</span></div>
+            <div class="hrow"><div class="fav"><i data-i="globe"></i></div><div style="flex:1"><div>KDE/mpvqt: libmpv wrapper for QtQuick2</div><div class="u">github.com/KDE/mpvqt</div></div><span style="font-size:11px;color:var(--text-faint)">14:06</span></div>
+            <div class="hrow"><div class="fav"><i data-i="search"></i></div><div style="flex:1"><div>libsmb2 build windows msvc</div><div class="u">bing.com/search?q=…</div></div><span style="font-size:11px;color:var(--text-faint)">13:51</span></div>
+            <div class="daygroup">昨天 · 10 月 11 日</div>
+            <div class="hrow"><div class="fav"><i data-i="package"></i></div><div style="flex:1"><div>libarchive Downloads</div><div class="u">libarchive.org</div></div><span style="font-size:11px;color:var(--text-faint)">21:14</span></div>
+            <div class="hrow"><div class="fav"><i data-i="shield"></i></div><div style="flex:1"><div>Qt Licensing</div><div class="u">qt.io/licensing</div></div><span style="font-size:11px;color:var(--text-faint)">20:42</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>错误页</b>：加载失败 / SSL 错误 + 重试</div>
+    <div class="window" style="width:578px;height:320px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="btoolbar" style="margin-top:8px">
+          <span class="bbtn"><i data-i="arrow-left"></i></span><span class="bbtn disabled"><i data-i="arrow-right"></i></span><span class="bbtn"><i data-i="refresh"></i></span>
+          <div class="addr"><i data-i="alert"></i><span class="host">example.invalid</span></div>
+          <div class="tabcount">1</div><span class="bbtn"><i data-i="more"></i></span>
+        </div>
+        <div class="errpage">
+          <span class="big"><i data-i="cloud-off"></i></span>
+          <span style="font-weight:600;color:var(--text-primary)">无法访问此网站</span>
+          <span>DNS 解析失败：ERR_NAME_NOT_RESOLVED</span>
+          <span class="bt">重试</span>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>工具栏收起</b>（窗口高度不足时）：收为底部小胶囊，<b>始终可见可点击</b>，点击恢复</div>
+    <div class="window" style="width:578px;height:320px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="webarea"><div class="fakepage" style="padding:18px 24px">
+          <div class="hero" style="height:60px;font-size:13px">Qt 6 Documentation</div>
+          <div class="ln m"></div><div class="ln"></div><div class="ln s"></div><div class="ln m"></div><div class="ln"></div>
+        </div></div>
+        <div class="minicapsule"><i data-i="lock" style="font-size:12px;color:var(--text-secondary)"></i><b style="font-weight:600">doc.qt.io</b></div>
+        <div class="anno" data-k="注意" style="left:12px;bottom:60px">iOS 的「滚动收起」在桌面默认<b>常驻</b>，仅窗口高度不足/沉浸阅读时收起</div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 4. 下载与设置 ============ -->
+<div class="secttl">4. 下载接管与浏览器设置（PC-401 / PC-404）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>下载接管</b>（桌面优于 iOS 的「引导系统浏览器」）：下载到应用下载目录 + 完成提示 + 在文件管理器中显示</div>
+    <div class="window" style="width:578px;height:330px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="btoolbar" style="margin-top:8px">
+          <span class="bbtn"><i data-i="arrow-left"></i></span><span class="bbtn"><i data-i="arrow-right"></i></span><span class="bbtn"><i data-i="refresh"></i></span>
+          <div class="addr"><i data-i="lock"></i><span class="host">libarchive.org</span></div>
+          <div class="tabcount">1</div><span class="bbtn"><i data-i="more"></i></span>
+        </div>
+        <div class="webarea"><div class="fakepage" style="padding:18px 24px"><div class="ln m"></div><div class="ln"></div><div class="ln s"></div></div></div>
+        <div class="dlpanel">
+          <div style="font-size:12px;font-weight:700;margin-bottom:9px">下载</div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <div style="width:34px;height:34px;border-radius:8px;background:var(--field-fill);display:grid;place-items:center;font-size:15px;color:var(--text-secondary)"><i data-i="package"></i></div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:11.5px;font-weight:600">libarchive-3.7.4.tar.gz</div>
+              <div style="height:3px;background:var(--separator);border-radius:2px;margin-top:6px"><i style="display:block;height:100%;width:72%;background:var(--primary);border-radius:2px"></i></div>
+              <div style="font-size:10px;color:var(--text-secondary);margin-top:4px">5.2 MB / 7.2 MB · 1.4 MB/s</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:11px;font-size:11px;align-items:center">
+            <span style="flex:1;text-align:center;padding:6px;background:var(--field-fill);border-radius:14px;display:flex;align-items:center;justify-content:center;gap:5px"><i data-i="external"></i>在文件夹中显示</span>
+            <span style="padding:6px 12px;background:var(--field-fill);border-radius:14px"><i data-i="x"></i></span>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="bp">
+    <div class="cap"><b>浏览器设置</b>（PC-404）：默认搜索引擎 / 默认 UA / 清除浏览数据</div>
+    <div class="window" style="width:578px;height:330px">
+      <div class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><span class="title">MyHub</span></div>
+      <div class="body-row"><div class="content">
+        <div class="toolbar"><span class="tbtn"><i data-i="arrow-left"></i></span><span class="dir-title">浏览器设置</span></div>
+        <div class="scroll" style="padding-top:10px">
+          <div class="setgroup">
+            <div class="hrow" style="justify-content:space-between"><span>默认搜索引擎</span><span style="color:var(--text-secondary);display:flex;align-items:center;gap:5px">Bing <i data-i="chevron-right"></i></span></div>
+            <div class="sp"></div>
+            <div class="hrow" style="justify-content:space-between"><span>默认 UA</span><span style="color:var(--text-secondary);display:flex;align-items:center;gap:5px">跟随平台 <i data-i="chevron-right"></i></span></div>
+            <div class="sp"></div>
+            <div class="hrow" style="justify-content:space-between"><span>启动时恢复上次标签</span><span style="color:var(--primary)"><i data-i="check"></i></span></div>
+          </div>
+          <div class="setgroup" style="margin-top:12px">
+            <div class="hrow" style="color:var(--danger)"><i data-i="trash"></i>清除缓存</div>
+            <div class="sp"></div>
+            <div class="hrow" style="color:var(--danger)"><i data-i="trash"></i>清除 Cookie</div>
+            <div class="sp"></div>
+            <div class="hrow" style="color:var(--danger)"><i data-i="trash"></i>清除历史记录</div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>需求</th><th>QtWebEngine API</th><th>编号</th></tr>
+  <tr><td>多标签保活</td><td>多个 <code>WebEngineView</code> 实例常驻（切标签不销毁、历史栈不丢）</td><td>PC-401</td></tr>
+  <tr><td>无痕隔离</td><td><code>QWebEngineProfile</code> off-the-record（默认构造即 OTR）</td><td>PC-401</td></tr>
+  <tr><td>下载接管</td><td><code>downloadRequested</code> + <code>QWebEngineDownloadRequest</code></td><td>PC-401</td></tr>
+  <tr><td>favicon / 标题</td><td><code>QWebEnginePage::iconUrl</code> / <code>iconChanged</code></td><td>PC-401</td></tr>
+  <tr><td>加载进度条</td><td><code>loadProgress(int)</code> 信号</td><td>PC-401</td></tr>
+  <tr><td>页内查找</td><td><code>findText()</code>（<code>Ctrl+F</code>）</td><td>PC-401</td></tr>
+  <tr><td>UA 覆盖</td><td><code>QWebEngineProfile::setHttpUserAgent</code></td><td>PC-404</td></tr>
+  <tr><td><code>_blank</code> 拦截</td><td>重写 <code>createWindow()</code> → 新标签打开</td><td>PC-401</td></tr>
+  <tr><td>SSL 错误页</td><td><code>certificateError</code> 信号 + 自绘错误页</td><td>PC-401</td></tr>
+  <tr><td>清除数据</td><td><code>clearHttpCache()</code> / <code>cookieStore()->deleteAllCookies()</code></td><td>PC-404</td></tr>
+  <tr><td>缩放</td><td><code>setZoomFactor()</code>（<code>Ctrl+±</code>）</td><td>PC-401</td></tr>
+</table>
+
+<div class="footnote">
+  <b>配色纪律：</b>标签页 favicon 在原型中以<b>统一线形图标占位</b>（实际运行显示站点真实 favicon，属外部内容不受本约束）；
+  无痕标签用<b>深灰底</b>区分而非紫色；清除数据等破坏性项用语义红。<br>
+  <b>iOS 实战经验的 PC 对应（TODO §14.13）：</b>
+  地址栏<b>居中且宽度受控</b>（不得撑满窗口导致看不到光标）· <b>只保留一个 URL 输入框</b>（起始页与地址栏不重复）·
+  <b>起始页作为可回退的虚拟第一页</b>（从起始页导航后后退按钮可用并能回到起始页）· <b>回退到最后一页不得关闭标签</b> ·
+  <b>标签会话持久化</b>（URL 变化即落盘，退出前兜底落盘；无痕标签不保存）· <b>历史记录与快捷入口必须在数据库就绪后装载</b>
+  （否则冷启动读到空列表，表现为「历史记录没生效」）· 快捷入口预置标记<b>仅在写入成功后设置</b> · 工具栏按钮按压动画 · 标签拖拽排序。<br>
+  <b>已知代价（§7.1）：</b>QtWebEngine 的 Chromium 基线<b>滞后上游</b>，需随 Qt 常规版本滚动升级；对关键站点提供「用系统浏览器打开」出口。
+</div>
+
+<script src="_icons.js"></script>
+</body>
+</html>

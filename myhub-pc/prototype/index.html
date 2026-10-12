@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyHub PC 原型总览</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(282px, 1fr)); gap: 18px; max-width: 1180px; }
+.pcard {
+  background: #fff; border: 1px solid var(--card-border); border-radius: var(--r-card);
+  overflow: hidden; text-decoration: none; color: inherit; display: flex; flex-direction: column;
+  box-shadow: var(--shadow-card); transition: transform .14s ease, box-shadow .14s ease;
+}
+.pcard:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(17,24,39,.13); }
+.pcard .pv {
+  height: 118px; background: #F5F7FA; color: var(--text-faint);
+  display: grid; place-items: center; font-size: 40px; border-bottom: 1px solid var(--card-border);
+}
+.pcard:hover .pv { background: #EEF4FB; color: var(--primary); }
+.pcard .pb { padding: 14px; }
+.pcard .pt { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.pcard .pn { font-size: 11px; font-weight: 700; color: var(--primary-ink); background: #EEF4FB; border-radius: 6px; padding: 1px 7px; }
+.pcard .pd { font-size: 11.5px; color: var(--text-secondary); line-height: 1.7; margin-top: 7px; min-height: 58px; }
+.pcard .pr { font-size: 10.5px; color: var(--text-faint); margin-top: 8px; border-top: 1px solid var(--separator); padding-top: 8px; }
+.tokens { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; max-width: 1180px; }
+.tk { display: flex; align-items: center; gap: 7px; background: #fff; border: 1px solid var(--card-border); border-radius: 9px; padding: 7px 11px; font-size: 11.5px; }
+.sw { width: 20px; height: 20px; border-radius: 5px; border: 1px solid rgba(0,0,0,.08); flex: none; }
+.note {
+  background: #fff; border: 1px solid var(--card-border); border-left: 3px solid var(--primary);
+  border-radius: var(--r-card); padding: 14px 16px; font-size: 12.5px; line-height: 1.85;
+  max-width: 1180px; margin-top: 16px; color: var(--text-secondary);
+}
+.note b { color: var(--text-primary); }
+.iconwall { display: flex; flex-wrap: wrap; gap: 8px; max-width: 1180px; margin-top: 10px; }
+.iw {
+  width: 78px; background: #fff; border: 1px solid var(--card-border); border-radius: 9px;
+  padding: 10px 4px 7px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  font-size: 9.5px; color: var(--text-faint);
+}
+.iw [data-i] { font-size: 19px; color: var(--text-secondary); }
+.legend { display: inline-flex; align-items: center; gap: 6px; background: var(--anno-bg); color: #fff; font-size: 10px; font-weight: 500; padding: 3px 9px; border-radius: 8px; }
+.legend span { font-size: 9px; font-weight: 700; letter-spacing: .5px; opacity: .55; border-right: 1px solid rgba(255,255,255,.28); padding-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1>MyHub PC 桌面端 · 页面原型总览</h1>
+<p class="subtitle">
+  技术栈：<b>Qt 6（LGPLv3）+ QML + C++20</b>｜平台：Windows 10 1809+ / macOS 12+<br>
+  原型用于确认交互与视觉方案，设计令牌严格对齐《需求分析文档》<b>§2.10 UI 风格设计</b>；
+  每页顶部标注对应的 <b>PC-xxx 需求编号</b>，并把 iOS 端 130 条「体验优化 / bug 修复」经验以<b>标注气泡</b>直接钉在界面上。<br>
+  参考来源：<code>myhub-ios/prototype/</code>（iOS 端方案原型）＋《myhub-ios/TODO.md》末章实战经验。
+</p>
+
+<div class="cards">
+  <a class="pcard" href="01-shell-navigation.html">
+    <div class="pv"><i data-i="monitor"></i></div>
+    <div class="pb">
+      <div class="pt"><span class="pn">01</span>主窗口外壳与导航</div>
+      <div class="pd">侧边栏（展开/折叠/抽屉三断点）、标题栏、mini 播放条、暗色主题、启动 Loading、应用锁。</div>
+      <div class="pr">PC-001 · PC-004 · PC-601 · PC-607 · PC-704 · PC-505</div>
+    </div>
+  </a>
+
+  <a class="pcard" href="02-browse.html">
+    <div class="pv"><i data-i="folder"></i></div>
+    <div class="pb">
+      <div class="pt"><span class="pn">02</span>浏览页（文件管理）</div>
+      <div class="pd">连接源选择、网格/列表视图、搜索框显隐、右键菜单、多选操作栏、状态指示、拖拽上传、四态。</div>
+      <div class="pr">PC-101~110 · PC-702 · PC-704</div>
+    </div>
+  </a>
+
+  <a class="pcard" href="03-player.html">
+    <div class="pv"><i data-i="play-circle"></i></div>
+    <div class="pb">
+      <div class="pt"><span class="pn">03</span>播放器（视频 / 音频）</div>
+      <div class="pd">控制层、键鼠分区、中央数值反馈、界面锁定、纯音频唱片封面、mini 条、置顶悬浮小窗、系统媒体集成。</div>
+      <div class="pr">PC-201~204 · PC-602 · PC-603 · PC-701 · PC-703</div>
+    </div>
+  </a>
+
+  <a class="pcard" href="04-readers.html">
+    <div class="pv"><i data-i="book-open"></i></div>
+    <div class="pb">
+      <div class="pt"><span class="pn">04</span>阅读器（小说 / 漫画 / 纯文本）</div>
+      <div class="pd">翻页与滚动、目录抽屉、阅读主题与设置面板、漫画三模式、缩略图面板、弱网加载态、图片预览。</div>
+      <div class="pr">PC-205~208 · PC-210 · PC-108 · PC-706</div>
+    </div>
+  </a>
+
+  <a class="pcard" href="05-reading-home.html">
+    <div class="pv"><i data-i="book"></i></div>
+    <div class="pb">
+      <div class="pt"><span class="pn">05</span>正在阅读首页与收藏</div>
+      <div class="pd">饼状进度、类型徽标、已读完文案、网格/列表、多选批量操作、右键菜单、确认框、空态、收藏页。</div>
+      <div class="pr">PC-209 · PC-107 · PC-110 · PC-705</div>
+    </div>
+  </a>
+
+  <a class="pcard" href="06-browser.html">
+    <div class="pv"><i data-i="globe"></i></div>
+    <div class="pb">
+      <div class="pt"><span class="pn">06</span>内置浏览器</div>
+      <div class="pd">多标签条、悬浮工具栏胶囊、起始页快捷入口、标签网格、历史书签、错误页、下载接管、浏览器设置。</div>
+      <div class="pr">PC-401~404</div>
+    </div>
+  </a>
+
+  <a class="pcard" href="07-settings.html">
+    <div class="pv"><i data-i="settings"></i></div>
+    <div class="pb">
+      <div class="pt"><span class="pn">07</span>设置与连接源</div>
+      <div class="pd">设置双栏、连接源列表与编辑表单（内网地址）、缓存分区管理、回收站、安全与数据、关于与运行日志。</div>
+      <div class="pr">PC-101 · PC-501~507 · PC-605 · PC-106 · PC-707</div>
+    </div>
+  </a>
+</div>
+
+<div class="secttl">配色令牌（§2.10）<span class="tag rec">统一色板</span></div>
+<div class="tokens">
+  <div class="tk"><span class="sw" style="background:#2563EB"></span>主色 #2563EB</div>
+  <div class="tk"><span class="sw" style="background:#FFFFFF"></span>页面背景 #FFFFFF</div>
+  <div class="tk"><span class="sw" style="background:#EDF0F3"></span>统一描边 #EDF0F3</div>
+  <div class="tk"><span class="sw" style="background:#F3F4F6"></span>输入填充 #F3F4F6</div>
+  <div class="tk"><span class="sw" style="background:#1A1A2E"></span>文字主色 #1A1A2E</div>
+  <div class="tk"><span class="sw" style="background:#6B7280"></span>文字辅色 #6B7280</div>
+  <div class="tk"><span class="sw" style="background:#9CA3AF"></span>图标占位 #9CA3AF</div>
+  <div class="tk"><span class="sw" style="background:#000000"></span>暗色背景 #000000</div>
+  <div class="tk"><span class="sw" style="background:#121212"></span>暗色卡片 #121212</div>
+  <div class="tk"><span class="sw" style="background:#262626"></span>暗色描边 #262626</div>
+</div>
+<div class="tokens">
+  <div class="tk"><span class="sw" style="background:#DC2626"></span>语义红 #DC2626 · <b style="color:var(--text-primary)">仅破坏性操作与错误</b></div>
+  <div class="tk"><span class="dot ok"></span>连接正常绿点 · <b style="color:var(--text-primary)">PC-101 明确要求</b></div>
+  <div class="tk"><span class="dot bad"></span>连接异常红点 · <b style="color:var(--text-primary)">PC-101 明确要求</b></div>
+</div>
+<div class="tokens">
+  <div class="tk">圆角：卡片 12 · 按钮 20 · 输入 8 · 悬浮胶囊 26</div>
+  <div class="tk">描边：统一 1pt，卡片 / 播放条 / 工具栏 / 多选操作栏不得各自为政</div>
+  <div class="tk">动效：≤ 200ms</div>
+  <div class="tk">按压：缩放 0.975 + 淡填充</div>
+  <div class="tk">选中：浮起抬升（放大 + 主色软阴影 + 1pt 描边，填充 ≤ 8%）</div>
+</div>
+
+<div class="secttl">统一图标集<span class="tag">单色线形 · currentColor</span></div>
+<p class="subtitle" style="margin-bottom:0">
+  全部图标为 <b>24×24 线形、stroke-width 1.8、一律 <code>currentColor</code></b>，颜色由上下文文字色决定，<b>不使用彩色图标或 emoji</b>。
+  实现见 <code>_icons.js</code>；Qt 实现时以同规格 SVG 资源放入 <code>resources/icons/</code>，经 QML <code>Image</code> + <code>ColorOverlay</code> 或 <code>IconImage</code> 着色。
+</p>
+<div class="iconwall">
+  <div class="iw"><i data-i="book"></i>book</div>
+  <div class="iw"><i data-i="star"></i>star</div>
+  <div class="iw"><i data-i="zap"></i>zap</div>
+  <div class="iw"><i data-i="folder"></i>folder</div>
+  <div class="iw"><i data-i="globe"></i>globe</div>
+  <div class="iw"><i data-i="settings"></i>settings</div>
+  <div class="iw"><i data-i="film"></i>film</div>
+  <div class="iw"><i data-i="music"></i>music</div>
+  <div class="iw"><i data-i="book-open"></i>book-open</div>
+  <div class="iw"><i data-i="comic"></i>comic</div>
+  <div class="iw"><i data-i="image"></i>image</div>
+  <div class="iw"><i data-i="file-text"></i>file-text</div>
+  <div class="iw"><i data-i="subtitle"></i>subtitle</div>
+  <div class="iw"><i data-i="server"></i>server</div>
+  <div class="iw"><i data-i="cloud"></i>cloud</div>
+  <div class="iw"><i data-i="hard-drive"></i>hard-drive</div>
+  <div class="iw"><i data-i="database"></i>database</div>
+  <div class="iw"><i data-i="arrow-left"></i>arrow-left</div>
+  <div class="iw"><i data-i="arrow-right"></i>arrow-right</div>
+  <div class="iw"><i data-i="chevron-left"></i>chevron-left</div>
+  <div class="iw"><i data-i="chevron-right"></i>chevron-right</div>
+  <div class="iw"><i data-i="chevron-down"></i>chevron-down</div>
+  <div class="iw"><i data-i="refresh"></i>refresh</div>
+  <div class="iw"><i data-i="menu"></i>menu</div>
+  <div class="iw"><i data-i="grid"></i>grid</div>
+  <div class="iw"><i data-i="list"></i>list</div>
+  <div class="iw"><i data-i="sort"></i>sort</div>
+  <div class="iw"><i data-i="search"></i>search</div>
+  <div class="iw"><i data-i="plus"></i>plus</div>
+  <div class="iw"><i data-i="x"></i>x</div>
+  <div class="iw"><i data-i="check"></i>check</div>
+  <div class="iw"><i data-i="more"></i>more</div>
+  <div class="iw"><i data-i="upload"></i>upload</div>
+  <div class="iw"><i data-i="download"></i>download</div>
+  <div class="iw"><i data-i="trash"></i>trash</div>
+  <div class="iw"><i data-i="edit"></i>edit</div>
+  <div class="iw"><i data-i="copy"></i>copy</div>
+  <div class="iw"><i data-i="move"></i>move</div>
+  <div class="iw"><i data-i="target"></i>target</div>
+  <div class="iw"><i data-i="info"></i>info</div>
+  <div class="iw"><i data-i="check-square"></i>check-square</div>
+  <div class="iw"><i data-i="external"></i>external</div>
+  <div class="iw"><i data-i="folder-open"></i>folder-open</div>
+  <div class="iw"><i data-i="play"></i>play</div>
+  <div class="iw"><i data-i="pause"></i>pause</div>
+  <div class="iw"><i data-i="skip-back"></i>skip-back</div>
+  <div class="iw"><i data-i="skip-fwd"></i>skip-fwd</div>
+  <div class="iw"><i data-i="rewind"></i>rewind</div>
+  <div class="iw"><i data-i="forward"></i>forward</div>
+  <div class="iw"><i data-i="volume"></i>volume</div>
+  <div class="iw"><i data-i="lock"></i>lock</div>
+  <div class="iw"><i data-i="maximize"></i>maximize</div>
+  <div class="iw"><i data-i="pip"></i>pip</div>
+  <div class="iw"><i data-i="replay"></i>replay</div>
+  <div class="iw"><i data-i="speed"></i>speed</div>
+  <div class="iw"><i data-i="type-aa"></i>type-aa</div>
+  <div class="iw"><i data-i="sun"></i>sun</div>
+  <div class="iw"><i data-i="bookmark"></i>bookmark</div>
+  <div class="iw"><i data-i="clock"></i>clock</div>
+  <div class="iw"><i data-i="link"></i>link</div>
+  <div class="iw"><i data-i="palette"></i>palette</div>
+  <div class="iw"><i data-i="play-circle"></i>play-circle</div>
+  <div class="iw"><i data-i="shield"></i>shield</div>
+  <div class="iw"><i data-i="package"></i>package</div>
+  <div class="iw"><i data-i="user"></i>user</div>
+  <div class="iw"><i data-i="eye-off"></i>eye-off</div>
+  <div class="iw"><i data-i="alert"></i>alert</div>
+  <div class="iw"><i data-i="monitor"></i>monitor</div>
+  <div class="iw"><i data-i="cloud-off"></i>cloud-off</div>
+  <div class="iw"><i data-i="wifi"></i>wifi</div>
+  <div class="iw"><i data-i="logo"></i>logo</div>
+</div>
+
+<div class="note">
+  <b>标注气泡图例：</b>原型内的标注统一为深色单色气泡，<b>类别由前缀文字区分，不用颜色区分</b> ——
+  <span class="legend"><span>规则</span>实现要点与设计规范</span>
+  <span class="legend" style="margin-left:8px"><span>注意</span>iOS 实战经验必须规避的坑</span>
+  <span class="legend" style="margin-left:8px"><span>验收</span>关键验收点</span><br><br>
+  <b>配色纪律：</b>除「连接状态绿/红点」（需求 PC-101 明确要求）与「破坏性操作/错误红」外，<b>界面不引入任何其它色相</b>；
+  层级与状态一律用<b>主色 + 中性灰 + 透明度</b>表达。类型徽标、缓存分区条等原先多色的元素，改为<b>统一中性 chip / 主色透明度梯度</b>。<br>
+  <b>维护约定：</b>原型是需求文档的可视化补充，不是独立规范。若原型与《需求分析文档》正文冲突，<b>以正文为准</b>；
+  实施过程中方案变更须同步更新原型与正文，保持与 iOS 端相同的文档维护纪律。<br>
+  <b>待补充（随开发推进）：</b>动态模块占位页（PC-301）、离线下载队列（PC-606）、桌面通知（PC-604）、快捷键速查面板（PC-703）。
+</div>
+
+<script src="_icons.js"></script>
+</body>
+</html>

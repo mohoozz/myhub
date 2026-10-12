@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 · 阅读器（小说 / 漫画 / 纯文本）｜MyHub PC 原型</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+.dpair { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.bp .cap { font-size: 12px; color: var(--text-secondary); margin-bottom: 7px; max-width: 560px; }
+.bp .cap b { color: var(--text-primary); }
+
+.reader {
+  width: 1180px; height: 700px; border-radius: 10px; position: relative; overflow: hidden;
+  box-shadow: 0 14px 38px rgba(17,24,39,.2); margin-bottom: 14px;
+  background: #FAF7F0; display: flex; flex-direction: column;
+}
+.reader.sm { width: 578px; height: 420px; }
+.reader.night { background: #0F0F0F; color: #C9C9C9; }
+.reader.plain { background: #fff; }
+.reader.comic { background: #000; color: #fff; }
+
+.r-top {
+  flex: none; height: 48px; display: flex; align-items: center; gap: 4px; padding: 0 14px;
+  background: rgba(255,255,255,.72); backdrop-filter: blur(18px);
+  border-bottom: 1px solid rgba(0,0,0,.06); z-index: 10;
+}
+.reader.night .r-top { background: rgba(20,20,20,.8); border-bottom-color: rgba(255,255,255,.07); }
+.reader.comic .r-top { background: linear-gradient(180deg, rgba(0,0,0,.8), transparent); border: none; position: absolute; left:0; right:0; top:0; }
+.r-top .ttl { font-size: 13.5px; font-weight: 600; flex: 1; margin-left: 6px; }
+.rbtn { min-width: 32px; height: 28px; padding: 0 6px; display: grid; place-items: center; border-radius: 7px; font-size: 15px; color: var(--text-secondary); cursor: pointer; }
+.rbtn:hover { background: rgba(0,0,0,.06); }
+.reader.night .rbtn, .reader.comic .rbtn { color: rgba(255,255,255,.85); }
+.reader.night .rbtn:hover, .reader.comic .rbtn:hover { background: rgba(255,255,255,.14); }
+
+.r-body { flex: 1; display: flex; min-height: 0; position: relative; }
+.r-page {
+  flex: 1; padding: 34px 58px; overflow: hidden;
+  font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  font-size: 17px; line-height: 1.85; letter-spacing: .3px;
+}
+.r-page h3 { font-size: 21px; font-weight: 700; margin-bottom: 20px; }
+.r-page p { margin-bottom: 15px; text-indent: 2em; }
+.r-page.two-col { column-count: 2; column-gap: 54px; }
+
+.r-toc {
+  flex: none; width: 258px; border-right: 1px solid rgba(0,0,0,.07);
+  background: rgba(255,255,255,.6); overflow: auto; padding: 10px;
+}
+.reader.night .r-toc { background: rgba(255,255,255,.03); border-right-color: rgba(255,255,255,.07); }
+.toc-i { padding: 8px 11px; border-radius: 8px; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.toc-i:hover { background: rgba(37,99,235,.07); }
+.toc-i.on { background: #EEF4FB; color: var(--primary); font-weight: 600; }
+.toc-i [data-i] { font-size: 13px; }
+.reader.night .toc-i.on { background: #1A2744; color: var(--primary-dark); }
+
+.r-bottom {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 12;
+  background: rgba(255,255,255,.88); backdrop-filter: blur(20px);
+  border: 1px solid rgba(0,0,0,.07); border-radius: 29px; box-shadow: var(--shadow-float);
+  height: 58px; display: flex; align-items: center; gap: 10px; padding: 0 14px; min-width: 560px;
+}
+.reader.night .r-bottom { background: rgba(26,26,26,.9); border-color: rgba(255,255,255,.1); }
+.reader.comic .r-bottom { background: rgba(20,20,22,.88); border-color: rgba(255,255,255,.12); color: #fff; }
+.r-bottom .trk { flex: 1; height: 3px; background: rgba(0,0,0,.14); border-radius: 2px; position: relative; cursor: pointer; }
+.reader.night .r-bottom .trk, .reader.comic .r-bottom .trk { background: rgba(255,255,255,.2); }
+.r-bottom .trk i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--primary); border-radius: 2px; display: block; }
+.r-bottom .trk .h {
+  position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #fff; top: -5.5px;
+  box-shadow: 0 1px 5px rgba(0,0,0,.3); border: 1px solid rgba(0,0,0,.06);
+}
+.r-bottom .pg { font-size: 11.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.reader.comic .r-bottom .pg { color: rgba(255,255,255,.75); }
+.r-cap-sub { position: absolute; left: 50%; transform: translateX(-50%); bottom: 80px; z-index: 12; font-size: 10.5px; color: var(--text-secondary); }
+.reader.comic .r-cap-sub { color: rgba(255,255,255,.55); }
+.bubble {
+  position: absolute; top: -34px; transform: translateX(-50%);
+  background: rgba(20,20,22,.92); color: #fff; font-size: 11px; font-weight: 600;
+  padding: 4px 10px; border-radius: 8px; white-space: nowrap;
+}
+.chips { position: absolute; left: 50%; transform: translateX(-50%); bottom: -34px; display: flex; gap: 8px; }
+.chip {
+  background: rgba(255,255,255,.9); border: 1px solid rgba(0,0,0,.07); border-radius: 15px;
+  padding: 4px 12px; font-size: 11px; color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; gap: 5px;
+}
+.chip [data-i] { font-size: 12px; }
+.reader.comic .chip { background: rgba(30,30,32,.9); border-color: rgba(255,255,255,.12); color: rgba(255,255,255,.8); }
+
+.panel {
+  position: absolute; right: 16px; top: 56px; z-index: 20; width: 272px;
+  background: rgba(255,255,255,.97); backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border); border-radius: var(--r-card);
+  box-shadow: 0 12px 32px rgba(17,24,39,.2); padding: 14px; font-size: 12.5px;
+}
+.panel .pr { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; }
+.panel .pr + .pr { border-top: 1px solid var(--separator); }
+.seg { display: flex; background: var(--field-fill); border-radius: 8px; padding: 2px; }
+.seg span { padding: 4px 11px; border-radius: 6px; font-size: 11.5px; cursor: pointer; }
+.seg span.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); font-weight: 600; color: var(--primary); }
+.sw { display: flex; gap: 6px; align-items: center; }
+.sw i { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; cursor: pointer; background: var(--field-fill); font-style: normal; }
+.theme-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+.theme-dot.on { border-color: var(--primary); }
+
+.comic-stage { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 20px; }
+.comic-pg {
+  height: 100%; aspect-ratio: .7; background: #1C1F24;
+  border-radius: 4px; display: grid; place-items: center; font-size: 36px; color: rgba(255,255,255,.2);
+  position: relative;
+}
+.comic-pg .no { position: absolute; bottom: 10px; font-size: 11px; color: rgba(255,255,255,.4); }
+.webtoon { flex: 1; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 2px; padding-top: 48px; }
+.webtoon .wp { width: 420px; height: 150px; background: #1C1F24; display: grid; place-items: center; font-size: 24px; color: rgba(255,255,255,.2); }
+.thumbsheet {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 196px; z-index: 22;
+  background: rgba(16,16,18,.96); backdrop-filter: blur(20px); border-top: 1px solid rgba(255,255,255,.1);
+  padding: 12px 16px;
+}
+.thumbgrid { display: flex; gap: 9px; overflow: auto; }
+.thumbgrid .t { width: 76px; height: 108px; flex: none; border-radius: 4px; background: #1C1F24; display: grid; place-items: center; font-size: 10px; color: rgba(255,255,255,.45); }
+.thumbgrid .t.on { outline: 2px solid var(--primary); }
+.loading-stage { flex: 1; display: grid; place-items: center; gap: 14px; }
+.spin { width: 34px; height: 34px; border: 3px solid rgba(255,255,255,.18); border-top-color: #fff; border-radius: 50%; animation: sp .8s linear infinite; }
+@keyframes sp { to { transform: rotate(360deg); } }
+.dlbar { width: 230px; height: 4px; background: rgba(255,255,255,.18); border-radius: 2px; }
+.dlbar i { display: block; height: 100%; background: var(--primary); border-radius: 2px; }
+
+.txt-body { flex: 1; overflow: hidden; padding: 20px 28px; font-family: ui-monospace, Consolas, "Microsoft YaHei", monospace; font-size: 13px; line-height: 1.95; }
+.txt-body .ln { color: var(--text-faint); display: inline-block; width: 30px; user-select: none; }
+.findbar {
+  position: absolute; right: 18px; top: 56px; z-index: 20;
+  background: #fff; border: 1px solid var(--card-border); border-radius: 10px;
+  box-shadow: var(--shadow-float); padding: 7px 10px; display: flex; align-items: center; gap: 8px; font-size: 12px;
+}
+.findbar input { border: none; outline: none; background: var(--field-fill); border-radius: 6px; padding: 5px 9px; font-size: 12px; width: 130px; }
+.nextbar {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 20px; z-index: 18;
+  background: rgba(20,20,22,.94); border: 1px solid rgba(255,255,255,.14); border-radius: var(--r-capsule);
+  height: 46px; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 16px; font-size: 12.5px; color: #fff;
+}
+.nextbar .go { background: var(--primary); border-radius: 18px; padding: 6px 14px; font-weight: 600; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>04 · 阅读器（小说 / 漫画 / 纯文本）</h1>
+<p class="subtitle">
+  对应需求：<b>PC-205/206</b> txt 与 epub 小说阅读 · <b>PC-207</b> 漫画阅读 · <b>PC-208</b> 翻完推荐下一本 · <b>PC-210</b> 纯 txt 阅读器 · <b>PC-706</b> 编码与文件查看<br>
+  Qt 实现要点：<b><code>QTextLayout</code> 行级分页</b>（<code>createLine()</code> 按行边界切页不截断行）＝ iOS CoreText <code>CTLine</code> 方案的等价物，
+  <b>排版与锚点算法可一比一移植</b>；页内行映射（<code>textStart()/textLength()</code>）供滚动模式精确锚点。
+</p>
+<a class="reflink" href="index.html"><i data-i="arrow-left"></i>返回原型总览</a>
+
+<!-- ============ 1. 小说阅读器 ============ -->
+<div class="secttl">1. 小说阅读器 · 翻页模式 + 目录抽屉（PC-205 / PC-206）<span class="tag rec">基准</span></div>
+<div class="reader">
+  <div class="r-top">
+    <span class="rbtn"><i data-i="x"></i></span>
+    <span class="ttl">三体 · 第二章 台球</span>
+    <span class="rbtn"><i data-i="menu"></i></span><span class="rbtn"><i data-i="type-aa"></i></span>
+    <span class="rbtn"><i data-i="sun"></i></span><span class="rbtn"><i data-i="more"></i></span>
+  </div>
+  <div class="r-body">
+    <div class="r-toc">
+      <div class="toc-i">第一章　科学边界</div>
+      <div class="toc-i on"><i data-i="check"></i>第二章　台球</div>
+      <div class="toc-i">第三章　射手和农场主</div>
+      <div class="toc-i">第四章　三体、周文王、长夜</div>
+      <div class="toc-i">第五章　叶文洁</div>
+      <div class="toc-i">第六章　宇宙闪烁</div>
+      <div class="toc-i">第七章　疯狂年代</div>
+      <div class="toc-i">第八章　寂静的春天</div>
+    </div>
+    <div class="r-page two-col">
+      <h3>第二章　台球</h3>
+      <p>汪淼发现，自己最近拍摄的每一张照片上，都出现了一行倒计时的数字。那数字在底片上像幽灵一样浮现，精确到秒，无论他换多少卷胶片、换多少台相机，结果都一样。</p>
+      <p>他把照片摊在桌上，一张挨着一张，像在拼一幅看不懂的图。数字在减少，从 1200:00:00 开始，一点点向零逼近。</p>
+      <p>「你看到的，是整个物理学的死亡倒计时。」申玉菲在电话那头说，声音平静得可怕，「如果你想让它停下来，就停止你的纳米材料研究。」</p>
+      <p>汪淼沉默了很久。窗外，城市的灯火连成一片，像一块巨大的电路板在缓慢地呼吸。他忽然意识到，这些灯火背后的每一条物理定律，可能都不像他以为的那样牢靠。</p>
+      <p>第二天，他去了那个被称作「科学边界」的地方。那是一栋并不起眼的小楼，门口没有招牌，只有一块写着门牌号的铁皮。</p>
+      <p>丁仪正在打台球。白球撞上红球，红球落袋，动作干净利落。他头也不抬地说：「如果我把这一杆重打一千次，每次球都落袋，你会说什么？」</p>
+    </div>
+  </div>
+  <div class="r-bottom">
+    <span class="rbtn"><i data-i="chevron-left"></i></span>
+    <div class="trk">
+      <i style="width:38%"></i>
+      <div class="h" style="left:calc(38% - 7px)"><div class="bubble">第二章 · 38%</div></div>
+    </div>
+    <span class="pg">第 46 / 318 页 · 全书 12%</span>
+    <span class="rbtn"><i data-i="menu"></i></span>
+    <span class="rbtn"><i data-i="chevron-right"></i></span>
+  </div>
+  <div class="r-cap-sub">第二章　台球 · 翻页模式 · 思源宋体</div>
+  <div class="anno" data-k="规则" style="left:276px;top:58px">目录抽屉：当前章高亮 + 勾选标记 · <code>Ctrl+D</code></div>
+  <div class="anno" data-k="验收" style="right:18px;top:58px">调字号/行距<b>不得卡死</b>：增量重排 + 页缓存 + 排版放 worker 线程</div>
+  <div class="anno" data-k="注意" style="left:300px;bottom:92px">拖动中<b>只改本地值、松手才跳页</b>，气泡跟随（出界夹紧）</div>
+</div>
+
+<!-- ============ 2. 阅读主题与设置面板 ============ -->
+<div class="secttl">2. 阅读主题与设置面板（PC-502）</div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>设置面板</b>：字号 / 行距 / 主题 / 翻页模式 / <b>亮度蒙层</b> / 衬线字体，实时生效并持久化</div>
+    <div class="reader sm">
+      <div class="r-top"><span class="rbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">三体</span><span class="rbtn"><i data-i="menu"></i></span><span class="rbtn"><i data-i="type-aa"></i></span></div>
+      <div class="r-body"><div class="r-page" style="font-size:14px;padding:22px 30px">
+        <p>汪淼发现，自己最近拍摄的每一张照片上，都出现了一行倒计时的数字。</p>
+        <p>他把照片摊在桌上，一张挨着一张，像在拼一幅看不懂的图。</p>
+      </div></div>
+      <div class="panel">
+        <div class="pr"><span>字号</span><div class="sw"><i>A−</i><b style="font-size:12px">17</b><i>A+</i></div></div>
+        <div class="pr"><span>行距</span><div class="sw"><i>−</i><b style="font-size:12px">1.6</b><i>+</i></div></div>
+        <div class="pr"><span>主题</span><div class="sw">
+          <span class="theme-dot" style="background:#FAF7F0"></span>
+          <span class="theme-dot on" style="background:#FFF"></span>
+          <span class="theme-dot" style="background:#0F0F0F"></span>
+          <span class="theme-dot" style="background:#E8F0E2"></span>
+        </div></div>
+        <div class="pr"><span>模式</span><div class="seg"><span class="on">翻页</span><span>滚动</span></div></div>
+        <div class="pr"><span>亮度</span><div style="width:110px;height:3px;background:var(--separator);position:relative;border-radius:2px"><i style="position:absolute;left:0;top:0;bottom:0;width:70%;background:var(--primary);border-radius:2px;display:block"></i></div></div>
+        <div class="pr"><span>思源宋体</span><div class="seg"><span>关</span><span class="on">开</span></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>夜间主题</b>（纯黑沉浸）· 滚动模式 · <b><code>Esc</code> 退出</b>（替代 iOS 左滑退出）</div>
+    <div class="reader sm night">
+      <div class="r-top"><span class="rbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">三体 · 第二章</span><span class="rbtn"><i data-i="menu"></i></span><span class="rbtn"><i data-i="type-aa"></i></span></div>
+      <div class="r-body"><div class="r-page" style="font-size:14px;padding:22px 30px">
+        <h3 style="font-size:16px;margin-bottom:12px">第二章　台球</h3>
+        <p>汪淼发现，自己最近拍摄的每一张照片上，都出现了一行倒计时的数字。那数字在底片上像幽灵一样浮现。</p>
+        <p>「你看到的，是整个物理学的死亡倒计时。」申玉菲在电话那头说。</p>
+      </div></div>
+      <div class="r-bottom" style="min-width:380px;height:50px">
+        <span class="rbtn"><i data-i="chevron-left"></i></span>
+        <div class="trk"><i style="width:38%"></i><div class="h" style="left:calc(38% - 7px)"></div></div>
+        <span class="pg">46 / 318 · 12%</span>
+        <span class="rbtn"><i data-i="chevron-right"></i></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3. 漫画阅读器 ============ -->
+<div class="secttl">3. 漫画阅读器 · 双页模式（PC-207）<span class="tag ref">RTL 默认（日漫）</span></div>
+<div class="reader comic">
+  <div class="r-top">
+    <span class="rbtn"><i data-i="x"></i></span>
+    <span class="ttl">进击的巨人 第01卷.cbz</span>
+    <span class="rbtn"><i data-i="more"></i></span>
+  </div>
+  <div class="comic-stage">
+    <div class="comic-pg"><i data-i="image"></i><span class="no">P.25</span></div>
+    <div class="comic-pg"><i data-i="image"></i><span class="no">P.24</span></div>
+  </div>
+  <div class="r-bottom">
+    <span class="rbtn"><i data-i="chevron-left"></i></span>
+    <div class="trk">
+      <i style="width:52%"></i>
+      <div class="h" style="left:calc(52% - 7px)"><div class="bubble">第 24 / 46 页</div></div>
+    </div>
+    <span class="pg">24 / 46</span>
+    <span class="rbtn"><i data-i="menu"></i></span>
+    <span class="rbtn"><i data-i="chevron-right"></i></span>
+    <div class="chips">
+      <span class="chip"><i data-i="grid"></i>缩略图</span>
+      <span class="chip"><i data-i="comic"></i>下一本</span>
+      <span class="chip"><i data-i="sun"></i>亮度</span>
+    </div>
+  </div>
+  <div class="r-cap-sub">第 24 / 46 页 · 52% · 双页 · 从右向左</div>
+  <div class="anno" data-k="规则" style="left:18px;top:58px">⋯ 菜单承载：模式切换 / 双页方向 / 亮度（底栏不放设置按钮）</div>
+  <div class="anno" data-k="验收" style="right:18px;top:58px"><code>Ctrl+滚轮</code> 1x~4x 缩放 · 双击放大还原 · 1x 时让位翻页</div>
+  <div class="anno" data-k="注意" style="left:280px;bottom:118px">预加载 ±3 页（方向优先，并发 3）· 内存 LRU ±6 页 · 大图下采样</div>
+</div>
+
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>缩略图面板</b>：点击跳页，<b>按需小尺寸解码 + LRU，不占用阅读解压并发</b></div>
+    <div class="reader sm comic">
+      <div class="r-top"><span class="rbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">进击的巨人 第01卷</span><span class="rbtn"><i data-i="more"></i></span></div>
+      <div class="comic-stage" style="padding:10px"><div class="comic-pg"><i data-i="image"></i><span class="no">P.24</span></div></div>
+      <div class="thumbsheet">
+        <div style="font-size:11.5px;color:rgba(255,255,255,.65);margin-bottom:9px">全部 46 页</div>
+        <div class="thumbgrid">
+          <div class="t">21</div><div class="t">22</div><div class="t">23</div>
+          <div class="t on">24</div><div class="t">25</div><div class="t">26</div><div class="t">27</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>条漫模式</b>（纵向连续滚动）· 恢复页码显示 · 单页模式同理</div>
+    <div class="reader sm comic">
+      <div class="r-top"><span class="rbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">某条漫.cbz</span><span class="rbtn"><i data-i="more"></i></span></div>
+      <div class="webtoon">
+        <div class="wp"><i data-i="image"></i></div>
+        <div class="wp"><i data-i="image"></i></div>
+        <div class="wp"><i data-i="image"></i></div>
+      </div>
+      <div class="r-bottom" style="min-width:340px;height:48px">
+        <div class="trk"><i style="width:28%"></i><div class="h" style="left:calc(28% - 7px)"></div></div>
+        <span class="pg">13 / 46</span>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>弱网加载态</b>：点击漫画<b>先展示 UI 进加载界面</b>（不得「点了没反应」）+ 点击防抖去重</div>
+    <div class="reader sm comic">
+      <div class="r-top"><span class="rbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">进击的巨人 第02卷.cbr</span></div>
+      <div class="loading-stage">
+        <div class="spin"></div>
+        <div style="font-size:12.5px">正在下载归档… 42%</div>
+        <div class="dlbar"><i style="width:42%"></i></div>
+        <div style="font-size:11px;color:rgba(255,255,255,.5)">远程 RAR 需完整下载后解析 · 78 MB / 186 MB</div>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>翻完推荐下一本</b>：<b>无倒计时、不自动打开</b>，需用户点击</div>
+    <div class="reader sm comic">
+      <div class="r-top"><span class="rbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">进击的巨人 第01卷</span></div>
+      <div class="comic-stage" style="padding:10px"><div class="comic-pg"><i data-i="image"></i><span class="no">P.46 · 完</span></div></div>
+      <div class="nextbar">
+        <span style="opacity:.7">下一本</span><b style="font-weight:600">第02卷.cbz</b>
+        <span class="go">打开</span>
+        <span class="rbtn"><i data-i="x"></i></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 4. 纯文本阅读器 ============ -->
+<div class="secttl">4. 纯文本阅读器 / 编辑器（PC-210 / PC-108 / PC-706）<span class="tag">txt 默认入口</span></div>
+<div class="dpair">
+  <div class="bp">
+    <div class="cap"><b>纯文本查看</b>：独立于小说阅读器 · 编码自动检测 · <b>大文件懒加载</b> · 可选中复制 · <code>Ctrl+F</code> 查找 · <b>不计入阅读记录</b></div>
+    <div class="reader sm plain">
+      <div class="r-top">
+        <span class="rbtn"><i data-i="x"></i></span>
+        <span class="ttl" style="font-size:12px">片源说明.txt <span style="font-weight:400;color:var(--text-secondary);font-size:11px">· GBK</span></span>
+        <span class="rbtn"><i data-i="type-aa"></i></span><span class="rbtn"><i data-i="edit"></i></span><span class="rbtn"><i data-i="more"></i></span>
+      </div>
+      <div class="txt-body">
+        <div><span class="ln">1</span>【片源信息】</div>
+        <div><span class="ln">2</span>来源：BDRip 1080p</div>
+        <div><span class="ln">3</span>编码：HEVC Main10 / FLAC 2.0</div>
+        <div><span class="ln">4</span>字幕：内嵌简繁日 + 外挂 ASS</div>
+        <div><span class="ln">5</span></div>
+        <div><span class="ln">6</span>※ 本资源仅供个人收藏使用。</div>
+      </div>
+      <div class="findbar">
+        <i data-i="search" style="font-size:13px;color:var(--text-secondary)"></i>
+        <input value="编码" readonly><span style="color:var(--text-secondary)">1 / 2</span>
+        <span class="rbtn"><i data-i="chevron-left"></i></span><span class="rbtn"><i data-i="chevron-right"></i></span><span class="rbtn"><i data-i="x"></i></span>
+      </div>
+    </div>
+  </div>
+  <div class="bp">
+    <div class="cap"><b>图片预览器</b>（PC-108，独立于漫画阅读器）：<code>←/→</code> 滚轮切换 · <code>Ctrl+滚轮</code> 缩放 · <b>仅加载当前与相邻页</b></div>
+    <div class="reader sm comic">
+      <div class="r-top"><span class="rbtn"><i data-i="x"></i></span><span class="ttl" style="font-size:12px">海报.jpg</span><span class="rbtn"><i data-i="replay"></i></span><span class="rbtn"><i data-i="download"></i></span><span class="rbtn"><i data-i="more"></i></span></div>
+      <div style="flex:1;display:grid;place-items:center;position:relative">
+        <div style="width:230px;height:170px;background:#1C1F24;border-radius:6px;display:grid;place-items:center;font-size:36px;color:rgba(255,255,255,.22)"><i data-i="image"></i></div>
+        <span class="rbtn" style="position:absolute;left:16px;font-size:22px"><i data-i="chevron-left"></i></span>
+        <span class="rbtn" style="position:absolute;right:16px;font-size:22px"><i data-i="chevron-right"></i></span>
+      </div>
+      <div style="position:absolute;left:50%;transform:translateX(-50%);bottom:14px;font-size:11px;color:rgba(255,255,255,.6)">3 / 12 · 1920×1080 · 100%</div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>快捷键</th><th>小说阅读器</th><th>漫画阅读器</th></tr>
+  <tr><td><code>←</code> / <code>→</code></td><td>上一页 / 下一页</td><td>翻页（RTL 模式自动反向）</td></tr>
+  <tr><td><code>PgUp</code> / <code>PgDn</code></td><td>翻页</td><td>翻页</td></tr>
+  <tr><td>滚轮</td><td>滚动模式下滚动</td><td>翻页 / 条漫滚动</td></tr>
+  <tr><td><code>Ctrl+←/→</code></td><td>上一章 / 下一章</td><td>—</td></tr>
+  <tr><td><code>Ctrl+D</code> / <code>T</code></td><td>目录抽屉</td><td>缩略图面板</td></tr>
+  <tr><td><code>Ctrl+±</code></td><td>字号 ±</td><td>—</td></tr>
+  <tr><td><code>Ctrl+滚轮</code> / 双击</td><td>—</td><td>缩放 1x~4x / 放大还原</td></tr>
+  <tr><td><code>D</code></td><td>—</td><td>单页 / 双页 / 条漫切换</td></tr>
+  <tr><td><code>Esc</code></td><td>退出阅读器</td><td>退出阅读器</td></tr>
+</table>
+
+<div class="footnote">
+  <b>配色纪律：</b>阅读主题色板（纸白 / 纯白 / 夜间 / 护眼）是<b>阅读背景</b>而非装饰色，属功能性配置；
+  除此之外界面元素一律主色 + 中性灰，图标全部单色线形。<br>
+  <b>进度锚点（PC-205 关键约束）：</b>使用<b>排版无关锚点</b>，禁止页码/百分比等排版相关锚点。结构为
+  <code>章序 + 章标题 + 段落序 + 段内字符偏移 + 章内偏移 + 后续文本片段（重定位兜底）+ 百分比兜底 + 文件指纹</code>；
+  恢复时<b>一步定位</b>（禁止「先跳章节再定位偏移」两步时序）；兼容 iOS 旧版纯字节偏移锚点。<br>
+  <b>文件打开分发（TODO §14.1）：</b>txt → 纯文本阅读器（右键可改「以小说阅读器打开」）；epub → 按<b>图集判定</b>分发小说/漫画；
+  zip/cbz/rar/cbr → 漫画阅读器；<b>类型徽标必须正确</b>（漫画不得显示小说标签）。<br>
+  <b>编码检测（PC-706）：</b>BOM + 启发式覆盖 UTF-8 / GBK·GB18030 / Big5 / UTF-16 LE·BE；Range 切块<b>码元对齐</b>；旧缓存编码复核自愈。<br>
+  <b>漫画进度恢复：</b>记录页码 + 文件指纹，下次打开<b>直接恢复到上次页码</b>（首次构建即定位，不从第一页开始），条漫模式恢复页码显示。
+</div>
+
+<script src="_icons.js"></script>
+</body>
+</html>
