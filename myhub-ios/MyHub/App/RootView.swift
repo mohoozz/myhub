@@ -240,7 +240,9 @@ enum AppTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     /// iPhone 底部 Tab（收藏并入阅读/浏览，iPad 侧栏独立）
-    static let phoneTabs: [AppTab] = [.reading, .feed, .browse, .browser, .settings]
+    /// 「动态」模块尚未实现（仅占位页，TODO §9 预留），暂不在底部页签栏露出（TODO 398）；
+    /// 该 case 仍保留在 `allCases` 中，供 iPad 侧边栏与后续接入外部 API 时复用，恢复时把 `.feed` 加回即可。
+    static let phoneTabs: [AppTab] = [.reading, .browse, .browser, .settings]
 
     var title: String {
         switch self {
