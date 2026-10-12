@@ -130,8 +130,17 @@ private struct SelectableTextField: UIViewRepresentable {
         field.autocapitalizationType = .none
         field.returnKeyType = .go
         field.clearButtonMode = .whileEditing
+        // 允许在受限宽度下增长 / 收缩：长 URL 不再把固有宽度撑爆地址栏（TODO §396）
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return field
+    }
+
+    /// 宽度固定为提议宽度：`UITextField` 的固有宽度等于文本完整宽度，
+    /// 若不约束，长 URL 会撑爆外层 `frame(maxWidth:)`（frame 不裁剪子视图）→ 输入框占满整屏（TODO §396）
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView field: UITextField, context: Context) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        return CGSize(width: width, height: field.intrinsicContentSize.height)
     }
 
     func updateUIView(_ field: UITextField, context: Context) {

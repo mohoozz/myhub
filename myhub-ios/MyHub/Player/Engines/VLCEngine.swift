@@ -95,6 +95,10 @@ final class VLCEngine: NSObject, PlaybackEngine {
     // MARK: - 控制
 
     func play() {
+        // 播放完成后再次播放：VLC 停在结尾（.ended）时 play() 不会回到开头重启，先把位置复位到起点
+        if player.state == .ended {
+            player.position = 0
+        }
         player.rate = desiredRate
         player.play()
     }

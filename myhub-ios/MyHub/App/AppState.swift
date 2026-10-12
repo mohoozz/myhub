@@ -9,6 +9,7 @@ final class AppState: ObservableObject {
         guard !isReady else { return }
         try? AppDatabase.shared.setup()   // 建表迁移随 §1.2 落地，失败不阻塞启动
         await FavoritesStore.shared.reload()   // 收藏预载（浏览页星标/收藏页共用）
+        await BrowserDataStore.shared.bootstrap()   // 浏览器书签/历史/快捷入口预载（必须在 DB 就绪后）
         // 缓存预热：统一容量上限兜底淘汰（IOS-605，跨分区按最久未访问回收超额占用）
         Task.detached(priority: .utility) {
             CacheManager.shared.enforceGlobalLimit()

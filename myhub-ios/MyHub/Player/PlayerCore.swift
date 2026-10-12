@@ -132,7 +132,20 @@ final class PlayerCore: ObservableObject {
 
     func play() {
         pausedAt = nil
+        // 播放完成后再次播放：引擎已停在结尾，仅 play() 不会回到开头重启。
+        // 先 seek 回 0 重置位置（顺带把「已完成」进度复位为 0 / 未完成，下次从历史记录也从头起播），再播放
+        if state == .ended {
+            AppLogger.shared.log("播放已结束，从头重新播放", module: "player-audio")
+            seek(to: 0)
+        }
         engine?.play()
+    }
+
+    /// 从历史记录重新进入同一媒体：若已播放结束则自动从头重播；
+    /// 播放中 / 暂停中保持原状态，仅由 UI 展开，避免打断正在进行或用户暂停的播放
+    func replayIfFinished() {
+        guard state == .ended else { return }
+        play()
     }
 
     func pause() {

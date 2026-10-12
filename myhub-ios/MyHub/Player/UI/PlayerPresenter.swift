@@ -27,6 +27,8 @@ final class PlayerPresenter: ObservableObject {
     func play(_ item: PlayableItem) {
         if current == item, isMini {
             expand()
+            // 该媒体若已播放结束，从历史记录/列表重新进入时自动从头重播（未结束则不打断，保持原状态）
+            Task { await PlayerCore.shared.replayIfFinished() }
             return
         }
         current = item

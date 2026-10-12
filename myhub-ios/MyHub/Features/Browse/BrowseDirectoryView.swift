@@ -45,7 +45,6 @@ struct BrowseDirectoryView: View {
     /// 播放引擎状态（区分播放中/暂停，仅播放中才高亮）
     @ObservedObject private var playerCore = PlayerCore.shared
 
-    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
     /// 全局底部装饰（悬浮页签栏 / mini 播放器）占用高度：底部覆盖层据此抬升（TODO 379）
     @Environment(\.bottomChromeHeight) private var bottomChromeHeight
     /// 多选态隐藏全局悬浮页签栏（回写 RootView，底部让给操作栏，TODO 385）
@@ -220,12 +219,10 @@ struct BrowseDirectoryView: View {
         // 多选态改为「已选 N 项」作为操作状态反馈。
         .navigationTitle(navigationTitleText)
         .navigationBarTitleDisplayMode(.inline)
-        // 液体玻璃关闭时隐藏系统返回按钮，改用无玻璃自定义返回（见 toolbar）；
-        // 多选态同样隐藏：多选态左侧是纯文字的「全选 / 完成」，而系统返回按钮在 iOS 26 是
+        // 多选态隐藏系统返回按钮：多选态左侧是纯文字的「全选 / 完成」，而系统返回按钮在 iOS 26 是
         // 圆形玻璃胶囊，两者风格不一致；且多选态本就不应被返回上一级目录（TODO 386）
-        .navigationBarBackButtonHidden(showsPlainBack || viewModel.isSelecting)
+        .navigationBarBackButtonHidden(viewModel.isSelecting)
         .toolbar { toolbar }
-        .background(swipeBackEnabler)
         // 底部覆盖层（多选操作栏 / 传输横幅 / 轻提示，TODO 379）：
         // safeAreaInset 只为滚动内容预留底部空间（高度固定），覆盖层本体由 overlay 绘制并抬升——
         // 页面内 safeAreaInset / overlay 的落点是「系统底部安全区」，不含祖先注入的悬浮页签栏，
@@ -727,15 +724,10 @@ struct BrowseDirectoryView: View {
         .padding(.horizontal, 12)
     }
 
-    /// 多选操作栏背景：液体玻璃模式开 → 毛玻璃材质；关 → 当前实色卡片背景
-    @ViewBuilder
+    /// 多选操作栏背景：毛玻璃材质
     private var selectionBarBackground: some View {
-        if liquidGlassMode {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-        } else {
-            AppColors.cardBackground
-        }
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(.ultraThinMaterial)
     }
 
     private func selectionButton(
@@ -762,9 +754,6 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 工具栏
 
-    /// 液体玻璃关闭且非多选时，使用无玻璃自定义返回按钮
-    private var showsPlainBack: Bool { !liquidGlassMode && !viewModel.isSelecting }
-
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         if viewModel.isSelecting {
@@ -773,39 +762,15 @@ struct BrowseDirectoryView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("全选") { viewModel.selectAll() }
             }
-            .liquidGlassToolbar(liquidGlassMode)
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("完成") { viewModel.endSelection() }
                     .fontWeight(.semibold)
             }
-            .liquidGlassToolbar(liquidGlassMode)
         } else {
-            if showsPlainBack {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        if !navPath.isEmpty { navPath.removeLast() }
-                    } label: {
-                        Image(systemName: "chevron.backward")
-                            .font(.body.weight(.semibold))
-                    }
-                    .tint(AppColors.primary)
-                    .accessibilityLabel("返回")
-                }
-                .liquidGlassToolbar(false)
-            }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 PopupMenuButton(items: addItems, symbol: "plus", style: .popover)
                 PopupMenuButton(items: overflowItems)
             }
-            .liquidGlassToolbar(liquidGlassMode)
-        }
-    }
-
-    /// 隐藏系统返回按钮后恢复左缘交互式返回手势（仅在无玻璃返回态挂载）
-    @ViewBuilder
-    private var swipeBackEnabler: some View {
-        if showsPlainBack {
-            InteractiveSwipeBackEnabler()
         }
     }
 
@@ -1007,59 +972,5 @@ struct BrowseDirectoryView: View {
             },
         ]
         popupMenu.show(items: items, style: .drawer)
-    }
-}
-
-// MARK: - 交互式返回手势恢复
-
-/// 隐藏系统返回按钮（`.navigationBarBackButtonHidden(true)`）后，SwiftUI 会默认关闭
-/// NavigationStack 的左缘侧滑返回手势。此桥接接管 `interactivePopGestureRecognizer` 的
-/// delegate 并将其重新启用，delegate 逻辑与系统默认一致（仅在存在可返回层级时允许），
-/// 因此即便后续切回系统返回按钮也不会产生副作用。
-private struct InteractiveSwipeBackEnabler: UIViewControllerRepresentable {
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        EnablerController(coordinator: context.coordinator)
-    }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        weak var navigationController: UINavigationController?
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            (navigationController?.viewControllers.count ?? 0) > 1
-        }
-    }
-
-    final class EnablerController: UIViewController {
-        private let coordinator: Coordinator
-
-        init(coordinator: Coordinator) {
-            self.coordinator = coordinator
-            super.init(nibName: nil, bundle: nil)
-            view.backgroundColor = .clear
-            view.isUserInteractionEnabled = false
-        }
-
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-        override func didMove(toParent parent: UIViewController?) {
-            super.didMove(toParent: parent)
-            restoreGesture()
-        }
-
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            restoreGesture()
-        }
-
-        private func restoreGesture() {
-            guard let gesture = navigationController?.interactivePopGestureRecognizer else { return }
-            coordinator.navigationController = navigationController
-            gesture.isEnabled = true
-            gesture.delegate = coordinator
-        }
     }
 }

@@ -14,9 +14,18 @@ final class BrowserDataStore: ObservableObject {
 
     private static let seededKey = "browser.shortcuts.seeded"
 
-    private init() {
-        reloadAll()
+    private init() {}
+
+    // MARK: - 启动预载
+
+    /// App 启动、数据库就绪后调用（`AppState.launch`）：补种首启预置快捷入口，并加载书签/历史/快捷入口。
+    ///
+    /// 注意：**不能**在 `init` 中加载——单例随 `MyHubApp` 的 `@StateObject` 属性初始化即创建，
+    /// 早于 `AppDatabase.setup()`，此时 `dbQueue` 为 nil，`reload*` 会全部早退，列表将一直为空
+    /// （历史记录/书签/快捷入口都读不出数据）。
+    func bootstrap() {
         seedShortcutsIfNeeded()
+        reloadAll()
     }
 
     // MARK: - 加载
@@ -151,7 +160,8 @@ final class BrowserDataStore: ObservableObject {
 
     private func seedShortcutsIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: Self.seededKey) else { return }
-        UserDefaults.standard.set(true, forKey: Self.seededKey)
+        // 数据库尚未就绪时既不写入也不打标记，留待下次启动重试（否则会永久跳过预置）
+        guard let db = AppDatabase.shared.dbQueue else { return }
 
         let presets: [(String, String)] = [
             ("Google", "https://www.google.com"),
@@ -159,13 +169,17 @@ final class BrowserDataStore: ObservableObject {
             ("哔哩哔哩", "https://www.bilibili.com"),
             ("GitHub", "https://github.com")
         ]
-        guard let db = AppDatabase.shared.dbQueue else { return }
-        _ = try? db.write { db in
-            for (index, preset) in presets.enumerated() {
-                var record = BrowserShortcut(id: nil, title: preset.0, url: preset.1, sortOrder: index)
-                try record.insert(db)
+        // 写入成功后才标记已预置，避免失败后永久跳过
+        do {
+            try db.write { db in
+                for (index, preset) in presets.enumerated() {
+                    var record = BrowserShortcut(id: nil, title: preset.0, url: preset.1, sortOrder: index)
+                    try record.insert(db)
+                }
             }
+            UserDefaults.standard.set(true, forKey: Self.seededKey)
+        } catch {
+            AppLogger.shared.log("预置快捷入口失败：\(error)", level: .warn, module: "browser")
         }
-        reloadShortcuts()
     }
 }

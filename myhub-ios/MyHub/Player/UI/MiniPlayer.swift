@@ -183,8 +183,15 @@ struct MiniPlayer: View {
                         .resizable()
                         .scaledToFill()   // 填满封面（对齐全屏/浏览页 BoxFit.cover 观感）
                 } else {
+                    // 占位封面：主色仅 12% 不透明度（近乎透明），若直接叠加会透出背后
+                    // 卡片上边框（`cardShape.stroke`）与溢出区后方页面内容。故先垫一层
+                    // 与卡片同色的不透明底色，再叠加主色浅色块，观感不变但不透光。
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(AppColors.primary.opacity(0.12))
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(AppColors.sidebarBackground)
+                        )
                         .overlay {
                             Image(systemName: "music.note")
                                 .font(.system(size: 24, weight: .medium))

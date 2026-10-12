@@ -146,11 +146,13 @@ struct RootView: View {
     /// iPhone 底部装饰：mini 播放器 + 悬浮圆角页签栏（TODO 376 方案 C）。
     /// 同时量出自身高度（含 mini 播放器），回写 `bottomChromeHeight`，
     /// 供页面把底部操作栏抬到装饰之上（TODO 379）。
-    /// 多选态隐藏页签栏（`bottomTabBarHidden`，TODO 385）：底部让给多选操作栏，测量值随之变小，
-    /// 操作栏自动落到页签栏原本的位置。
+    /// 多选态隐藏页签栏与 mini 播放器（`bottomTabBarHidden`，TODO 385/389）：底部整体让给多选操作栏，
+    /// 测量值随之变小，操作栏自动落到窗口底部（无装饰遮挡）。
     private var phoneBottomChrome: some View {
         VStack(spacing: 8) {
-            if player.isMini {
+            // 多选态 mini 播放器与页签栏一并隐藏，把整个底部让给多选操作栏（TODO 389）：
+            // 此前只隐藏页签栏、mini 播放器仍常驻，操作栏落在其上方，未实现「底部整体让位」。
+            if player.isMini && !bottomTabBarHidden {
                 MiniPlayer(roundedBottom: true)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -284,9 +286,6 @@ private struct BottomTabBar: View {
 
     @EnvironmentObject private var router: AppRouter
 
-    /// 液体玻璃模式：开启时页签栏使用 Liquid Glass 背景，关闭时用实色背景
-    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
-
     /// 胶囊圆角 / 条高（TODO 376 方案 C）
     private let cornerRadius: CGFloat = 26
     private let barHeight: CGFloat = 56
@@ -325,19 +324,15 @@ private struct BottomTabBar: View {
         .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
     }
 
-    /// 页签栏背景：液体玻璃开 → Liquid Glass（iOS 26）/ 毛玻璃回退；关 → 实色
+    /// 页签栏背景：Liquid Glass（iOS 26）/ 毛玻璃回退
     @ViewBuilder
     private var barBackground: some View {
-        if liquidGlassMode {
-            if #available(iOS 26.0, *) {
-                Rectangle()
-                    .fill(Color.clear)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            } else {
-                Rectangle().fill(.ultraThinMaterial)
-            }
+        if #available(iOS 26.0, *) {
+            Rectangle()
+                .fill(Color.clear)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
-            Rectangle().fill(AppColors.sidebarBackground)
+            Rectangle().fill(.ultraThinMaterial)
         }
     }
 }

@@ -88,7 +88,7 @@ struct PlayerView: View {
                 withAnimation(.appQuick) { pipNotice = nil }
             }
         }
-        // 切到纯音频时恢复竖屏（纯音频不提供横竖屏切换，避免卡在横屏）
+        // 切到纯音频时默认恢复竖屏（避免直接卡在横屏）；手动模式下仍可用左中旋转按钮切换
         .onChange(of: isAudioPresentation) { audio in
             if audio {
                 if orientation.isLandscape { orientation.lockPortrait() }
@@ -165,8 +165,9 @@ struct PlayerView: View {
                 .transition(.opacity)
             }
 
-            // 屏幕左中：横竖屏切换按钮（手动模式 + 视频 + 控制层可见时显示；自动模式/锁定/纯音频不显示）
-            if showControls, !isInterfaceLocked, !isAudioPresentation, orientation.isManualMode {
+            // 屏幕左中：横竖屏切换按钮（手动模式 + 控制层可见时显示；自动模式/锁定不显示）
+            // 纯音频同样提供：从横屏视频进入音频后可能沿用缓存的横屏偏好，需要能手动切回竖屏
+            if showControls, !isInterfaceLocked, orientation.isManualMode {
                 HStack {
                     Button {
                         orientation.toggle()
@@ -285,6 +286,17 @@ struct PlayerView: View {
                     .foregroundStyle(.white.opacity(0.9))
             }
             .buttonStyle(.pressScale)
+        case .ended where showControls && !isInterfaceLocked:
+            // 播放完成：中央显示「重播」按钮，点击从头重新播放（与底栏播放键行为一致）
+            Button {
+                core.play()
+            } label: {
+                Image(systemName: "arrow.counterclockwise.circle.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            .buttonStyle(.pressScale)
+            .accessibilityLabel("重新播放")
         case .failed(let message):
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")

@@ -163,6 +163,11 @@ final class AVPlayerEngine: PlaybackEngine {
 
     func play() {
         guard let player else { return }
+        // 播放完成后再次播放：AVPlayer 停在结尾时仅设置 rate 不会重启，先 seek 回起点
+        if let item = playerItem, item.duration.isNumeric, item.duration.seconds > 0,
+           player.currentTime().seconds >= item.duration.seconds - 0.5 {
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         player.rate = desiredRate
     }
 

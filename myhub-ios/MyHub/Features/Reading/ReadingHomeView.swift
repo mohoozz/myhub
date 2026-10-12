@@ -17,7 +17,6 @@ struct ReadingHomeView: View {
     /// 文件名行数等浏览显示偏好（设置「文件名行数」，浏览页与阅读页的卡片、列表均生效）
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
-    @AppStorage("ui.liquidGlassMode") private var liquidGlassMode = true
     /// 全局底部装饰（悬浮页签栏 / mini 播放器）占用高度：多选操作栏据此抬升（TODO 379）
     @Environment(\.bottomChromeHeight) private var bottomChromeHeight
     /// 多选态隐藏全局悬浮页签栏（回写 RootView，底部让给操作栏，TODO 385）
@@ -54,7 +53,6 @@ struct ReadingHomeView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
                 // 多选态标题居中；常态用 .editor 令「阅读」大标题左对齐（与其余标签一致）。
-                // 液体玻璃按钮背景由工具栏项各自的 .liquidGlassToolbar 控制。
                 .toolbarRole(isSelecting ? .navigationStack : .editor)
                 // 多选操作栏（TODO 379）：safeAreaInset 只负责为滚动内容预留底部空间（高度固定），
                 // 操作栏本体由 overlay 绘制并抬升——页面内 safeAreaInset / overlay 的落点是「系统底部
@@ -387,7 +385,6 @@ struct ReadingHomeView: View {
                     selection = Set(history.records.compactMap(\.id))
                 }
             }
-            .liquidGlassToolbar(liquidGlassMode)
             ToolbarItem(placement: .principal) {
                 Text("已选 \(selection?.count ?? 0) 项")
                     .font(.headline)
@@ -396,7 +393,6 @@ struct ReadingHomeView: View {
                 Button("完成") { selection = nil }
                     .fontWeight(.semibold)
             }
-            .liquidGlassToolbar(liquidGlassMode)
         } else {
             ToolbarItem(placement: .principal) {
                 Text("阅读")
@@ -413,7 +409,6 @@ struct ReadingHomeView: View {
                 }
                 PopupMenuButton(items: overflowItems)
             }
-            .liquidGlassToolbar(liquidGlassMode)
         }
     }
 
@@ -531,15 +526,10 @@ struct ReadingHomeView: View {
         .padding(.horizontal, 12)
     }
 
-    /// 多选操作栏背景：液体玻璃模式开 → 毛玻璃材质；关 → 当前实色卡片背景
-    @ViewBuilder
+    /// 多选操作栏背景：毛玻璃材质
     private var selectionBarBackground: some View {
-        if liquidGlassMode {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-        } else {
-            AppColors.cardBackground
-        }
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(.ultraThinMaterial)
     }
 
     // MARK: - 交互
