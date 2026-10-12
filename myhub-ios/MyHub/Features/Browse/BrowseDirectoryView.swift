@@ -832,6 +832,10 @@ struct BrowseDirectoryView: View {
     private func contextMenuItems(for entry: FileEntry) -> [PopupMenuItem] {
         let type = viewModel.isComicEpub(entry) ? .comic : MediaType.detect(ext: entry.ext)
         var items: [PopupMenuItem] = [
+            // 多选：置顶显示（与右上角「…」→「选择」一致，进入多选，不预选）
+            PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
+                viewModel.selection = []
+            },
             PopupMenuItem(title: entry.isDir ? "进入" : "打开", systemImage: "arrow.right.circle") {
                 tap(entry)
             },
@@ -905,10 +909,6 @@ struct BrowseDirectoryView: View {
                 })
             }
         }
-        // 多选：与右上角「…」→「选择」一致（进入多选，不预选）
-        items.append(PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
-            viewModel.selection = []
-        })
         items.append(PopupMenuItem(title: "删除", systemImage: "trash", destructive: true) {
             deletingPaths = [entry.path]
         })
