@@ -13,9 +13,10 @@ struct BrowserToolbar: View {
     /// 地址栏提交（导航）回调：由父视图交给 `BrowserSessionStore.open`
     let onSubmitAddress: (URL) -> Void
 
-    /// 胶囊圆角 / 条高：与全局页签栏（26 / 56）同一圆角语言，略矮以让出网页可视区
+    /// 胶囊圆角 / 条高：与全局页签栏（26 / 56）同一圆角语言，略矮以让出网页可视区。
+    /// 条高公开为静态常量供兄弟视图复用（如 `BrowserExitHandle` 的垂直落点），避免多处写死漂移。
     private let cornerRadius: CGFloat = 26
-    private let barHeight: CGFloat = 52
+    static let barHeight: CGFloat = 52
 
     var body: some View {
         HStack(spacing: 4) {
@@ -61,7 +62,7 @@ struct BrowserToolbar: View {
             }
         }
         .padding(.horizontal, 6)
-        .frame(height: barHeight)
+        .frame(height: Self.barHeight)
         .background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(AppColors.cardBackground)

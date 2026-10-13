@@ -2,17 +2,22 @@ import SwiftUI
 
 /// 点击/长按选中态高亮（IOS-702）：按压浅蓝高亮 + 缩放 0.975（与文件 cell 的按压表现对齐，TODO 375）。
 /// 高亮以半透明 overlay 叠加，避免被卡片不透明背景遮住。
+///
+/// 按压态经 `PressVisualGate` 过闸（按下瞬时 + 抬起补足最短可见时长），并关闭所在
+/// 滚动容器的 `delaysContentTouches`，解决「快速单点没动画、按住一会儿才有动画」（TODO 402）。
 struct SelectableCellStyle: ButtonStyle {
     var cornerRadius: CGFloat = 12
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(configuration.isPressed ? AppColors.primary.opacity(0.08) : Color.clear)
-            )
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
-            .animation(.appFast, value: configuration.isPressed)
+        PressVisualGate(isPressed: configuration.isPressed) { pressed in
+            configuration.label
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(pressed ? AppColors.primary.opacity(0.08) : Color.clear)
+                )
+                .scaleEffect(pressed ? 0.975 : 1)
+        }
+        .instantPressInScrollView()
     }
 }
 

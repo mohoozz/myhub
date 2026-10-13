@@ -297,7 +297,7 @@ struct PopupMenuButton: View {
     var style: PopupMenuPresenter.Style = .drawer
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
-    @State private var isPressing = false
+    @StateObject private var press = PressStateHolder()
     @State private var anchor: CGRect = .zero
 
     var body: some View {
@@ -306,21 +306,11 @@ struct PopupMenuButton: View {
             .foregroundStyle(.tint)
             .frame(width: 32, height: 32)
             .contentShape(Rectangle())
-            .scaleEffect(isPressing ? 0.97 : 1)
+            .scaleEffect(press.isPressing ? 0.92 : 1)
             .background(AnchorReader(anchor: $anchor))
             .overlay(PressBridge(
                 onTap: { presenter.show(items: items, anchor: anchor, style: style) },
-                onPressing: { pressing in
-                    if pressing {
-                        // 按下：瞬时切换（无动画），保证跟手；不用 easeOut 渐变，避免按下瞬间延迟
-                        var transaction = Transaction()
-                        transaction.animation = nil
-                        withTransaction(transaction) { isPressing = true }
-                    } else {
-                        // 松开：动画平滑恢复
-                        withAnimation(.appFast) { isPressing = false }
-                    }
-                },
+                onPress: { press.handle($0) },
                 onLongPress: {}
             ))
             .accessibilityAddTraits(.isButton)
@@ -418,9 +408,12 @@ private struct CellPressModifier: ViewModifier {
     let onTap: () -> Void
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
-    @State private var isPressing = false
+    /// 按压视觉状态：按下瞬时点亮，抬起补足最短可见时长再回弹（快速单点也能看到动画，TODO 402）
+    @StateObject private var press = PressStateHolder()
     @State private var isHovering = false
     @State private var anchor: CGRect = .zero
+
+    private var isPressing: Bool { press.isPressing }
 
     /// 高亮块圆角：通栏列表行 cell 无圆角（0）时单独收一个具名圆角
     private var highlightRadius: CGFloat { cornerRadius > 0 ? cornerRadius : 11 }
@@ -475,24 +468,14 @@ private struct CellPressModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(AnchorReader(anchor: $anchor))
-            // 选中浮起 / 按压回缩；动画只挂在 isSelected 上（按压由 onPressing 的事务控制，保持瞬时跟手）
+            // 选中浮起 / 按压回缩；动画只挂在 isSelected 上（按压由 PressStateHolder 的事务控制，保持瞬时跟手）
             .scaleEffect(scale)
             .overlay(highlightLayer)
             .animation(.appFast, value: isSelected)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(PressBridge(
                 onTap: onTap,
-                onPressing: { pressing in
-                    if pressing {
-                        // 按下：瞬时切换（无动画），保证跟手；不用 easeOut 渐变，避免按下瞬间延迟
-                        var transaction = Transaction()
-                        transaction.animation = nil
-                        withTransaction(transaction) { isPressing = true }
-                    } else {
-                        // 松开：动画平滑恢复
-                        withAnimation(.appFast) { isPressing = false }
-                    }
-                },
+                onPress: { press.handle($0) },
                 onLongPress: {
                     // 长按触发轻微震动（prepare 预唤醒触觉引擎，确保即时可靠触发）
                     let generator = UIImpactFeedbackGenerator(style: .light)
@@ -552,11 +535,11 @@ extension View {
 /// 让长按不再干扰滚动。
 private struct PressBridge: UIViewRepresentable {
     let onTap: () -> Void
-    let onPressing: (Bool) -> Void
+    let onPress: (PressPhase) -> Void
     let onLongPress: () -> Void
 
     func makeUIView(context: Context) -> PressBridgeView {
-        PressBridgeView(onTap: onTap, onPressing: onPressing, onLongPress: onLongPress)
+        PressBridgeView(onTap: onTap, onPress: onPress, onLongPress: onLongPress)
     }
 
     // 让桥接视图填满 cell（overlay 内容默认按自身理想大小居中，需显式铺满）
@@ -566,23 +549,25 @@ private struct PressBridge: UIViewRepresentable {
 
     func updateUIView(_ uiView: PressBridgeView, context: Context) {
         uiView.onTap = onTap
-        uiView.onPressing = onPressing
+        uiView.onPress = onPress
         uiView.onLongPress = onLongPress
     }
 }
 
 private final class PressBridgeView: UIView {
     var onTap: () -> Void
-    var onPressing: (Bool) -> Void
+    var onPress: (PressPhase) -> Void
     var onLongPress: () -> Void
 
     private let longPress = UILongPressGestureRecognizer()
+    /// 长按是否已进入（仅已进入的长按才在结束时复位按压态，避免误清掉点击的回弹动画）
+    private var isLongPressing = false
 
     init(onTap: @escaping () -> Void,
-         onPressing: @escaping (Bool) -> Void,
+         onPress: @escaping (PressPhase) -> Void,
          onLongPress: @escaping () -> Void) {
         self.onTap = onTap
-        self.onPressing = onPressing
+        self.onPress = onPress
         self.onLongPress = onLongPress
         super.init(frame: .zero)
         isUserInteractionEnabled = true
@@ -600,33 +585,47 @@ private final class PressBridgeView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// 挂到窗口上时关闭所在滚动容器的触摸延迟：
+    /// UIScrollView 默认攒 ~150ms 才把 touchesBegan 下发，快速单点时按下/抬起被压缩进同一批事件，
+    /// 按压态一帧都渲染不出来（表现为「快点没动画、按住一会儿才有动画」，TODO 402）。
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        disableTouchDelayInEnclosingScrollView(of: self)
+    }
+
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
         if recognizer.state == .ended { onTap() }
     }
 
     // 手指按下立即进入按压态（高亮 + 缩放跟手），不等长按阈值；
-    // 抬起 / 取消（滚动接管）时复位。长按菜单仍由 longPress 的 .began（0.5s）触发，职责分离。
+    // 抬起（.ended，保证动画播完）/ 取消（.cancelled，滚动接管则立即复位）。
+    // 长按菜单仍由 longPress 的 .began（0.5s）触发，职责分离。
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        onPressing(true)
+        onPress(.began)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
-        onPressing(false)
+        onPress(.ended)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
-        onPressing(false)
+        onPress(.cancelled)
     }
 
     @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
         switch recognizer.state {
         case .began:
+            isLongPressing = true
             onLongPress()          // 达到长按阈值触发菜单，不等松手
         case .ended, .cancelled, .failed:
-            onPressing(false)      // 兜底复位：长按后松手 / 移动超限 / 被取消
+            // 兜底复位：仅针对已进入的长按（移动超限导致的 .failed 不应打断点击的回弹动画）
+            guard isLongPressing else { return }
+            isLongPressing = false
+            onPress(.cancelled)
         default:
             break
         }

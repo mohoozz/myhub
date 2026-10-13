@@ -139,6 +139,8 @@ enum AppSettings {
         @UserDefault("browser.customSearchTemplate", default: "") static var customSearchTemplate: String
         @RawUserDefault("browser.userAgent", default: .platform) static var userAgent: BrowserUserAgent
         @UserDefault("browser.privateMode", default: false) static var privateMode: Bool
+        /// 沉浸态左下角退出钮的首启提示气泡是否已展示过（「退出全屏」，仅提示一次）
+        @UserDefault("browser.exitHandleTipShown", default: false) static var exitHandleTipShown: Bool
     }
 
     /// 缓存偏好（IOS-504 / 605）

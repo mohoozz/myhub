@@ -1,6 +1,34 @@
 import SwiftUI
 import WebKit
 
+/// 滚动位移计量器（TODO 399）：把 `contentOffset` 的高频变化（ProMotion 下可达 120Hz）
+/// 归并成稀疏的「用户正在滑动页面」信号——累计位移超过 `distance` 且距上次信号超过 `interval`
+/// 才发一个，既保证慢速拖动（单次回调不足 1pt）也能触发收起，又避免刷爆 `@Published`。
+/// 仅在 `UIScrollView` 的主线程 KVO 回调内读写，故标注 `@unchecked Sendable`。
+private final class ScrollDragMeter: @unchecked Sendable {
+    private let distance: CGFloat = 4
+    private let interval: TimeInterval = 0.15
+    private var accumulated: CGFloat = 0
+    private var lastTickAt: TimeInterval = 0
+
+    /// 喂入一次位移增量，返回是否应发出「收起操作栏」信号
+    func feed(_ delta: CGFloat) -> Bool {
+        accumulated += abs(delta)
+        guard accumulated >= distance else { return false }
+        let now = Date().timeIntervalSinceReferenceDate
+        guard now - lastTickAt >= interval else { return false }
+        accumulated = 0
+        lastTickAt = now
+        return true
+    }
+
+    /// 手指离开页面（惯性滚动 / 回弹 / 布局自动调整）时复位，使下一次拖动能立即触发
+    func reset() {
+        accumulated = 0
+        lastTickAt = 0
+    }
+}
+
 /// 浏览器标签（TODO §8.1，IOS-401）：
 /// 每个标签持有一个 `WKWebView` 实例，切换标签时不销毁视图，从而保持导航历史栈
 /// （back/forward）不因标签切换或 URL 重建而丢失；无痕标签使用独立的 `nonPersistent`
@@ -32,9 +60,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var isSSLError = false
     @Published var errorMessage: String?
 
-    /// 页面滚动计数：任意方向滚动均自增，用于将底部操作栏收起为胶囊（TODO §8.2）
+    /// 页面滚动计数：用户任意方向拖动页面均自增，用于将底部操作栏收起为胶囊（TODO §8.2）
     /// 用计数器而非布尔，保证「展开后再次滚动」也能再触发收起
     @Published var scrollTick: Int = 0
+
+    /// 刷新计数：主动刷新（工具栏刷新键 / 下拉刷新 / 错误页重试）自增，
+    /// 与 `scrollTick` 一样用于把底部操作栏收起为胶囊（TODO 399）
+    @Published var reloadTick: Int = 0
 
     /// 起始页回退标记：从起始页导航进入过页面后为 `true`，
     /// 使「回退」按钮在 webView 历史为空时仍可返回到起始页（Safari 行为）
@@ -102,6 +134,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func reload() {
         clearError()
+        // 刷新同样收起操作栏为胶囊（TODO 399）：计数器自增，保证连续刷新每次都能触发
+        reloadTick += 1
         webView.reload()
     }
 
@@ -162,6 +196,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     // MARK: - KVO
 
     private func observe() {
+        // 滚动计量器：随下方 contentOffset 观察闭包一同存活，仅在主线程 KVO 回调内访问
+        let dragMeter = ScrollDragMeter()
         observations = [
             webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
                 let value = webView.estimatedProgress
@@ -195,12 +231,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 let value = webView.hasOnlySecureContent
                 Task { @MainActor [weak self] in self?.hasOnlySecureContent = value }
             },
-            // 滚动即收起操作栏为胶囊（任意方向，Safari 风格）：只有点击胶囊才恢复地址栏
+            // 滚动即收起操作栏为胶囊（任意方向，Safari 风格）：只有点击胶囊才恢复地址栏。
+            // 仅统计「用户手指在拖动」期间的位移（TODO 399）：操作栏展开/收起会改变 webView 高度、
+            // 页面加载与回弹也会自动调整 contentOffset，这类「伪滚动」若计入就会与点击胶囊展开形成反馈回路
+            // （展开 → webView 变矮 → offset 自动调整 → 立刻又收起，表现为「第一次点击胶囊没展开」）。
             webView.scrollView.observe(\.contentOffset, options: [.new, .old]) { [weak self] scrollView, change in
+                guard scrollView.isTracking || scrollView.isDragging else {
+                    dragMeter.reset()
+                    return
+                }
                 let newY = scrollView.contentOffset.y
                 let oldY = change.oldValue?.y ?? newY
-                // 忽略微小抖动（含页面加载时的自动布局微调）
-                guard abs(newY - oldY) > 2 else { return }
+                // 按「累计位移」判定而非单次增量：慢速拖动时每次回调不足 1pt，
+                // 用单次阈值会永远触发不了收起；累计超过阈值即发一个信号并复位（兼带节流）
+                guard dragMeter.feed(newY - oldY) else { return }
                 Task { @MainActor [weak self] in self?.scrollTick += 1 }
             }
         ]

@@ -415,14 +415,14 @@ struct ReadingHomeView: View {
     /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）
     private var overflowItems: [PopupMenuItem] {
         [
+            PopupMenuItem(title: "选择", systemImage: "checkmark.circle") {
+                selection = []
+            },
             PopupMenuItem(
                 title: viewMode == .grid ? "列表视图" : "网格视图",
                 systemImage: viewMode == .grid ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol
             ) {
                 viewMode = viewMode == .grid ? .list : .grid
-            },
-            PopupMenuItem(title: "选择", systemImage: "checkmark.circle") {
-                selection = []
             },
             PopupMenuItem(title: "刷新", systemImage: "arrow.clockwise") {
                 history.reload()
@@ -433,15 +433,15 @@ struct ReadingHomeView: View {
     /// 长按（iOS，底部抽屉）/ 指针右键（iPad/PC，锚点卡片）操作菜单
     private func menuItems(for record: ReadingProgress) -> [PopupMenuItem] {
         [
+            // 多选：置顶显示（与右上角「…」→「选择」一致，进入多选，不预选）
+            PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
+                selection = []
+            },
             PopupMenuItem(
                 title: record.mediaType == .video || record.mediaType == .audio ? "继续播放" : "继续阅读",
                 systemImage: "play.circle"
             ) {
                 open(record)
-            },
-            // 多选：与右上角「…」→「选择」一致（进入多选，不预选）
-            PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
-                selection = []
             },
             // 定位到源路径位置：切到浏览页并呼吸灯高亮源文件所在目录（参照 Flutter 端与收藏页「在浏览中定位」）
             PopupMenuItem(title: "定位到源路径位置", systemImage: "scope") {

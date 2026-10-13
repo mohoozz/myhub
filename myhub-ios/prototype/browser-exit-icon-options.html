@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内置浏览器 · 退出按钮图标候选（方案 C + S1）</title>
+<style>
+:root{--primary:#2563EB;--tb-line:#D1D5DB;--card-line:#EDF0F3;--sep:#E5E7EB;--tp:#1A1A2E;--ts:#6B7280;--fill:#F3F4F6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+h3.sec{font-size:16px;margin:38px 0 14px;padding-left:9px;border-left:3px solid var(--primary)}
+.subtitle{color:var(--ts);font-size:13px;line-height:1.75;max-width:1100px}
+.subtitle b{color:var(--tp)}
+code,.d-code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.locked{display:inline-flex;align-items:center;gap:6px;background:#DCFCE7;color:#166534;font-size:12px;font-weight:600;padding:4px 10px;border-radius:8px;margin:10px 0 0}
+/* ===== 图标候选网格 ===== */
+.grid{display:flex;flex-wrap:wrap;gap:18px;align-items:stretch}
+.ic-card{width:340px;background:#fff;border:1px solid var(--card-line);border-radius:14px;padding:14px 16px 16px;box-shadow:0 2px 10px rgba(17,24,39,.05);display:flex;flex-direction:column}
+.ic-card.pick{border-color:#93C5FD;box-shadow:0 2px 14px rgba(37,99,235,.14)}
+.ic-card h4{font-size:14px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:3px}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}
+.tag.warn{background:#FEF3C7;color:#92400E}
+.tag.bad{background:#FEE2E2;color:#991B1B}
+.sf{font-size:11px;color:var(--ts);font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all;margin-bottom:10px}
+.row{display:flex;align-items:flex-end;gap:16px;padding:12px 0 10px;border-top:1px dashed var(--sep);border-bottom:1px dashed var(--sep);margin-bottom:10px;background:
+  linear-gradient(135deg,#FAFBFC,#fff)}
+.row .cap{font-size:10px;color:#9CA3AF;text-align:center;margin-top:5px;line-height:1.3}
+.zoom{width:56px;height:56px;border-radius:14px;background:var(--fill);display:flex;align-items:center;justify-content:center;flex:none}
+.zoom svg{width:34px;height:34px}
+.col{display:flex;flex-direction:column;align-items:center}
+/* 真实尺寸：单钮 38pt */
+.fab{width:38px;height:38px;border-radius:19px;background:#fff;border:1px solid var(--tb-line);box-shadow:0 3px 10px rgba(0,0,0,.14);display:flex;align-items:center;justify-content:center;color:var(--tp)}
+.fab svg{width:17px;height:17px}
+/* 真实尺寸：双联胶囊（播放中） */
+.stack{width:38px;background:#fff;border:1px solid var(--tb-line);border-radius:19px;box-shadow:0 3px 10px rgba(0,0,0,.14);overflow:hidden}
+.stack .cell{height:38px;display:flex;align-items:center;justify-content:center;color:var(--tp)}
+.stack .cell svg{width:17px;height:17px}
+.stack .cov{background:linear-gradient(135deg,#C7D2FE,#E0E7FF);font-size:16px}
+.stack .hr{height:1px;background:var(--sep)}
+/* 深色网页上的表现 */
+.dark{width:38px;height:38px;border-radius:19px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;color:#fff}
+.dark svg{width:17px;height:17px}
+.darkwrap{background:#1F2430;padding:6px;border-radius:14px}
+.eval{font-size:12px;color:var(--ts);line-height:1.8;flex:1}
+.eval b{color:var(--tp)}
+.eval .g{color:#047857}.eval .r{color:#B45309}
+/* ===== 真实场景手机框 ===== */
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:320px}
+.board h2{font-size:15px;margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.phone{width:320px;height:520px;border:8px solid #111827;border-radius:38px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+.statusbar{height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;font-weight:600}
+.web{flex:1;overflow:hidden;padding:14px 16px;background:#fff}
+.wimg{height:104px;border-radius:12px;background:linear-gradient(135deg,#DBEAFE,#EEF4FB);display:flex;align-items:center;justify-content:center;font-size:32px;margin-bottom:12px}
+.wh{font-size:16px;font-weight:700}
+.wm{font-size:11px;color:var(--ts);margin:4px 0 10px}
+.wline{height:9px;border-radius:5px;background:#EEF1F4;margin-bottom:8px}
+.wline.s{width:62%}.wline.m{width:84%}
+.tb{flex:none;margin:0 12px 8px;height:52px;display:flex;align-items:center;gap:4px;padding:0 6px;background:#fff;border:1px solid var(--tb-line);border-radius:26px;box-shadow:0 3px 8px rgba(0,0,0,.10)}
+.tb .nb{width:32px;height:44px;display:flex;align-items:center;justify-content:center;font-size:16px;flex:none}
+.tb .nb.dim{color:#C3C7CE}
+.tb .addr{flex:1;height:38px;border-radius:19px;background:var(--fill);padding:0 12px;display:flex;align-items:center;gap:6px;font-size:12px;min-width:0}
+.tb .addr .u{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb .tsq{display:flex;align-items:center;gap:3px;font-size:12px;height:36px;padding:0 6px;border-radius:18px;background:var(--fill);flex:none}
+.inphone{position:absolute;left:12px;bottom:72px}
+table{border-collapse:collapse;margin-top:14px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);width:100%;max-width:1100px}
+th,td{padding:9px 13px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:middle;line-height:1.55}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+td svg{width:16px;height:16px;vertical-align:-3px;margin-right:5px}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:18px;font-size:12px;color:var(--ts);line-height:1.95;max-width:1100px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+
+<!-- ============ SVG 图标定义（按 SF Symbols 轮廓等比描绘，stroke 对应 .medium 字重） ============ -->
+<svg style="display:none" aria-hidden="true">
+  <symbol id="e1" viewBox="0 0 24 24"><polyline points="6,15 12,9 18,15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="e2" viewBox="0 0 24 24"><polyline points="4.6,13.8 12,10 19.4,13.8" fill="none" stroke="currentColor" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="e3" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6.5" y1="6.5" x2="17.5" y2="17.5"/><line x1="17.5" y1="6.5" x2="6.5" y2="17.5"/></g></symbol>
+  <symbol id="e4" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="3.6" y1="3.6" x2="9.6" y2="9.6"/><polyline points="9.6,5.6 9.6,9.6 5.6,9.6"/>
+    <line x1="20.4" y1="20.4" x2="14.4" y2="14.4"/><polyline points="14.4,18.4 14.4,14.4 18.4,14.4"/></g></symbol>
+  <symbol id="e5" viewBox="0 0 24 24">
+    <rect x="6.4" y="2.6" width="11.2" height="18.8" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <rect x="7.9" y="15.1" width="8.2" height="4.8" rx="1.6" fill="currentColor"/></symbol>
+  <symbol id="e6" viewBox="0 0 24 24">
+    <rect x="2.4" y="5.4" width="19.2" height="13.2" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <rect x="3.9" y="13.4" width="16.2" height="3.7" rx="1.5" fill="currentColor"/></symbol>
+  <symbol id="e7" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8">
+    <rect x="2.5" y="3.4" width="19" height="9" rx="2"/>
+    <rect x="2.5" y="15" width="8" height="5.6" rx="1.6"/>
+    <rect x="13.5" y="15" width="8" height="5.6" rx="1.6"/></g></symbol>
+  <symbol id="e8" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.6" y="3.6" width="8.8" height="16.8" rx="2.4"/>
+    <line x1="10.6" y1="12" x2="21.4" y2="12"/><polyline points="18,8.6 21.4,12 18,15.4"/></g></symbol>
+  <symbol id="e9" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M19.4 20.4 V12 A5.6 5.6 0 0 0 13.8 6.4 H6.2"/><polyline points="9.6,3 6.2,6.4 9.6,9.8"/></g></symbol>
+  <symbol id="e10" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="4" y1="20.4" x2="20" y2="20.4"/><line x1="12" y1="16.6" x2="12" y2="4.2"/><polyline points="7.4,8.8 12,4.2 16.6,8.8"/></g></symbol>
+</svg>
+
+<h1>内置浏览器 · 退出按钮图标候选</h1>
+<p class="subtitle">
+  形态与策略已定：<b>方案 C「左下悬浮圆钮 + 播放微件」+ S1「进入浏览器页签即隐藏页签栏与 mini 播放器」</b>，本页只决定最后一件事——<b>退出键的图标</b>。<br>
+  约束条件：①按钮直径 <b>38pt</b>、图标实际渲染约 <b>17pt</b>，笔画过密的符号会糊；②无音频时是<b>单圆钮</b>，有音频时是<b>竖向双联</b>（上格封面、下格退出），两种形态都要清晰；③<b>上格封面已占用「上滑 / 上箭头 = 展开播放器」的手势语义</b>，下格再用向上箭头会产生方向冲突；④工程最低 <code>iOS 16.0</code>，因此 <code>dock.rectangle</code>（iOS 17+）已被排除。<br>
+  下面每个候选都给出：2x 放大预览 ｜ 真实尺寸单钮 ｜ 真实尺寸双联 ｜ 深色网页上的毛玻璃表现。
+</p>
+<div class="locked">✓ 已确认：方案 C + 策略 S1 ｜ 待确认：退出图标</div>
+
+<h3 class="sec">一、图标候选（10 个，均 iOS 16 可用）</h3>
+<div class="grid">
+
+  <!-- E1 -->
+  <div class="ic-card">
+    <h4>E1 · 上尖括号<span class="tag warn">方向冲突</span></h4>
+    <div class="sf">chevron.up · iOS 13+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e1"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e1"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e1"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e1"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      语义「把底栏拉回来」。<span class="g">17pt 下辨识度最高、最通用。</span><br>
+      <span class="r">但上格封面的展开手势也是「上滑 / 向上」，两格一前一后两个「向上」含义不同，易误解为"再往上展开"；且不含任何"退出"暗示。</span>
+    </div>
+  </div>
+
+  <!-- E2 -->
+  <div class="ic-card">
+    <h4>E2 · 扁平把手<span class="tag">最克制</span></h4>
+    <div class="sf">chevron.compact.up · iOS 13+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e2"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e2"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e2"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e2"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      iOS 抽屉"把手"的标准暗示，<span class="g">观感最轻、不抢视线</span>。<br>
+      <span class="r">暗示的是"可拖动展开"而非"点击退出"，用户可能去拖它；与 E1 同样存在方向冲突。</span>
+    </div>
+  </div>
+
+  <!-- E3 -->
+  <div class="ic-card pick">
+    <h4>E3 · 叉号<span class="tag rec">备选 ①</span><span class="tag">最直白</span></h4>
+    <div class="sf">xmark · iOS 13+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e3"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e3"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e3"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e3"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      <span class="g">零学习成本：圆钮 + 叉 = 关闭当前浮层/全屏态，和视频播放器退全屏、图片查看器关闭完全同一套心智；17pt 下极清晰；无方向冲突。</span><br>
+      <span class="r">歧义风险：在浏览器里"×"也可能被读成"关闭当前标签页"或"停止加载"（操作栏加载中就有一个 xmark 停止键，二者会同屏出现）。</span>
+    </div>
+  </div>
+
+  <!-- E4 -->
+  <div class="ic-card pick">
+    <h4>E4 · 对角收缩<span class="tag rec">备选 ②</span><span class="tag">退出全屏惯例</span></h4>
+    <div class="sf">arrow.down.right.and.arrow.up.left · iOS 13+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e4"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e4"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e4"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e4"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      <span class="g">「退出全屏 / 缩回」的行业通用符号（视频播放器同款），语义精准地表达"结束沉浸态"，无方向冲突，也不会和停止加载撞车。</span><br>
+      <span class="r">四个端点 + 两个箭头，17pt 下是本页第二密的图形；深色毛玻璃上细节略有粘连（可降为 .regular 字重 16pt 缓解）。</span>
+    </div>
+  </div>
+
+  <!-- E5 -->
+  <div class="ic-card pick">
+    <h4>E5 · 竖屏 + 底栏<span class="tag rec">推荐</span><span class="tag">语义最精准</span></h4>
+    <div class="sf">rectangle.portrait.bottomthird.inset.filled · iOS 14+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e5"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e5"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e5"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e5"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      一块竖屏里<b>底部三分之一被填实</b>——字面意思就是"把底栏显示出来"，<span class="g">与本功能一一对应；外廓是整块矩形，17pt 下仍是一个清晰的"手机剪影"，远比箭头类更耐小尺寸；无任何方向/停止歧义。</span><br>
+      <span class="r">抽象度偏高，首次见到需半秒理解（配 A-2 式首启文字提示即可化解）。</span>
+    </div>
+  </div>
+
+  <!-- E6 -->
+  <div class="ic-card">
+    <h4>E6 · 横屏 + 底栏<span class="tag">E5 的横版</span></h4>
+    <div class="sf">rectangle.bottomthird.inset.filled · iOS 14+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e6"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e6"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e6"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e6"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      同语义，横向矩形在 17pt 圆钮里<span class="g">视觉重量更稳</span>。<br>
+      <span class="r">横版矩形不像"手机"，更像"面板/卡片"，对应"手机底栏"的直觉弱于 E5；填充条较扁，缩小后易糊成一条粗线。</span>
+    </div>
+  </div>
+
+  <!-- E7 -->
+  <div class="ic-card">
+    <h4>E7 · 页面 + 下方方块<span class="tag warn">偏密</span></h4>
+    <div class="sf">squares.below.rectangle · iOS 14+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e7"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e7"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e7"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e7"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      "网页上方、页签在下方"的图示感最接近真实布局。<br>
+      <span class="r">三个矩形 + 细描边，17pt 下是全场最密的一个，深色页上明显粘连；且形状接近操作栏右侧的 <code>square.on.square</code>（标签数），容易被误认成"标签页"。</span>
+    </div>
+  </div>
+
+  <!-- E8 -->
+  <div class="ic-card">
+    <h4>E8 · 离开门框<span class="tag warn">含义偏重</span></h4>
+    <div class="sf">rectangle.portrait.and.arrow.forward · iOS 16+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e8"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e8"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e8"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e8"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      "走出去"的离开感最强，和"退出"二字字面最贴。<br>
+      <span class="r">这个符号在 iOS 生态里长期被用作<b>登出 / 退出账号</b>，放在浏览器里有"要把我踢出去"的误导；横向箭头与"回到底栏"的垂直空间关系也不符。</span>
+    </div>
+  </div>
+
+  <!-- E9 -->
+  <div class="ic-card">
+    <h4>E9 · 掉头返回<span class="tag bad">易撞车</span></h4>
+    <div class="sf">arrow.uturn.left · iOS 13+</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e9"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e9"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e9"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e9"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      "回到刚才的地方"，对应需求原话"回退到进入浏览器前"。<br>
+      <span class="r">浏览器场景里"返回"几乎必然被读成<b>网页后退</b>——而操作栏左侧已有 <code>chevron.left</code> 后退键，二者同屏会直接打架，风险最高。</span>
+    </div>
+  </div>
+
+  <!-- E10 -->
+  <div class="ic-card">
+    <h4>E10 · 箭头抵线<span class="tag">折中</span></h4>
+    <div class="sf">arrow.up.to.line · iOS 16+（或 arrow.up.to.line.compact）</div>
+    <div class="row">
+      <div class="col"><div class="zoom"><svg><use href="#e10"/></svg></div><div class="cap">2x 预览</div></div>
+      <div class="col"><div class="fab"><svg><use href="#e10"/></svg></div><div class="cap">单钮</div></div>
+      <div class="col"><div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e10"/></svg></div></div><div class="cap">双联</div></div>
+      <div class="col"><div class="darkwrap"><div class="dark"><svg><use href="#e10"/></svg></div></div><div class="cap">深色页</div></div>
+    </div>
+    <div class="eval">
+      箭头 + 一条底线，可读作"把下面那条栏顶回来"，<span class="g">比纯 chevron 多了"栏"这个实体指代，辨识度仍好。</span><br>
+      <span class="r">仍是向上箭头，与上格封面的上滑展开存在同一个方向冲突；线在箭头尾部，也可能被读成"回到页面顶部"（网页常见功能）。</span>
+    </div>
+  </div>
+
+</div>
+
+<h3 class="sec">二、三个主推候选的真实场景（有音频播放 = 双联形态）</h3>
+<div class="boards">
+
+  <div class="board">
+    <h2>E5 · rectangle.portrait.bottomthird.inset.filled<span class="tag rec">推荐</span></h2>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="web">
+        <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+        <div class="wline"></div><div class="wline m"></div>
+      </div>
+      <div class="tb">
+        <div class="nb">‹</div><div class="nb dim">›</div><div class="nb">↻</div>
+        <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+        <div class="tsq">⧉ 3</div><div class="nb" style="width:28px">⋯</div>
+      </div>
+      <div class="inphone">
+        <div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e5"/></svg></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>E4 · arrow.down.right.and.arrow.up.left<span class="tag">备选 ②</span></h2>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="web">
+        <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+        <div class="wline"></div><div class="wline m"></div>
+      </div>
+      <div class="tb">
+        <div class="nb">‹</div><div class="nb dim">›</div><div class="nb">↻</div>
+        <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+        <div class="tsq">⧉ 3</div><div class="nb" style="width:28px">⋯</div>
+      </div>
+      <div class="inphone">
+        <div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e4"/></svg></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>E3 · xmark<span class="tag">备选 ①</span></h2>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="web">
+        <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+        <div class="wline"></div><div class="wline m"></div>
+      </div>
+      <div class="tb">
+        <div class="nb">‹</div><div class="nb dim">›</div><div class="nb">↻</div>
+        <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+        <div class="tsq">⧉ 3</div><div class="nb" style="width:28px">⋯</div>
+      </div>
+      <div class="inphone">
+        <div class="stack"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell"><svg><use href="#e3"/></svg></div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<h3 class="sec">三、横向评分</h3>
+<table>
+  <tr><th>候选</th><th>语义准确度</th><th>17pt 辨识度</th><th>与现有控件撞车</th><th>与上格上滑冲突</th><th>结论</th></tr>
+  <tr><td><svg><use href="#e5"/></svg>E5 竖屏+底栏</td><td>★★★★★</td><td>★★★★☆</td><td>无</td><td>无</td><td><b>推荐</b></td></tr>
+  <tr><td><svg><use href="#e4"/></svg>E4 对角收缩</td><td>★★★★☆</td><td>★★★☆☆</td><td>无</td><td>无</td><td>备选 ②</td></tr>
+  <tr><td><svg><use href="#e3"/></svg>E3 叉号</td><td>★★★☆☆</td><td>★★★★★</td><td>与加载中停止键同形</td><td>无</td><td>备选 ①</td></tr>
+  <tr><td><svg><use href="#e10"/></svg>E10 箭头抵线</td><td>★★★★☆</td><td>★★★★☆</td><td>似"回到顶部"</td><td><b>有</b></td><td>折中可选</td></tr>
+  <tr><td><svg><use href="#e1"/></svg>E1 上尖括号</td><td>★★★☆☆</td><td>★★★★★</td><td>无</td><td><b>有</b></td><td>谨慎</td></tr>
+  <tr><td><svg><use href="#e6"/></svg>E6 横屏+底栏</td><td>★★★★☆</td><td>★★★☆☆</td><td>无</td><td>无</td><td>E5 的次优版</td></tr>
+  <tr><td><svg><use href="#e2"/></svg>E2 扁平把手</td><td>★★☆☆☆</td><td>★★★★☆</td><td>暗示可拖动</td><td><b>有</b></td><td>不建议</td></tr>
+  <tr><td><svg><use href="#e7"/></svg>E7 页面+方块</td><td>★★★★☆</td><td>★★☆☆☆</td><td>似 square.on.square 标签数</td><td>无</td><td>不建议</td></tr>
+  <tr><td><svg><use href="#e8"/></svg>E8 离开门框</td><td>★★★☆☆</td><td>★★★☆☆</td><td>生态里=登出账号</td><td>无</td><td>不建议</td></tr>
+  <tr><td><svg><use href="#e9"/></svg>E9 掉头返回</td><td>★★★☆☆</td><td>★★★★☆</td><td><b>与网页后退键直接冲突</b></td><td>无</td><td>排除</td></tr>
+</table>
+
+<p class="footnote">
+  <b>我的建议：E5</b>（<code>rectangle.portrait.bottomthird.inset.filled</code>，16pt / <code>.medium</code>）——它是唯一"图形本身就在说明这个按钮会做什么"的候选，且避开了全部三类歧义（后退、停止加载、上滑展开播放器）。若你更看重"一眼就懂、不需要学"，则选 <b>E3</b>；若更看重"全屏退出的行业惯例"，则选 <b>E4</b>。<br>
+  <b>附带 3 个可一并敲定的小项（不选就按默认）：</b>
+  ① 首次进入时是否在圆钮右侧飘一个「退出全屏」文字气泡 2 秒后淡出（默认：<b>做</b>，只显示一次，存 <code>UserDefaults</code>）；
+  ② <code>accessibilityLabel</code> 文案（默认：<b>"退出全屏浏览，显示页签栏"</b>）；
+  ③ 点击后是否带轻触感反馈 <code>UIImpactFeedbackGenerator(.light)</code>（默认：<b>带</b>，与现有页签切换一致）。<br>
+  回复图标编号即可，我随后直接改代码：<code>MyHub/Features/Browser/BrowserHomeView.swift</code>（新增左下浮层 + <code>\.bottomTabBarHidden</code> 的 onAppear/onDisappear 管控 + <code>bottomBarGap</code> 改读 <code>\.bottomChromeHeight</code>）、新增 <code>MyHub/Features/Browser/BrowserExitHandle.swift</code>（圆钮 / 双联胶囊 + 播放微件，观察 <code>PlayerPresenter</code>）。
+</p>
+</body>
+</html>

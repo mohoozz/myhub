@@ -8,6 +8,11 @@ struct BrowserHomeView: View {
     @EnvironmentObject private var session: BrowserSessionStore
     @EnvironmentObject private var dataStore: BrowserDataStore
     @EnvironmentObject private var player: PlayerPresenter
+    @EnvironmentObject private var router: AppRouter
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// 沉浸态回写全局底部装饰（页签栏 + mini 播放器）的隐藏开关
+    @Environment(\.bottomTabBarHidden) private var bottomTabBarHidden
 
     @State private var showingTabs = false
     @State private var showingBookmarks = false
@@ -19,11 +24,28 @@ struct BrowserHomeView: View {
     /// 操作栏 / 收起态小胶囊与底部页签栏之间的视觉间距（左右内缩 12pt 形成上下「双胶囊」节奏）
     private let tabBarGap: CGFloat = 12
 
+    /// 沉浸态（原型 `prototype/browser-exit-handle-collapse-options.html` 策略 S1）：
+    /// iPhone 上停留在「浏览器」页签期间隐藏全局页签栏与 mini 播放器，把约 128pt 竖向空间还给网页；
+    /// 退出由左下角 `BrowserExitHandle` 触发——回到进入浏览器前的页签，底部装饰随之恢复。
+    /// iPad 走侧边栏导航、本就无底部页签栏，不进入沉浸态。
+    private var isImmersive: Bool {
+        horizontalSizeClass == .compact && router.selectedTab == .browser
+    }
+
     /// 底部预留间距：与页签栏留一段距离；
     /// 有 mini 播放器时再叠加上封面向上溢出量（`MiniPlayer.coverOverflow` 是 `.offset` 视觉位移、
     /// 不参与布局测量，页面底边实际落在 mini 卡片上边界，不补偿就会与突出的封面贴太紧）。
+    /// 沉浸态下底部装饰已整体隐藏（仅剩 `RootView.phoneBottomChrome` 的 8pt 外边距），
+    /// 此时沿用 12pt 会把操作栏推离屏底过远，故收窄为 4pt。
     private var bottomBarGap: CGFloat {
-        player.isMini ? tabBarGap + MiniPlayer.coverOverflow : tabBarGap
+        if isImmersive { return 4 }
+        return player.isMini ? tabBarGap + MiniPlayer.coverOverflow : tabBarGap
+    }
+
+    /// 左下角退出钮的垂直落点：底部操作栏胶囊之上 10pt。
+    /// 固定取展开态操作栏高度，使其在操作栏收为小胶囊时位置不跳动。
+    private var exitHandleBottomInset: CGFloat {
+        bottomBarGap + BrowserToolbar.barHeight + 10
     }
 
     var body: some View {
@@ -53,11 +75,32 @@ struct BrowserHomeView: View {
             }
         }
         .background(AppColors.pageBackground)
+        // 沉浸态左下角退出钮（+ 有播放会话时的播放微件）：
+        // 收缩态与操作栏的 `toolbarMini` 同源联动（T1），贴边半隐仅露 14pt
+        .overlay(alignment: .bottomLeading) {
+            if isImmersive {
+                BrowserExitHandle(collapsed: toolbarMini, onExit: exitImmersive)
+                    .padding(.bottom, exitHandleBottomInset)
+                    .transition(.opacity)
+            }
+        }
         .animation(.appFast, value: toolbarMini)
         .onChange(of: session.activeTabID) { _ in
             // 打开/切换到网页标签 → 收为胶囊；起始页（需输入网址）→ 展开地址栏
             toolbarMini = !(session.activeTab?.isShowingStartPage ?? true)
         }
+        // 沉浸态开关同步（S1）：`RootView` 以 ZStack 保活各页签（切页签不触发 onDisappear），
+        // 故必须由 `router.selectedTab` 驱动，不能依赖本视图的进出场
+        .onChange(of: router.selectedTab) { tab in
+            bottomTabBarHidden.wrappedValue = (horizontalSizeClass == .compact && tab == .browser)
+        }
+        // iPad 分屏 / 多任务导致 sizeClass 变化时同步校正（regular 下不隐藏底部装饰）
+        .onChange(of: horizontalSizeClass) { sizeClass in
+            bottomTabBarHidden.wrappedValue = (sizeClass == .compact && router.selectedTab == .browser)
+        }
+        // 启动时各保活页签均会触发 onAppear，故按当前页签校正；退场兜底复位，避免底栏永久消失
+        .onAppear { bottomTabBarHidden.wrappedValue = isImmersive }
+        .onDisappear { bottomTabBarHidden.wrappedValue = false }
         .fullScreenCover(isPresented: $showingTabs) {
             TabGridView()
         }
@@ -77,29 +120,38 @@ struct BrowserHomeView: View {
     private var contentArea: some View {
         ZStack {
             ForEach(session.visibleTabs) { tab in
-                BrowserView(tab: tab)
-                .opacity(tab.id == session.activeTabID ? 1 : 0)
-                .allowsHitTesting(tab.id == session.activeTabID)
-                .accessibilityHidden(tab.id != session.activeTabID)
-                .onChange(of: tab.scrollTick) { _ in
-                    guard tab.id == session.activeTabID else { return }
-                    // 滑动页面即收为胶囊（起始页除外，只有点击胶囊才恢复地址栏）
-                    if !tab.isShowingStartPage { toolbarMini = true }
-                }
-                .onChange(of: tab.currentURL) { url in
-                    guard tab.id == session.activeTabID else { return }
-                    // 打开新界面（导航到网页）→ 胶囊；回退到起始页 → 展开地址栏
-                    toolbarMini = (url != nil)
-                }
+                // 标签状态变化（滚动 / 刷新 / 导航）必须由持有 `@ObservedObject` 的子视图接收，
+                // 否则 onChange 不会被及时求值（见 `BrowserTabContent` 注释，TODO 399）
+                BrowserTabContent(
+                    tab: tab,
+                    isActive: tab.id == session.activeTabID,
+                    onCollapseToolbar: collapseToolbar,
+                    onURLChange: { url in
+                        // 打开新界面（导航到网页）→ 胶囊；回退到起始页 → 展开地址栏
+                        toolbarMini = (url != nil)
+                    }
+                )
             }
         }
     }
 
     // MARK: - 行为
 
+    /// 退出沉浸态：回到进入浏览器前的页签，页签栏与 mini 播放器随 `bottomTabBarHidden` 复位滑回。
+    /// 页签切换由 `onChange(of: router.selectedTab)` 统一回写隐藏开关，此处不重复置位。
+    private func exitImmersive() {
+        router.backToPreviousTab()
+    }
+
     private func expandToolbar() {
         guard toolbarMini else { return }
         toolbarMini = false
+    }
+
+    /// 收起为底部小胶囊（滑动页面 / 刷新页面触发）
+    private func collapseToolbar() {
+        guard !toolbarMini else { return }
+        toolbarMini = true
     }
 
     // MARK: - 收起态小胶囊（Safari 风格）
@@ -161,6 +213,43 @@ struct BrowserHomeView: View {
         items.append(PopupMenuItem(title: "浏览器设置", systemImage: "gearshape") { showingSettings = true })
 
         return items
+    }
+}
+
+/// 单个标签的内容容器（TODO 399）：以 `@ObservedObject` 持有标签，使标签的状态变化
+/// （`scrollTick` / `reloadTick` / `currentURL`）能驱动本视图 body 重算，从而让 `onChange` 即时触发。
+///
+/// 此前这几个 `onChange` 挂在 `BrowserHomeView` 的 body 里，而父视图并未观察 `BrowserTab`
+/// （`tab` 只是 `ForEach` 的循环变量），`onChange` 比较的旧值只在父 body 重算时才刷新，导致：
+/// ①展开操作栏后滑动 / 刷新页面不会收起（父 body 不重算，差异永远比较不出来）；
+/// ②点击胶囊展开时父 body 重算，此刻才「迟到」地比较出之前滚动产生的差异，操作栏刚展开又被改回收起态
+/// （表现为第一次点击有按压动画但没展开，需要点第二次）。
+private struct BrowserTabContent: View {
+    @ObservedObject var tab: BrowserTab
+    let isActive: Bool
+    /// 收起操作栏为胶囊（滑动页面 / 刷新页面）
+    let onCollapseToolbar: () -> Void
+    /// 当前页面地址变化（nil 表示回到起始页）
+    let onURLChange: (URL?) -> Void
+
+    var body: some View {
+        BrowserView(tab: tab)
+            .opacity(isActive ? 1 : 0)
+            .allowsHitTesting(isActive)
+            .accessibilityHidden(!isActive)
+            // 滑动页面即收为胶囊（任意方向；起始页除外，只有点击胶囊才恢复地址栏）
+            .onChange(of: tab.scrollTick) { _ in collapseIfNeeded() }
+            // 刷新页面（工具栏刷新键 / 下拉刷新 / 错误页重试）同样收为胶囊
+            .onChange(of: tab.reloadTick) { _ in collapseIfNeeded() }
+            .onChange(of: tab.currentURL) { url in
+                guard isActive else { return }
+                onURLChange(url)
+            }
+    }
+
+    private func collapseIfNeeded() {
+        guard isActive, !tab.isShowingStartPage else { return }
+        onCollapseToolbar()
     }
 }
 

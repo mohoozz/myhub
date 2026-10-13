@@ -790,9 +790,12 @@ struct BrowseDirectoryView: View {
         ]
     }
 
-    /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）：视图切换 / 排序 / 升降序 / 多选 / 刷新
+    /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）：多选 / 视图切换 / 排序 / 升降序 / 刷新
     private var overflowItems: [PopupMenuItem] {
         var items: [PopupMenuItem] = [
+            PopupMenuItem(title: "选择", systemImage: "checkmark.circle") {
+                viewModel.selection = []
+            },
             PopupMenuItem(
                 title: viewModel.viewMode == .grid ? "列表视图" : "网格视图",
                 systemImage: viewModel.viewMode == .grid ? BrowseViewMode.list.symbol : BrowseViewMode.grid.symbol
@@ -817,9 +820,6 @@ struct BrowseDirectoryView: View {
             systemImage: viewModel.sortAscending ? "chevron.up" : "chevron.down"
         ) {
             viewModel.sortAscending.toggle()
-        })
-        items.append(PopupMenuItem(title: "选择", systemImage: "checkmark.circle") {
-            viewModel.selection = []
         })
         items.append(PopupMenuItem(title: "刷新", systemImage: "arrow.clockwise") {
             Task { await viewModel.refresh() }

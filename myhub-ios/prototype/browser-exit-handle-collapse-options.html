@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内置浏览器 · 退出钮贴边收缩方案（C + S1 + E9）</title>
+<style>
+:root{--primary:#2563EB;--tb-line:#D1D5DB;--card-line:#EDF0F3;--sep:#E5E7EB;--tp:#1A1A2E;--ts:#6B7280;--fill:#F3F4F6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+h3.sec{font-size:16px;margin:38px 0 14px;padding-left:9px;border-left:3px solid var(--primary)}
+.subtitle{color:var(--ts);font-size:13px;line-height:1.75;max-width:1100px}
+.subtitle b{color:var(--tp)}
+code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.locked{display:inline-flex;align-items:center;gap:6px;background:#DCFCE7;color:#166534;font-size:12px;font-weight:600;padding:5px 11px;border-radius:8px;margin:12px 0 4px}
+.shipped{background:#DCFCE7;border:1px solid #86EFAC;border-radius:12px;padding:13px 16px;font-size:12px;color:#166534;line-height:1.85;max-width:1100px;margin:14px 0 4px}
+.shipped b{color:#065F46}
+.shipped code{background:#BBF7D0;color:#065F46}
+.alert{background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px;padding:13px 16px;font-size:12px;color:#92400E;line-height:1.8;max-width:1100px;margin-top:14px}
+.alert b{color:#78350F}
+.alert .ok{color:#047857}
+/* ===== 方案板 ===== */
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:330px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}
+.tag.warn{background:#FEF3C7;color:#92400E}
+.tag.bad{background:#FEE2E2;color:#991B1B}
+.desc{font-size:12px;color:var(--ts);line-height:1.75;min-height:148px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:330px;height:600px;border:8px solid #111827;border-radius:38px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+.statusbar{height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;font-weight:600}
+.web{flex:1;overflow:hidden;padding:14px 16px;background:#fff}
+.wimg{height:108px;border-radius:12px;background:linear-gradient(135deg,#DBEAFE,#EEF4FB);display:flex;align-items:center;justify-content:center;font-size:32px;margin-bottom:12px}
+.wh{font-size:16px;font-weight:700}
+.wm{font-size:11px;color:var(--ts);margin:4px 0 10px}
+.wline{height:9px;border-radius:5px;background:#EEF1F4;margin-bottom:8px}
+.wline.s{width:62%}.wline.m{width:84%}
+.wgap{height:10px}
+/* 操作栏 */
+.tb{flex:none;margin:0 12px 8px;height:52px;display:flex;align-items:center;gap:4px;padding:0 6px;background:#fff;border:1px solid var(--tb-line);border-radius:26px;box-shadow:0 3px 8px rgba(0,0,0,.10)}
+.tb .nb{width:32px;height:44px;display:flex;align-items:center;justify-content:center;font-size:16px;flex:none}
+.tb .nb.dim{color:#C3C7CE}
+.tb .nb svg{width:16px;height:16px}
+.tb .addr{flex:1;height:38px;border-radius:19px;background:var(--fill);padding:0 12px;display:flex;align-items:center;gap:6px;font-size:12px;min-width:0}
+.tb .addr .u{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb .tsq{display:flex;align-items:center;gap:3px;font-size:12px;height:36px;padding:0 6px;border-radius:18px;background:var(--fill);flex:none}
+/* 收起态小胶囊（Safari 风格，已有实现） */
+.capsule{position:absolute;left:50%;transform:translateX(-50%);bottom:20px;display:flex;align-items:center;gap:6px;height:34px;padding:0 14px;background:#fff;border:1px solid var(--tb-line);border-radius:17px;box-shadow:0 3px 8px rgba(0,0,0,.10);font-size:12px}
+/* ===== 退出控件：双联胶囊 / 单钮 ===== */
+.stack{position:absolute;width:38px;background:#fff;border:1px solid var(--tb-line);border-radius:19px;box-shadow:0 3px 10px rgba(0,0,0,.14);overflow:hidden;transition:all .25s}
+.stack .cell{height:38px;display:flex;align-items:center;justify-content:center;color:var(--tp)}
+.stack .cell svg{width:17px;height:17px}
+.stack .cell.exit{color:var(--primary)}
+.stack .cov{background:linear-gradient(135deg,#C7D2FE,#E0E7FF);font-size:16px}
+.stack .hr{height:1px;background:var(--sep)}
+.stack.collapsed{opacity:.55}
+/* 细条 */
+.bar{position:absolute;left:0;width:6px;border-radius:0 3px 3px 0;background:rgba(107,114,128,.40)}
+.bar.playing{background:linear-gradient(to bottom,#818CF8,#6366F1);opacity:.75}
+/* 合并小圆 */
+.dot{position:absolute;width:28px;height:28px;border-radius:14px;background:#fff;border:1px solid var(--tb-line);box-shadow:0 2px 8px rgba(0,0,0,.14);display:flex;align-items:center;justify-content:center;font-size:13px;overflow:hidden}
+.dot.cov{background:linear-gradient(135deg,#C7D2FE,#E0E7FF)}
+.ring{position:absolute;width:34px;height:34px;border-radius:17px;border:2px solid rgba(99,102,241,.55)}
+/* 两态对照条 */
+.twostate{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--card-line);border-radius:12px;padding:12px 10px;margin-bottom:10px;box-shadow:0 2px 8px rgba(17,24,39,.04)}
+.ts-box{width:118px;height:104px;border-radius:10px;background:linear-gradient(135deg,#FAFBFC,#F3F4F6);position:relative;overflow:hidden;border:1px dashed var(--sep)}
+.ts-box .edge{position:absolute;left:0;top:0;bottom:0;width:2px;background:#111827;opacity:.28}
+.ts-cap{font-size:10px;color:#9CA3AF;text-align:center;margin-top:5px}
+.arrowto{font-size:17px;color:#9CA3AF;flex:none}
+.ts-box .stack,.ts-box .dot,.ts-box .bar{position:absolute}
+/* 状态机 */
+.fsm{display:flex;flex-wrap:wrap;gap:12px;align-items:center;background:#fff;border:1px solid var(--card-line);border-radius:14px;padding:16px 18px;box-shadow:0 2px 10px rgba(17,24,39,.05);max-width:1100px;font-size:12px;color:var(--ts);line-height:1.7}
+.node{border:1.5px solid var(--primary);color:#1D4ED8;background:#EFF6FF;border-radius:10px;padding:8px 12px;font-weight:600;font-size:12px;text-align:center;line-height:1.5}
+.node.gray{border-color:var(--tb-line);background:#F9FAFB;color:var(--tp)}
+.edgelbl{font-size:11px;color:var(--ts);text-align:center;line-height:1.5}
+/* 卡片 */
+.cards{display:flex;flex-wrap:wrap;gap:16px}
+.card{width:340px;background:#fff;border:1px solid var(--card-line);border-radius:14px;padding:14px 16px;box-shadow:0 2px 10px rgba(17,24,39,.05)}
+.card.pick{border-color:#93C5FD;box-shadow:0 2px 14px rgba(37,99,235,.14)}
+.card h4{font-size:13px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.card p{font-size:12px;color:var(--ts);line-height:1.78}
+.card p b{color:var(--tp)}
+table{border-collapse:collapse;margin-top:14px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);width:100%;max-width:1100px}
+th,td{padding:9px 13px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:18px;font-size:12px;color:var(--ts);line-height:1.95;max-width:1100px}
+.footnote b{color:var(--tp)}
+/* 图标尺寸对照 */
+.cmp{display:flex;gap:14px;align-items:flex-end;background:#fff;border:1px solid var(--card-line);border-radius:12px;padding:14px 16px;box-shadow:0 2px 8px rgba(17,24,39,.04);flex-wrap:wrap}
+.cmp .u{display:flex;flex-direction:column;align-items:center;gap:6px}
+.cmp .big{width:52px;height:52px;border-radius:13px;background:var(--fill);display:flex;align-items:center;justify-content:center}
+.cmp .big svg{width:32px;height:32px}
+.cmp .lbl{font-size:10px;color:#9CA3AF;text-align:center;line-height:1.35}
+.cmp .fab{width:38px;height:38px;border-radius:19px;background:#fff;border:1px solid var(--tb-line);box-shadow:0 3px 10px rgba(0,0,0,.14);display:flex;align-items:center;justify-content:center}
+.cmp .fab svg{width:17px;height:17px}
+.blue{color:var(--primary)}
+</style>
+</head>
+<body>
+
+<svg style="display:none" aria-hidden="true">
+  <!-- E9-a：arrow.uturn.left（已选） -->
+  <symbol id="u-left" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M19.4 20.4 V12 A5.6 5.6 0 0 0 13.8 6.4 H6.2"/><polyline points="9.6,3 6.2,6.4 9.6,9.8"/></g></symbol>
+  <!-- E9-b：arrow.uturn.down（向下掉头，避开与网页后退的方向混淆） -->
+  <symbol id="u-down" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.2 4.6 H12.6 A5.6 5.6 0 0 1 18.2 10.2 V17.8"/><polyline points="14.8,14.4 18.2,17.8 21.6,14.4"/></g></symbol>
+  <!-- 操作栏后退键 chevron.left（用于冲突对照） -->
+  <symbol id="chev-left" viewBox="0 0 24 24"><polyline points="15,5.5 8.5,12 15,18.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<h1>内置浏览器 · 退出钮「贴边收缩」方案</h1>
+<p class="subtitle">
+  已确认：<b>形态 C</b>（左下悬浮圆钮 + 播放微件，无音频时单圆钮 38pt、有音频时竖向双联）＋ <b>策略 S1</b>（进入浏览器页签即隐藏页签栏与 mini 播放器）＋ <b>图标 E9</b> <code>arrow.uturn.left</code>。<br>
+  本次追加：退出钮要<b>能像方案 A 那样收缩到侧边</b>。于是控件从"常驻一态"变成<b>展开态 ⇄ 收缩态</b>两态，需要定三件事：①<b>收缩后长什么样</b>（R1–R4）；②<b>什么时候收/什么时候回来</b>（T1–T3）；③<b>收缩态点一下是直接退出还是先展开</b>（K1/K2）。<br>
+  关键约束：项目已有<b>自定义左边缘侧滑返回</b>（<code>Readers/EdgeSwipeBack</code>），左边缘约 20pt 是手势热区，贴边控件必须靠<b>垂直位置错开</b>并把命中区限制在露出部分，否则会互相吞手势。
+</p>
+<div class="shipped">
+  <b>✓ 本页方案已全部确认并实施：C + S1 + E9-b + R1 + T1 + K1</b>（形态「悬浮圆钮 + 播放微件」· 策略「进入浏览器页签即隐藏」·
+  图标 <code>arrow.uturn.down</code> · 收缩「整体半隐贴边」· 触发「跟随操作栏联动」· 点击「收缩态一点即退」）。<br>
+  <b>代码落点：</b>新增 <code>MyHub/Features/Browser/BrowserExitHandle.swift</code>；改
+  <code>BrowserHomeView.swift</code>（<code>isImmersive</code> 判定 / 退出钮挂载 / 隐藏开关同步 / 沉浸态间距）、
+  <code>App/AppRouter.swift</code>（<code>previousTab</code> + <code>backToPreviousTab()</code>）、
+  <code>BrowserToolbar.swift</code>（<code>barHeight</code> 提为 static 供退出钮复用）、
+  <code>Core/Preferences/AppSettings.swift</code>（首启气泡标记）。<code>RootView.swift</code> 未改动——
+  <code>phoneBottomChrome</code> 现有的 <code>\.bottomTabBarHidden</code> 机制直接复用。<br>
+  <b>实施中偏离本页原型的两点：</b>①播放微件<b>取消了「长按展开全屏播放器」</b>——SwiftUI <code>Button</code> 与
+  <code>LongPressGesture</code> 共存会双触发，需要全屏时先点退出钮、mini 播放器即恢复可点；
+  ②收缩态命中区<b>仅向右外扩 10pt</b>（非四周等距），否则双联两格命中区会重叠、点暂停会误触退出。<br>
+  详细记录见 <code>TODO.md</code> 末条。
+</div>
+
+<div class="alert">
+  <b>E9 的已知风险与缓解（你已选定，这里只做降损处理，不再建议换图标）：</b><br>
+  <code>arrow.uturn.left</code> 与操作栏左侧的网页后退键 <code>chevron.left</code> 会同屏，且都表达"返回"。<span class="ok">实测形状差异其实够用：uturn 是「带 180° 掉头弧的长箭头」，chevron 是「单个尖括号」，见下方 1x 对照。</span>
+  落地时再叠三道区分：<span class="ok">①退出钮图标<b>上主题蓝</b> <code>AppColors.primary</code>（操作栏导航键是黑灰单色）；②退出钮在<b>屏幕左下角浮层</b>、后退键在<b>底部胶囊内</b>，位置分层明确；③首次进入飘一次「退出全屏」文字气泡。</span><br>
+  另附一个<b>零成本微调</b>供你二选一：<b>E9-b</b> <code>arrow.uturn.down</code>——同样是"掉头返回"语义，但箭头朝<b>下</b>指向底栏将要出现的位置，与"水平向左=网页后退"彻底错开方向维度，冲突概率显著更低。
+  <div class="cmp" style="margin-top:12px">
+    <div class="u"><div class="big blue"><svg><use href="#u-left"/></svg></div><div class="fab blue"><svg><use href="#u-left"/></svg></div><div class="lbl"><b>E9-a</b><br>arrow.uturn.left</div></div>
+    <div class="u"><div class="big blue"><svg><use href="#u-down"/></svg></div><div class="fab blue"><svg><use href="#u-down"/></svg></div><div class="lbl"><b>E9-b</b><br>arrow.uturn.down</div></div>
+    <div class="u" style="margin-left:18px"><div class="big" style="color:#1A1A2E"><svg><use href="#chev-left"/></svg></div><div class="fab"><svg><use href="#chev-left"/></svg></div><div class="lbl">对照：操作栏后退<br>chevron.left</div></div>
+  </div>
+</div>
+
+<h3 class="sec">一、收缩形态 R1–R4（图示均为「有音频播放」的双联形态）</h3>
+<div class="boards">
+
+  <!-- ===== R1 ===== -->
+  <div class="board">
+    <h2>R1 · 整体半隐贴边<span class="tag rec">推荐</span><span class="tag">与方案 A 同语言</span></h2>
+    <div class="desc">
+      收缩时整个控件<b>左移 24pt 滑出屏外</b>，仅露出右侧 14pt 的一道圆弧，透明度降到 55%，左侧圆角被屏幕边缘自然裁切——视觉上就是方案 A 的"贴边半胶囊"。<br>
+      播放中时双联一起左移，<b>封面那一弧仍带颜色</b>，余光就能知道"有音频在播"。<br>
+      <span class="pros">优点：完全对应你要的"像方案 A 那样收到侧边"；两态之间只是一个 <code>offset</code> + <code>opacity</code> 动画，实现最简、不换布局；露出 14pt 已足够手指捕捉。</span><br>
+      <span class="cons">缺点：露出部分窄，命中区需额外向右扩张（建议 <code>contentShape</code> 给 28pt）；贴边位置要与边缘返回手势错开垂直区间。</span>
+    </div>
+    <div class="twostate">
+      <div><div class="ts-box"><div class="edge"></div>
+        <div class="stack" style="left:10px;bottom:16px"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+      </div><div class="ts-cap">展开态 · 左 12pt</div></div>
+      <div class="arrowto">→</div>
+      <div><div class="ts-box"><div class="edge"></div>
+        <div class="stack collapsed" style="left:-24px;bottom:16px"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+      </div><div class="ts-cap">收缩态 · 露出 14pt</div></div>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="web">
+        <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+        <div class="wgap"></div><div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="capsule">🔒 blog.myhub.dev</div>
+      <div class="stack collapsed" style="left:-24px;bottom:68px"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+    </div>
+  </div>
+
+  <!-- ===== R2 ===== -->
+  <div class="board">
+    <h2>R2 · 收成竖细条<span class="tag">最克制</span></h2>
+    <div class="desc">
+      收缩时控件整体淡出，原地换成一条 <b>6×34 的贴边细条</b>（圆角仅右侧）；播放中时细条染成<b>封面主色/紫蓝渐变</b>作为"在播"指示。<br>
+      <span class="pros">优点：干扰最小，接近"完全沉浸"；细条与网页内容几乎不争抢注意力；与方案 D 的提示条同源。</span><br>
+      <span class="cons">缺点：①形态突变（胶囊→细条）而非位移，动画要做交叉淡入淡出，观感不如 R1 连续；②<b>收缩态完全丧失播放控制入口</b>，必须先展开——而"暂停"恰恰是最急的操作；③6pt 宽命中区过小，必须靠隐形扩张，且紧贴边缘返回热区。</span>
+    </div>
+    <div class="twostate">
+      <div><div class="ts-box"><div class="edge"></div>
+        <div class="stack" style="left:10px;bottom:16px"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+      </div><div class="ts-cap">展开态</div></div>
+      <div class="arrowto">→</div>
+      <div><div class="ts-box"><div class="edge"></div>
+        <div class="bar playing" style="height:34px;bottom:38px"></div>
+      </div><div class="ts-cap">收缩态 · 6×34 细条</div></div>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="web">
+        <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+        <div class="wgap"></div><div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="capsule">🔒 blog.myhub.dev</div>
+      <div class="bar playing" style="height:34px;bottom:70px"></div>
+    </div>
+  </div>
+
+  <!-- ===== R3 ===== -->
+  <div class="board">
+    <h2>R3 · 原地淡化缩小<span class="tag">不位移</span></h2>
+    <div class="desc">
+      不往屏外跑：仍停在左 12pt，仅<b>缩到 0.84 倍 + 透明度 38%</b>。<br>
+      <span class="pros">优点：命中区完整（整颗按钮都可点），一步即退出，零手势冲突；实现最省（一个 <code>scaleEffect</code> + <code>opacity</code>）。</span><br>
+      <span class="cons">缺点：<b>没有真正"收到侧边"</b>，与你本次诉求不符；浅色网页上 38% 透明仍可见，沉浸感收益有限；缩小后图标更小，uturn 的弧线细节易糊。</span>
+    </div>
+    <div class="twostate">
+      <div><div class="ts-box"><div class="edge"></div>
+        <div class="stack" style="left:10px;bottom:16px"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+      </div><div class="ts-cap">展开态</div></div>
+      <div class="arrowto">→</div>
+      <div><div class="ts-box"><div class="edge"></div>
+        <div class="stack" style="left:10px;bottom:16px;opacity:.38;transform:scale(.84);transform-origin:left bottom"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+      </div><div class="ts-cap">收缩态 · 0.84x / 38%</div></div>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="web">
+        <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+        <div class="wgap"></div><div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="capsule">🔒 blog.myhub.dev</div>
+      <div class="stack" style="left:12px;bottom:68px;opacity:.38;transform:scale(.84);transform-origin:left bottom"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+    </div>
+  </div>
+
+  <!-- ===== R4 ===== -->
+  <div class="board">
+    <h2>R4 · 合并为贴边小圆<span class="tag warn">两步退出</span></h2>
+    <div class="desc">
+      收缩时双联<b>合并成一颗 28pt 小圆</b>并贴到左 4pt：播放中显示<b>封面缩略 + 一圈细蓝环</b>（环即进度），无播放时显示 uturn 图标。点一下先<b>展开回双联</b>，再点下格退出。<br>
+      <span class="pros">优点：收缩态仍保有"在播 + 进度"信息，信息密度最高；小圆完整在屏内，命中区规整 28pt；形态变化有机、动画好做（双联高度 77→28 的 <code>matchedGeometry</code>）。</span><br>
+      <span class="cons">缺点：<b>退出必须两步</b>（展开→点退出），与"随手退出"的诉求相违；小圆里塞封面 + 环，在复杂网页背景上辨识度一般；仍不是严格的"贴边半隐"。</span>
+    </div>
+    <div class="twostate">
+      <div><div class="ts-box"><div class="edge"></div>
+        <div class="stack" style="left:10px;bottom:16px"><div class="cell cov">🎵</div><div class="hr"></div><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+      </div><div class="ts-cap">展开态</div></div>
+      <div class="arrowto">→</div>
+      <div><div class="ts-box"><div class="edge"></div>
+        <div style="position:absolute;left:4px;bottom:40px">
+          <div class="dot cov">🎵</div><div class="ring" style="left:-3px;top:-3px"></div>
+        </div>
+      </div><div class="ts-cap">收缩态 · 28pt 小圆 + 进度环</div></div>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+      <div class="web">
+        <div class="wimg">🗞</div><div class="wh">MyHub 技术博客</div><div class="wm">tech · 3 分钟前</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline s"></div>
+        <div class="wgap"></div><div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="capsule">🔒 blog.myhub.dev</div>
+      <div style="position:absolute;left:4px;bottom:72px">
+        <div class="dot cov">🎵</div><div class="ring" style="left:-3px;top:-3px"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<h3 class="sec">二、无音频时的单钮形态（R1 收缩前后）</h3>
+<div class="boards">
+  <div class="board">
+    <h2>单钮 · 展开态</h2>
+    <div class="desc" style="min-height:40px">无音频播放 → 只有一颗 38pt 退出圆钮，不出现播放微件。</div>
+    <div class="phone" style="height:330px">
+      <div class="web" style="padding-top:18px">
+        <div class="wh">正文区域</div><div class="wm">左 12pt，操作栏上方 10pt</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div>
+      </div>
+      <div class="tb">
+        <div class="nb"><svg style="width:16px;height:16px"><use href="#chev-left"/></svg></div><div class="nb dim">›</div><div class="nb">↻</div>
+        <div class="addr">🔒 <span class="u">blog.myhub.dev</span></div>
+        <div class="tsq">⧉ 3</div><div class="nb" style="width:28px">⋯</div>
+      </div>
+      <div class="stack" style="left:12px;bottom:70px"><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+    </div>
+  </div>
+  <div class="board">
+    <h2>单钮 · 收缩态（R1）</h2>
+    <div class="desc" style="min-height:40px">左移 24pt 半隐 + 55% 透明；此图同时展示操作栏已收为 Safari 小胶囊的状态（T1 联动）。</div>
+    <div class="phone" style="height:330px">
+      <div class="web" style="padding-top:18px">
+        <div class="wh">正文区域</div><div class="wm">滚动页面 → 操作栏收胶囊 + 退出钮贴边</div>
+        <div class="wline"></div><div class="wline s"></div><div class="wline m"></div><div class="wline"></div>
+      </div>
+      <div class="capsule">🔒 blog.myhub.dev</div>
+      <div class="stack collapsed" style="left:-24px;bottom:68px"><div class="cell exit"><svg><use href="#u-left"/></svg></div></div>
+    </div>
+  </div>
+</div>
+
+<h3 class="sec">三、收缩触发 T ／ 收缩态点击行为 K</h3>
+<div class="cards">
+  <div class="card pick">
+    <h4>T1 · 跟随操作栏联动<span class="tag rec">推荐</span></h4>
+    <p>直接复用已有的 <code>toolbarMini</code> 信号：<b>滚动页面</b>（<code>tab.scrollTick</code>）→ 操作栏收成小胶囊的同时退出钮贴边；<b>点胶囊展开</b>操作栏 → 退出钮同步滑回。<br>零新增手势、零新增状态，两个底部控件动作一致，观感统一。</p>
+  </div>
+  <div class="card">
+    <h4>T2 · 独立定时自动收缩</h4>
+    <p>展开后 <b>3 秒无交互</b>自动贴边；任意触碰屏幕（或仅触碰露出部分）滑回。<br>优点：与操作栏解耦，纯阅读时最干净；缺点：新增计时器与"刚想点它就跑了"的挫败感。</p>
+  </div>
+  <div class="card">
+    <h4>T3 · 纯手动（可与 T1 叠加）</h4>
+    <p><b>左滑</b>退出钮 → 贴边；<b>右滑或点露出部分</b> → 滑回。永不自动。<br>建议作为 T1 的<b>补充</b>而非替代：T1 管常态自动，T3 给"想立刻收掉"的用户一条主动通道（<code>DragGesture</code> 约 15 行）。</p>
+  </div>
+  <div class="card pick">
+    <h4>K1 · 收缩态一点即退出<span class="tag rec">推荐</span></h4>
+    <p>收缩态仍是完整按钮，点露出的 14pt（命中区向右扩至 28pt）<b>直接退出全屏</b>，不需要先展开。<br>最符合"随手退出"；风险是贴边误触——用<b>垂直位置避让</b>化解：把控件放在操作栏上方 10pt 处（距屏底约 70pt），而边缘返回手势通常在屏幕中部纵向区间触发。</p>
+  </div>
+  <div class="card">
+    <h4>K2 · 两步（先展开再退出）</h4>
+    <p>收缩态点一下只是<b>滑回展开</b>，第二下才退出。<br>安全、几乎不可能误退；但"退出"本是低频且无破坏性的操作（点错了再点一下进去即可），用两步保护收益不大。</p>
+  </div>
+  <div class="card">
+    <h4>附加项（默认值，可直接沿用）</h4>
+    <p>① 收缩态播放微件：<b>封面弧仍上色</b>，点它直接暂停/继续（R1 下仍可操作）；<br>② 首启一次「退出全屏」气泡（存 <code>UserDefaults</code>）；<br>③ 点击带 <code>UIImpactFeedbackGenerator(.light)</code>；<br>④ 无障碍：<b>"退出全屏浏览，显示页签栏"</b>；<br>⑤ 动画统一 <code>.appQuick</code>。</p>
+  </div>
+</div>
+
+<h3 class="sec">四、状态机（推荐组合 R1 + T1 + K1）</h3>
+<div class="fsm">
+  <div class="node gray">其它页签<br><span style="font-weight:400">页签栏 + mini 播放器常驻</span></div>
+  <div class="edgelbl">点「浏览器」页签<br>→ S1 隐藏底部装饰 →</div>
+  <div class="node">浏览器 · 展开态<br><span style="font-weight:400">操作栏胶囊 + 退出钮（左 12pt）</span></div>
+  <div class="edgelbl">滚动页面 / 左滑退出钮<br>⇄<br>点小胶囊 / 点露出部分</div>
+  <div class="node">浏览器 · 收缩态<br><span style="font-weight:400">Safari 小胶囊 + 退出钮半隐（露 14pt）</span></div>
+  <div class="edgelbl">点退出钮（任一态）<br>→ 恢复底部装饰 →</div>
+  <div class="node gray">回到进入前的页签</div>
+</div>
+
+<h3 class="sec">五、收缩形态对比</h3>
+<table>
+  <tr><th>维度</th><th>R1 半隐贴边</th><th>R2 竖细条</th><th>R3 原地淡化</th><th>R4 合并小圆</th></tr>
+  <tr><td>契合"收到侧边"</td><td>★★★★★</td><td>★★★★★</td><td>★☆（不位移）</td><td>★★★</td></tr>
+  <tr><td>收缩态可见宽度</td><td>14pt</td><td>6pt</td><td>32pt（原位）</td><td>28pt</td></tr>
+  <tr><td>收缩态能否控播</td><td><b>能</b>（封面弧可点）</td><td>不能</td><td>能</td><td>需先展开</td></tr>
+  <tr><td>一步退出</td><td><b>能</b>（K1）</td><td>能（K1）</td><td>能</td><td><b>不能</b></td></tr>
+  <tr><td>动画连续性</td><td>位移，最连续</td><td>形变，需交叉淡化</td><td>缩放，连续</td><td>形变，需 matchedGeometry</td></tr>
+  <tr><td>边缘手势冲突风险</td><td>中（靠垂直避让）</td><td><b>高</b>（最贴边且最窄）</td><td>无</td><td>低</td></tr>
+  <tr><td>实现量</td><td>小</td><td>中</td><td>最小</td><td>大</td></tr>
+</table>
+
+<p class="footnote">
+  <b>我的推荐：R1 + T1 + K1 + E9-b</b>（贴边半隐 ／ 跟随操作栏联动 ／ 收缩态一点即退 ／ 掉头箭头朝下）。这套能做到：滚动看网页时底部只剩一枚 Safari 小胶囊和左侧一道 14pt 圆弧，屏幕利用率接近 92%；想退出时随手戳左下角一下即回到页签栏；有音频时封面弧仍露在外面可直接暂停。若你坚持 <b>E9-a</b>（uturn.left），我就按上面三道区分（主题蓝 + 位置分层 + 首启气泡）落地，功能无差别。<br>
+  <b>请回复 4 项（任一项说"默认"即按推荐）：</b>① 收缩形态 R1 / R2 / R3 / R4；② 触发 T1 / T2 / T3（T1 是否叠加 T3 左滑）；③ 点击行为 K1 / K2；④ 图标 E9-a / E9-b。<br>
+  <b>确认后的代码落点：</b>
+  新增 <code>MyHub/Features/Browser/BrowserExitHandle.swift</code>（单钮 / 双联两形态 + 展开收缩两状态 + 播放微件，观察 <code>PlayerPresenter</code>）；
+  改 <code>MyHub/Features/Browser/BrowserHomeView.swift</code>（<code>@Environment(\.bottomTabBarHidden)</code> 的 <code>onAppear</code> 置位 / <code>onDisappear</code> 复位、<code>.overlay(alignment:.bottomLeading)</code> 挂载、把收缩态与已有 <code>toolbarMini</code> 绑定、<code>bottomBarGap</code> 改读 <code>\.bottomChromeHeight</code>）；
+  <code>MyHub/App/RootView.swift</code> 现有 <code>phoneBottomChrome</code> 已支持 <code>!bottomTabBarHidden</code>，预计无需改动。<br>
+  <b>两个必须规避的坑：</b>① 照抄 <code>BrowseDirectoryView</code> 多选态的 <code>onAppear</code> 校正 + <code>onDisappear</code> 复位写法，否则切走页签后底栏永久消失；② 退出钮浮层要加 <code>.allowsHitTesting</code> 精确裁剪（收缩态命中区只覆盖露出部分 + 右扩 14pt），避免整块透明区吃掉网页点击。
+</p>
+</body>
+</html>

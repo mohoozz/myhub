@@ -301,17 +301,23 @@ private struct BottomTabBar: View {
                         // 重复点击当前页签：通知该页回到起始界面（浏览页 → 路径源选择）
                         router.reselect(tab)
                     } else {
+                        // 仅页签图标做弹性反馈（见 label 的 .animation(.appPop)）；
+                        // 页面切换仍为瞬时，避免整页淡入淡出带来的开销
                         selection = tab
                     }
                 } label: {
                     Image(systemName: tab.symbol)
                         .font(.system(size: 20))
+                        // 选中态：图标放大一档 + 主色（切换走 appPop 弹性，点击有「弹起」反馈）
+                        .scaleEffect(isSelected ? 1.12 : 1)
+                        .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
+                        .animation(.appPop, value: isSelected)
                         .frame(maxWidth: .infinity)
                         .frame(height: barHeight)
-                        .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                // 按下即回缩 0.86（经 PressVisualGate 保底最短可见时长，快速单点也能看到动画，TODO 402）
+                .buttonStyle(ScaleButtonStyle(scale: 0.86))
                 .accessibilityLabel(tab.title)
             }
         }

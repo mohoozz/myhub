@@ -13,29 +13,55 @@ final class PiPState: NSObject, ObservableObject {
     /// 启动失败原因（PlayerView 据此弹出提示，避免点击无反馈）
     @Published var lastError: String?
     private var controller: AVPictureInPictureController?
+    /// 当前渲染层（引擎切换时透明替换）。开关关闭时不建立 controller，需要时据此按需创建
+    private weak var playerLayer: AVPlayerLayer?
     /// 本次画中画启动是否由播放页按钮手动触发（用于区分系统「退后台自动画中画」）
     private var manualRequest = false
     /// App 退后台前同步「自动画中画」开关的观察者
     private var backgroundObserver: NSObjectProtocol?
 
     func attach(layer: AVPlayerLayer) {
-        guard AVPictureInPictureController.isPictureInPictureSupported(),
-              let controller = AVPictureInPictureController(playerLayer: layer) else { return }
-        controller.delegate = self
-        self.controller = controller
-        // App 退后台时是否自动进入画中画（默认关闭，可在「设置 → 播放器偏好」开启；
-        // 需 Info.plist 声明 UIBackgroundModes = audio）
-        applyAutoPreference()
+        playerLayer = layer
+        isSupported = AVPictureInPictureController.isPictureInPictureSupported()
+        // 「退后台自动画中画」默认关闭。系统只有在 App 持有 AVPictureInPictureController（且其
+        // playerLayer 关联着正在播放的视频）时才有能力自动进入画中画 —— 因此关闭开关时**不建立**
+        // controller，从根本上杜绝退后台自动画中画（手动画中画按钮点击时按需创建，不受影响）；
+        // 开启时才建立 controller 并置 canStartPictureInPictureAutomaticallyFromInline = true。
+        syncAutoPreference()
         // AVPlayerLayer/Controller 只在开播/引擎切换时重建，开关却可能在播放过程中被改动；
-        // 因此在每次退后台前重新读取一次开关，确保本轮行为与当前设置一致
-        //（否则会沿用开播时的旧值 → 关闭开关后仍自动进入画中画）。
+        // 因此在每次退后台前重新读取一次开关，确保本轮行为与当前设置一致。
         startObservingBackground()
-        isSupported = true
     }
 
-    /// 把「退后台自动画中画」开关同步到系统控制器
-    private func applyAutoPreference() {
-        controller?.canStartPictureInPictureAutomaticallyFromInline = AppSettings.Player.autoPiPOnBackground
+    /// 依据「退后台自动画中画」开关决定是否持有 AVPictureInPictureController：
+    /// 开启 → 建立并允许系统自动进入画中画；关闭 → 释放（画中画正在显示时不释放，否则会强制退出）。
+    private func syncAutoPreference() {
+        if AppSettings.Player.autoPiPOnBackground {
+            ensureController()?.canStartPictureInPictureAutomaticallyFromInline = true
+        } else {
+            releaseController()
+        }
+    }
+
+    /// 按需创建 controller（手动画中画按钮 / 开关开启时）
+    @discardableResult
+    private func ensureController() -> AVPictureInPictureController? {
+        if let controller { return controller }
+        guard let playerLayer,
+              AVPictureInPictureController.isPictureInPictureSupported(),
+              let controller = AVPictureInPictureController(playerLayer: playerLayer) else { return nil }
+        controller.delegate = self
+        controller.canStartPictureInPictureAutomaticallyFromInline = AppSettings.Player.autoPiPOnBackground
+        self.controller = controller
+        return controller
+    }
+
+    /// 释放 controller：画中画正在显示时不释放（否则会强制退出用户已开启的画中画）
+    private func releaseController() {
+        guard !(controller?.isPictureInPictureActive ?? false) else { return }
+        controller?.delegate = nil
+        controller?.stopPictureInPicture()
+        controller = nil
     }
 
     /// 注册「即将退后台（失活）」观察者，在系统决定是否自动进入画中画前刷新开关
@@ -44,7 +70,7 @@ final class PiPState: NSObject, ObservableObject {
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.applyAutoPreference() }
+            Task { @MainActor [weak self] in self?.syncAutoPreference() }
         }
     }
 
@@ -58,6 +84,7 @@ final class PiPState: NSObject, ObservableObject {
         controller?.stopPictureInPicture()
         controller?.delegate = nil
         controller = nil
+        playerLayer = nil
         stopObservingBackground()
         isSupported = false
         isActive = false
@@ -73,18 +100,39 @@ final class PiPState: NSObject, ObservableObject {
         controller?.delegate = nil
         controller?.stopPictureInPicture()
         controller = nil
+        playerLayer = nil
         stopObservingBackground()
     }
 
     /// 切换画中画：激活中点击则退出，未激活则启动
+    /// （开关关闭时 controller 未预建，这里按需创建，保证手动按钮始终可用）
     func toggle() {
-        guard let controller else { return }
+        guard let controller = ensureController() else {
+            lastError = "当前设备不支持画中画"
+            return
+        }
         if controller.isPictureInPictureActive {
             controller.stopPictureInPicture()
         } else {
             lastError = nil
             manualRequest = true
+            startWhenPossible(controller)
+        }
+    }
+
+    /// 刚创建的 controller 可能尚未进入「可画中画」状态（按需创建的场景），
+    /// 稍等一帧再启动；最多重试两次，仍未就绪则直接启动交由失败回调提示。
+    private func startWhenPossible(_ controller: AVPictureInPictureController, attempt: Int = 0) {
+        guard self.controller === controller else { return }
+        if controller.isPictureInPicturePossible || attempt >= 2 {
             controller.startPictureInPicture()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.manualRequest else { return }
+                self.startWhenPossible(controller, attempt: attempt + 1)
+            }
         }
     }
 }
