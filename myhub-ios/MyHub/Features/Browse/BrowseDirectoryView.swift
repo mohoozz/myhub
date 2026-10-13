@@ -65,6 +65,13 @@ struct BrowseDirectoryView: View {
     @State private var forceDeleteReason: String?
     /// 搜索框显隐（TODO 336/345）：滚到顶部显示、下滑超过搜索框高度隐藏，带迟滞避免抖动
     @State private var showSearchBar = true
+    /// 搜索输入框焦点（TODO 403）：聚焦期间锁定搜索框可见，避免键盘弹出引发的布局抖动把它收起
+    @FocusState private var searchFieldFocused: Bool
+
+    /// 搜索框当前是否可见：滚动显隐状态为准，但输入中（已聚焦）始终保持展开
+    private var isSearchBarVisible: Bool {
+        showSearchBar || searchFieldFocused
+    }
 
     init(
         connection: Connection,
@@ -206,14 +213,20 @@ struct BrowseDirectoryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if showSearchBar {
-                searchBar
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
+            // 搜索框常驻视图树，仅用高度 + 透明度收起（TODO 403）：
+            // 此前用 `if showSearchBar { searchBar }` 条件插拔，点击输入框时键盘弹出引发的布局变化
+            // 会让偏移上报抖动一次 → 搜索框被移除 → TextField 连同第一响应者一起销毁 → 键盘刚弹即收
+            //（表现为「要点两次才出输入法」），且收起/展开动画被打断时 VStack 会停在中间高度
+            //（表现为「点完搜索框变矮」）。常驻 + 高度动画后视图标识稳定，焦点不再丢失。
+            searchBar
+                .frame(height: isSearchBarVisible ? searchBarHeight : 0, alignment: .top)
+                .opacity(isSearchBarVisible ? 1 : 0)
+                .clipped()
+                .allowsHitTesting(isSearchBarVisible)
 
             content
         }
-        .animation(.appQuick, value: showSearchBar)
+        .animation(.appQuick, value: isSearchBarVisible)
         .background(AppColors.pageBackground)
         // 面包屑已移除（TODO 364）：普通态标题显示当前目录名（根目录为连接名），
         // 多选态改为「已选 N 项」作为操作状态反馈。
@@ -386,6 +399,11 @@ struct BrowseDirectoryView: View {
     /// 否则会被 ScrollView 拉回顶部，造成「隐藏即回弹（看似下滑不消失）」的抖动。
     private let searchBarHeight: CGFloat = 60
 
+    /// 搜索框内胶囊自身高度：`searchBarHeight` 减去上下各 8pt 外边距。
+    /// 显式固定而非靠内边距撑开——键盘弹出时外层可用高度骤减，VStack 会压缩非滚动子视图，
+    /// 导致「点一下搜索框就变矮」（TODO 403）。
+    private var searchBarFieldHeight: CGFloat { searchBarHeight - 16 }
+
     @ViewBuilder
     private var content: some View {
         ScrollViewReader { scrollProxy in
@@ -416,6 +434,10 @@ struct BrowseDirectoryView: View {
             .refreshable { await viewModel.refresh() }
             .scrollDismissesKeyboard(.immediately)
             .onPreferenceChange(BrowseScrollOffsetKey.self) { value in
+                // 输入中不参与显隐：键盘弹出会改变可用高度并让偏移上报抖动，
+                // 此时若收起搜索框会把正在编辑的输入框一并收走（TODO 403）。
+                // 用户一滚动即由 `.scrollDismissesKeyboard(.immediately)` 失焦，随后恢复正常判定。
+                guard !searchFieldFocused else { return }
                 // 迟滞判定（避免阈值边界抖动 / 隐藏回弹）：
                 // - 回到顶部附近（minY >= -1）显示；
                 // - 内容上滚超过搜索框高度（minY < -searchBarHeight）才隐藏；
@@ -468,6 +490,8 @@ struct BrowseDirectoryView: View {
                 .foregroundStyle(AppColors.textPrimary)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+                .focused($searchFieldFocused)
             if !viewModel.searchText.isEmpty {
                 Button {
                     viewModel.searchText = ""
@@ -480,7 +504,9 @@ struct BrowseDirectoryView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        // 固定胶囊高度（原为 .padding(.vertical, 12) 撑开）：键盘弹出使外层可用高度骤减时，
+        // VStack 不会再把这条非滚动子视图压扁（TODO 403）
+        .frame(height: searchBarFieldHeight)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(AppColors.cardBackground)
@@ -489,6 +515,13 @@ struct BrowseDirectoryView: View {
                         .stroke(AppColors.separator, lineWidth: 0.5)
                 )
         )
+        // 整条胶囊可点聚焦：此前只有 TextField 自身区域（去掉图标与内边距后不足一半宽）能唤起键盘，
+        // 点在放大镜/空白处无反应，正是「有时要点两次」的另一半原因（TODO 403）
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture {
+            guard !searchFieldFocused else { return }
+            searchFieldFocused = true
+        }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
