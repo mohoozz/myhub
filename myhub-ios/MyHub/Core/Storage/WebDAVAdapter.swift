@@ -17,11 +17,27 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
     /// 串流专用共享 URLSession：与 `URLSession.shared` 隔离，避免边下边播的高频 Range 请求
     /// 与频繁取消污染全局共享连接池（僵尸连接导致后续请求 30s 超时）。
     /// 提升单主机并发上限、关闭 URL 缓存（视频流不缓存）。
-    private static let streamSession: URLSession = {
+    static let streamSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.httpMaximumConnectionsPerHost = 16
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
+
+    /// 封面加载专用 URLSession（TODO 404）：与 `streamSession` 的连接池完全隔离。
+    /// 封面抽帧会产生大量短 Range 请求（mp4 box 头逐个 8B GET、zip 中央目录、首帧分片），
+    /// 失控时（moov 后置整文件拉取）会把共享的 16 连接占满 —— 此时目录 PROPFIND 与播放器
+    /// 首片 GET 只能排队至 120s 超时，表现为「封面不再加载，点音视频也播不了，只能重启 App」。
+    /// 独立 session + 更小并发上限 + 更短超时，保证播放/列目录永远有可用连接。
+    static let coverSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 4
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 45
         config.waitsForConnectivity = false
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil

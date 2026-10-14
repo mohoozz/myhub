@@ -13,6 +13,10 @@ final class CachedRangeReader: @unchecked Sendable {
     /// 预读开关：封面抽帧等一次性按需读取场景关闭，避免每次 read 向后预取 15MB
     /// 造成大量并发 NAS 请求（3 个视频 × 16 分片 = 48 并发）打爆连接导致文件头读取超时
     let prefetchEnabled: Bool
+    /// 网络拉取字节上限（nil = 不限，TODO 404）：封面抽帧专用护栏。
+    /// AVFoundation / VLC 对 moov 后置文件会发起「读整个文件」Range 请求（几 GB），
+    /// 超出上限即自我注销取消，避免单个封面吃光连接与带宽、拖垮播放与后续封面。
+    let networkByteBudget: Int64?
 
     private let inFlight = InFlightSegments()
     /// 预取并发信号量：限制同时在飞的分片预取数量，避免 seek/播放时大量并发请求打爆远端存储（Connection reset by peer）
@@ -30,12 +34,20 @@ final class CachedRangeReader: @unchecked Sendable {
     /// 本 reader 生命周期内实际从数据源（网络）拉取的字节数（不含分片缓存命中）
     var networkBytesFetched: Int64 { networkBytes.total }
 
-    init(source: RangeDataSource, identity: SegmentCache.FileIdentity, cachingEnabled: Bool, offlineMode: Bool = false, prefetchEnabled: Bool = true) {
+    init(
+        source: RangeDataSource,
+        identity: SegmentCache.FileIdentity,
+        cachingEnabled: Bool,
+        offlineMode: Bool = false,
+        prefetchEnabled: Bool = true,
+        networkByteBudget: Int64? = nil
+    ) {
         self.source = source
         self.identity = identity
         self.cachingEnabled = cachingEnabled
         self.offlineMode = offlineMode
         self.prefetchEnabled = prefetchEnabled
+        self.networkByteBudget = networkByteBudget
     }
 
     /// 取消所有 in-flight 分片拉取（播放器关闭 / 会话注销时调用），
@@ -88,6 +100,16 @@ final class CachedRangeReader: @unchecked Sendable {
         }
         if offlineMode {
             throw StorageError.offline("该时段视频")
+        }
+        // 网络预算护栏（TODO 404）：超限即注销取消，阻断后续分片与预取，
+        // 把失控的「整文件抽帧」限制在可控流量内
+        if let budget = networkByteBudget, networkBytes.total >= budget {
+            AppLogger.shared.log(
+                "reader 网络拉取超出上限 \(DisplayFormatters.size(budget))，取消会话（避免占满连接池）",
+                level: .warn, module: "stream"
+            )
+            cancel()
+            throw PlayerPlaybackError("网络拉取超出上限")
         }
         return try await inFlight.value(for: index) { [source, identity, cachingEnabled, networkBytes] in
             let lower = index * SegmentCache.segmentLength

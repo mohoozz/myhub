@@ -134,6 +134,72 @@ private struct PartialReadError: Error {
     let underlying: Error
 }
 
+/// 超时错误（硬超时专用，便于调用方与取消区分）
+struct HardTimeoutError: Error {
+    let seconds: TimeInterval
+}
+
+/// **硬**超时执行（TODO 404）：`operation` 跑在独立的非结构化任务中，超时立即抛出
+/// `HardTimeoutError` 返回，**不等待** `operation` 真正结束。
+///
+/// 为什么不能用下面的 `withTimeout`：`withThrowingTaskGroup` 在作用域结束时会隐式等待
+/// 所有子任务，`cancelAll()` 只是协作式请求。VLC / AVFoundation / SMB 的内部挂起并不响应
+/// 协作式取消，结构化版本会被挂死的子任务反向拖住，照样永不返回（封面并发许可因此泄漏）。
+///
+/// 调用方被取消时经 `withTaskCancellationHandler` 向 `operation` 传导取消并立即抛
+/// `CancellationError` 返回，不等待其收尾。
+func withHardTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    operation: @escaping @Sendable () async -> T
+) async throws -> T {
+    let box = FirstResultBox<T>()
+    let work = Task.detached(priority: .utility) {
+        let value = await operation()
+        await box.settle(.success(value))
+    }
+    let timer = Task.detached(priority: .utility) {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        await box.settle(.failure(HardTimeoutError(seconds: seconds)))
+    }
+    defer {
+        timer.cancel()
+        work.cancel()   // 协作式取消；不 await，避免被挂死的 operation 反向拖住调用方
+    }
+    let result = await withTaskCancellationHandler {
+        await box.wait()
+    } onCancel: {
+        work.cancel()
+        Task { await box.settle(.failure(CancellationError())) }
+    }
+    return try result.get()
+}
+
+/// 一次性结果信箱：先到者胜出（正常结果 / 超时 / 取消），供 `withHardTimeout` 使用
+private actor FirstResultBox<T: Sendable> {
+    private var settled: Result<T, Error>?
+    private var waiter: CheckedContinuation<Result<T, Error>, Never>?
+
+    func settle(_ result: Result<T, Error>) {
+        guard settled == nil else { return }
+        settled = result
+        if let waiter {
+            self.waiter = nil
+            waiter.resume(returning: result)
+        }
+    }
+
+    func wait() async -> Result<T, Error> {
+        if let settled { return settled }
+        return await withCheckedContinuation { continuation in
+            if let settled {
+                continuation.resume(returning: settled)
+            } else {
+                waiter = continuation
+            }
+        }
+    }
+}
+
 /// 带超时的异步执行（超时取消并抛错）
 func withTimeout<T>(seconds: TimeInterval, operation: @escaping @Sendable () async throws -> T) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in

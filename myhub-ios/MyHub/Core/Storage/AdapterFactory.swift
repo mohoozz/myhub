@@ -4,12 +4,30 @@ import Foundation
 enum AdapterFactory {
     private static let credentials = CredentialStore()
 
+    /// 适配器用途（TODO 404）：决定 WebDAV 走哪个 URLSession 连接池。
+    /// 封面加载与「列目录 / 播放」隔离，避免失控的封面抽帧占满连接导致点击音视频无法播放。
+    enum Purpose {
+        /// 列目录 / 播放 / 文件操作（共享 `WebDAVAdapter.streamSession`，16 连接）
+        case general
+        /// 封面加载（独立 `WebDAVAdapter.coverSession`，4 连接 + 短超时）
+        case cover
+
+        var webdavSession: URLSession {
+            switch self {
+            case .general: return WebDAVAdapter.streamSession
+            case .cover: return WebDAVAdapter.coverSession
+            }
+        }
+    }
+
     /// - Parameters:
     ///   - connection: 连接源记录
     ///   - passwordOverride: 表单「连接测试」时传入未保存的密码；nil 则读 Keychain
+    ///   - purpose: 用途（决定 WebDAV 连接池隔离，见 `Purpose`）
     static func makeAdapter(
         for connection: Connection,
-        passwordOverride: String? = nil
+        passwordOverride: String? = nil,
+        purpose: Purpose = .general
     ) throws -> StorageAdapter {
         let password = passwordOverride ?? connection.id.flatMap { try? credentials.loadPassword(for: $0) }
 
@@ -39,13 +57,16 @@ enum AdapterFactory {
                 if let internalAdapter = try? WebDAVAdapter(
                     config: internalConfig,
                     password: password,
+                    session: purpose.webdavSession,
                     timeoutInterval: 5
                 ) {
-                    let externalAdapter = try WebDAVAdapter(config: config, password: password)
+                    let externalAdapter = try WebDAVAdapter(
+                        config: config, password: password, session: purpose.webdavSession
+                    )
                     return RoutedWebDAVAdapter(internalAdapter: internalAdapter, externalAdapter: externalAdapter)
                 }
             }
-            return try WebDAVAdapter(config: config, password: password)
+            return try WebDAVAdapter(config: config, password: password, session: purpose.webdavSession)
 
         case .smb:
             guard let config = connection.decodeConfig(SMBConfig.self) else {
