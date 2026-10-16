@@ -291,6 +291,12 @@ private struct DrawerRowStyle: ButtonStyle {
 /// 按钮的 `isPressed` 置为 true、手势结束复位，导致 `.pressScale` 播放缩放动画，
 /// 表现为「左滑返回 / 进入下一级目录后右上角图标像被点击一样弹一下」。改用
 /// `PressBridge` 后仅在手指真实按下按钮时才反馈，彻底消除该误触。
+///
+/// 另一路同样表现为「弹一下」的来源是**导航转场事务**（TODO 404）：切换上/下一级目录时，
+/// toolbar 内容属于「新页面的新视图」，SwiftUI 按插入处理并在一个**带动画的转场事务**里
+/// 渲染它。`scaleEffect` 若不自带显式动画，就会继承该事务的动画、从转场初值插值到 1 ——
+/// 在 iOS 26 的圆形玻璃胶囊按钮上看起来和按压回弹一模一样。故按压缩放必须把动画来源
+/// 锁死为「真实按压信号」这唯一一个，并显式声明插入/移除无转场（见 body 内注释）。
 struct PopupMenuButton: View {
     let items: [PopupMenuItem]
     var symbol: String = "ellipsis"
@@ -307,6 +313,10 @@ struct PopupMenuButton: View {
             .frame(width: 32, height: 32)
             .contentShape(Rectangle())
             .scaleEffect(press.isPressing ? 0.92 : 1)
+            // 缩放只认 `press.isPressing` 这一个动画来源：`.animation(_:value:)` 在 value
+            // 未变化时会把继承来的动画置空，导航转场事务便再也驱动不了这里的插值。
+            // 动画值随方向取舍，保留原语义——按下瞬时（nil，跟手）、抬起回弹（.appFast）。
+            .animation(press.isPressing ? nil : Animation.appFast, value: press.isPressing)
             .background(AnchorReader(anchor: $anchor))
             .overlay(PressBridge(
                 onTap: { presenter.show(items: items, anchor: anchor, style: style) },
@@ -315,6 +325,11 @@ struct PopupMenuButton: View {
             ))
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(symbol == "plus" ? "添加" : "更多操作")
+            // push/pop 时本视图会被当作插入/移除，默认转场（缩放 + 淡入）即「弹一下」的观感；
+            // 显式声明 identity 转场 + 掐断继承动画，让目录切换只是「直接在那里」。
+            // 外层 transaction 不影响上面的 `.animation(_:value:)`——内侧声明优先级更高。
+            .transition(.identity)
+            .transaction { transaction in transaction.animation = nil }
     }
 }
 
@@ -325,9 +340,19 @@ private struct AnchorReader: View {
     var body: some View {
         GeometryReader { geo in
             Color.clear
-                .onAppear { anchor = geo.frame(in: .global) }
-                .onChange(of: geo.frame(in: .global)) { anchor = $0 }
+                .onAppear { write(geo.frame(in: .global)) }
+                .onChange(of: geo.frame(in: .global)) { write($0) }
         }
+    }
+
+    /// 导航转场期间导航栏内容横向滑动，全局坐标会逐帧变化并高频写回 `@State`。
+    /// 这类纯几何测量不应参与动画，否则状态写入被卷进转场事务、再次驱动按钮重绘。
+    private func write(_ frame: CGRect) {
+        guard frame != anchor else { return }
+        var transaction = Transaction()
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { anchor = frame }
     }
 }
 
