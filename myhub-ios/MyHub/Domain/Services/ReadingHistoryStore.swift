@@ -13,6 +13,8 @@ final class ReadingHistoryStore: ObservableObject {
     @Published private(set) var records: [ReadingProgress] = []
 
     private var progressObserver: NSObjectProtocol?
+    /// 诊断（TODO 413）：reload 次数
+    private var reloadCount = 0
 
     private init() {
         progressObserver = NotificationCenter.default.addObserver(
@@ -30,6 +32,12 @@ final class ReadingHistoryStore: ObservableObject {
 
     /// 全量重载：最后阅读时间降序
     func reload() {
+        // 诊断（TODO 413）：浏览页会观察本对象，`reload` 每次都会整表重读并发布 `records`，
+        // 若被高频调用（进度广播风暴 / 页面反复挂载），就会推动整页高频重绘
+        reloadCount += 1
+        AppLogger.shared.log(
+            "ReadingHistoryStore.reload 第 \(reloadCount) 次", level: .debug, module: "history"
+        )
         guard let db = AppDatabase.shared.dbQueue else { return }
         records = (try? db.read {
             try ReadingProgress.order(Column("updatedAt").desc).fetchAll($0)

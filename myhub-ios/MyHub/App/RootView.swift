@@ -51,6 +51,8 @@ struct RootView: View {
     @State private var bottomChromeHeight: CGFloat = 0
     /// 多选态隐藏悬浮页签栏（由页面经 `\.bottomTabBarHidden` 回写，TODO 385）
     @State private var bottomTabBarHidden = false
+    /// 诊断（TODO 413）：底部装饰高度回写次数
+    private static var chromeWriteCount = 0
 
     /// 漫画阅读器路由绑定（下滑/系统关闭时联动 presenter）
     private var comicReaderBinding: Binding<NovelOpenContext?> {
@@ -175,8 +177,24 @@ struct RootView: View {
                 let windowHeight = window?.bounds.height ?? proxy.frame(in: .global).maxY
                 let height = max(0, windowHeight - proxy.frame(in: .global).minY - (window?.safeAreaInsets.bottom ?? 0))
                 Color.clear
-                    .onAppear { bottomChromeHeight = height }
-                    .onChange(of: height) { bottomChromeHeight = $0 }
+                    .onAppear {
+                        bottomChromeHeight = height
+                        // 诊断（TODO 413）：底部装饰高度回写会经环境值下发到整棵页面树，
+                        // 若这里反复触发，就是「全 App 级重绘」的源头（右上角胶囊反复弹一下同源）
+                        Self.chromeWriteCount += 1
+                        AppLogger.shared.log(
+                            "底部装饰高度回写(首次) \(String(format: "%.2f", height))pt 第 \(Self.chromeWriteCount) 次",
+                            level: .debug, module: "chrome"
+                        )
+                    }
+                    .onChange(of: height) { newValue in
+                        bottomChromeHeight = newValue
+                        Self.chromeWriteCount += 1
+                        AppLogger.shared.log(
+                            "底部装饰高度回写(变化) \(String(format: "%.2f", newValue))pt 第 \(Self.chromeWriteCount) 次",
+                            level: .debug, module: "chrome"
+                        )
+                    }
             }
         }
     }
