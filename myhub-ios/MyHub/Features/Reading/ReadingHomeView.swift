@@ -43,6 +43,8 @@ struct ReadingHomeView: View {
     @State private var message: String?
     /// 长按菜单 →「属性」：当前展示属性页的记录
     @State private var infoRecord: ReadingProgress?
+    /// 左滑删除后的「撤销」提示条（TODO 408）
+    @StateObject private var undoToast = UndoToastState()
 
     private var isSelecting: Bool { selection != nil }
 
@@ -329,6 +331,32 @@ struct ReadingHomeView: View {
                 onTap: { tap(record) }
             )
         }
+        // 左滑删除阅读记录（TODO 408 方案 A）：左滑只露出按钮，点按才删除；多选态禁用
+        .swipeActions(
+            enabled: !isSelecting,
+            rowBackground: AppColors.pageBackground,
+            [deleteRecordAction(record)]
+        )
+    }
+
+    /// 左滑「删除阅读记录」：图标 / 文案 / 语义色与长按菜单同名项完全一致（`trash` + 系统红）
+    private func deleteRecordAction(_ record: ReadingProgress) -> SwipeAction {
+        SwipeAction(title: "删除记录", systemImage: "trash") {
+            deleteRecord(record)
+        }
+    }
+
+    /// 删除阅读记录并挂起撤销（不影响源文件）：删前留快照，撤销即原样插回
+    private func deleteRecord(_ record: ReadingProgress) {
+        guard let id = record.id else { return }
+        history.remove(ids: [id])
+        undoToast.show("已删除 1 条阅读记录") {
+            history.restore([record])
+            // 记录回来时 stat 结果可能已被清理，重新解析指纹以恢复封面
+            resolved[id] = nil
+            statFailedAt[id] = nil
+            resolveAll()
+        }
     }
 
     /// 饼状图进度条（参考浏览界面的饼状图进度条）：环形进度从 12 点方向顺时针填充，
@@ -467,14 +495,16 @@ struct ReadingHomeView: View {
 
     @ViewBuilder
     private var bottomOverlay: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
+            // 左滑删除的撤销提示条（TODO 408）：与多选操作栏共用同一抬升逻辑
+            UndoToastBar(state: undoToast)
             if isSelecting {
                 selectionBar
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         // 抬到全局底部装饰（悬浮页签栏 / mini 播放器）之上；非多选态高度为 0，不占空间（TODO 379）
-        .padding(.bottom, isSelecting ? bottomChromeHeight + 10 : 0)
+        .padding(.bottom, isSelecting || undoToast.item != nil ? bottomChromeHeight + 10 : 0)
         .animation(.appQuick, value: isSelecting)
     }
 
@@ -493,7 +523,7 @@ struct ReadingHomeView: View {
                     Text("删除阅读记录")
                         .font(.caption2)
                 }
-                .foregroundStyle(count > 0 ? Color.red : AppColors.textSecondary.opacity(0.5))
+                .foregroundStyle(count > 0 ? AppColors.destructive : AppColors.textSecondary.opacity(0.5))
                 .frame(maxWidth: .infinity)
             }
             .disabled(count == 0)
@@ -513,7 +543,7 @@ struct ReadingHomeView: View {
                     Text("删除源文件")
                         .font(.caption2)
                 }
-                .foregroundStyle(count > 0 ? Color.red : AppColors.textSecondary.opacity(0.5))
+                .foregroundStyle(count > 0 ? AppColors.destructive : AppColors.textSecondary.opacity(0.5))
                 .frame(maxWidth: .infinity)
             }
             .disabled(count == 0)

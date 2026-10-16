@@ -3,18 +3,26 @@ import UIKit
 
 /// 地址栏（TODO §8.1，IOS-401）：
 /// URL 智能识别（合法 URL 直接导航，否则走默认搜索引擎）、域名 + HTTPS 安全图标、聚焦全选。
+///
+/// 编辑态**由父级 `BrowserToolbar` 持有**（TODO 407）：Safari 风格——点击地址栏后整条操作栏
+/// 让位给输入框（导航键 / 标签 / 菜单让出横向空间，右侧出「取消」），故编辑开关必须在父级可见，
+/// 不能像此前那样封在本视图的私有 `@State` 里（那会让输入框只占中间一小块）。
 struct AddressBar: View {
     @ObservedObject var tab: BrowserTab
+    /// 是否处于编辑（输入）态：由父级驱动，外部置 false 即收起键盘退出编辑
+    @Binding var isEditing: Bool
     /// 提交（导航）回调：由父视图交给 `BrowserSessionStore.open`
     var onSubmit: (URL) -> Void
 
     @State private var text = ""
-    @State private var isEditing = false
     @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             if isEditing {
+                Image(systemName: "magnifyingglass")
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.textSecondary)
                 SelectableTextField(
                     text: $text,
                     placeholder: "搜索或输入网址",
@@ -22,7 +30,7 @@ struct AddressBar: View {
                     onEndEditing: { isEditing = false }
                 )
                 .focused($focused)
-                .font(.subheadline)
+                .font(.body)
             } else {
                 securityIcon
                 Text(displayHost)
@@ -31,15 +39,30 @@ struct AddressBar: View {
                     .foregroundStyle(AppColors.textPrimary)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 38)
+        .padding(.horizontal, 14)
+        // 46pt 高：与操作栏 60pt 条高配比，满足 iOS 44pt 最小点击区（TODO 406）
+        .frame(height: 46)
         .frame(maxWidth: .infinity, alignment: .leading)
         // 胶囊内浅灰填充块（TODO 377 方案 A）：不再描边，靠填充色与白胶囊区分
         .background(Capsule().fill(AppColors.fieldFill))
-        .contentShape(Capsule())
-        .onTapGesture {
-            guard !isEditing else { return }
-            beginEditing()
+        // 进入编辑的点击层只在非编辑态存在：若常驻，SwiftUI 的 tap 手势会抢走落在
+        // `UITextField` 上的触摸，编辑态下便无法定位光标 / 选词 / 点清除键（TODO 407）
+        .overlay {
+            if !isEditing {
+                Capsule()
+                    .fill(.clear)
+                    .contentShape(Capsule())
+                    .onTapGesture { isEditing = true }
+            }
+        }
+        // 编辑开关在父级，故焦点与文本预填统一由它驱动（无论点本视图还是外部取消/提交）
+        .onChange(of: isEditing) { editing in
+            if editing {
+                text = tab.currentURL?.absoluteString ?? ""
+                focused = true
+            } else {
+                focused = false
+            }
         }
     }
 
@@ -69,16 +92,9 @@ struct AddressBar: View {
 
     // MARK: - 行为
 
-    private func beginEditing() {
-        text = tab.currentURL?.absoluteString ?? ""
-        isEditing = true
-        focused = true
-    }
-
     private func submit() {
         guard let url = BrowserAddress.resolve(text) else { return }
         isEditing = false
-        focused = false
         onSubmit(url)
     }
 }

@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>左滑删除 · 方案原型（阅读页 / 浏览页）</title>
+<style>
+:root{--primary:#2563EB;--page-bg:#EEF4FB;--card:#FFF;--tp:#1A1A2E;--ts:#6B7280;--sep:#E5E7EB;--hl:#EEF4FB;--red:#FF3B30;--orange:#FF9500;--gray:#8E8E93}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 72px;-webkit-user-select:none;user-select:none}
+h1{font-size:22px;margin-bottom:6px}
+h3{font-size:16px;margin:40px 0 10px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:10px;line-height:1.8;max-width:1080px}
+.subtitle code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.tipbar{display:inline-flex;align-items:center;gap:8px;background:#DBEAFE;color:#1D4ED8;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;margin-bottom:26px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:300px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.warn{background:#FEF3C7;color:#92400E}.tag.safe{background:#D1FAE5;color:#047857}
+.desc{font-size:12px;color:var(--ts);line-height:1.75;min-height:118px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+/* 手机壳 */
+.phone{width:300px;background:var(--page-bg);border:8px solid #111827;border-radius:38px;overflow:hidden;box-shadow:0 12px 28px rgba(17,24,39,.18);position:relative}
+.statusbar{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:11px;font-weight:600}
+.navbar{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;background:rgba(255,255,255,.76)}
+.back{color:var(--primary);font-size:21px;font-weight:600;line-height:1}
+.nav-title{font-size:17px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav-title.sm{font-size:15px;font-weight:600}
+.nav-right{color:var(--primary);display:flex;gap:8px;align-items:center;flex:none;white-space:nowrap;font-size:11px}
+.seclabel{font-size:10px;font-weight:700;color:var(--ts);letter-spacing:.4px;padding:9px 14px 5px;background:rgba(255,255,255,.45)}
+.list{background:var(--card)}
+/* 可滑动行：过度拖拽时露出的底色由 JS 取「最左侧那颗按钮」同色，避免接缝处串色 */
+.sw{position:relative;overflow:hidden;background:var(--red)}
+.sw .actions{position:absolute;inset:0 0 0 auto;display:flex;height:100%}
+.sw .act{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:#fff;font-size:10.5px;font-weight:600;width:82px;height:100%}
+.sw .act.rec{background:var(--red)}
+.sw .act.src{background:#C1121F}
+.sw .act.more{background:var(--gray)}
+.sw .act.conf{background:var(--orange)}
+.sw .act .ic{width:19px;height:19px}
+.sw .front{position:relative;background:var(--card);transform:translateX(0);touch-action:pan-y}
+.sw.anim .front{transition:transform .28s cubic-bezier(.22,.61,.36,1)}
+.sw.gone{max-height:0;opacity:0;transition:max-height .3s ease,opacity .2s ease}
+.sw:not(.gone){max-height:90px;transition:max-height .3s ease}
+/* 行内容 */
+.row{display:flex;align-items:center;gap:11px;padding:11px 12px;border-bottom:1px solid var(--sep)}
+.row .thumb{width:46px;height:46px;border-radius:9px;background:var(--hl);display:flex;align-items:center;justify-content:center;font-size:22px;flex:none;position:relative}
+.row .thumb .badge{position:absolute;top:-4px;left:-4px;font-size:8px;font-weight:700;color:#fff;background:var(--primary);border-radius:6px;padding:1px 4px}
+.row .meta{flex:1;min-width:0}
+.row .n{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .s{font-size:11px;color:var(--ts);margin-top:2px}
+.ring{width:26px;height:26px;flex:none;position:relative}
+.ring svg{transform:rotate(-90deg)}
+.ring .pct{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:var(--primary)}
+.chev{color:var(--ts);font-size:13px}
+/* 网格说明区 */
+.gridwrap{background:rgba(255,255,255,.55);padding:9px 12px 13px}
+.gridwrap .cap{font-size:10px;color:var(--ts);font-weight:600;margin-bottom:7px;display:flex;gap:5px;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.card{background:var(--card);border-radius:12px;padding:6px;box-shadow:0 1px 3px rgba(17,24,39,.07);border:1px solid var(--sep)}
+.card .cover{width:100%;aspect-ratio:1.2;border-radius:8px;background:var(--hl);display:flex;align-items:center;justify-content:center;font-size:24px}
+.card .cn{font-size:10px;text-align:center;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 提示/吐司 */
+.toast{position:absolute;left:14px;right:14px;bottom:14px;background:rgba(28,28,30,.93);color:#fff;border-radius:12px;padding:10px 13px;font-size:11.5px;display:flex;align-items:center;gap:10px;opacity:0;transform:translateY(14px);transition:all .22s ease;pointer-events:none;z-index:20}
+.toast.on{opacity:1;transform:translateY(0);pointer-events:auto}
+.toast .undo{margin-left:auto;color:#7FB2FF;font-weight:700;white-space:nowrap}
+/* 确认弹窗 */
+.dim{position:absolute;inset:0;background:rgba(0,0,0,.32);display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:30}
+.dim.on{opacity:1;pointer-events:auto}
+.alert{width:200px;background:rgba(250,250,250,.96);border-radius:14px;overflow:hidden;text-align:center;transform:scale(.9);transition:transform .2s ease}
+.dim.on .alert{transform:scale(1)}
+.alert .t{font-size:13px;font-weight:700;padding:14px 14px 4px}
+.alert .m{font-size:11px;color:var(--ts);padding:0 14px 12px;line-height:1.5}
+.alert .btns{display:flex;border-top:.5px solid #C6C6C8}
+.alert .btns div{flex:1;padding:10px;font-size:13px;color:var(--primary)}
+.alert .btns div.del{color:var(--red);font-weight:700;border-left:.5px solid #C6C6C8}
+/* 底部抽屉（图标一致性对照） */
+.drawer{background:var(--card);border-radius:16px 16px 0 0;box-shadow:0 -4px 16px rgba(0,0,0,.12);padding:8px 0 12px;width:300px;border:1px solid var(--sep)}
+.drawer .handle{width:36px;height:5px;border-radius:3px;background:rgba(107,114,128,.35);margin:0 auto 13px}
+.drawer .mi{display:flex;align-items:center;gap:14px;padding:0 20px;height:46px;font-size:14px}
+.drawer .mi .ic{width:21px;height:21px;color:var(--primary)}
+.drawer .mi.del{color:var(--red)}.drawer .mi.del .ic{color:var(--red)}
+.mirror{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;margin-top:12px}
+.swatch{display:flex;gap:10px}
+.swbtn{width:82px;height:62px;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff;font-size:10.5px;font-weight:600}
+.swbtn .ic{width:19px;height:19px}
+/* 表格 */
+table{border-collapse:collapse;margin-top:18px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--sep);vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+code.sf{background:#EEF2FF;color:#4338CA;border-radius:4px;padding:1px 5px;font-size:12px;font-family:ui-monospace,Menlo,monospace}
+.footnote{margin-top:22px;font-size:12.5px;color:var(--ts);line-height:1.95;max-width:1080px;background:#fff;border-radius:12px;padding:16px 18px;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+.footnote b{color:var(--tp)}
+.ic{fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;width:19px;height:19px;flex:none;display:inline-block;vertical-align:-4px}
+.nav-right .ic{width:18px;height:18px}
+/* 图标速览条 */
+.peek{background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 2px 10px rgba(17,24,39,.06);margin-bottom:26px;display:flex;gap:30px;align-items:center;flex-wrap:wrap}
+.peek .ttl{font-size:12.5px;font-weight:700}
+.peek .item{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--ts)}
+.peek .item .box{width:46px;height:46px;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#fff;font-size:8px;font-weight:600}
+.peek .item .box .ic{width:17px;height:17px}
+.peek .item code{background:#EEF2FF;color:#4338CA;border-radius:4px;padding:1px 5px;font-size:11px;font-family:ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+
+<svg style="display:none">
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6.5h16M9 6.5V4.2h6v2.3M6.6 6.5l.9 12.2a2 2 0 0 0 2 1.9h5a2 2 0 0 0 2-1.9l.9-12.2"/></symbol>
+  <symbol id="i-trash-slash" viewBox="0 0 24 24"><path d="M4 6.5h16M9 6.5V4.2h6v2.3M6.6 6.5l.9 12.2a2 2 0 0 0 2 1.9h5a2 2 0 0 0 2-1.9l.9-12.2"/><path d="M3 3l18 18" stroke-width="2.1"/></symbol>
+  <symbol id="i-ellipsis" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M8.2 12.2l2.6 2.6 5-5.2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M10.2 8.8l5.2 3.2-5.2 3.2z" fill="currentColor"/></symbol>
+  <symbol id="i-scope" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.4"/><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 11v5.2M12 7.9v.1"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M15.6 4.8l3.6 3.6L8.9 18.7l-4.3 1 1-4.3z"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.8v7.4M8.8 12.3l3.2 3.2 3.2-3.2"/></symbol>
+  <symbol id="i-exclaim" viewBox="0 0 24 24"><path d="M12 3.6L21 19.4H3z"/><path d="M12 9.6v4.2M12 16.6v.1"/></symbol>
+</svg>
+
+<h1>左滑删除 · 方案原型</h1>
+<p class="subtitle">
+对应需求：① <b>阅读界面</b>（正在阅读）支持左滑直接删除该浏览记录；② <b>浏览界面</b>（文件列表）支持左滑直接删除该文件；③ <b>左滑按钮图标与长按菜单图标保持一致</b>（<code class="sf">trash</code> / <code class="sf">trash.slash</code> / <code class="sf">ellipsis</code>，同一操作同一符号）。<br>
+现状：两个界面删除均需「长按 → 底部抽屉菜单 → 删除 → 确认弹窗」，最少 3 步；阅读页还区分<b>删除阅读记录</b>（不动源文件）与<b>删除源文件</b>（移入回收站）两种语义，这是方案分歧的关键。
+</p>
+<div class="tipbar" style="background:#D1FAE5;color:#047857">✅ 已确认采用 <b>方案 A</b>，并按要求<b>去掉「滑到最左自动删除」</b>——左滑只负责露出按钮，<b>点按红色「删除」才真正删除</b>，删除后给「撤销」吐司</div>
+<div class="tipbar">👉 每个方案的<b>第一行已预先滑开</b>，可直接看到删除按钮；其余行按住向左拖动即可体验（鼠标拖、手机触摸拖都行）</div>
+
+<div class="peek" id="peek"></div>
+
+<div class="boards" id="boards"></div>
+
+<h3>需求 ③ 图标一致性：左滑按钮 ←→ 长按抽屉菜单</h3>
+<p class="subtitle">左滑按钮的符号、颜色语义与长按抽屉里的同名菜单项<b>逐一对齐</b>，用户在两条路径上看到的是同一个「视觉词汇」。下图左为长按抽屉现状，右为左滑按钮取用的同款图标。</p>
+<div class="mirror" id="mirror"></div>
+
+<table id="cmp"></table>
+
+<div class="footnote" id="foot"></div>
+
+<script>
+/* ============ 数据 ============ */
+const READ_ROWS = [
+  {e:'🎬',n:'星际穿越.mkv',s:'影视库 · 视频 · 10-12',p:.62,badge:''},
+  {e:'📖',n:'三体 Ⅱ·黑暗森林.epub',s:'小说源 · 小说 · 10-09',p:.31,badge:''},
+  {e:'🖼️',n:'海贼王 1120 话.zip',s:'漫画源 · 漫画 · 10-02',p:1,badge:'漫画'}
+];
+const BROWSE_ROWS = [
+  {e:'🎬',n:'盗梦空间.mp4',s:'视频 · 2:28:00 · 4.1 GB',p:null},
+  {e:'📁',n:'2024 合集',s:'目录 · 12 项',p:null,dir:true}
+];
+const ACT = {
+  rec :{cls:'rec', ic:'i-trash',       t:'删除记录'},
+  recF:{cls:'rec', ic:'i-trash',       t:'删除'},
+  src :{cls:'src', ic:'i-trash-slash', t:'删除源文件'},
+  more:{cls:'more',ic:'i-ellipsis',    t:'更多'},
+  conf:{cls:'conf',ic:'i-exclaim',     t:'确认删除'}
+};
+
+/* ============ 方案定义 ============
+   acts      : 左滑露出的按钮（从右往左）
+   actsBrowse: 浏览页按钮（缺省同 acts 的首个）
+   full      : 是否支持「一滑到底直接执行」
+   confirm   : 点按钮后是否弹确认框
+   undo      : 删除后是否给「撤销」吐司
+=================================== */
+const PLANS = [
+  {
+    k:'a', t:'方案 A · 单按钮 + 撤销吐司', tag:'✅ 已确认采用', tagc:'rec',
+    acts:['rec'], actsBrowse:['recF'], full:false, confirm:false, undo:true,
+    d:'左滑露出<b>一个红色「删除」</b>按钮，<b>必须点按按钮才删除</b>（已按确认去掉「一滑到底自动删除」，避免误删）；删除后<b>不弹确认框</b>，底部出「已删除 · 撤销」吐司兜底。<br>阅读页左滑删的是<b>阅读记录</b>（不动源文件，风险最低）；删源文件仍走长按菜单。<br><span class="pros">优点：最快（滑 + 点，无确认框）、最像原生、误删可撤销、不会手滑直接删掉。</span><br><span class="cons">代价：需新增「撤销」能力（阅读记录缓存回插；浏览页记录回收站路径后移回原处）。</span>'
+  },
+  {
+    k:'b', t:'方案 B · 单按钮 + 二次确认', tag:'未采用', tagc:'safe',
+    acts:['rec'], actsBrowse:['recF'], full:false, confirm:true, undo:false,
+    d:'左滑露出红色「删除」，点按后<b>沿用现有确认弹窗</b>（阅读页：删除阅读记录 / 浏览页：移入回收站）。<br><span class="pros">优点：复用既有删除链路与文案，零新增风险；破坏性操作仍有闸门。</span><br><span class="cons">缺点：仍是 2 步，「直接删除」的爽快感被确认框打断。</span>'
+  },
+  {
+    k:'c', t:'方案 C · 双按钮（记录 / 源文件）', tag:'未采用', tagc:'',
+    acts:['src','rec'], actsBrowse:['more','recF'], full:false, confirm:true, undo:false,
+    d:'阅读页左滑露出<b>两个</b>按钮：<code class="sf">trash</code>「删除记录」+ 深红 <code class="sf">trash.slash</code>「删除源文件」；浏览页为「删除」+ 灰色「更多」（直通长按菜单）。<br><span class="pros">优点：阅读页两种删除语义在左滑里都能到达，不必再长按。</span><br><span class="cons">缺点：按钮区占 164pt、文字需缩写，小屏偏挤；相邻两颗红按钮本身也是误触源。</span>'
+  },
+  {
+    k:'d', t:'方案 D · 滑到底才删（强阻尼）', tag:'未采用', tagc:'warn',
+    acts:['conf'], actsBrowse:['conf'], full:true, confirm:false, undo:true,
+    d:'短滑只露出<b>橙色「确认删除」</b>（提示态，点一下才真删）；滑过 70% 后按钮整条变红并触发震动，松手即删。<br><span class="pros">优点：把「确认」从弹窗变成手势深度，既快又难误触。</span><br><span class="cons">缺点：是自定义交互，不如系统左滑直观，需引导；与 iOS 习惯略有偏差。</span>'
+  }
+];
+
+/* ============ 渲染 ============ */
+const ic = (id,cls='ic') => `<svg class="${cls}"><use href="#${id}"/></svg>`;
+const STATUS = '<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>';
+
+function ring(p){
+  const r=10.5,c=2*Math.PI*r,off=c*(1-p);
+  return `<div class="ring"><svg width="26" height="26">
+    <circle cx="13" cy="13" r="${r}" fill="none" stroke="#E5E7EB" stroke-width="3"/>
+    <circle cx="13" cy="13" r="${r}" fill="none" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${off}"/>
+  </svg><span class="pct">${p>=1?'✓':Math.round(p*100)}</span></div>`;
+}
+
+function swipeRow(r, acts, plan, open){
+  const actHTML = acts.map(k=>{
+    const a=ACT[k];
+    return `<div class="act ${a.cls}" data-act="${k}">${ic(a.ic)}<span>${a.t}</span></div>`;
+  }).join('');
+  const trail = r.p!=null ? ring(r.p) : (r.dir?'<span class="chev">›</span>':'<span class="chev">›</span>');
+  const W = acts.length*82;
+  return `<div class="sw" data-w="${W}" data-plan="${plan.k}" data-open="${open?1:0}">
+    <div class="actions">${actHTML}</div>
+    <div class="front"${open?` style="transform:translateX(-${W}px)"`:''}><div class="row">
+      <div class="thumb">${r.e}${r.badge?`<span class="badge">${r.badge}</span>`:''}</div>
+      <div class="meta"><div class="n">${r.n}</div><div class="s">${r.s}</div></div>
+      ${trail}
+    </div></div>
+  </div>`;
+}
+
+function phone(plan){
+  return `<div class="phone" data-plan="${plan.k}">
+    ${STATUS}
+    <div class="navbar"><div class="nav-title">阅读</div><div class="nav-right">3 项 ${ic('i-ellipsis')}</div></div>
+    <div class="seclabel">阅读界面 · 正在阅读（左滑删除<b>阅读记录</b>）</div>
+    <div class="list">${READ_ROWS.map((r,i)=>swipeRow(r,plan.acts,plan,i===0)).join('')}</div>
+    <div class="navbar" style="border-top:1px solid var(--sep)"><span class="back">‹</span><div class="nav-title sm">电影</div><div class="nav-right">${ic('i-ellipsis')}</div></div>
+    <div class="seclabel">浏览界面 · 文件列表（左滑删除<b>该文件</b>）</div>
+    <div class="list">${BROWSE_ROWS.map((r,i)=>swipeRow(r,plan.actsBrowse||plan.acts,plan,i===0)).join('')}</div>
+    <div class="gridwrap"><div class="cap">⚠️ 网格视图：卡片不支持左滑，仍走长按菜单</div>
+      <div class="grid">
+        <div class="card"><div class="cover">🎬</div><div class="cn">星际穿越</div></div>
+        <div class="card"><div class="cover">📖</div><div class="cn">三体 Ⅱ</div></div>
+        <div class="card"><div class="cover">🖼️</div><div class="cn">海贼王</div></div>
+      </div>
+    </div>
+    <div class="toast"><span class="msg">已删除</span><span class="undo">撤销</span></div>
+    <div class="dim"><div class="alert">
+      <div class="t">删除阅读记录</div><div class="m">将删除 1 条阅读记录（不影响源文件）</div>
+      <div class="btns"><div data-x="0">取消</div><div class="del" data-x="1">删除</div></div>
+    </div></div>
+  </div>`;
+}
+
+document.getElementById('boards').innerHTML = PLANS.map(p=>`
+  <div class="board">
+    <h2>${p.t}<span class="tag ${p.tagc}">${p.tag}</span></h2>
+    <div class="desc">${p.d}</div>
+    ${phone(p)}
+  </div>`).join('');
+
+/* ---- 顶部图标速览 ---- */
+document.getElementById('peek').innerHTML = `
+  <span class="ttl">左滑按钮图标速览</span>
+  <div class="item"><div class="box" style="background:var(--red)">${ic('i-trash')}<span>删除记录</span></div><div>删除阅读记录 / 删除文件<br><code>trash</code></div></div>
+  <div class="item"><div class="box" style="background:#C1121F">${ic('i-trash-slash')}<span>删源文件</span></div><div>删除源文件（回收站）<br><code>trash.slash</code></div></div>
+  <div class="item"><div class="box" style="background:var(--gray)">${ic('i-ellipsis')}<span>更多</span></div><div>直通长按抽屉菜单<br><code>ellipsis</code></div></div>
+  <div class="item"><div class="box" style="background:var(--orange)">${ic('i-exclaim')}<span>确认删除</span></div><div>方案 D 的提示态按钮<br><code>exclamationmark.triangle</code></div></div>`;
+
+/* ---- 图标一致性对照 ---- */
+document.getElementById('mirror').innerHTML = `
+  <div>
+    <div class="desc" style="min-height:0;margin-bottom:8px"><b>阅读界面</b>：长按抽屉（现状）</div>
+    <div class="drawer">
+      <div class="handle"></div>
+      <div class="mi">${ic('i-check')}多选</div>
+      <div class="mi">${ic('i-play')}继续阅读</div>
+      <div class="mi">${ic('i-scope')}定位到源路径位置</div>
+      <div class="mi">${ic('i-info')}属性</div>
+      <div class="mi del">${ic('i-trash-slash')}删除源文件</div>
+      <div class="mi del">${ic('i-trash')}删除阅读记录</div>
+    </div>
+  </div>
+  <div>
+    <div class="desc" style="min-height:0;margin-bottom:8px"><b>左滑按钮</b>取用同款符号与红色语义</div>
+    <div class="swatch">
+      <div class="swbtn" style="background:var(--red)">${ic('i-trash')}<span>删除记录</span></div>
+      <div class="swbtn" style="background:#C1121F">${ic('i-trash-slash')}<span>删除源文件</span></div>
+      <div class="swbtn" style="background:var(--gray)">${ic('i-ellipsis')}<span>更多</span></div>
+    </div>
+    <div class="desc" style="margin-top:14px;min-height:0">
+      同时统一三处细节：<br>
+      · 同一操作 <b>同一 SF Symbol</b>（删除记录 <code class="sf">trash</code>、删源文件 <code class="sf">trash.slash</code>、更多 <code class="sf">ellipsis</code>）；<br>
+      · 同一操作 <b>同一语义色</b>（破坏性 = 系统红 <code class="sf">#FF3B30</code>，次级 = 灰）；<br>
+      · 同一操作 <b>同一文案</b>（左滑按钮用长按菜单文案的缩写，不另起名字）。
+    </div>
+  </div>`;
+
+/* ---- 对比表 ---- */
+document.getElementById('cmp').innerHTML = `
+  <tr><th>方案</th><th>阅读页左滑</th><th>浏览页左滑</th><th>确认机制</th><th>一滑到底</th><th>主要取舍</th></tr>
+  <tr><td>现状</td><td>—</td><td>—</td><td>抽屉 + 弹窗</td><td>—</td><td>慢，但最安全</td></tr>
+  <tr style="background:#F0FDF4"><td><b>A ✅ 采用</b></td><td>删除记录（trash）</td><td>删除（trash）</td><td>撤销吐司（5s）</td><td><b>已去掉</b></td><td>滑 + 点，误删可撤销</td></tr>
+  <tr><td>B 单按钮 + 确认</td><td>删除记录（trash）</td><td>删除（trash）</td><td>沿用现有弹窗</td><td>否</td><td>改动最小，爽快感一般</td></tr>
+  <tr><td>C 双按钮</td><td>删除记录 + 删除源文件</td><td>删除 + 更多</td><td>源文件删除仍弹窗</td><td>否</td><td>语义全，但按钮挤、易误触</td></tr>
+  <tr><td>D 滑到底才删</td><td>橙色确认按钮 → 全滑即删</td><td>同左</td><td>手势深度代替弹窗</td><td>是</td><td>防误触最好，需用户学习</td></tr>`;
+
+document.getElementById('foot').innerHTML = `
+  <b>✅ 最终确认：方案 A（单按钮 + 撤销吐司），且不做「一滑到底自动删除」</b><br>
+  左滑只负责<b>露出按钮</b>（最大位移停在按钮宽度，再拖有橡皮筋阻尼但不会触发删除）；<b>必须点按红色「删除」</b>才执行，执行后不弹确认框，底部给 5 秒「已删除 · 撤销」吐司兜底。<br><br>
+  <b>两个界面的删除语义：</b><br>
+  · <b>阅读界面</b> 左滑 = 删除<b>阅读记录</b>（<code>trash</code>，不动源文件）；撤销 = 把删前缓存的记录原样插回数据库。<br>
+  · <b>浏览界面</b> 左滑 = 删除<b>该文件</b>（<code>trash</code>，移入 <code>.trash/</code> 回收站）；撤销 = 从回收站把文件移回原路径。<br>
+  · 「删除源文件」（<code>trash.slash</code>）<b>不进入左滑</b>，仍只在长按菜单里——避免一次左滑就把源文件删掉。<br><br>
+  <b>共同规则：</b><br>
+  · 仅<b>列表视图</b>支持左滑；网格视图保持长按菜单（卡片横向空间无法承载按钮，且与左右滚动冲突）。<br>
+  · 左滑与<b>多选态互斥</b>：进入多选后禁用左滑（避免与勾选冲突）。<br>
+  · 同一时刻<b>只允许一行展开</b>，滑动另一行 / 滚动列表 / 点击别处自动收起。<br>
+  · 行展开时，点击行主体区域只负责<b>收起左滑</b>，不会触发打开文件（防误触）。<br>
+  · 删除的<b>执行链路完全复用</b>长按菜单那一套（阅读记录走 <code>history.remove</code>；文件走 <code>viewModel.delete(paths:)</code> 的「回收站优先、不可用再降级彻底删除」），仅入口不同。<br>
+  · 浏览页左滑删除<b>目录</b>时，与长按删除同样把目录及其内容一并移入回收站。<br>
+  · 横向左滑手势需与现有 <code>PressBridge</code>（点击 + 长按的 UIKit 桥接）做互斥仲裁，保证竖向滚动、点击、长按三者都不受影响。<br><br>
+  <b>需求 ③ 图标一致性：</b>同一操作在「左滑按钮」与「长按抽屉菜单」里使用同一 SF Symbol、同一语义色、同一文案（见上方对照图）。`;
+
+/* ============ 左滑交互 ============ */
+/* 同一列表内「只允许一行展开」：按列表分别记录当前展开行 */
+const openRowOf = new Map();
+function closeRow(r){
+  const f = r.querySelector('.front');
+  r.classList.add('anim');
+  f.style.transform = 'translateX(0)';
+  const ph = r.closest('.list');
+  if(openRowOf.get(ph) === r) openRowOf.delete(ph);
+}
+
+document.querySelectorAll('.sw').forEach(sw=>{
+  const front = sw.querySelector('.front');
+  const W = +sw.dataset.w;
+  const plan = PLANS.find(p=>p.k===sw.dataset.plan);
+  const phoneEl = sw.closest('.phone');
+  const listEl = sw.closest('.list');
+  // 预先滑开的行：初始位移同步给手势状态，避免再次拖动时位置跳变
+  const preOpen = sw.dataset.open === '1';
+  let startX=0, startT=0, cur = preOpen ? -W : 0, dragging=false, moved=false, rowW=300;
+  if(preOpen) openRowOf.set(listEl, sw);   // 纳入「同一列表只允许一行展开」的管辖
+
+  const setX = x => front.style.transform = `translateX(${x}px)`;
+  // 过度拖拽时行底色取最左侧按钮色（方案 D 为橙、方案 C 为深红），接缝不串色
+  const leftMost = sw.querySelector('.act');
+  if(leftMost) sw.style.background = getComputedStyle(leftMost).backgroundColor;
+  const animTo = x => {
+    sw.classList.add('anim'); setX(x); cur=x;
+    if(x === 0){ if(openRowOf.get(listEl) === sw) openRowOf.delete(listEl); }
+    else {
+      const prev = openRowOf.get(listEl);
+      if(prev && prev !== sw) closeRow(prev);
+      openRowOf.set(listEl, sw);
+    }
+  };
+
+  front.addEventListener('pointerdown', e=>{
+    dragging=true; moved=false; startX=e.clientX; startT=cur; rowW=sw.offsetWidth;
+    sw.classList.remove('anim'); front.setPointerCapture(e.pointerId);
+  });
+  front.addEventListener('pointermove', e=>{
+    if(!dragging) return;
+    let dx = startT + (e.clientX - startX);
+    if(Math.abs(e.clientX-startX)>4) moved=true;
+    if(dx>0) dx = dx*0.18;                                  // 右滑橡皮筋
+    const limit = plan.full ? -rowW*0.92 : -(W+28);
+    if(dx<limit) dx = limit + (dx-limit)*0.25;
+    cur = dx; setX(dx);
+    // 方案 D：滑过 70% 整条变红并提示「松手删除」（真机上此刻触发一次轻震动）
+    if(plan.k==='d'){
+      const a = sw.querySelector('.act');
+      const armed = -dx > rowW*0.7;
+      a.style.background = armed ? 'var(--red)' : 'var(--orange)';
+      sw.style.background = armed ? 'var(--red)' : 'var(--orange)';
+      a.querySelector('span').textContent = armed ? '松手删除' : '确认删除';
+    }
+  });
+  const end = ()=>{
+    if(!dragging) return; dragging=false;
+    const d = -cur;
+    const fullT = plan.k==='d' ? rowW*0.7 : rowW*0.55;
+    if(plan.full && d > fullT) return sw.__fullRemove();
+    animTo(d > W*0.42 ? -W : 0);
+  };
+  front.addEventListener('pointerup', end);
+  front.addEventListener('pointercancel', end);
+  front.addEventListener('click', e=>{ if(moved) {e.stopPropagation(); return;} if(cur!==0){ animTo(0); } });
+
+  // 删除后「撤销」需把手势状态一并复位（否则再次拖动会从旧位移起跳）
+  const restore = ()=>{
+    cur = 0; setX(0);
+    if(openRowOf.get(listEl) === sw) openRowOf.delete(listEl);
+    if(plan.k==='d'){
+      const a = sw.querySelector('.act');
+      a.style.background = 'var(--orange)';
+      sw.style.background = 'var(--orange)';
+      a.querySelector('span').textContent = '确认删除';
+    }
+  };
+
+  sw.querySelectorAll('.act').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const k = btn.dataset.act;
+      if(k==='more'){ animTo(0); toast(phoneEl,'→ 打开长按抽屉菜单',false); return; }
+      const run = ()=>{ if(openRowOf.get(listEl)===sw) openRowOf.delete(listEl); remove(sw, plan, phoneEl, restore); };
+      if(plan.confirm){
+        const conf = k==='src'
+          ? {t:'删除源文件', m:'将删除 1 个源文件及对应阅读记录（保留 30 天，可在回收站还原）'}
+          : isReadingList(sw)
+            ? {t:'删除阅读记录', m:'将删除 1 条阅读记录（不影响源文件）'}
+            : {t:'删除', m:'将 1 个项目移入回收站（保留 30 天，可还原）'};
+        confirmDialog(phoneEl, conf, ok=> ok ? run() : animTo(0));
+        return;
+      }
+      run();
+    });
+  });
+
+  // 一滑到底直接删除时也走同一条复位链路
+  sw.__fullRemove = ()=>{ if(openRowOf.get(listEl)===sw) openRowOf.delete(listEl); remove(sw, plan, phoneEl, restore); };
+});
+
+/* 点击列表外的空白区域，收起已展开的行（与原生一致） */
+document.addEventListener('pointerdown', e=>{
+  openRowOf.forEach((row, list)=>{ if(!row.contains(e.target)) closeRow(row); });
+}, true);
+
+/// 该行属于阅读界面列表（用于区分删除语义与提示文案）
+function isReadingList(sw){
+  return sw.closest('.list').previousElementSibling.textContent.includes('阅读界面');
+}
+
+function remove(sw, plan, phoneEl, onRestore){
+  const f = sw.querySelector('.front');
+  sw.classList.add('anim'); f.style.transform=`translateX(-${sw.offsetWidth}px)`;
+  setTimeout(()=>{
+    sw.classList.add('gone');
+    const label = isReadingList(sw) ? '已删除 1 条阅读记录' : '已将 1 个文件移入回收站';
+    toast(phoneEl, label, plan.undo, ()=>{
+      sw.classList.remove('gone');
+      sw.classList.add('anim');
+      onRestore ? onRestore() : (f.style.transform='translateX(0)');
+    });
+  }, 180);
+}
+
+/* 吐司按手机原型各自计时，互不干扰 */
+const toastTimers = new WeakMap();
+function toast(phoneEl, msg, undoable, onUndo){
+  const t = phoneEl.querySelector('.toast');
+  t.querySelector('.msg').textContent = msg;
+  const u = t.querySelector('.undo');
+  u.style.display = undoable ? 'inline' : 'none';
+  u.onclick = ()=>{ t.classList.remove('on'); onUndo && onUndo(); };
+  t.classList.add('on');
+  clearTimeout(toastTimers.get(phoneEl));
+  toastTimers.set(phoneEl, setTimeout(()=>t.classList.remove('on'), 3600));
+}
+
+function confirmDialog(phoneEl, conf, cb){
+  const dim = phoneEl.querySelector('.dim');
+  dim.querySelector('.alert .t').textContent = conf.t;
+  dim.querySelector('.alert .m').textContent = conf.m;
+  dim.classList.add('on');
+  dim.querySelectorAll('.btns div').forEach(b=>{
+    b.onclick = ()=>{ dim.classList.remove('on'); cb(b.dataset.x==='1'); };
+  });
+}
+</script>
+</body>
+</html>

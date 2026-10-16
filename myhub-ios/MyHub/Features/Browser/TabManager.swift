@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 /// 滚动位移计量器（TODO 399）：把 `contentOffset` 的高频变化（ProMotion 下可达 120Hz）
@@ -364,6 +365,67 @@ extension BrowserTab: WKUIDelegate {
             onOpenNewTab?(url)
         }
         return nil
+    }
+
+    /// 长按链接菜单**全部自绘**（TODO 408）：
+    /// 系统默认菜单里的「打开」在 `WKWebView`（非 Safari 宿主）下由 WebKit 自行处理，
+    /// 会走 `UIApplication.open` 把链接丢给系统默认浏览器——表现为「点了 Open Link 跳到 Safari」，
+    /// 且该动作**不经过** `decidePolicyFor`，因此无法在导航策略层拦截。
+    /// 唯一可靠的办法是接管 `contextMenuConfigurationForElement` 自建菜单，
+    /// 让每个动作都落到内置浏览器的 API 上（当前标签加载 / 新建标签 / 拷贝 / 分享）。
+    func webView(
+        _ webView: WKWebView,
+        contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
+        completionHandler: @escaping (UIContextMenuConfiguration?) -> Void
+    ) {
+        // 非链接元素（图片 / 纯文本 / 输入框）返回 nil，交回系统默认菜单（选词、拷贝图片等不受影响）
+        guard let url = elementInfo.linkURL else {
+            completionHandler(nil)
+            return
+        }
+
+        let config = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            let open = UIAction(title: "打开", image: UIImage(systemName: "arrow.up.right.square")) { _ in
+                Task { @MainActor in self?.load(url) }
+            }
+            let openInNewTab = UIAction(title: "在新标签页中打开", image: UIImage(systemName: "plus.square.on.square")) { _ in
+                Task { @MainActor in self?.onOpenNewTab?(url) }
+            }
+            let copy = UIAction(title: "拷贝链接", image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.url = url
+            }
+            let share = UIAction(title: "分享…", image: UIImage(systemName: "square.and.arrow.up")) { _ in
+                Task { @MainActor in self?.presentShareSheet(for: url, from: webView) }
+            }
+            return UIMenu(title: url.absoluteString, children: [open, openInNewTab, copy, share])
+        }
+        completionHandler(config)
+    }
+
+    /// 点击长按预览（而非菜单项）时的提交动作：同样留在内置浏览器内，于当前标签加载
+    func webView(
+        _ webView: WKWebView,
+        contextMenuForElement elementInfo: WKContextMenuElementInfo,
+        willCommitWithAnimator animator: UIContextMenuInteractionCommitAnimating
+    ) {
+        guard let url = elementInfo.linkURL else { return }
+        animator.preferredCommitStyle = .pop
+        animator.addCompletion { [weak self] in
+            Task { @MainActor in self?.load(url) }
+        }
+    }
+
+    /// 分享面板：从承载 webView 的窗口最上层控制器弹出（iPad 需锚点，否则 popover 会崩）
+    private func presentShareSheet(for url: URL, from webView: WKWebView) {
+        guard var presenter = webView.window?.rootViewController else { return }
+        while let presented = presenter.presentedViewController { presenter = presented }
+
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let popover = controller.popoverPresentationController {
+            popover.sourceView = webView
+            popover.sourceRect = CGRect(x: webView.bounds.midX, y: webView.bounds.midY, width: 1, height: 1)
+        }
+        presenter.present(controller, animated: true)
     }
 }
 

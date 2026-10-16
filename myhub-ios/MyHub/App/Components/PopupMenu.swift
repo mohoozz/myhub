@@ -95,7 +95,7 @@ struct PopupMenuLayer: View {
                             .font(.subheadline)
                         Spacer()
                     }
-                    .foregroundStyle(item.destructive ? Color.red : AppColors.textPrimary)
+                    .foregroundStyle(item.destructive ? AppColors.destructive : AppColors.textPrimary)
                     .padding(.horizontal, 14)
                     .frame(height: rowHeight)
                     .contentShape(Rectangle())
@@ -210,7 +210,7 @@ struct BottomMenuDrawer: View {
                                             .font(.body)
                                         Spacer()
                                     }
-                                    .foregroundStyle(item.destructive ? Color.red : AppColors.textPrimary)
+                                    .foregroundStyle(item.destructive ? AppColors.destructive : AppColors.textPrimary)
                                     .padding(.horizontal, 20)
                                     .frame(height: rowHeight)
                                     .contentShape(Rectangle())
@@ -301,6 +301,10 @@ struct PopupMenuButton: View {
     let items: [PopupMenuItem]
     var symbol: String = "ellipsis"
     var style: PopupMenuPresenter.Style = .drawer
+    /// 触控格尺寸：默认 32pt（导航栏内沿用原尺寸），
+    /// 需要满足 44pt 最小点击区的场景（如浏览器底部操作栏，TODO 406）由调用方显式放大。
+    /// `PressBridge` 以 overlay 覆盖本尺寸，故改这里即同时放大命中区。
+    var size: CGSize = CGSize(width: 32, height: 32)
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
     @StateObject private var press = PressStateHolder()
@@ -310,7 +314,7 @@ struct PopupMenuButton: View {
         Image(systemName: symbol)
             .font(.body.weight(.medium))
             .foregroundStyle(.tint)
-            .frame(width: 32, height: 32)
+            .frame(width: size.width, height: size.height)
             .contentShape(Rectangle())
             .scaleEffect(press.isPressing ? 0.92 : 1)
             // 缩放只认 `press.isPressing` 这一个动画来源：`.animation(_:value:)` 在 value
@@ -437,6 +441,8 @@ private struct CellPressModifier: ViewModifier {
     @StateObject private var press = PressStateHolder()
     @State private var isHovering = false
     @State private var anchor: CGRect = .zero
+    /// 左滑操作桥接（由 `swipeActions` 注入；nil = 本行不支持左滑，TODO 408）
+    @Environment(\.swipeRowBridge) private var swipeBridge
 
     private var isPressing: Bool { press.isPressing }
 
@@ -499,15 +505,22 @@ private struct CellPressModifier: ViewModifier {
             .animation(.appFast, value: isSelected)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(PressBridge(
-                onTap: onTap,
+                onTap: {
+                    // 左滑展开态：点击仅收起该行，不触发打开（防误触，TODO 408）
+                    guard swipeBridge?.consumeGesture() != true else { return }
+                    onTap()
+                },
                 onPress: { press.handle($0) },
                 onLongPress: {
+                    // 左滑展开态：长按同样先收起，不弹菜单
+                    guard swipeBridge?.consumeGesture() != true else { return }
                     // 长按触发轻微震动（prepare 预唤醒触觉引擎，确保即时可靠触发）
                     let generator = UIImpactFeedbackGenerator(style: .light)
                     generator.prepare()
                     generator.impactOccurred()
                     presenter.show(items: items, anchor: anchor, style: .drawer)
-                }
+                },
+                onSwipe: swipeBridge?.drag
             ))
             .onHover { isHovering = $0 }
             .accessibilityAddTraits(.isButton)
@@ -562,9 +575,13 @@ private struct PressBridge: UIViewRepresentable {
     let onTap: () -> Void
     let onPress: (PressPhase) -> Void
     let onLongPress: () -> Void
+    /// 横向左滑回调（nil = 本行不支持左滑，pan 识别器直接禁用，TODO 408）
+    var onSwipe: (@MainActor (SwipeDragPhase) -> Void)?
 
     func makeUIView(context: Context) -> PressBridgeView {
-        PressBridgeView(onTap: onTap, onPress: onPress, onLongPress: onLongPress)
+        let view = PressBridgeView(onTap: onTap, onPress: onPress, onLongPress: onLongPress)
+        view.onSwipe = onSwipe
+        return view
     }
 
     // 让桥接视图填满 cell（overlay 内容默认按自身理想大小居中，需显式铺满）
@@ -576,17 +593,30 @@ private struct PressBridge: UIViewRepresentable {
         uiView.onTap = onTap
         uiView.onPress = onPress
         uiView.onLongPress = onLongPress
+        uiView.onSwipe = onSwipe
     }
 }
 
-private final class PressBridgeView: UIView {
+private final class PressBridgeView: UIView, UIGestureRecognizerDelegate {
     var onTap: () -> Void
     var onPress: (PressPhase) -> Void
     var onLongPress: () -> Void
 
+    /// 左滑回调；赋值即开关 pan 识别器（避免给不支持左滑的 cell 挂无用手势）
+    var onSwipe: (@MainActor (SwipeDragPhase) -> Void)? {
+        didSet {
+            let shouldEnable = onSwipe != nil
+            // 正在识别时改 isEnabled 会强制取消手势，故仅在状态真正变化时写入
+            if pan.isEnabled != shouldEnable { pan.isEnabled = shouldEnable }
+        }
+    }
+
     private let longPress = UILongPressGestureRecognizer()
+    private let pan = UIPanGestureRecognizer()
     /// 长按是否已进入（仅已进入的长按才在结束时复位按压态，避免误清掉点击的回弹动画）
     private var isLongPressing = false
+    /// 横向拖动是否已进入（期间抑制点击，避免滑完手指抬起又触发打开）
+    private var isPanning = false
 
     init(onTap: @escaping () -> Void,
          onPress: @escaping (PressPhase) -> Void,
@@ -606,6 +636,15 @@ private final class PressBridgeView: UIView {
         tap.require(toFail: longPress)             // 长按成功则抑制点击，二者互斥
         addGestureRecognizer(tap)
         addGestureRecognizer(longPress)
+
+        // 左滑（TODO 408）：与点击/长按同属本视图，复用同一套仲裁。
+        // 不用 `require(toFail:)` 串联——手指静止不动时 pan 既不开始也不失败，
+        // 会把长按无限期挂起；改为「pan 一旦开始就主动取消长按 + 抑制点击」。
+        pan.delegate = self
+        pan.cancelsTouchesInView = false
+        pan.isEnabled = false                      // 默认关闭，由 onSwipe 赋值时开启
+        pan.addTarget(self, action: #selector(handlePan))
+        addGestureRecognizer(pan)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -620,6 +659,7 @@ private final class PressBridgeView: UIView {
     }
 
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        guard !isPanning else { return }   // 左滑过程中抬手不算点击
         if recognizer.state == .ended { onTap() }
     }
 
@@ -654,6 +694,65 @@ private final class PressBridgeView: UIView {
         default:
             break
         }
+    }
+
+    // MARK: - 左滑
+
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        guard let onSwipe else { return }
+        switch recognizer.state {
+        case .began:
+            isPanning = true
+            onPress(.cancelled)    // 清掉按压高亮：此刻意图已明确是滑动而非点击
+            cancelLongPress()
+            onSwipe(.began)
+        case .changed:
+            onSwipe(.changed(recognizer.translation(in: self).x))
+        case .ended:
+            onSwipe(.ended(
+                translation: recognizer.translation(in: self).x,
+                velocity: recognizer.velocity(in: self).x
+            ))
+            // 延到下一轮 runloop 复位：同一次抬手里 tap / pan 回调的投递顺序 UIKit 不保证，
+            // 同步置 false 可能让随后到达的 tap 漏过 isPanning 守卫、误把文件打开
+            DispatchQueue.main.async { [weak self] in self?.isPanning = false }
+        case .cancelled, .failed:
+            onSwipe(.cancelled)
+            DispatchQueue.main.async { [weak self] in self?.isPanning = false }
+        default:
+            break
+        }
+    }
+
+    /// 强制取消长按（禁用再启用是 UIKit 既定做法：会把识别器打回 .possible）
+    private func cancelLongPress() {
+        guard longPress.isEnabled else { return }
+        longPress.isEnabled = false
+        longPress.isEnabled = true
+        if isLongPressing { isLongPressing = false }
+    }
+
+    /// 仅当横向分量明显占优时才让 pan 开始：竖向滚动继续归 UIScrollView，
+    /// 斜向拖动也判给滚动，避免列表滑动时误露出删除按钮。
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === pan else { return true }
+        guard onSwipe != nil else { return false }
+        let velocity = pan.velocity(in: self)
+        // 极慢起手时首帧速度可能为 0，退化用累计位移判方向，避免这一次左滑整体失效
+        if abs(velocity.x) < 1, abs(velocity.y) < 1 {
+            let translation = pan.translation(in: self)
+            return abs(translation.x) > abs(translation.y)
+        }
+        return abs(velocity.x) > abs(velocity.y) * 1.5
+    }
+
+    /// 不与滚动容器的 pan 同时识别（否则左滑时列表会一起竖向滚动）；
+    /// 与本视图自己的 tap/longPress 可并存——它们的互斥已由 isPanning / cancelLongPress 处理。
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        !(other.view is UIScrollView)
     }
 }
 

@@ -36,6 +36,14 @@ struct BrowserSettingsView: View {
             }
 
             Section {
+                Toggle("新标签页打开后立即跳转", isOn: openNewTabInForegroundBinding)
+            } header: {
+                Text("链接")
+            } footer: {
+                Text("长按链接「在新标签页中打开」，以及网页内的新窗口请求（target=_blank / window.open）是否立即切换到新标签。关闭后新标签在后台创建，当前页面保持不变，可稍后从标签列表进入。")
+            }
+
+            Section {
                 Button(role: .destructive) {
                     showingClearConfirm = true
                 } label: {
@@ -82,6 +90,14 @@ struct BrowserSettingsView: View {
         Binding(
             get: { AppSettings.Browser.userAgent },
             set: { AppSettings.Browser.userAgent = $0 }
+        )
+    }
+
+    /// 新标签页是否立即跳转（TODO 408）：读取即最新值，无需重启生效
+    private var openNewTabInForegroundBinding: Binding<Bool> {
+        Binding(
+            get: { AppSettings.Browser.openNewTabInForeground },
+            set: { AppSettings.Browser.openNewTabInForeground = $0 }
         )
     }
 

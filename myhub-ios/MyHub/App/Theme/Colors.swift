@@ -34,6 +34,11 @@ enum AppColors {
     static let textSecondary = Color(light: Color(hex: 0x6B7280), dark: Color(hex: 0x888888))
     static let separator = Color(light: Color(hex: 0xE5E7EB), dark: Color(hex: 0x1E1E1E))
     static let highlightBackground = Color(light: Color(hex: 0xEEF4FB), dark: Color(hex: 0x1A2744))
+    /// 破坏性操作语义色（删除等）：长按菜单项文字、左滑按钮底色、多选操作栏统一用此色，
+    /// 保证「同一操作同一语义色」（TODO 408 需求 ③）
+    static let destructive = Color(uiColor: .systemRed)
+    /// 次级左滑按钮底色（如「更多」）
+    static let destructiveSecondary = Color(uiColor: .systemGray)
     /// 播放器/阅读器等沉浸场景统一纯黑
     static let immersiveBackground = Color.black
 }

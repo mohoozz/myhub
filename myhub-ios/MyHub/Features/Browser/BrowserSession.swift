@@ -26,21 +26,24 @@ final class BrowserSessionStore: ObservableObject {
 
     // MARK: - 标签操作
 
-    /// 新建标签并激活；`url` 为空表示空白起始页
+    /// 新建标签；`url` 为空表示空白起始页。
+    /// `activate` 为 false 时只把标签追加到列表、**不切换**当前页面（后台新开，TODO 408）。
     @discardableResult
-    func newTab(url: URL? = nil) -> BrowserTab {
+    func newTab(url: URL? = nil, activate: Bool = true) -> BrowserTab {
         let tab = BrowserTab(url: url, isIncognito: isIncognito)
         configure(tab)
         tabs.append(tab)
-        activeTabID = tab.id
+        if activate { activeTabID = tab.id }
         persist()
         return tab
     }
 
     /// 统一配置标签回调（新窗口 + 历史记录 + 会话持久化）
     private func configure(_ tab: BrowserTab) {
+        // 长按链接「在新标签页中打开」/ `target=_blank` / `window.open` 统一走这里：
+        // 是否立即跳转由设置项决定（关闭即后台新开，停留在当前页，TODO 408）
         tab.onOpenNewTab = { [weak self] url in
-            self?.newTab(url: url)
+            self?.newTab(url: url, activate: AppSettings.Browser.openNewTabInForeground)
         }
         tab.onDidFinishVisit = { url, title in
             BrowserDataStore.shared.recordVisit(

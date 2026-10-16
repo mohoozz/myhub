@@ -20,6 +20,9 @@ struct BrowserHomeView: View {
     @State private var showingSettings = false
     /// 操作栏是否收起为底部小胶囊（而非完全隐藏，始终可见可点击）
     @State private var toolbarMini = false
+    /// 地址栏是否处于编辑态（TODO 407）：由本视图持有——操作栏据此整体变为输入条，
+    /// 网页上的可点遮罩与左下角退出钮的显隐也都要读这个状态，故不能封在 `AddressBar` 内部。
+    @State private var addressEditing = false
 
     /// 操作栏 / 收起态小胶囊与底部页签栏之间的视觉间距（左右内缩 12pt 形成上下「双胶囊」节奏）
     private let tabBarGap: CGFloat = 12
@@ -52,13 +55,28 @@ struct BrowserHomeView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 contentArea
+                    // 编辑态遮罩（Safari 风格）：压暗网页并吃掉点击，点任意处即取消编辑。
+                    // 只盖内容区、不盖操作栏本身，避免挡住输入框与「取消」。
+                    .overlay {
+                        if addressEditing {
+                            Color.black.opacity(0.10)
+                                .contentShape(Rectangle())
+                                .onTapGesture { addressEditing = false }
+                                .transition(.opacity)
+                        }
+                    }
                 // 展开态：完整操作栏占位底部
                 if !toolbarMini, let tab = session.activeTab {
                     BrowserToolbar(
                         tab: tab,
                         tabCount: session.visibleTabs.count,
                         menuItems: menuItems,
-                        onTabs: { showingTabs = true },
+                        onTabs: {
+                            // 打开标签网格前先退出编辑：否则键盘会留在全屏页签网格下方
+                            addressEditing = false
+                            showingTabs = true
+                        },
+                        isEditingAddress: $addressEditing,
                         onSubmitAddress: { url in session.open(url) }
                     )
                     // 与底部页签栏留出一段距离（有 mini 播放器时补偿封面向上溢出的 8pt）
@@ -76,18 +94,23 @@ struct BrowserHomeView: View {
         }
         .background(AppColors.pageBackground)
         // 沉浸态左下角退出钮（+ 有播放会话时的播放微件）：
-        // 收缩态与操作栏的 `toolbarMini` 同源联动（T1），贴边半隐仅露 14pt
+        // 收缩态与操作栏的 `toolbarMini` 同源联动（T1），贴边半隐仅露 14pt。
+        // 编辑态整体隐藏：该钮按展开态条高定位，键盘弹起后操作栏已被系统抬走，
+        // 它会悬在半空并与输入框抢视线（TODO 407）。
         .overlay(alignment: .bottomLeading) {
-            if isImmersive {
+            if isImmersive && !addressEditing {
                 BrowserExitHandle(collapsed: toolbarMini, onExit: exitImmersive)
                     .padding(.bottom, exitHandleBottomInset)
                     .transition(.opacity)
             }
         }
         .animation(.appFast, value: toolbarMini)
+        .animation(.appFast, value: addressEditing)
         .onChange(of: session.activeTabID) { _ in
             // 打开/切换到网页标签 → 收为胶囊；起始页（需输入网址）→ 展开地址栏
             toolbarMini = !(session.activeTab?.isShowingStartPage ?? true)
+            // 切标签时地址栏内容已换页，留在编辑态会继续编辑上一个页面的 URL
+            addressEditing = false
         }
         // 沉浸态开关同步（S1）：`RootView` 以 ZStack 保活各页签（切页签不触发 onDisappear），
         // 故必须由 `router.selectedTab` 驱动，不能依赖本视图的进出场
@@ -129,6 +152,8 @@ struct BrowserHomeView: View {
                     onURLChange: { url in
                         // 打开新界面（导航到网页）→ 胶囊；回退到起始页 → 展开地址栏
                         toolbarMini = (url != nil)
+                        // 地址已随页面变化，编辑态若残留会继续编辑上一页 URL（如提交后又被重定向，TODO 407）
+                        addressEditing = false
                     }
                 )
             }
@@ -148,30 +173,32 @@ struct BrowserHomeView: View {
         toolbarMini = false
     }
 
-    /// 收起为底部小胶囊（滑动页面 / 刷新页面触发）
+    /// 收起为底部小胶囊（滑动页面 / 刷新页面触发）。
+    /// 编辑态下不收起：操作栏正在充当输入框，此时收成小胶囊会让键盘悬在空处（TODO 407）。
     private func collapseToolbar() {
-        guard !toolbarMini else { return }
+        guard !toolbarMini, !addressEditing else { return }
         toolbarMini = true
     }
 
     // MARK: - 收起态小胶囊（Safari 风格）
 
-    /// 操作栏收起后缩为底部中央的小胶囊：锁图标 + 域名，点击展开完整操作栏
+    /// 操作栏收起后缩为底部中央的小胶囊：锁图标 + 域名，点击展开完整操作栏。
+    /// 高度取 44pt（原 34pt 低于 iOS 最小点击区、贴近屏底易误触，TODO 406），对齐 Safari 收起态地址胶囊尺度。
     private func miniCapsule(_ tab: BrowserTab) -> some View {
         Button {
             expandToolbar()
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: tab.hasOnlySecureContent ? "lock.fill" : "lock.open")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                 Text(tab.currentURL?.host ?? "网页")
-                    .font(.footnote.weight(.medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(AppColors.textPrimary)
                     .lineLimit(1)
             }
-            .padding(.horizontal, 14)
-            .frame(height: 34)
+            .padding(.horizontal, 18)
+            .frame(height: 44)
             .background(
                 Capsule()
                     .fill(AppColors.cardBackground)
@@ -253,6 +280,17 @@ private struct BrowserTabContent: View {
     }
 }
 
+/// 标签网格滚动偏移上报（TODO 409）：minY >= 0 表示已回到顶部。
+/// 用于限定「下滑关闭」只在列表顶部触发——否则在长列表中间下滑时，
+/// 本该是「向上滚动列表」的操作会被误判为关闭手势。
+/// 与 `BrowseScrollOffsetKey`（TODO 336）同一套做法：零高探测器 + preference 上报。
+private struct TabGridScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// Safari 风格标签卡片网格（新建/关闭/切换 + 无痕开关，IOS-401）
 private struct TabGridView: View {
     @EnvironmentObject private var session: BrowserSessionStore
@@ -261,11 +299,30 @@ private struct TabGridView: View {
     /// 当前被长按拖动的标签（用于实时重排 + 拖动态视觉反馈）
     @State private var draggingTab: BrowserTab?
 
+    /// 下滑关闭的跟手位移（TODO 409）
+    @State private var dragOffset: CGFloat = 0
+    /// 列表是否处于顶部：仅顶部允许下滑关闭，避免与「向上滚动列表」争抢
+    @State private var atTop = true
+
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 12)]
+
+    /// 关闭阈值：位移超过 110pt，或按松手速度外推的终点超过 220pt（轻扫即关）。
+    /// 与 mini 播放器下滑收起（`MiniPlayer`）取同一量级，手感统一。
+    private let dismissDistance: CGFloat = 110
+    private let dismissFlickDistance: CGFloat = 220
 
     var body: some View {
         NavigationStack {
             ScrollView {
+                // 顶部零高探测器：滚动偏移经 preference 上报，限定下滑关闭只在顶部生效
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: TabGridScrollOffsetKey.self,
+                        value: proxy.frame(in: .named("tabGridScroll")).minY
+                    )
+                }
+                .frame(height: 0)
+
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(session.visibleTabs) { tab in
                         tabCard(tab)
@@ -273,6 +330,14 @@ private struct TabGridView: View {
                 }
                 .padding(16)
             }
+            .coordinateSpace(name: "tabGridScroll")
+            .onPreferenceChange(TabGridScrollOffsetKey.self) { value in
+                // 留 1pt 容差：顶部回弹时 minY 会在 0 附近抖动
+                atTop = value >= -1
+            }
+            // 下滑关闭（TODO 409）：与滚动同时识别，故用 `simultaneousGesture`——
+            // 非顶部时降级为 `.subviews`，把手势完全让给 ScrollView 的滚动与卡片自身交互。
+            .simultaneousGesture(dismissDrag, including: atTop ? .all : .subviews)
             .background(AppColors.pageBackground)
             .navigationTitle(session.isIncognito ? "无痕浏览" : "标签页")
             .navigationBarTitleDisplayMode(.inline)
@@ -293,6 +358,43 @@ private struct TabGridView: View {
                 bottomBar
             }
         }
+        // 整体跟手下移（含导航栏与底部栏），松手未过阈值则弹回
+        .offset(y: dragOffset)
+    }
+
+    // MARK: - 下滑关闭手势
+
+    /// 从空白区域（或列表顶部）下滑关闭标签页（TODO 409）。
+    ///
+    /// 坐标空间取 `.global`：本视图会随 `dragOffset` 整体下移，若用默认 `.local`，
+    /// 视图自身位移会反过来改变 translation 的换算基准，形成正反馈 → 拖动抖动、跟随距离减半
+    /// （与 `MiniPlayer` / 播放页 `GestureHandler` 同一处坑）。
+    ///
+    /// 卡片拖拽排序期间（`draggingTab != nil`）直接早退：`simultaneousGesture` 会与卡片的
+    /// `onDrag` 同时识别，不排除的话长按拖动卡片时整个网格会跟着下移。
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .onChanged { value in
+                guard draggingTab == nil else { return }
+                // 仅向下、且以纵向位移为主（横向滑动交给其它交互）
+                guard value.translation.height > 0,
+                      value.translation.height > abs(value.translation.width)
+                else { return }
+                dragOffset = value.translation.height
+            }
+            .onEnded { value in
+                guard draggingTab == nil else {
+                    withAnimation(.appFast) { dragOffset = 0 }
+                    return
+                }
+                let reachedByDistance = value.translation.height > dismissDistance
+                let reachedByFlick = value.predictedEndTranslation.height > dismissFlickDistance
+                guard reachedByDistance || reachedByFlick else {
+                    withAnimation(.appFast) { dragOffset = 0 }
+                    return
+                }
+                dismiss()
+            }
     }
 
     // MARK: - 标签卡片

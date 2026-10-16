@@ -53,6 +53,23 @@ final class ReadingHistoryStore: ObservableObject {
         reload()
     }
 
+    /// 撤销删除（TODO 408 左滑删除的撤销兜底）：把删除前缓存的记录原样插回。
+    ///
+    /// 保留原 `id` 写回（SQLite 允许显式 rowid），这样撤销后列表项身份不变，
+    /// 封面/指纹等按 id 建立的视图状态（`resolved`/`statFailedAt`）继续命中，不会闪烁重载。
+    /// 若该 `(connectionID, filePath)` 期间已被新进度重新写入（唯一约束冲突），
+    /// 则保留较新的那条、丢弃本次回插——用户刚产生的真实进度优先于撤销的旧快照。
+    func restore(_ snapshots: [ReadingProgress]) {
+        guard let db = AppDatabase.shared.dbQueue, !snapshots.isEmpty else { return }
+        _ = try? db.write { database in
+            for record in snapshots {
+                // insert 失败（唯一约束冲突）不应中断其余记录的回插
+                try? record.insert(database)
+            }
+        }
+        reload()
+    }
+
     // MARK: - 源文件同步（浏览界面删除 / 移动 / 重命名时，TODO §7.309）
 
     /// 删除某连接下指定路径的阅读记录（源文件被删除或移动后同步清理，避免残留失效记录）
@@ -65,6 +82,24 @@ final class ReadingHistoryStore: ObservableObject {
             try database.execute(
                 sql: "DELETE FROM readingProgress WHERE connectionID = ? AND filePath IN (\(placeholders))",
                 arguments: StatementArguments(arguments)
+            )
+        }
+        reload()
+    }
+
+    /// 删除某路径**及其子路径**下的阅读记录（删除/移走目录时用）。
+    ///
+    /// `remove(connectionID:filePaths:)` 是 `filePath IN (…)` 精确匹配，对目录只会命中
+    /// 目录自身那条（通常并不存在），目录内文件的记录会全部残留在阅读页、指向已删文件。
+    func removeTree(connectionID: Int64, path: String) {
+        guard let db = AppDatabase.shared.dbQueue, !path.isEmpty else { return }
+        _ = try? db.write { database in
+            try database.execute(
+                sql: """
+                    DELETE FROM readingProgress
+                    WHERE connectionID = ? AND (filePath = ? OR filePath LIKE ?)
+                    """,
+                arguments: StatementArguments([connectionID, path, "\(path)/%"] as [DatabaseValueConvertible?])
             )
         }
         reload()

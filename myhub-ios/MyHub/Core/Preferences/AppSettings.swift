@@ -139,6 +139,9 @@ enum AppSettings {
         @UserDefault("browser.customSearchTemplate", default: "") static var customSearchTemplate: String
         @RawUserDefault("browser.userAgent", default: .platform) static var userAgent: BrowserUserAgent
         @UserDefault("browser.privateMode", default: false) static var privateMode: Bool
+        /// 长按链接「在新标签页中打开」/ `target=_blank` / `window.open` 后是否立即切换到新标签（TODO 408）。
+        /// 开启（默认）= 新开即跳转；关闭 = 仅后台新开，停留在当前页面继续浏览（对应 Safari「在后台打开」）。
+        @UserDefault("browser.openNewTabInForeground", default: true) static var openNewTabInForeground: Bool
         /// 沉浸态左下角退出钮的首启提示气泡是否已展示过（「退出全屏」，仅提示一次）
         @UserDefault("browser.exitHandleTipShown", default: false) static var exitHandleTipShown: Bool
     }

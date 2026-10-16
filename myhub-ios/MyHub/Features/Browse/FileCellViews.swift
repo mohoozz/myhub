@@ -178,6 +178,10 @@ struct FileListRow: View {
     let onTap: () -> Void
     /// 目录层预判：epub 内容为图集型（漫画）时按漫画显示徽标（IOS-207 策略 5）
     var isComicEpub: Bool = false
+    /// 左滑删除（TODO 408 方案 A）：左滑只露出按钮、点按才删除；空数组即关闭左滑。
+    /// 不叫 `swipeActions`——具体类型的属性会遮蔽 `View.swipeActions(...)` 协议扩展方法，
+    /// 日后若对 `self` 调用该修饰器会报极难懂的「cannot call value of non-function type」
+    var trailingSwipeActions: [SwipeAction] = []
 
     @State private var duration: Double?
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
@@ -242,6 +246,8 @@ struct FileListRow: View {
                 onTap: onTap
             )
         }
+        // 左滑删除（TODO 408 方案 A）：行内容带页面底色随行左移，露出底下的红色按钮
+        .swipeActions(enabled: !isSelecting, rowBackground: AppColors.pageBackground, trailingSwipeActions)
     }
 
     private var caption: String {

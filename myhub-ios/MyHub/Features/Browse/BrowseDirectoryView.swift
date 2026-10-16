@@ -67,6 +67,8 @@ struct BrowseDirectoryView: View {
     @State private var showSearchBar = true
     /// 搜索输入框焦点（TODO 403）：聚焦期间锁定搜索框可见，避免键盘弹出引发的布局抖动把它收起
     @FocusState private var searchFieldFocused: Bool
+    /// 左滑删除后的「撤销」提示条（TODO 408）
+    @StateObject private var undoToast = UndoToastState()
 
     /// 搜索框当前是否可见：滚动显隐状态为准，但输入中（已聚焦）始终保持展开
     private var isSearchBarVisible: Bool {
@@ -605,7 +607,9 @@ struct BrowseDirectoryView: View {
                     isPlaying: isPlaying(entry),
                     menuItems: contextMenuItems(for: entry),
                     onTap: { tap(entry) },
-                    isComicEpub: viewModel.isComicEpub(entry)
+                    isComicEpub: viewModel.isComicEpub(entry),
+                    // 左滑删除（TODO 408 方案 A）：左滑只露出按钮、点按才删除；多选态禁用
+                    trailingSwipeActions: viewModel.isSelecting ? [] : [deleteSwipeAction(entry)]
                 )
             }
         }
@@ -681,6 +685,8 @@ struct BrowseDirectoryView: View {
                     .clipShape(Capsule())
                     .transition(.opacity)
             }
+            // 左滑删除的撤销提示条（TODO 408）
+            UndoToastBar(state: undoToast)
             if viewModel.isSelecting {
                 selectionBar
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -692,9 +698,10 @@ struct BrowseDirectoryView: View {
         .animation(.appQuick, value: viewModel.toast)
     }
 
-    /// 底部覆盖层是否有内容（传输横幅 / 轻提示 / 多选操作栏任一在场）
+    /// 底部覆盖层是否有内容（传输横幅 / 轻提示 / 撤销提示条 / 多选操作栏任一在场）
     private var hasBottomOverlayContent: Bool {
-        viewModel.transfer != nil || viewModel.toast != nil || viewModel.isSelecting
+        viewModel.transfer != nil || viewModel.toast != nil
+            || undoToast.item != nil || viewModel.isSelecting
     }
 
     private func transferBanner(_ progress: BrowseDirectoryViewModel.TransferProgress) -> some View {
@@ -779,7 +786,7 @@ struct BrowseDirectoryView: View {
                     .font(.caption2)
                     .lineLimit(1)
             }
-            .foregroundStyle(enabled ? (destructive ? Color.red : AppColors.primary) : AppColors.textSecondary.opacity(0.5))
+            .foregroundStyle(enabled ? (destructive ? AppColors.destructive : AppColors.primary) : AppColors.textSecondary.opacity(0.5))
             .frame(maxWidth: .infinity)
         }
         .disabled(!enabled)
@@ -956,6 +963,31 @@ struct BrowseDirectoryView: View {
             viewModel.toggleSelection(entry)
         } else {
             open(entry)
+        }
+    }
+
+    // MARK: - 左滑删除（TODO 408 方案 A）
+
+    /// 左滑「删除」：图标 / 文案 / 语义色与长按菜单的「删除」项完全一致（`trash` + 系统红）。
+    /// 只移入回收站，不做彻底删除降级——不可恢复的操作仍只保留在长按菜单里
+    private func deleteSwipeAction(_ entry: FileEntry) -> SwipeAction {
+        SwipeAction(title: "删除", systemImage: "trash") {
+            Task { await swipeDelete(entry) }
+        }
+    }
+
+    /// 左滑删除：先释放播放占用（刚播放完的文件服务端句柄可能未释放，TODO 373），
+    /// 再移入回收站；失败只提示不弹降级确认框
+    private func swipeDelete(_ entry: FileEntry) async {
+        await releasePlaybackIfNeeded([entry.path])
+        do {
+            let receipt = try await viewModel.deleteToTrash(entry)
+            let name = entry.name
+            undoToast.show("已将「\(name)」移入回收站") {
+                Task { await viewModel.undoDeleteToTrash(receipt) }
+            }
+        } catch {
+            viewModel.operationError = "删除失败：\(entry.name)（\(error.localizedDescription)）。请稍后重试"
         }
     }
 

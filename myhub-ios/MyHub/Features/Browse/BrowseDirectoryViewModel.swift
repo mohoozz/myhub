@@ -446,6 +446,8 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
         let stamp = Self.trashStamp()
         var movedPaths: [String] = []
+        /// 已移走项中的目录（循环内 entry 在手时记下，避免 await 后回查 entries 失准）
+        var movedDirs: Set<String> = []
         var failureReason: String?
         do {
             for sourcePath in paths.sorted() {
@@ -460,6 +462,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
                     throw error
                 }
                 movedPaths.append(sourcePath)
+                if entry.isDir { movedDirs.insert(sourcePath) }
                 // 记录原路径元数据（§3.3 回收站还原用）
                 await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: entry)
             }
@@ -467,21 +470,115 @@ final class BrowseDirectoryViewModel: ObservableObject {
             // 部分成功：已移入回收站的文件同样清理阅读记录并立即从列表移除
             // （回收站还原不还原记录，见 TODO §7.309 决策）；未成功的由 UI 引导「彻底删除」降级处理，
             // 并携带失败原因（占用/网络/不支持）供弹窗提示（TODO 373）
-            finishTrashMove(movedPaths)
+            finishTrashMove(movedPaths, knownDirs: movedDirs)
             throw TrashError.unsupported(movedToTrash: Set(movedPaths), reason: failureReason)
         }
         // 移入回收站即删除对应阅读记录（还原后无需还原记录，TODO §7.309）
-        finishTrashMove(movedPaths)
+        finishTrashMove(movedPaths, knownDirs: movedDirs)
         await invalidateAndRefresh()
         endSelection()
         showToast("已移入回收站")
     }
 
-    /// 移入回收站收尾：清理阅读记录 + 本地列表立即移除并同步缓存（弱网下界面依然正确）
-    private func finishTrashMove(_ movedPaths: [String]) {
+    /// 移入回收站收尾：清理阅读记录 + 本地列表立即移除并同步缓存（弱网下界面依然正确）。
+    ///
+    /// 目录走 `removeTree`（按路径前缀）而非精确匹配——否则目录内文件的阅读记录会全部
+    /// 残留在阅读页、指向已被移走的文件。
+    /// - Parameter knownDirs: 调用方已确认是目录的路径。move/delete 的 `await` 期间
+    ///   `entries` 可能被并发刷新（下拉刷新 / `refreshPending` 补刷 / 回前台刷新）整体替换，
+    ///   此时回查 `entry(for:)` 会返回 nil、把目录误判成文件；调用方手里有 `FileEntry`
+    ///   时应直接传入，避免与快照侧（用的是 `entry.isDir`）口径不一致。
+    private func finishTrashMove(_ movedPaths: [String], knownDirs: Set<String> = []) {
         guard !movedPaths.isEmpty else { return }
-        ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
+        let id = connectionID
+        var filePaths: Set<String> = []
+        for path in movedPaths {
+            if knownDirs.contains(path) || entry(for: path)?.isDir == true {
+                ReadingHistoryStore.shared.removeTree(connectionID: id, path: path)
+            } else {
+                filePaths.insert(path)
+            }
+        }
+        if !filePaths.isEmpty {
+            ReadingHistoryStore.shared.remove(connectionID: id, filePaths: filePaths)
+        }
         applyLocalRemoval(Set(movedPaths))
+    }
+
+    // MARK: - 左滑删除（TODO 408 方案 A：点按按钮即删，不弹确认，由撤销兜底）
+
+    /// 左滑删除的撤销句柄：记录回收站落点与被一并清理的阅读记录，供「撤销」原样还原
+    struct SwipeTrashReceipt {
+        let entry: FileEntry
+        let trashPath: String
+        /// 删除前该路径（含目录下子路径）的阅读记录快照
+        let readingRecords: [ReadingProgress]
+    }
+
+    /// 左滑删除单个条目：移入挂载点 `.trash` 并返回撤销句柄。
+    ///
+    /// 与多选删除 `delete(paths:)` 的差异：
+    /// - **不**在失败时抛 `TrashError.unsupported` 引导「彻底删除」降级——左滑是轻量入口，
+    ///   破坏性更强的彻底删除仍只保留在长按菜单里，避免一次左滑就不可恢复；
+    /// - **不**出「已移入回收站」轻提示，反馈改由可撤销提示条承担。
+    func deleteToTrash(_ entry: FileEntry) async throws -> SwipeTrashReceipt {
+        guard let adapter else { throw StorageError.invalidPath("连接不可用") }
+        do {
+            try await adapter.mkdir("/.trash")
+        } catch {
+            // 目录已存在或创建失败均继续尝试移动
+        }
+        let trashPath = "/.trash/\(Self.trashStamp())-\(entry.name)"
+        // 占用类瞬时失败自动重试（TODO 373）
+        try await Self.withOccupancyRetry { try await adapter.move(entry.path, trashPath) }
+        await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: entry)
+
+        // 撤销需还原阅读记录，故在清理前先取快照（目录需连同子路径下的记录）
+        let snapshot = readingRecordsSnapshot(under: entry)
+        // isDir 直接用手里的 entry：上面两个 await 期间 entries 可能已被并发刷新替换
+        finishTrashMove([entry.path], knownDirs: entry.isDir ? [entry.path] : [])
+        await invalidateAndRefresh()
+        return SwipeTrashReceipt(entry: entry, trashPath: trashPath, readingRecords: snapshot)
+    }
+
+    /// 撤销左滑删除：把文件从回收站移回原路径（被占用则自动追加序号），并补回阅读记录。
+    /// 失败只提示不抛出——撤销是补偿操作，文件仍在回收站里可手动还原。
+    func undoDeleteToTrash(_ receipt: SwipeTrashReceipt) async {
+        guard let adapter else { return }
+        let originalPath = receipt.entry.path
+        var candidate = originalPath
+        var counter = 1
+        // 上限保护：部分 WebDAV / 反代对任意路径都返回 200（工程为此有 StorageError.invalidResponse），
+        // stat 恒成功时无上限即变成无限网络请求，撤销按钮一按就卡住
+        while counter <= 20, (try? await adapter.stat(candidate)) != nil {
+            let stem = (receipt.entry.name as NSString).deletingPathExtension
+            let ext = (receipt.entry.name as NSString).pathExtension
+            let suffix = ext.isEmpty ? " (\(counter))" : " (\(counter)).\(ext)"
+            candidate = StoragePath.joining(StoragePath.parent(of: originalPath), stem + suffix)
+            counter += 1
+        }
+        do {
+            try await Self.withOccupancyRetry { try await adapter.move(receipt.trashPath, candidate) }
+        } catch {
+            operationError = "撤销失败：\(error.localizedDescription)。文件仍在回收站中，可在「回收站」手动还原"
+            return
+        }
+        try? await adapter.delete(receipt.trashPath + ".meta.json")
+        // 原路径未被占用才补回阅读记录（改名还原后旧记录已对不上文件）
+        if candidate == originalPath, !receipt.readingRecords.isEmpty {
+            ReadingHistoryStore.shared.restore(receipt.readingRecords)
+        }
+        await invalidateAndRefresh()
+    }
+
+    /// 某条目（文件或目录）关联的阅读记录快照：目录取其子路径下全部记录
+    private func readingRecordsSnapshot(under entry: FileEntry) -> [ReadingProgress] {
+        let id = connectionID
+        let prefix = entry.path.hasSuffix("/") ? entry.path : entry.path + "/"
+        return ReadingHistoryStore.shared.records.filter { record in
+            record.connectionID == id
+                && (record.filePath == entry.path || (entry.isDir && record.filePath.hasPrefix(prefix)))
+        }
     }
 
     /// 彻底删除（回收站不可用时经用户确认的降级）
@@ -489,6 +586,8 @@ final class BrowseDirectoryViewModel: ObservableObject {
         guard let adapter else { return }
         var failed: [String] = []
         var deletedPaths: [String] = []
+        // 删除前先记下哪些是目录：循环内的 await 期间 entries 可能被并发刷新替换
+        let dirs = Set(paths.filter { entry(for: $0)?.isDir == true })
         for sourcePath in paths.sorted() {
             do {
                 // 占用类瞬时失败自动重试（TODO 373）
@@ -498,10 +597,10 @@ final class BrowseDirectoryViewModel: ObservableObject {
                 failed.append("\(StoragePath.fileName(of: sourcePath))（\(Self.failureHint(for: error))）")
             }
         }
-        // 彻底删除：同步清理阅读记录 + 本地列表立即移除（TODO §7.309）
+        // 彻底删除：同步清理阅读记录 + 本地列表立即移除（TODO §7.309）。
+        // 复用 finishTrashMove 的清理分支：目录按路径前缀清，避免内部文件记录残留
         if !deletedPaths.isEmpty {
-            ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(deletedPaths))
-            applyLocalRemoval(Set(deletedPaths))
+            finishTrashMove(deletedPaths, knownDirs: dirs)
         }
         await invalidateAndRefresh()
         endSelection()
