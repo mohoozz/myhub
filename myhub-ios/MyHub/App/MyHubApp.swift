@@ -6,6 +6,7 @@ struct MyHubApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() {
         _ = AppLogger.shared   // 尽早初始化日志 + 安装崩溃捕获（避免启动早期崩溃漏捕获）
+        GlobalAppearance.apply()   // 导航栏返回箭头用主色（iOS 26 系统返回按钮不再吃 tint，TODO 404）
         AppSettings.Reader.migrateReaderThemeToAutoIfNeeded()   // 旧版固定主题 → 跟随系统（一次性迁移）
         NetworkPathMonitor.shared.start()   // 网络路径变化监测（TODO 380：熄屏后播放失败诊断）
     }

@@ -20,6 +20,10 @@ extension Color {
 /// 色板常量（《需求分析文档》§2.10）
 enum AppColors {
     static let primary = Color(light: Color(hex: 0x2563EB), dark: Color(hex: 0x3B82F6))
+    /// 主色的 UIKit 形态：UIKit 侧取色用（导航栏返回指示图、栏内自定义图标等），跟随明暗主题
+    static let primaryUIColor = UIColor { traits in
+        UIColor(primary).resolvedColor(with: traits)
+    }
     /// 主界面背景：纯白（TODO 376，原浅蓝灰 #EEF4FB）；白底下卡片靠 `cardBorder` 1pt 描边界定
     static let pageBackground = Color(light: Color(hex: 0xFFFFFF), dark: Color(hex: 0x000000))
     static let cardBackground = Color(light: Color(hex: 0xFFFFFF), dark: Color(hex: 0x121212))

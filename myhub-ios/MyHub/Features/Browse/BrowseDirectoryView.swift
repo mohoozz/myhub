@@ -174,6 +174,31 @@ struct BrowseDirectoryView: View {
     private static var renderCount = 0
     private static var renderLogLast = Date.distantPast
 
+    /// 诊断（TODO 413）：本次统计窗口内各上游对象的发布次数——
+    /// 用来回答「到底是什么在推动每秒 1~5 次重绘」这个唯一还缺的事实
+    private static var triggerTally: [String: Int] = [:]
+
+    /// 诊断（TODO 413）：页面挂载 / 卸载 / `.task` 触发次数——
+    /// 三者都在涨说明宿主层级在反复重排（不是用户在导航）
+    private static var pageAppearCount = 0
+    private static var pageDisappearCount = 0
+    private static var pageTaskCount = 0
+
+    private static func note(_ source: String) {
+        triggerTally[source, default: 0] += 1
+    }
+
+    /// 取出并清空本窗口的触发来源统计（按次数降序）
+    private static func drainTriggerTally() -> String {
+        guard !triggerTally.isEmpty else { return "无对外发布" }
+        let text = triggerTally
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: " ")
+        triggerTally.removeAll()
+        return text
+    }
+
     /// 当前连接源下 `filePath -> percent(0~1)` 进度映射（无记录的文件取不到即为 nil）
     private var progressByPath: [String: Double] {
         var map: [String: Double] = [:]
@@ -230,6 +255,9 @@ struct BrowseDirectoryView: View {
         }
         .animation(.appQuick, value: isSearchBarVisible)
         .background(AppColors.pageBackground)
+        // 主色：与设置等页一致（它们都逐页声明 `.tint(AppColors.primary)`）——不声明的话本页
+        // 导航栏取系统默认色，返回按钮与右上角按钮会偏白（iOS 26）
+        .tint(AppColors.primary)
         // 面包屑已移除（TODO 364）：普通态标题显示当前目录名（根目录为连接名），
         // 多选态改为「已选 N 项」作为操作状态反馈。
         .navigationTitle(navigationTitleText)
@@ -238,6 +266,13 @@ struct BrowseDirectoryView: View {
         // 圆形玻璃胶囊，两者风格不一致；且多选态本就不应被返回上一级目录（TODO 386）
         .navigationBarBackButtonHidden(viewModel.isSelecting)
         .toolbar { toolbar }
+        // iOS 26：右上角改由 UIKit 装到本页面的 `UINavigationItem` 上（TODO 404）。
+        // 透明挂载点：只借它拿到「当前页面」，不显示内容、不参与命中。
+        .background {
+            if !viewModel.isSelecting, usesUIKitTrailing {
+                NavigationBarTrailingButtons(items: uikitTrailingButtons)
+            }
+        }
         // 底部覆盖层（多选操作栏 / 传输横幅 / 轻提示，TODO 379）：
         // safeAreaInset 只为滚动内容预留底部空间（高度固定），覆盖层本体由 overlay 绘制并抬升——
         // 页面内 safeAreaInset / overlay 的落点是「系统底部安全区」，不含祖先注入的悬浮页签栏，
@@ -248,8 +283,49 @@ struct BrowseDirectoryView: View {
         .overlay(alignment: .bottom) { bottomOverlay }
         // 多选态隐藏全局页签栏：底部让给操作栏；退出多选或本页退场即恢复（TODO 385）
         .onChange(of: viewModel.isSelecting) { bottomTabBarHidden.wrappedValue = $0 }
-        .onAppear { bottomTabBarHidden.wrappedValue = viewModel.isSelecting }   // 返回本页时按当前多选态校正
-        .onDisappear { bottomTabBarHidden.wrappedValue = false }
+        .onAppear {
+            bottomTabBarHidden.wrappedValue = viewModel.isSelecting   // 返回本页时按当前多选态校正
+            Self.pageAppearCount += 1
+            AppLogger.shared.log(
+                "页面 onAppear 第 \(Self.pageAppearCount) 次（\(viewModel.instanceTag)）",
+                level: .debug, module: "browse"
+            )
+        }
+        .onDisappear {
+            bottomTabBarHidden.wrappedValue = false
+            Self.pageDisappearCount += 1
+            AppLogger.shared.log(
+                "页面 onDisappear 第 \(Self.pageDisappearCount) 次（\(viewModel.instanceTag)）",
+                level: .debug, module: "browse"
+            )
+        }
+        // 诊断（TODO 413）：归因每一次重绘——本页观察到的每个 `ObservableObject`
+        // 与外部环境值（底部装饰高度）各自记一笔，随限流日志一并打出；
+        // viewModel 再按属性细分，直接回答「是哪个 @Published 在反复发布」
+        .onReceive(viewModel.objectWillChange) { Self.note("viewModel") }
+        .onReceive(viewModel.$entries) { _ in Self.note("vm.entries") }
+        .onReceive(viewModel.$state) { _ in Self.note("vm.state") }
+        .onReceive(viewModel.$isRefreshing) { _ in Self.note("vm.isRefreshing") }
+        .onReceive(viewModel.$favoritePaths) { _ in Self.note("vm.favoritePaths") }
+        .onReceive(viewModel.$comicEpubPaths) { _ in Self.note("vm.comicEpubPaths") }
+        .onReceive(viewModel.$selection) { _ in Self.note("vm.selection") }
+        .onReceive(viewModel.$toast) { _ in Self.note("vm.toast") }
+        .onReceive(viewModel.$transfer) { _ in Self.note("vm.transfer") }
+        .onReceive(viewModel.$operationError) { _ in Self.note("vm.operationError") }
+        .onReceive(viewModel.$searchText) { _ in Self.note("vm.searchText") }
+        .onReceive(viewModel.$sortKey) { _ in Self.note("vm.sortKey") }
+        .onReceive(viewModel.$sortAscending) { _ in Self.note("vm.sortAscending") }
+        .onReceive(viewModel.$viewMode) { _ in Self.note("vm.viewMode") }
+        .onReceive(readingHistory.objectWillChange) { Self.note("readingHistory") }
+        .onReceive(readingHistory.$records) { _ in Self.note("history.records") }
+        .onReceive(playerCore.objectWillChange) { Self.note("playerCore") }
+        .onReceive(locator.objectWillChange) { Self.note("locator") }
+        .onReceive(player.objectWillChange) { Self.note("player") }
+        .onReceive(novelReader.objectWillChange) { Self.note("novelReader") }
+        .onReceive(comicReader.objectWillChange) { Self.note("comicReader") }
+        .onReceive(txtReader.objectWillChange) { Self.note("txtReader") }
+        .onReceive(popupMenu.objectWillChange) { Self.note("popupMenu") }
+        .onChange(of: bottomChromeHeight) { _ in Self.note("env:bottomChromeHeight") }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.item],
@@ -385,6 +461,16 @@ struct BrowseDirectoryView: View {
             Text(viewModel.operationError ?? "")
         }
         .task {
+            // 诊断（TODO 413）：`.task` 只在视图「初次挂载」执行一次；若这里反复打印，
+            // 说明本页宿主被反复重建（这也正是右上角 `+`/`…` 胶囊反复弹一下的来源）
+            let nth = await MainActor.run { () -> Int in
+                Self.pageTaskCount += 1
+                return Self.pageTaskCount
+            }
+            AppLogger.shared.log(
+                "页面 task 第 \(nth) 次触发（\(viewModel.instanceTag)）",
+                level: .debug, module: "browse"
+            )
             await viewModel.loadIfNeeded()
             readingHistory.reload()   // 首次进入时预载阅读进度（后续经 .playbackProgressDidChange 自动刷新）
         }
@@ -410,27 +496,31 @@ struct BrowseDirectoryView: View {
     private var content: some View {
         ScrollViewReader { scrollProxy in
             ScrollView {
-                // 顶部零高探测器：滚动偏移通过 preference 上报，驱动搜索框显隐
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: BrowseScrollOffsetKey.self,
-                        value: proxy.frame(in: .named("browseScroll")).minY
-                    )
-                }
-                .frame(height: 0)
+                Group {
+                    // 顶部零高探测器：滚动偏移通过 preference 上报，驱动搜索框显隐
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: BrowseScrollOffsetKey.self,
+                            value: proxy.frame(in: .named("browseScroll")).minY
+                        )
+                    }
+                    .frame(height: 0)
 
-                switch viewModel.state {
-                case .loading:
-                    loadingState
-                case .failed(let message):
-                    errorState(message)
-                case .empty:
-                    emptyState
-                case .loaded:
-                    if let adapter = viewModel.storageAdapter {
-                        fileCollection(adapter: adapter)
+                    switch viewModel.state {
+                    case .loading:
+                        loadingState
+                    case .failed(let message):
+                        errorState(message)
+                    case .empty:
+                        emptyState
+                    case .loaded:
+                        if let adapter = viewModel.storageAdapter {
+                            fileCollection(adapter: adapter)
+                        }
                     }
                 }
+                // 点击空白区域收起左滑展开行（TODO 411）
+                .dismissSwipeRowOnBlankTap()
             }
             .coordinateSpace(name: "browseScroll")
             .refreshable { await viewModel.refresh() }
@@ -535,7 +625,7 @@ struct BrowseDirectoryView: View {
         let now = Date()
         if now.timeIntervalSince(Self.renderLogLast) >= 1 {
             AppLogger.shared.log(
-                "BrowseDirectoryView 重绘 \(Self.renderCount) 次/秒, 条目 \(viewModel.entries.count), 展示 \(items.count)",
+                "BrowseDirectoryView 重绘 \(Self.renderCount) 次/秒, 条目 \(viewModel.entries.count), 展示 \(items.count), 触发源[\(Self.drainTriggerTally())]",
                 module: "browse"
             )
             Self.renderCount = 0
@@ -794,6 +884,30 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 工具栏
 
+    /// iOS 26 起右上角交给 **UIKit**（TODO 404）
+    ///
+    /// 为什么：左上角返回按钮是同位置的对照组——它从不弹。
+    ///
+    /// 真正的差别在 **item 是谁**，不在时机：自绘 view 装的 item（`UIBarButtonItem(customView:)`）
+    /// 对导航栏是「外来户」，栏得给它现量尺寸、现配玻璃胶囊，成形动画就发生在这一步；换成标准
+    /// item（`UIBarButtonItem(image:style:target:action:)`）后，图标成了栏**自己的**内容，只随栏
+    /// 走转场，那一下弹就没了。
+    ///
+    /// 这个结论是**日志证伪**换来的，别再往「时机」上修：真机日志（模块 `navbar`）显示新页面的
+    /// item 在 `viewWillAppear` 时就已装好——「转场中=true 已上屏=false」，即转场动画开始前就在位，
+    /// 且整个流程没有任何一次被 SwiftUI 清掉重装；把赋值改成 `setRightBarButtonItems(animated: false)`
+    /// 加 `performWithoutAnimation` 也照弹。此前六轮修法（自绘 item、标准 `Button`、锁死动画来源、
+    /// 显式无转场事务、逐帧锚点写回、自绘胶囊 + `.glassEffectTransition(.identity)`）之所以处处照弹，
+    /// 是因为它们改的都是 item 的*内容*或*时机*，而问题在 item 的*种类*。做法见 `NavigationBarTrailingButtons`。
+    ///
+    /// 这里用运行时条件而不是 `#available` 分支：`ToolbarContentBuilder` 没有空分支能力
+    /// （SDK 里只有 `buildBlock<Content>` / `buildIf` / `buildEither`），而 iOS 26 下
+    /// SwiftUI 侧必须**一个字都不声明**，否则会改写 `rightBarButtonItems` 覆盖掉 UIKit 装的 item。
+    private var usesUIKitTrailing: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         if viewModel.isSelecting {
@@ -806,12 +920,38 @@ struct BrowseDirectoryView: View {
                 Button("完成") { viewModel.endSelection() }
                     .fontWeight(.semibold)
             }
-        } else {
+        }
+        // 常态：iOS 26 起右上角**一个字都不声明**（交给 UIKit，见 `usesUIKitTrailing`），
+        // 下面这条只服务 iOS 26 以下——那些系统胶囊本来就没有成形动画，保持原样。
+        if !viewModel.isSelecting, !usesUIKitTrailing {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                PopupMenuButton(items: addItems, symbol: "plus", style: .popover)
-                PopupMenuButton(items: overflowItems)
+                addButton
+                overflowButton
             }
         }
+    }
+
+    /// iOS 26 的右上角两颗按钮：UIKit item 描述，挂在页面 body 的 `.background` 上
+    /// （锚点取按钮自身在窗口中的位置，自绘菜单的定位方式不变）
+    private var uikitTrailingButtons: [NavigationBarTrailingButtons.Item] {
+        [
+            NavigationBarTrailingButtons.Item(symbol: "plus", accessibilityLabel: "添加") { anchor in
+                popupMenu.show(items: addItems, anchor: anchor, style: .popover)
+            },
+            NavigationBarTrailingButtons.Item(symbol: "ellipsis", accessibilityLabel: "更多操作") { anchor in
+                popupMenu.show(items: overflowItems, anchor: anchor)
+            },
+        ]
+    }
+
+    /// 右上角 ＋（上传文件 / 从相册上传 / 新建文件夹）——iOS 26 以下的 SwiftUI 版本
+    private var addButton: some View {
+        ToolbarMenuButton(items: addItems, symbol: "plus", style: .popover)
+    }
+
+    /// 右上角 …（多选 / 视图切换 / 排序 / 升降序 / 刷新）
+    private var overflowButton: some View {
+        ToolbarMenuButton(items: overflowItems)
     }
 
     /// ＋菜单：上传文件 / 从相册上传 / 新建文件夹

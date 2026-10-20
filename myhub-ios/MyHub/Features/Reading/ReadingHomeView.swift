@@ -182,6 +182,8 @@ struct ReadingHomeView: View {
                     }
                 }
                 .animation(.appQuick, value: viewMode)
+                // 点击空白区域收起左滑展开行（TODO 411）
+                .dismissSwipeRowOnBlankTap()
                 // 多选操作栏的占位由 safeAreaInset（固定高度）为 ScrollView 预留内容内边距（TODO 379），
                 // 操作栏本体是 overlay，不再手工叠加底部留白
             }

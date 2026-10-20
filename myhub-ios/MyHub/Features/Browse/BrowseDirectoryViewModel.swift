@@ -114,6 +114,16 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// 若每次 body 求值都重排会阻塞主线程导致滑动卡死，这里在数据变化时重算一次并复用。
     private var displayedEntriesCache: [FileEntry]?
 
+    /// 诊断（TODO 413）：实例序号 / 短标识——父视图每重算一次 `BrowseDirectoryView` 就会
+    /// 构造一个 VM（`StateObject` 只保留首个，其余随即丢弃），序号暴涨即父视图在高频重算
+    private static var instanceSeq = 0
+    private(set) var instanceTag = ""
+    /// 诊断：`loadIfNeeded` / 公开 `refresh()` 的调用次数
+    private var loadIfNeededCount = 0
+    private var refreshCallCount = 0
+    /// 诊断：真正执行的刷新轮次（含补刷循环）
+    private var lifecycleRefreshCount = 0
+
     init(connection: Connection, path: String) {
         let normalizedPath = StoragePath.normalize(path)
         self.connection = connection
@@ -132,6 +142,9 @@ final class BrowseDirectoryViewModel: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.reloadFavorites() }
         }
+        Self.instanceSeq += 1
+        instanceTag = "#VM\(Self.instanceSeq)"
+        AppLogger.shared.log("VM 构造 \(instanceTag) path=\(normalizedPath)", level: .debug, module: "browse")
     }
 
     deinit {
@@ -201,6 +214,12 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
     /// 首次进入：先出缓存再后台刷新（目录结果本地缓存，二次进入加速）
     func loadIfNeeded() async {
+        // 诊断（TODO 413）：页面 `.task` 若被反复触发，这里会连续计数
+        loadIfNeededCount += 1
+        AppLogger.shared.log(
+            "loadIfNeeded \(instanceTag) 第 \(loadIfNeededCount) 次（已加载=\(loaded)）",
+            level: .debug, module: "browse"
+        )
         guard !loaded else { return }
         loaded = true
         guard let adapter else {
@@ -216,6 +235,11 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
     /// 下拉刷新
     func refresh() async {
+        // 诊断（TODO 413）：谁在高频调用刷新
+        refreshCallCount += 1
+        AppLogger.shared.log(
+            "refresh() \(instanceTag) 第 \(refreshCallCount) 次", level: .debug, module: "browse"
+        )
         guard let adapter else { return }
         await refresh(using: adapter, notifyFailure: true)
     }
@@ -228,9 +252,19 @@ final class BrowseDirectoryViewModel: ObservableObject {
     private func refresh(using adapter: StorageAdapter, notifyFailure: Bool = false) async {
         if isRefreshing {
             refreshPending = true
+            AppLogger.shared.log(
+                "刷新进行中→登记补刷 \(instanceTag)", level: .debug, module: "browse"
+            )
             return
         }
+        var round = 0
         repeat {
+            round += 1
+            lifecycleRefreshCount += 1
+            AppLogger.shared.log(
+                "执行刷新 \(instanceTag) 第 \(lifecycleRefreshCount) 轮（本轮第 \(round) 轮，补刷=\(refreshPending)）",
+                level: .debug, module: "browse"
+            )
             refreshPending = false
             isRefreshing = true
             await performRefresh(using: adapter, notifyFailure: notifyFailure)
