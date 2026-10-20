@@ -7,6 +7,7 @@ struct PlayerPreferencesView: View {
     @State private var preloadSeconds = AppSettings.Player.preloadSeconds
     @State private var subtitleFontSize = AppSettings.Player.subtitleFontSize
     @State private var subtitleDelay = AppSettings.Player.subtitleDelay
+    @State private var embeddedSubtitleEncoding = AppSettings.Player.embeddedSubtitleEncoding
     @State private var audioOnlyByDefault = AppSettings.Player.audioOnlyByDefault
     @State private var volumeStep = AppSettings.Player.volumeStep
     @State private var seekStepSeconds = AppSettings.Player.seekStepSeconds
@@ -55,13 +56,22 @@ struct PlayerPreferencesView: View {
             } footer: {
                 Text("自动模式按格式路由硬解/软解，硬解失败自动回退软解；预读窗口决定向前缓冲的数据量。")
             }
-            Section("字幕") {
+            Section {
                 valueRow(title: "字幕字号", value: "\(Int(subtitleFontSize))") {
                     Slider(value: $subtitleFontSize, in: 12...32, step: 1)
                 }
                 valueRow(title: "字幕延迟", value: String(format: "%+.1f 秒", subtitleDelay)) {
                     Slider(value: $subtitleDelay, in: -5...5, step: 0.5)
                 }
+                Picker("内嵌字幕编码", selection: $embeddedSubtitleEncoding) {
+                    ForEach(SubtitleTextEncoding.allCases, id: \.self) { encoding in
+                        Text(encoding.displayName).tag(encoding)
+                    }
+                }
+            } header: {
+                Text("字幕")
+            } footer: {
+                Text("字号与延迟作用于外挂字幕浮层。内嵌字幕由解码器渲染：若中文显示为方框 □，是片源指定的字体不在本机、也未内附字体所致——把中文字体（.ttf / .otf / .ttc，如思源黑体 Noto Sans SC）放入「文件」App 的 MyHub → Fonts 目录，重新进入播放页即生效；若显示为随机乱码，则改为手动指定内嵌字幕编码。")
             }
             Section {
                 Picker("音量步进", selection: $volumeStep) {
@@ -82,6 +92,7 @@ struct PlayerPreferencesView: View {
         .onChange(of: preloadSeconds) { AppSettings.Player.preloadSeconds = $0 }
         .onChange(of: subtitleFontSize) { AppSettings.Player.subtitleFontSize = $0 }
         .onChange(of: subtitleDelay) { AppSettings.Player.subtitleDelay = $0 }
+        .onChange(of: embeddedSubtitleEncoding) { AppSettings.Player.embeddedSubtitleEncoding = $0 }
         .onChange(of: audioOnlyByDefault) { AppSettings.Player.audioOnlyByDefault = $0 }
         .onChange(of: autoPiPOnBackground) { AppSettings.Player.autoPiPOnBackground = $0 }
         .onChange(of: volumeStep) { AppSettings.Player.volumeStep = $0 }

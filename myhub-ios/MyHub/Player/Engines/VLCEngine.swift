@@ -25,7 +25,8 @@ final class VLCEngine: NSObject, PlaybackEngine {
     let kind: PlayerEngineKind = .software
     var onEvent: ((PlayerEngineEvent) -> Void)?
 
-    private let player = VLCMediaPlayer()
+    /// 经工厂创建：libvlc 实例携带字幕字体选项（`--ssa-fontsdir` / `--freetype-font`，TODO 412）
+    private let player: VLCMediaPlayer
 
     private var desiredRate: Float = 1
     private var pendingStartAt: TimeInterval?
@@ -37,6 +38,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
     private var lastReportedState: PlaybackState = .idle
 
     override init() {
+        player = VLCPlayerFactory.makePlayer()
         super.init()
         player.delegate = self
     }
@@ -82,6 +84,11 @@ final class VLCEngine: NSObject, PlaybackEngine {
         // 弱网下极易耗尽卡顿；用预加载秒数换算并限制在 3~5s，对齐 nPlayer 软解平滑度，兼顾起播速度。
         let networkCachingMs = Int(min(max(AppSettings.Player.preloadSeconds, 3), 5) * 1000)
         media.addOption(":network-caching=\(networkCachingMs)")
+        // 内嵌文本字幕编码（TODO 412）：动漫内嵌 srt 常见 GBK/Big5，VLC 自动探测偶有误判成乱码，
+        // 「播放器偏好 → 字幕 → 内嵌字幕编码」可强制指定。subsdec 是解码器模块，媒体级选项即可继承。
+        if let encoding = AppSettings.Player.embeddedSubtitleEncoding.vlcEncodingName {
+            media.addOption(":subsdec-encoding=\(encoding)")
+        }
         player.media = media
         // 加载面包屑（TODO 380）：记录起播 URL 与网络缓存策略，配合后续状态日志定位熄屏后卡点
         AppLogger.shared.log(
@@ -197,6 +204,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
                 emit(.ready)
                 onEvent?(.tracksChanged)
                 logAudioDiagnostics()
+                logSubtitleDiagnostics()
             }
             emit(.playing)
         case .paused:
@@ -262,6 +270,16 @@ final class VLCEngine: NSObject, PlaybackEngine {
         AppLogger.shared.log(
             "软解音轨诊断 names=[\(names.joined(separator: ","))] indexes=[\(indexes.map { $0.stringValue }.joined(separator: ","))] current=\(player.currentAudioTrackIndex)",
             module: "player-audio"
+        )
+    }
+
+    /// 记录软解字幕轨与字体供给情况，定位「内嵌字幕显示为方框 / 乱码」（TODO 412）
+    private func logSubtitleDiagnostics() {
+        let names = (player.videoSubTitlesNames as? [String]) ?? []
+        let encoding = AppSettings.Player.embeddedSubtitleEncoding
+        AppLogger.shared.log(
+            "软解字幕诊断 tracks=[\(names.joined(separator: ","))] current=\(player.currentVideoSubTitleIndex) 编码=\(encoding.rawValue) \(SubtitleFontRegistry.diagnosticSnapshot)",
+            module: "player-subtitle"
         )
     }
 }

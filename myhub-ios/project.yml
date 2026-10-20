@@ -36,6 +36,7 @@ targets:
         excludes:
           - "Info.plist"
           - "MyHub.entitlements"
+          - "Resources/Fonts/README.md"   # 说明文档，不打进 bundle
     info:
       path: MyHub/Info.plist
       properties:
@@ -58,6 +59,11 @@ targets:
         # 视频画中画 / 后台音频播放必需（无此项 AVPictureInPictureController 启动会静默失败）
         UIBackgroundModes:
           - audio
+        # 打包字体（XcodeGen 把 Resources/Fonts/* 平铺进 bundle 根目录）：
+        # 思源黑体供内嵌 ASS 字幕兜底（TODO 412），思源宋体供阅读器正文衬线（UIFont(name:) 需本项注册）
+        UIAppFonts:
+          - NotoSansSC-Regular.otf
+          - NotoSerifSC-Regular.otf
     entitlements:
       path: MyHub/MyHub.entitlements
     settings:

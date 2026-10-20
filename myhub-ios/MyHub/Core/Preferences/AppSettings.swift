@@ -61,6 +61,34 @@ enum PlayerOrientationMode: String, CaseIterable, Codable {
     case manual, auto   // 手动：点按钮切换并缓存方向；自动：跟随设备横放/竖放
 }
 
+/// 内嵌文本字幕（软解 VLC 渲染路径）的字符编码（TODO 412）：
+/// 动漫内嵌 srt 常见 GBK/Big5，VLC 自动探测偶有误判导致乱码，可在此强制指定。
+/// 外挂字幕不受影响——由 App 自己用 `TextEncodingDetector` 解码并浮层渲染。
+enum SubtitleTextEncoding: String, CaseIterable, Codable {
+    case auto, utf8, gb18030, big5, shiftJIS
+
+    var displayName: String {
+        switch self {
+        case .auto: return "自动"
+        case .utf8: return "UTF-8"
+        case .gb18030: return "简体中文（GB18030）"
+        case .big5: return "繁体中文（Big5）"
+        case .shiftJIS: return "日文（Shift-JIS）"
+        }
+    }
+
+    /// libvlc `subsdec-encoding` 取值（iconv 名称）；nil = 交给 VLC 自动探测
+    var vlcEncodingName: String? {
+        switch self {
+        case .auto: return nil
+        case .utf8: return "UTF-8"
+        case .gb18030: return "GB18030"
+        case .big5: return "Big5"
+        case .shiftJIS: return "Shift_JIS"
+        }
+    }
+}
+
 enum SearchEngine: String, CaseIterable, Codable {
     case google, bing, baidu, custom
 
@@ -124,6 +152,8 @@ enum AppSettings {
         @UserDefault("player.volumeStep", default: 0.05) static var volumeStep: Double   // iOS 音量步进，默认 5%
         @UserDefault("player.subtitleFontSize", default: 16) static var subtitleFontSize: Double
         @UserDefault("player.subtitleDelay", default: 0) static var subtitleDelay: Double
+        /// 内嵌文本字幕编码（软解 VLC 渲染路径）；默认交给 VLC 自动探测（TODO 412）
+        @RawUserDefault("player.embeddedSubtitleEncoding", default: .auto) static var embeddedSubtitleEncoding: SubtitleTextEncoding
         @UserDefault("player.seekStepSeconds", default: 10) static var seekStepSeconds: Double   // 快进/快退步进
         /// App 退后台时自动进入画中画（默认关闭；仅硬解 AVPlayer 路径生效）
         @UserDefault("player.autoPiPOnBackground", default: false) static var autoPiPOnBackground: Bool

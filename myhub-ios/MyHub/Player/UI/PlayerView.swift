@@ -52,11 +52,12 @@ struct PlayerView: View {
             orientation.enterPlayer()
             // 预安装系统音量滑杆，确保进入播放页后手势调音量能可靠写系统音量（音量始终与系统同步）
             SystemVolume.prepare()
-            Task {
+            Task { @MainActor in
                 await subtitles.discover(
                     connectionID: player.current?.connectionID,
                     mediaPath: player.current?.path ?? ""
                 )
+                dedupeSubtitleTracks()
             }
         }
         .onDisappear {
@@ -76,6 +77,8 @@ struct PlayerView: View {
             if newState == .ended { prepareNext() }
             if newState == .playing, nextCandidate != nil { cancelNext() }
         }
+        // 引擎解析出内嵌字幕轨后常默认启用一条（VLC 行为）：外挂字幕已命中时关掉它，避免两套字幕重叠
+        .onChange(of: core.selectedSubtitleTrackID) { _ in dedupeSubtitleTracks() }
         .onChange(of: player.current) { _ in cancelNext() }
         // 画中画启动失败提示（避免点击按钮后无任何反馈）
         .onChange(of: pip.lastError) { message in
@@ -364,6 +367,13 @@ struct PlayerView: View {
             guard !Task.isCancelled, core.isPlaying else { return }
             withAnimation(.appQuick) { showControls = false }
         }
+    }
+
+    /// 外挂字幕与内嵌轨互斥：外挂已命中时关闭引擎内嵌轨（内嵌由解码器绘制，与浮层叠加会重影）。
+    /// 用户手动选内嵌轨时 `PlayerControls` 会先 `subtitles.clearSelection()`，故不会与手动选择打架。
+    private func dedupeSubtitleTracks() {
+        guard subtitles.activeExternalPath != nil, core.selectedSubtitleTrackID != nil else { return }
+        core.selectSubtitleTrack(nil)
     }
 
     private func resetHideTimer() {

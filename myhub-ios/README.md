@@ -47,7 +47,7 @@ myhub-ios/
 │   ├── Domain/                 # Models / Services
 │   └── Resources/
 │       ├── Assets.xcassets     # AppIcon、BrandLogo、LaunchBackground
-│       └── Fonts/              # NotoSerifSC（思源宋体，需手动放入）
+│       └── Fonts/              # NotoSansSC（字幕兜底）/ NotoSerifSC（阅读器正文）
 └── MyHubTests/                 # （待建）
 ```
 
@@ -67,5 +67,10 @@ myhub-ios/
 - **启动屏**：`UILaunchScreen` 引用 `BrandLogo` + `LaunchBackground`（亮 #EEF4FB / 暗纯黑）。
 - **后台音频**：已在 `Info.plist` 配置 `UIBackgroundModes: audio`；后台传输使用 background `URLSession`，无需额外 entitlement。
 - **ATS**：已允许局域网 HTTP（`NSAllowsLocalNetworking`）与 Web 内容（内置浏览器）。
-- **字体**：从 Google Fonts 下载 **Noto Serif SC**，放入 `MyHub/Resources/Fonts/` 并勾选 target 成员资格（阅读器正文用，TODO §5）。
+- **字体**：已内置 **Noto Sans SC**（思源黑体，字幕兜底）与 **Noto Serif SC**（思源宋体，阅读器正文衬线），
+  位于 `MyHub/Resources/Fonts/`（SIL OFL 1.1，Noto CJK 单语言子集，合计约 19MB），并在 `Info.plist` 的 `UIAppFonts` 中声明。
+- **字幕字体**：VLC 在 Apple 平台不自带字幕字体，内嵌 ASS 字幕若指定了本机没有的中文字体会渲染成方框 □（TODO 412）。
+  `SubtitleFontRegistry` 会把「`Documents/Fonts`（用户经「文件」App 自行投放）→ Bundle 字体 → 系统中文字体」
+  汇聚到一个独立目录，经 `--ssa-fontsdir` 交给 libass，并做 CoreText 进程级注册 + `--freetype-font` 默认族名下发。
+  片源指定日文字体（如「ヒラギノ角ゴ」）时若仍缺字，把对应日文字体投放到上述用户目录即可。
 - **应用图标**：品牌图标已内置（1024 单张，Xcode 自动派生各尺寸），可按版本替换 `AppIcon.png`。

@@ -32,6 +32,8 @@ struct PreferencesSnapshot: Codable {
     var playerAutoPiPOnBackground: Bool?
     /// 播放器横竖屏切换方式（manual / auto）；可选以兼容旧快照
     var playerOrientationMode: String?
+    /// 内嵌字幕编码（auto / utf8 / gb18030 / big5 / shiftJIS）；可选以兼容旧快照
+    var playerEmbeddedSubtitleEncoding: String?
 
     static func capture() -> PreferencesSnapshot {
         PreferencesSnapshot(
@@ -52,7 +54,8 @@ struct PreferencesSnapshot: Codable {
             contentCachingEnabled: AppSettings.Cache.contentCachingEnabled,
             trashRetentionDays: AppSettings.Trash.retentionDays,
             playerAutoPiPOnBackground: AppSettings.Player.autoPiPOnBackground,
-            playerOrientationMode: AppSettings.Player.orientationMode.rawValue
+            playerOrientationMode: AppSettings.Player.orientationMode.rawValue,
+            playerEmbeddedSubtitleEncoding: AppSettings.Player.embeddedSubtitleEncoding.rawValue
         )
     }
 
@@ -78,6 +81,9 @@ struct PreferencesSnapshot: Codable {
         }
         if let mode = playerOrientationMode, let orientationMode = PlayerOrientationMode(rawValue: mode) {
             AppSettings.Player.orientationMode = orientationMode
+        }
+        if let raw = playerEmbeddedSubtitleEncoding, let encoding = SubtitleTextEncoding(rawValue: raw) {
+            AppSettings.Player.embeddedSubtitleEncoding = encoding
         }
     }
 }

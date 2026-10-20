@@ -49,5 +49,10 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>NotoSansSC-Regular.otf</string>
+		<string>NotoSerifSC-Regular.otf</string>
+	</array>
 </dict>
 </plist>
