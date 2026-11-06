@@ -21,19 +21,6 @@ struct SelectableCellStyle: ButtonStyle {
     }
 }
 
-/// 漫画徽标
-struct ComicBadge: View {
-    var body: some View {
-        Text("漫画")
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(AppColors.primary)
-            .clipShape(Capsule())
-    }
-}
-
 /// 多选勾选标记（右上角）
 struct SelectionCheckmark: View {
     let isSelected: Bool
@@ -74,6 +61,9 @@ struct FileGridCell: View {
     private var mediaType: MediaType {
         isComicEpub ? .comic : MediaType.detect(ext: entry.ext)
     }
+
+    /// 封面上是否打类型徽标：漫画（cbz/cbr/图集型 epub）与压缩包（zip/rar/7z…）
+    private var showsTypeBadge: Bool { mediaType.isArchiveLike }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -120,9 +110,9 @@ struct FileGridCell: View {
         .aspectRatio(1.35, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .topLeading) {
-            // 漫画徽标；多选态该角让给进度环/播放动画（右上角被勾选标记占用，TODO 371）
-            if mediaType == .comic, !isSelecting {
-                ComicBadge().padding(6)
+            // 类型徽标（漫画 / 压缩包）；多选态该角让给进度环/播放动画（右上角被勾选标记占用，TODO 371）
+            if showsTypeBadge, !isSelecting {
+                MediaTypeBadge(type: mediaType).padding(6)
             } else if isSelecting, hasStatus {
                 statusBadge
             }
@@ -190,6 +180,9 @@ struct FileListRow: View {
         isComicEpub ? .comic : MediaType.detect(ext: entry.ext)
     }
 
+    /// 缩略图上是否打类型徽标：漫画（cbz/cbr/图集型 epub）与压缩包（zip/rar/7z…）
+    private var showsTypeBadge: Bool { mediaType.isArchiveLike }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
@@ -200,8 +193,10 @@ struct FileListRow: View {
                 .frame(width: 52, height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(alignment: .topLeading) {
-                    if mediaType == .comic, !isSelecting {
-                        ComicBadge().padding(3).scaleEffect(0.85, anchor: .topLeading)
+                    if showsTypeBadge, !isSelecting {
+                        MediaTypeBadge(type: mediaType)
+                            .padding(3)
+                            .scaleEffect(0.85, anchor: .topLeading)
                     }
                 }
 

@@ -257,6 +257,13 @@ struct FavoritesView: View {
         case .comic:
             // 漫画阅读器（TODO §6）：直接恢复上次页码
             comicReader.open(connection: connection, entry: entry)
+        case .archive:
+            // 压缩包：zip/rar 交给漫画阅读器（内容嗅探校验）；其余格式无阅读入口，回浏览页定位
+            if ComicDetector.readableArchiveExtensions.contains(entry.ext) {
+                comicReader.open(connection: connection, entry: entry)
+            } else {
+                locate(favorite)
+            }
         case .subtitle, .other:
             locate(favorite)
         }

@@ -2,7 +2,7 @@ import Foundation
 
 /// WebDAV 适配器：URLSession + PROPFIND/GET，支持 HTTP Range 串流、HTTPS、Basic 认证
 /// 所有存储属性均为不可变 `let`（URLSession 亦线程安全），可安全跨并发域使用（内外网竞速判定捕获）。
-final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
+final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sendable {
     private let config: WebDAVConfig
     private let password: String?
     private let session: URLSession
@@ -213,17 +213,31 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
     }
 
     func readStream(_ path: String, range: Range<Int64>?) async throws -> AsyncThrowingStream<Data, Error> {
+        try await readStream(path, range: range, expectedTotal: nil)
+    }
+
+    /// 带「期望对象总长」的 Range 流式读取（`RangeVerifyingAdapter`）：
+    /// 服务器回报的区间起点 / 对象总长与预期不符时直接失败，绝不把错位或被换源的字节写进分片缓存。
+    func readStream(
+        _ path: String, range: Range<Int64>?, expectedTotal: Int64?
+    ) async throws -> AsyncThrowingStream<Data, Error> {
         var headers: [String: String] = [:]
         if let range {
             headers["Range"] = "bytes=\(range.lowerBound)-\(max(range.lowerBound, range.upperBound - 1))"
         }
         let request = makeRequest("GET", path: path, headers: headers)
+        let expectation = StreamingReadExpectation(
+            path: path,
+            requestedRange: range,
+            expectedTotal: expectedTotal,
+            originHost: request.url?.host?.lowercased()
+        )
         return AsyncThrowingStream { continuation in
             // 真正的增量流式下载（TODO 356）：按网络到达的数据块（通常几 KB~几十 KB）持续 yield，
             // 弱网慢速下载不再「整块下完才返回」——配合上层停滞超时可断点续传、不丢弃已下载数据。
             // 用 per-task delegate（iOS 15+，task 强引用直至完成）承接回调，而非 AsyncBytes
             // （后者逐字节 await，1MB ≈ 百万次，性能极差）。task 保持对 delegate 强引用，无需额外持有。
-            let delegate = StreamingReadDelegate(continuation: continuation)
+            let delegate = StreamingReadDelegate(continuation: continuation, expectation: expectation)
             let task = session.dataTask(with: request)
             task.delegate = delegate
             continuation.onTermination = { _ in
@@ -301,16 +315,46 @@ final class WebDAVAdapter: StorageAdapter, @unchecked Sendable {
 
 // MARK: - 增量流式下载 delegate（TODO 356）
 
+/// `readStream` 的响应校验上下文：把「请求区间 / 期望对象总长 / 原始主机」交给 delegate，
+/// 由它确认服务器返回的确实是**这个对象的这一段字节**。
+/// 这是「播放中突然变成另一段视频」的最后一道闸门：Range 被忽略（200 全量）会让数据整体错位，
+/// 跨主机 302 或中间网络换源则会让播放器拿到别的视频——两者都会污染分片缓存、并且此后越播越乱。
+struct StreamingReadExpectation {
+    let path: String
+    let requestedRange: Range<Int64>?
+    /// 目录（PROPFIND）声明的内容长度；nil 或 <= 0 表示未知（离线兜底等场景），跳过长度校验
+    let expectedTotal: Int64?
+    /// 原始请求主机（小写）：跨主机重定向一律不跟
+    let originHost: String?
+
+    /// 是否对响应做「网页 / 错误页」嗅探：只针对带 Range 的二进制媒体读取，
+    /// 文本类文件（可能真是 html/xml）不拦，避免误伤
+    var shouldRejectWebPage: Bool {
+        guard requestedRange != nil else { return false }
+        let textual: Set<String> = ["html", "htm", "xhtml", "xml", "txt", "md", "json", "css", "js"]
+        return !textual.contains(StoragePath.ext(of: path))
+    }
+}
+
 /// `readStream` 的 per-task 数据接收 delegate：将网络到达的数据块持续 `yield` 给上游，
 /// 完成或失败时结束流。URLSession 的 per-task delegate（iOS 15+）会被 task 强引用直至结束，
 /// 无需额外持有；消费方取消迭代时经 `markTerminated` 提前标记，避免已终止后续流再 `finish` 崩溃。
-final class StreamingReadDelegate: NSObject, URLSessionDataDelegate {
+/// 同时承担「响应是否仍是这个对象的这一区间」的校验（防 Range 被忽略 / 换源）。
+final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
     private let continuation: AsyncThrowingStream<Data, Error>.Continuation
+    private let expectation: StreamingReadExpectation
     private let lock = NSLock()
     private var terminated = false
+    /// 本次响应最多向消费方输出多少字节（= 请求区间长度）；nil = 不限制（全量读取）
+    private var payloadCap: Int64?
+    private var receivedBytes: Int64 = 0
 
-    init(continuation: AsyncThrowingStream<Data, Error>.Continuation) {
+    init(
+        continuation: AsyncThrowingStream<Data, Error>.Continuation,
+        expectation: StreamingReadExpectation
+    ) {
         self.continuation = continuation
+        self.expectation = expectation
     }
 
     /// 消费方取消迭代时调用：原子标记终止，使随后 cancel 触发的完成回调直接忽略。
@@ -320,36 +364,173 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate {
         lock.unlock()
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        // 校验 HTTP 状态码：Range 读取必须 2xx（206 Partial Content / 200）。
-        // 否则（416 Range 不满足 / 4xx / 5xx / 内网代理错误页）错误响应体若被当数据 yield，
-        // 会污染 RangeZipReader 的中央目录/条目解析，表现为「malformed」「图片一直加载中」等偶发故障。
-        var badStatus: Int?
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            badStatus = http.statusCode
+    // MARK: - 重定向（防换源）
+
+    /// 只跟随同主机重定向（允许 http → https 升级）。
+    /// 跨主机的 302/307 意味着后续字节不再来自你配置的那台服务器——典型症状正是
+    /// 「看着看着突然开始播另一段视频」；此时宁可报错，也不要把别人的内容写进分片缓存。
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        let newHost = request.url?.host?.lowercased()
+        let originHost = expectation.originHost
+        guard let newHost, !newHost.isEmpty, newHost == originHost else {
+            AppLogger.shared.log(
+                "readStream 拒绝跨主机重定向 path=\(expectation.path) status=\(response.statusCode) \(originHost ?? "-") → \(request.url?.absoluteString ?? "-")",
+                level: .warn, module: "webdav"
+            )
+            completionHandler(nil)   // 不跟随：任务以 3xx 收尾，由 didReceive 抛错
+            return
         }
+        AppLogger.shared.log(
+            "readStream 同主机重定向 path=\(expectation.path) status=\(response.statusCode) → \(request.url?.absoluteString ?? "-")",
+            level: .info, module: "webdav"
+        )
+        completionHandler(request)
+    }
+
+    // MARK: - 响应校验
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         lock.lock()
-        if let code = badStatus, !terminated {
-            terminated = true
-            lock.unlock()
-            continuation.finish(throwing: StorageError.http(
-                status: code,
-                message: HTTPURLResponse.localizedString(forStatusCode: code)
-            ))
+        let isTerminated = terminated
+        lock.unlock()
+        if isTerminated {
             completionHandler(.cancel)
             return
         }
-        lock.unlock()
-        completionHandler(.allow)
+        guard let http = response as? HTTPURLResponse else {
+            fail(StorageError.invalidResponse("readStream 收到非 HTTP 响应"))
+            completionHandler(.cancel)
+            return
+        }
+        do {
+            let cap = try validate(http)
+            lock.lock()
+            payloadCap = cap
+            lock.unlock()
+            completionHandler(.allow)
+        } catch {
+            fail(error)
+            completionHandler(.cancel)
+        }
+    }
+
+    /// 校验响应与请求的一致性，返回本次允许输出的最大字节数（nil = 不限）。
+    private func validate(_ http: HTTPURLResponse) throws -> Int64? {
+        // 状态码必须 2xx：否则（416 / 4xx / 5xx / 网关错误页）响应体若被当数据 yield，
+        // 会污染 RangeZipReader 的中央目录/条目解析，表现为「malformed」「图片一直加载中」等偶发故障。
+        let status = http.statusCode
+        guard (200...299).contains(status) else {
+            throw StorageError.http(
+                status: status,
+                message: HTTPURLResponse.localizedString(forStatusCode: status)
+            )
+        }
+        // 劫持/登录页签名：媒体请求被换成网页时，字节流会被当成视频喂给解码器
+        let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        if expectation.shouldRejectWebPage,
+           contentType.contains("text/html") || contentType.contains("application/xhtml") || contentType.contains("text/xml") {
+            throw StorageError.invalidResponse("媒体请求返回了网页内容（Content-Type: \(contentType)），疑似被劫持或登录页")
+        }
+        let contentLength = http.value(forHTTPHeaderField: "Content-Length")
+            .flatMap { Int64($0.trimmingCharacters(in: .whitespaces)) }
+
+        guard let range = expectation.requestedRange else { return nil }
+        let requestedCount = range.upperBound - range.lowerBound
+
+        if status == 206 {
+            guard let raw = http.value(forHTTPHeaderField: "Content-Range") else {
+                // 非标准服务器可能省略 Content-Range：从 0 起的分片可按请求长度截断兜底；
+                // 非 0 起点则无从判断对齐，宁可失败也不写入错位数据
+                guard range.lowerBound == 0 else {
+                    throw StorageError.invalidResponse(
+                        "206 响应缺少 Content-Range，无法确认分片对齐（起点 \(range.lowerBound)）"
+                    )
+                }
+                return requestedCount
+            }
+            guard let parsed = Self.parseContentRange(raw) else {
+                throw StorageError.invalidResponse("Content-Range 无法解析：\(raw)")
+            }
+            guard parsed.start == range.lowerBound else {
+                throw StorageError.invalidResponse(
+                    "Content-Range 起点 \(parsed.start) 与请求起点 \(range.lowerBound) 不一致（数据错位）"
+                )
+            }
+            guard parsed.end >= parsed.start else {
+                throw StorageError.invalidResponse("Content-Range 区间非法：\(raw)")
+            }
+            if let total = parsed.total,
+               let expected = expectation.expectedTotal, expected > 0, total != expected {
+                throw StorageError.invalidResponse(
+                    "响应对象总长 \(total) 与目录记录 \(expected) 不一致（疑似被换源）"
+                )
+            }
+            let available = parsed.end - parsed.start + 1
+            if let contentLength, contentLength != available {
+                throw StorageError.invalidResponse(
+                    "206 Content-Length \(contentLength) 与 Content-Range 区间长度 \(available) 不一致"
+                )
+            }
+            // 允许服务器少给（不足部分由上层断点续传补齐），但绝不允许多给
+            return min(requestedCount, available)
+        }
+
+        // 200：服务器忽略了 Range，返回整份对象
+        guard range.lowerBound == 0 else {
+            throw StorageError.invalidResponse(
+                "服务器忽略 Range（HTTP 200 返回全量），起点 \(range.lowerBound) 的字节无法对齐"
+            )
+        }
+        if let contentLength, let expected = expectation.expectedTotal, expected > 0, contentLength != expected {
+            throw StorageError.invalidResponse(
+                "响应长度 \(contentLength) 与目录记录 \(expected) 不一致（疑似被换源）"
+            )
+        }
+        // 从 0 起的全量响应：按请求长度截断，绝不把整份文件当分片写进缓存
+        return requestedCount
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock()
-        let isTerminated = terminated
+        if terminated {
+            lock.unlock()
+            return
+        }
+        var payload = data
+        var capReached = false
+        if let cap = payloadCap {
+            let remain = cap - receivedBytes
+            if remain <= 0 {
+                lock.unlock()
+                return
+            }
+            if Int64(payload.count) > remain {
+                payload = payload.prefix(Int(remain))
+            }
+            receivedBytes += Int64(payload.count)
+            capReached = receivedBytes >= cap
+        } else {
+            receivedBytes += Int64(payload.count)
+        }
+        if capReached {
+            // 请求区间已取满即视为完成：服务器忽略 Range 返回整份对象时，
+            // 不截断会把整个文件下完——既费流量，也会让「分片」变成整文件
+            terminated = true
+        }
         lock.unlock()
-        guard !isTerminated else { return }
-        // yield 对已终止的流是安全的（返回 .terminated），不会崩溃
-        continuation.yield(data)
+
+        if !payload.isEmpty {
+            // yield 对已终止的流是安全的（返回 .terminated），不会崩溃
+            continuation.yield(payload)
+        }
+        if capReached {
+            continuation.finish()
+            dataTask.cancel()
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -359,13 +540,57 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate {
             return
         }
         terminated = true
+        let received = receivedBytes
+        let cap = payloadCap
         lock.unlock()
 
         if let error {
             continuation.finish(throwing: error)
-        } else {
-            continuation.finish()
+            return
         }
+        if let cap, received < cap {
+            // 服务器提前收尾（未报错但少给字节）：上层会从断点续传补齐，这里留面包屑便于定位
+            AppLogger.shared.log(
+                "readStream 响应提前结束 path=\(expectation.path) 期望=\(cap)B 实收=\(received)B（将由断点续传补齐）",
+                level: .debug, module: "webdav"
+            )
+        }
+        continuation.finish()
+    }
+
+    private func fail(_ error: Error) {
+        lock.lock()
+        guard !terminated else {
+            lock.unlock()
+            return
+        }
+        terminated = true
+        lock.unlock()
+        AppLogger.shared.log(
+            "readStream 响应校验失败 path=\(expectation.path) range=\(describe(expectation.requestedRange)) error=\(error.localizedDescription)",
+            level: .warn, module: "webdav"
+        )
+        continuation.finish(throwing: error)
+    }
+
+    private func describe(_ range: Range<Int64>?) -> String {
+        guard let range else { return "全量" }
+        return "\(range.lowerBound)-\(range.upperBound - 1)"
+    }
+
+    /// 解析 `Content-Range: bytes 0-1048575/7340032`（total 可能为 `*`）
+    private static func parseContentRange(_ value: String) -> (start: Int64, end: Int64, total: Int64?)? {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard trimmed.lowercased().hasPrefix("bytes ") else { return nil }
+        let spec = trimmed.dropFirst("bytes ".count)
+        let parts = spec.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        let bounds = parts[0].split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard bounds.count == 2,
+              let start = Int64(bounds[0].trimmingCharacters(in: .whitespaces)),
+              let end = Int64(bounds[1].trimmingCharacters(in: .whitespaces)) else { return nil }
+        let totalText = parts[1].trimmingCharacters(in: .whitespaces)
+        return (start, end, totalText == "*" ? nil : Int64(totalText))
     }
 }
 

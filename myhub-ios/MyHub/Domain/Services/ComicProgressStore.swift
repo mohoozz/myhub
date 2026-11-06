@@ -74,6 +74,10 @@ enum ComicProgressStore {
         guard let db = AppDatabase.shared.dbQueue else { return }
         let percent = pageCount > 0 ? Double(anchor.page + 1) / Double(pageCount) : 0
         let clamped = min(1, max(0, percent))
+        // 类型按扩展名落库：cbz/cbr → 漫画，zip/rar 等 → 压缩包，
+        // 保证「正在阅读」徽标/副标题与浏览页一致（不再一律写死 .comic）。
+        let detected = MediaType.detect(ext: StoragePath.ext(of: path))
+        let mediaType: MediaType = detected.isArchiveLike ? detected : .comic
         try? db.write { database in
             if var existing = try ReadingProgress
                 .filter(Column("connectionID") == connectionID && Column("filePath") == path)
@@ -82,7 +86,7 @@ enum ComicProgressStore {
                 existing.percent = finished ? 1 : clamped
                 existing.finished = finished
                 existing.title = title
-                existing.mediaType = .comic
+                existing.mediaType = mediaType
                 if let cover { existing.cover = cover }
                 existing.updatedAt = Date()
                 try existing.update(database)
@@ -91,7 +95,7 @@ enum ComicProgressStore {
                     id: nil,
                     connectionID: connectionID,
                     filePath: path,
-                    mediaType: .comic,
+                    mediaType: mediaType,
                     title: title,
                     cover: cover,
                     progressJSON: anchor.json(),

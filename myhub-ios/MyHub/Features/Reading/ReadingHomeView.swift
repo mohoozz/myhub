@@ -233,7 +233,7 @@ struct ReadingHomeView: View {
                         .foregroundStyle(.white.opacity(0.9))
                     Spacer()
                     if !isSelecting {
-                        MediaTypeBadge(type: record.mediaType)
+                        MediaTypeBadge(type: record.displayMediaType)
                     }
                 }
                 Text(title(of: record))
@@ -400,7 +400,7 @@ struct ReadingHomeView: View {
         if let name = connections[record.connectionID]?.name, !name.isEmpty {
             parts.append(name)
         }
-        parts.append(record.mediaType.label)
+        parts.append(record.displayMediaType.label)
         parts.append(DisplayFormatters.shortDate(record.updatedAt))
         return parts.joined(separator: " · ")
     }
@@ -604,6 +604,13 @@ struct ReadingHomeView: View {
         case .comic:
             // 直接恢复到上次页码（TODO §6）
             comicReader.open(connection: connection, entry: entry)
+        case .archive:
+            // 压缩包（zip/rar）经漫画阅读器打开过：同样恢复到上次页码；其余格式无进度可言
+            if ComicDetector.readableArchiveExtensions.contains(entry.ext) {
+                comicReader.open(connection: connection, entry: entry)
+            } else {
+                locate(record)
+            }
         case .image, .subtitle, .other:
             break   // 进度记录仅由播放/阅读内核产生，不会出现其他类型
         }
@@ -787,35 +794,6 @@ struct ReadingHomeView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return formatter.string(from: Date())
-    }
-}
-
-// MARK: - 类型徽标
-
-/// 类型徽标（视频/音频/漫画/小说）
-private struct MediaTypeBadge: View {
-    let type: MediaType
-
-    var body: some View {
-        Text(text)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(AppColors.primary)
-            .clipShape(Capsule())
-    }
-
-    private var text: String {
-        switch type {
-        case .video: return "视频"
-        case .audio: return "音频"
-        case .novel: return "小说"
-        case .comic: return "漫画"
-        case .image: return "图片"
-        case .subtitle: return "字幕"
-        case .other: return "其他"
-        }
     }
 }
 

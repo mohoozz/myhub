@@ -8,6 +8,9 @@ DerivedData/
 build/
 build-device/
 
+# 真机数据备份（deploy/install-myhub-ios.sh --reset-trust 生成）
+.device-backup/
+
 # SwiftPM
 .swiftpm/
 .build/

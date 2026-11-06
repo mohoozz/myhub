@@ -293,6 +293,9 @@ actor CoverService {
             return entry.ext == "txt"
         case .subtitle, .other:
             return true
+        case .archive:
+            // 压缩包：zip/rar 仍可提取首图当封面（图集型压缩包），7z/tar 等暂不支持
+            return !ComicDetector.readableArchiveExtensions.contains(entry.ext)
         case .video, .audio, .comic, .image:
             return false
         }
@@ -338,6 +341,16 @@ actor CoverService {
                 let image = try await comicCover(entry: entry, connection: connection, adapter: adapter)
                 if image == nil {
                     Self.logCover(.warn, "comic 封面缺失", entry: entry)
+                }
+                return CoverResult(image: image, duration: nil)
+            case .archive:
+                // 压缩包：zip/rar 沿用首图提取；其余格式无封面，直接占位
+                guard ComicDetector.readableArchiveExtensions.contains(entry.ext) else {
+                    return CoverResult(image: nil, duration: nil)
+                }
+                let image = try await comicCover(entry: entry, connection: connection, adapter: adapter)
+                if image == nil {
+                    Self.logCover(.warn, "archive 封面缺失", entry: entry)
                 }
                 return CoverResult(image: image, duration: nil)
             case .novel:

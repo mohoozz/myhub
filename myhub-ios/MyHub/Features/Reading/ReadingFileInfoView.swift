@@ -17,7 +17,7 @@ struct ReadingFileInfoView: View {
             List {
                 Section("基本信息") {
                     row("标题", title)
-                    row("类型", record.mediaType.label)
+                    row("类型", record.displayMediaType.label)
                     if let name = connection?.name, !name.isEmpty {
                         row("路径源", name)
                     }

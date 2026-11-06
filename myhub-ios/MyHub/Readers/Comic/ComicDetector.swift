@@ -6,8 +6,15 @@ import Foundation
 /// 3. epub 图集型判定：spine 抽样 XHTML 文本稀少且含插图（见 EpubBook.isComicSpine）；
 /// 4. 手动覆盖：浏览页右键/长按菜单「以漫画阅读打开 / 以小说阅读打开」（见 BrowseDirectoryView）；
 /// 5. 目录层预判：列目录时对 epub 判定并缓存，直接显示漫画徽标 + 打开走漫画阅读器（见 EpubComicCache）。
+///
+/// 注：zip/rar 在 UI 上按「压缩包」展示（`MediaType.archive`），仅打开时做内容嗅探；
+/// cbz/cbr 仍按「漫画」展示。
 enum ComicDetector {
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "avif"]
+
+    /// 漫画阅读器实际能解析的「压缩包」扩展名（zip 走 RangeZipReader，rar 走 UnrarKit）。
+    /// 7z/tar/gz 等暂不支持解析：仍显示「压缩包」，但打开时走通用不支持菜单。
+    static let readableArchiveExtensions: Set<String> = ["zip", "rar"]
 
     /// 归档条目名是否为图片页
     static func isImageName(_ name: String) -> Bool {

@@ -15,7 +15,7 @@ enum StreamPurpose {
         }
     }
 
-    /// 预读：播放开（窗口 15MB 平滑播放）；封面关（只读首帧，避免每次 read 向后预取）
+    /// 预读：播放开（3MB 窗口平滑播放）；封面关（只读首帧，避免每次 read 向后预取）
     var prefetchEnabled: Bool { self == .playback }
 
     /// 网络拉取字节上限：播放不限；封面 24MB——首帧/moov/artwork 实际只需数百 KB~数 MB，

@@ -1029,8 +1029,9 @@ struct BrowseDirectoryView: View {
                 sheet = .editText(entry)
             })
         }
-        // 手动覆盖（IOS-207 漫画识别策略 4）：zip/rar/epub 可强制以漫画阅读器打开
-        if !entry.isDir, ["zip", "rar", "epub"].contains(entry.ext), type != .comic {
+        // 手动覆盖（IOS-207 漫画识别策略 4）：epub 可强制以漫画阅读器打开
+        // （zip/rar 的默认打开动作已是漫画阅读器，无需重复入口）
+        if !entry.isDir, entry.ext == "epub", type != .comic {
             items.append(PopupMenuItem(title: "以漫画阅读打开", systemImage: "photo.stack") {
                 comicReader.open(connection: connection, entry: entry)
             })
@@ -1041,7 +1042,9 @@ struct BrowseDirectoryView: View {
                 novelReader.open(connection: connection, entry: entry)
             })
         }
-        if !entry.isDir, type == .subtitle || type == .other {
+        if !entry.isDir,
+           type == .subtitle || type == .other
+            || (type == .archive && !ComicDetector.readableArchiveExtensions.contains(entry.ext)) {
             items.append(PopupMenuItem(title: "纯文本查看", systemImage: "doc.plaintext") {
                 txtReader.open(connection: connection, entry: entry)
             })
@@ -1161,6 +1164,14 @@ struct BrowseDirectoryView: View {
         case .comic:
             // 漫画阅读器（TODO §6）：先展示加载 UI，再后台解析归档（弱网不卡顿）+ 点击防抖
             comicReader.open(connection: connection, entry: entry)
+        case .archive:
+            // 压缩包：zip/rar 仍交给漫画阅读器（内容嗅探校验后再判定是否图集）；
+            // 7z/tar 等暂不支持解析，走通用不支持菜单（纯文本查看 / 下载）
+            if ComicDetector.readableArchiveExtensions.contains(entry.ext) {
+                comicReader.open(connection: connection, entry: entry)
+            } else {
+                showUnsupportedMenu(entry)
+            }
         case .subtitle, .other:
             showUnsupportedMenu(entry)
         }

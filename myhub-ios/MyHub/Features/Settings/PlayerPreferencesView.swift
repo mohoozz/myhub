@@ -49,12 +49,12 @@ struct PlayerPreferencesView: View {
                     Text("强制软解").tag(DecodePreference.software)
                 }
                 valueRow(title: "预读窗口", value: "\(Int(preloadSeconds)) 秒") {
-                    Slider(value: $preloadSeconds, in: 10...120, step: 10)
+                    Slider(value: $preloadSeconds, in: 5...60, step: 5)
                 }
             } header: {
                 Text("解码与缓冲")
             } footer: {
-                Text("自动模式按格式路由硬解/软解，硬解失败自动回退软解；预读窗口决定向前缓冲的数据量。")
+                Text("自动模式按格式路由硬解/软解，硬解失败自动回退软解；预读窗口决定向前缓冲的数据量，实际按 \(Int(AppSettings.Player.forwardBufferCapSeconds)) 秒封顶——窗口越大下载越激进，高码率片源长期大窗口会明显发热。")
             }
             Section {
                 valueRow(title: "字幕字号", value: "\(Int(subtitleFontSize))") {

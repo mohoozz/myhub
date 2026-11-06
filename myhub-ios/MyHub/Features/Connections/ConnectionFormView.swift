@@ -130,6 +130,11 @@ struct ConnectionFormView: View {
         }
     }
 
+    /// 外网地址是否为 http:// 明文（无 TLS 时任何中间网络都可改写内容）
+    private var usesPlainHTTP: Bool {
+        webdavBaseURL.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("http://")
+    }
+
     private var webdavSection: some View {
         Group {
             Section {
@@ -147,7 +152,13 @@ struct ConnectionFormView: View {
             } header: {
                 Text("WebDAV 服务器")
             } footer: {
-                Text("填写内网地址后，App 会优先连接内网，不通时自动切换到外网。")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("填写内网地址后，App 会优先连接内网，不通时自动切换到外网。")
+                    if usesPlainHTTP {
+                        Text("外网地址是 http:// 明文：运营商、公共 Wi-Fi、反向代理都能改写内容（表现为播放中突然变成另一段视频）。建议改用 https://。")
+                            .foregroundStyle(.orange)
+                    }
+                }
             }
             Section("凭据") {
                 TextField("用户名（可空为匿名）", text: $webdavUsername)

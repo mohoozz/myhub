@@ -100,6 +100,15 @@ struct ReadingProgress: Codable, FetchableRecord, PersistableRecord, Identifiabl
     }
 }
 
+extension ReadingProgress {
+    /// 展示用类型：归档类（zip/rar → 压缩包、cbz/cbr → 漫画）按扩展名实时校正，
+    /// 兼容历史记录里 zip/rar 曾被一律写死为 `.comic` 的旧数据。
+    var displayMediaType: MediaType {
+        let detected = MediaType.detect(ext: StoragePath.ext(of: filePath))
+        return detected.isArchiveLike ? detected : mediaType
+    }
+}
+
 // MARK: - 小说章节索引（可重建缓存）
 
 struct NovelIndex: Codable, FetchableRecord, PersistableRecord, Identifiable {

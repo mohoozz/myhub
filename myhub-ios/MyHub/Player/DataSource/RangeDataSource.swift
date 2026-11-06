@@ -76,7 +76,14 @@ final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
     /// 抛出 `PartialReadError` 携带已收数据供断点续传（TODO 356）。
     /// 相比旧的「整段绝对超时」，弱网慢速但持续的下载不会被误杀、已下载数据不作废。
     private func collectStalled(range: Range<Int64>) async throws -> Data {
-        let stream = try await adapter.readStream(path, range: range)
+        // HTTP 源（WebDAV）额外带上期望总长：服务器返回的区间起点/对象总长对不上时直接失败，
+        // 避免「Range 被忽略」或「被换成别的视频」的字节错位写进分片缓存（表现为突然跳到另一段内容）
+        let stream: AsyncThrowingStream<Data, Error>
+        if let verifying = adapter as? RangeVerifyingAdapter {
+            stream = try await verifying.readStream(path, range: range, expectedTotal: contentLength)
+        } else {
+            stream = try await adapter.readStream(path, range: range)
+        }
         let stall = StallGuard()
         return try await withThrowingTaskGroup(of: Data?.self) { group in
             // 消费者：累积网络分块；流正常结束返回完整快照

@@ -96,3 +96,13 @@ protocol StorageAdapter {
     /// 连接测试：成功正常返回，失败抛错（列表绿/红点、表单内外网提示）
     func testConnection() async throws
 }
+
+/// 可校验 Range 响应的适配器（HTTP 源，如 WebDAV）。
+/// 把「期望的对象总长」一并交给适配器，由适配器确认服务器返回的确实是**这个对象的这一区间**。
+/// 目的：挡住「中间网络 / 反向代理忽略 Range 或直接换源」——两者都会让播放器拿到别的区间或别的视频，
+/// 且错位数据一旦写进分片缓存就会永久复现（表现为播放中突然跳到另一段内容）。
+protocol RangeVerifyingAdapter: AnyObject {
+    func readStream(
+        _ path: String, range: Range<Int64>?, expectedTotal: Int64
+    ) async throws -> AsyncThrowingStream<Data, Error>
+}

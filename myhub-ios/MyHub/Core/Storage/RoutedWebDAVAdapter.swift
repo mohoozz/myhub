@@ -25,7 +25,7 @@ protocol RouteRecoverable: AnyObject {
 /// - 重新判定时机：用户手动「测试连接」、重启 App、分片读取停滞（`RouteRecoverable`，TODO 366）、
 ///   长时间后台回到前台（`NetworkRecovery`，TODO 366）、目录/协议请求因地址不可达失败（TODO 369）
 ///   ——这些使「锁定地址失效（熄屏/内外网切换）→ 只能重启」可自愈。
-final class RoutedWebDAVAdapter: StorageAdapter, RouteRecoverable {
+final class RoutedWebDAVAdapter: StorageAdapter, RouteRecoverable, RangeVerifyingAdapter {
     /// 进程级路由锁定表：key = 内网根 URL，缺省 = 尚未判定
     private static let sharedLock = NSLock()
     private static var lockedRouteByURL: [String: ConnectionRoute] = [:]
@@ -319,5 +319,21 @@ final class RoutedWebDAVAdapter: StorageAdapter, RouteRecoverable {
         // 兜底：外网这次又可达则锁外网
         lockRoute(.externalNetwork)
         activeRoute = .externalNetwork
+    }
+}
+
+// MARK: - Range 校验透传（防错位 / 换源）
+
+extension RoutedWebDAVAdapter {
+    /// 与 `readStream` 相同的路由选址，额外把「期望对象总长」透传给实际生效的地址，
+    /// 由 `WebDAVAdapter` 校验服务器返回的区间与对象是否仍是同一个（防止把别的视频写进缓存）。
+    func readStream(
+        _ path: String, range: Range<Int64>?, expectedTotal: Int64
+    ) async throws -> AsyncThrowingStream<Data, Error> {
+        let route = await resolveRoute()
+        if route == .internalNetwork {
+            return try await internalAdapter.readStream(path, range: range, expectedTotal: expectedTotal)
+        }
+        return try await externalAdapter.readStream(path, range: range, expectedTotal: expectedTotal)
     }
 }

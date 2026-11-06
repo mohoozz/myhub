@@ -173,6 +173,11 @@ final class VLCEngine: NSObject, PlaybackEngine {
 
     /// 统一状态上报出口：记录最近状态，供时间回调兜底纠正
     private func emit(_ state: PlaybackState) {
+        // 已播完：VLC 在播放结束后还会补发 stopped（→ idle）/ buffering 等尾随状态，
+        // 短时长片源几乎必然走到这条路径，放行会把「已结束」改写成菊花或空状态
+        if lastReportedState == .ended, state == .idle || state == .buffering || state == .loading || state == .ready {
+            return
+        }
         lastReportedState = state
         onEvent?(.stateChanged(state))
     }

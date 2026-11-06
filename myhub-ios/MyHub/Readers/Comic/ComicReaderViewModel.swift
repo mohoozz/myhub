@@ -577,7 +577,13 @@ final class ComicReaderViewModel: ObservableObject {
         guard let adapter = try? AdapterFactory.makeAdapter(for: connection) else { return nil }
         let parent = StoragePath.parent(of: entry.path)
         guard let siblings = try? await adapter.list(parent) else { return nil }
-        let comics = siblings.filter { !$0.isDir && MediaType.detect(ext: $0.ext) == .comic }
+        // 本目录中可被漫画阅读器打开的文件：cbz/cbr（漫画）+ zip/rar（压缩包，读时嗅探）
+        let comics = siblings.filter { sibling in
+            guard !sibling.isDir else { return false }
+            let type = MediaType.detect(ext: sibling.ext)
+            return type == .comic
+                || (type == .archive && ComicDetector.readableArchiveExtensions.contains(sibling.ext))
+        }
         // 用该目录单独缓存的排序（TODO 370）与浏览界面显示顺序一致，无记录回落全局默认
         let preference = BrowseSortPreferences.preference(
             connectionID: connection.id ?? 0, path: parent

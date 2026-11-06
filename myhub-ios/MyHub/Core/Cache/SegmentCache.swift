@@ -32,6 +32,13 @@ actor SegmentCache {
 
     private var metas: [String: FileMeta] = [:]
     private var indexLoaded = false
+    /// 索引落盘节流（发热优化）：旧实现每写 1MB 分片就把整个索引 JSON 全量重编码 + 原子写，
+    /// 高码率片源等于持续索引 IO。改为最多每 1s 合并落盘一次——索引仅用于加速淘汰决策，
+    /// 进程被杀最多丢失最近 1s 的增量（分片文件仍在，重建成本低）。
+    private var indexDirty = false
+    private var indexFlushTask: Task<Void, Never>?
+    /// 单文件上限检查节流：超上限时列目录 + 逐分片 stat 成本高，最多每 1s 执行一次
+    private var lastFileCapAt = Date.distantPast
 
     private init() {}
 
@@ -63,7 +70,7 @@ actor SegmentCache {
         metas[key] = meta
 
         enforceFileCap(key: key, aroundIndex: index)
-        saveIndex()
+        scheduleIndexSave()
         evictIfNeeded()
     }
 
@@ -73,6 +80,7 @@ actor SegmentCache {
         let key = file.key
         try? FileManager.default.removeItem(at: directory(for: key))
         metas.removeValue(forKey: key)
+        cancelPendingIndexSave()
         saveIndex()
     }
 
@@ -148,9 +156,13 @@ actor SegmentCache {
 
     private var fileLimitBytes: Int64 { totalLimitBytes / 4 }
 
-    /// 单文件上限：距当前播放位置最远的分片优先淘汰（预读向前，回退方向分片重新拉取即可）
+    /// 单文件上限：距当前播放位置最远的分片优先淘汰（预读向前，回退方向分片重新拉取即可）。
+    /// 距上次检查不足 1s 时跳过：列目录 + 逐分片 stat 在持续写入时成本明显，短时超限可接受
     private func enforceFileCap(key: String, aroundIndex: Int64) {
         guard let meta = metas[key], meta.totalBytes > fileLimitBytes else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastFileCapAt) >= 1 else { return }
+        lastFileCapAt = now
         let dir = directory(for: key)
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
@@ -182,7 +194,7 @@ actor SegmentCache {
             metas.removeValue(forKey: key)
             total -= size
         }
-        saveIndex()
+        scheduleIndexSave()
     }
 
     // MARK: - 索引持久化（重建成本低，仅加速淘汰决策）
@@ -202,6 +214,36 @@ actor SegmentCache {
     private func saveIndex() {
         guard let data = try? JSONEncoder().encode(metas) else { return }
         try? data.write(to: indexURL, options: .atomic)
+    }
+
+    /// 合并落盘：1s 内的多次写入只触发一次索引重写（旧实现每次 1MB 分片即全量重写）
+    private func scheduleIndexSave() {
+        indexDirty = true
+        guard indexFlushTask == nil else { return }
+        indexFlushTask = Task.detached { [weak self] in
+            do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+            await self?.flushIndex()
+        }
+    }
+
+    private func flushIndex() {
+        indexFlushTask = nil
+        guard indexDirty else { return }
+        indexDirty = false
+        saveIndex()
+    }
+
+    /// 立即写盘前取消排队中的合并落盘，避免重复写与「删除后又被旧快照覆盖」
+    private func cancelPendingIndexSave() {
+        indexFlushTask?.cancel()
+        indexFlushTask = nil
+        indexDirty = false
+    }
+
+    /// 立即落盘（退后台时调用）：合并落盘窗口内进程被系统回收会让索引少记最近的分片
+    func flushIndexNow() {
+        cancelPendingIndexSave()
+        saveIndex()
     }
 
     // MARK: - 路径

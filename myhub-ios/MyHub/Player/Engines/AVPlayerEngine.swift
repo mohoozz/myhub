@@ -20,6 +20,12 @@ final class AVPlayerEngine: PlaybackEngine {
     private var lastWaitingLogAt: TimeInterval = 0
     /// 本次 load 起始时刻（诊断日志用，TODO 380）
     private var loadStartedAt: TimeInterval = 0
+    /// 最近一次上报给上层的状态：用于兜底纠正「时间在走却仍标记 loading/buffering」（TODO 353）
+    private var lastReportedState: PlaybackState = .idle
+    /// 上一次时间回调的媒体时间：判断媒体时间是否真的在推进（排除 seek 跳变）
+    private var lastReportedTime: TimeInterval = 0
+    /// 已收到「播放到结尾」通知：结尾处补发的 buffering / paused 事件不得再覆盖 ended
+    private var didReachEnd = false
 
     private var desiredRate: Float = 1
     private var pendingStartAt: TimeInterval?
@@ -94,6 +100,9 @@ final class AVPlayerEngine: PlaybackEngine {
         // 熄屏回来后若卡住可判断是「探测无响应」（无后续日志）还是「建连慢」
         let loadStart = ProcessInfo.processInfo.systemUptime
         loadStartedAt = loadStart
+        lastReportedState = .idle
+        lastReportedTime = 0
+        didReachEnd = false
         AppLogger.shared.log(
             "硬解加载开始 url=\(url.absoluteString) startAt=\(startAt.map { String(Int($0)) } ?? "nil") 网络=\(NetworkPathMonitor.shared.snapshot())",
             level: .debug, module: "player-audio"
@@ -132,7 +141,11 @@ final class AVPlayerEngine: PlaybackEngine {
         // 弱网抗抖动（TODO 356）：本地回环代理会让 AVPlayer 误判带宽极高（连的是 127.0.0.1），
         // 于是只维持很浅的缓冲；一旦代理后端弱网拉取阻塞就瞬间耗尽卡顿。显式设定前向缓冲目标时长，
         // 强制 AVPlayer 主动多囤数据抗抖动（0 为系统自动，此处用预加载秒数对齐软解 network-caching 策略）。
-        item.preferredForwardBufferDuration = max(0, AppSettings.Player.preloadSeconds)
+        // 发热优化：目标时长按 forwardBufferCapSeconds 封顶——高码率片源下 30s 缓冲即上百 MB，
+        // AVPlayer 会满速下载并经代理逐片落盘，持续播放时网络/磁盘全程满载。
+        item.preferredForwardBufferDuration = max(
+            0, min(AppSettings.Player.preloadSeconds, AppSettings.Player.forwardBufferCapSeconds)
+        )
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
         player.allowsExternalPlayback = true   // AirPlay
@@ -149,7 +162,7 @@ final class AVPlayerEngine: PlaybackEngine {
         legibleGroup = try? await asset.loadMediaSelectionGroup(for: .legible)
 
         installObservers(player: player, item: item)
-        onEvent?(.stateChanged(.loading))
+        report(.loading)
         AppLogger.shared.log(
             "硬解加载提交 video=\(videoTracks.count) audio=\(audioTracks.count) 总耗时=\(Self.elapsedMs(since: loadStart))ms 网络=\(NetworkPathMonitor.shared.snapshot())（等待 item 就绪）",
             level: .info, module: "player-audio"
@@ -163,10 +176,16 @@ final class AVPlayerEngine: PlaybackEngine {
 
     func play() {
         guard let player else { return }
+        // 仅在「确实播放到结尾」时回退起点：此前只按位置判断，会把「刚 seek 到片尾附近再起播」
+        // 误判成播放完毕而跳回 0（seek 等待结束后的自动续播正好走这条路径）
+        let wasEnded = didReachEnd
+        // 重新播放：解除「已播完」锁定，后续事件恢复正常上报
+        didReachEnd = false
         // 播放完成后再次播放：AVPlayer 停在结尾时仅设置 rate 不会重启，先 seek 回起点
-        if let item = playerItem, item.duration.isNumeric, item.duration.seconds > 0,
-           player.currentTime().seconds >= item.duration.seconds - 0.5 {
+        if wasEnded, let item = playerItem, item.duration.isNumeric, item.duration.seconds > 0,
+           player.currentTime().seconds >= item.duration.seconds - 1 {
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+            lastReportedTime = 0
         }
         player.rate = desiredRate
     }
@@ -198,11 +217,17 @@ final class AVPlayerEngine: PlaybackEngine {
         legibleGroup = nil
         pendingStartAt = nil
         didApplyStartAt = false
+        lastReportedState = .idle
+        lastReportedTime = 0
+        didReachEnd = false
     }
 
     /// 精准 seek（容差为零，保证历史进度恢复不偏移）
     func seek(to seconds: TimeInterval) {
         let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+        // 从结尾往回拖：解除「已播完」锁定，否则后续 buffering/paused 事件会被丢弃、状态卡死
+        if seconds < currentTime - 0.5 { didReachEnd = false }
+        lastReportedTime = seconds
         player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
@@ -260,6 +285,7 @@ final class AVPlayerEngine: PlaybackEngine {
         ) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self, time.isNumeric, time.seconds.isFinite else { return }
+                self.healStateIfActuallyPlaying(current: time.seconds)
                 self.onEvent?(.timeUpdated(current: time.seconds, duration: self.duration))
             }
         }
@@ -276,7 +302,7 @@ final class AVPlayerEngine: PlaybackEngine {
                         level: .info, module: "player-audio"
                     )
                     self.applyPendingStartIfNeeded()
-                    self.onEvent?(.stateChanged(.ready))
+                    self.report(.ready)
                     self.onEvent?(.tracksChanged)
                 case .failed:
                     // item 失败详情（TODO 380）：error 带域名/错误码，errorLog 带 HTTP 状态码，
@@ -298,9 +324,9 @@ final class AVPlayerEngine: PlaybackEngine {
                 switch player.timeControlStatus {
                 case .playing:
                     self.applyPendingStartIfNeeded()
-                    self.onEvent?(.stateChanged(.playing))
+                    self.report(.playing)
                 case .paused:
-                    self.onEvent?(.stateChanged(.paused))
+                    self.report(.paused)
                 case .waitingToPlayAtSpecifiedRate:
                     // 等待原因面包屑（TODO 380）：reason 区分「缓冲不足 / 评测起播码率 / 无 item」，
                     // 附缓冲水位与网络路径，定位熄屏回前台后起播卡在等待态的原因
@@ -312,7 +338,7 @@ final class AVPlayerEngine: PlaybackEngine {
                             level: .warn, module: "player-audio"
                         )
                     }
-                    self.onEvent?(.stateChanged(.buffering))
+                    self.report(.buffering)
                 default:
                     break
                 }
@@ -324,7 +350,7 @@ final class AVPlayerEngine: PlaybackEngine {
                 guard let self, item.isPlaybackBufferEmpty else { return }
                 // 缓冲耗尽：仅在引擎确非播放态时上报缓冲，避免与 timeControlStatus 抢报
                 if player.timeControlStatus != .playing {
-                    self.onEvent?(.stateChanged(.buffering))
+                    self.report(.buffering)
                 }
             }
         })
@@ -336,9 +362,9 @@ final class AVPlayerEngine: PlaybackEngine {
             Task { @MainActor [weak self] in
                 guard let self, item.isPlaybackLikelyToKeepUp else { return }
                 if player.timeControlStatus == .playing {
-                    self.onEvent?(.stateChanged(.playing))
+                    self.report(.playing)
                 } else if player.timeControlStatus == .paused {
-                    self.onEvent?(.stateChanged(.ready))
+                    self.report(.ready)
                 }
             }
         })
@@ -349,7 +375,12 @@ final class AVPlayerEngine: PlaybackEngine {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.onEvent?(.stateChanged(.ended))
+                guard let self else { return }
+                // 先置位再上报：短时长片源在结尾处 timeControlStatus→paused /
+                // isPlaybackBufferEmpty→true 的 KVO 往往晚到一步，若放行会把已结束的播放
+                // 拉回 buffering（菊花常转）或 paused（显示播放键），盖掉 ended
+                self.didReachEnd = true
+                self.report(.ended)
             }
         }
 
@@ -368,6 +399,47 @@ final class AVPlayerEngine: PlaybackEngine {
                 )
             }
         }
+    }
+
+    // MARK: - 状态上报（含纠错兜底）
+
+    /// 统一状态上报出口（TODO 353）：记录最近状态并过滤「与事实相反」的迟到事件。
+    /// - 已播完（didReachEnd）：结尾处补发的 buffering / paused 一律改报 ended，
+    ///   避免短时长片源（十余秒）在结尾处被迟到的 KVO 事件盖成永久菊花；
+    /// - 实际仍在播放（timeControlStatus == .playing）：不上报 buffering。
+    private func report(_ state: PlaybackState) {
+        if didReachEnd, state == .buffering || state == .paused || state == .ready {
+            if lastReportedState != .ended {
+                lastReportedState = .ended
+                onEvent?(.stateChanged(.ended))
+            }
+            return
+        }
+        if state == .buffering, player?.timeControlStatus == .playing {
+            return
+        }
+        lastReportedState = state
+        onEvent?(.stateChanged(state))
+    }
+
+    /// 时间推进兜底纠正（TODO 353）：媒体时间在一次回调间只前进了一点点（排除 seek 跳变），
+    /// 且 AVPlayer 自述正在播放，说明画面确实在动；此时若上层仍停在 loading/buffering，
+    /// 就主动纠正为 playing——KVO 事件缺失或乱序（短时长片源在结尾尤其容易）时不至于菊花常转。
+    private func healStateIfActuallyPlaying(current: TimeInterval) {
+        let previous = lastReportedTime
+        lastReportedTime = current
+        guard let player, player.timeControlStatus == .playing, player.rate > 0 else { return }
+        // 增量上限排除 seek 跳变（本引擎的 seek / 重播都会同步 lastReportedTime，故增量只可能是播放推进）；
+        // 上限放到 2.5s 以兼容 3 倍速下 0.5s 回调间隔的抖动
+        guard current - previous > 0, current - previous <= 2.5 else { return }
+        guard lastReportedState == .loading || lastReportedState == .buffering || lastReportedState == .ready else {
+            return
+        }
+        AppLogger.shared.log(
+            "硬解时间在推进但状态仍为 \(lastReportedState.logDescription)，纠正为 playing time=\(Int(current))s",
+            level: .warn, module: "player-audio"
+        )
+        report(.playing)
     }
 
     /// 历史进度恢复：首帧就绪后一次性 seek 到起始位置（精准续播，不先 0 后跳）

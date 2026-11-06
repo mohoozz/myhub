@@ -90,6 +90,7 @@ extension FileEntry {
         case .audio: colors = [Color(hex: 0x0F2027), Color(hex: 0x203A43)]
         case .novel: colors = [Color(hex: 0x1A0533), Color(hex: 0x0D021A)]
         case .comic: colors = [Color(hex: 0x2D1515), Color(hex: 0x1A0A0A)]
+        case .archive: colors = [Color(hex: 0x1E2A38), Color(hex: 0x0B0F14)]   // 石板灰蓝
         default: colors = [Color(hex: 0x232526), Color(hex: 0x000000)]
         }
         return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -103,6 +104,7 @@ extension FileEntry {
         case .audio: return "music.note"
         case .novel: return "text.book.closed"
         case .comic: return "photo.stack"
+        case .archive: return "doc.zipper"
         case .image: return "photo"
         case .subtitle: return "captions.bubble"
         case .other: return "doc"

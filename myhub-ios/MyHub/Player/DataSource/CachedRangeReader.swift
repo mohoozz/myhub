@@ -10,8 +10,8 @@ final class CachedRangeReader: @unchecked Sendable {
     let cachingEnabled: Bool
     /// 离线模式（IOS-605）：stat 失败后以缓存身份起播——未命中分片快速抛错，不重试不预取
     let offlineMode: Bool
-    /// 预读开关：封面抽帧等一次性按需读取场景关闭，避免每次 read 向后预取 15MB
-    /// 造成大量并发 NAS 请求（3 个视频 × 16 分片 = 48 并发）打爆连接导致文件头读取超时
+    /// 预读开关：封面抽帧等一次性按需读取场景关闭，避免每次 read 向后预取整个窗口
+    /// 造成大量并发 NAS 请求（3 个视频 × 多分片并发）打爆连接导致文件头读取超时
     let prefetchEnabled: Bool
     /// 网络拉取字节上限（nil = 不限，TODO 404）：封面抽帧专用护栏。
     /// AVFoundation / VLC 对 moov 后置文件会发起「读整个文件」Range 请求（几 GB），
@@ -21,6 +21,8 @@ final class CachedRangeReader: @unchecked Sendable {
     private let inFlight = InFlightSegments()
     /// 预取并发信号量：限制同时在飞的分片预取数量，避免 seek/播放时大量并发请求打爆远端存储（Connection reset by peer）
     private let prefetchLimiter = PrefetchLimiter(limit: 3)
+    /// 预读窗口记账：同一分片只安排一次预取（read 每 512KB 触发一次，不去重会反复预取同一窗口）
+    private let prefetchTracker = PrefetchTracker()
     /// 线程安全的网络拉取字节累计（跨分片/Task）
     private let networkBytes = NetworkByteCounter()
     /// 会话取消标记（TODO 372）：置位后拒绝一切新的读取/预取网络请求
@@ -54,7 +56,7 @@ final class CachedRangeReader: @unchecked Sendable {
     /// 阻止后台预取与未完成的 NAS 请求继续占用连接。
     /// 先置取消标记再取消在途请求：read/segment 之后直接失败、排队中的预取任务获得额度后立即退出、
     /// in-flight 去重器拒绝 cancel 之后的新请求——避免快速切换视频时旧视频的残留分片请求
-    /// （预读窗口可达 15MB）继续占用连接池与 NAS 带宽，拖慢新视频加载（TODO 372）
+    /// （预读窗口 3MB）继续占用连接池与 NAS 带宽，拖慢新视频加载（TODO 372）
     func cancel() {
         guard cancelFlag.markCancelled() else { return }
         AppLogger.shared.log(
@@ -123,15 +125,23 @@ final class CachedRangeReader: @unchecked Sendable {
         }
     }
 
-    /// 预读窗口：当前位置向后预取（秒数 × 估算码率，AppSettings.Player.preloadSeconds 可配）；
-    /// 弱网抖动时窗口内分片已就绪，保证平滑播放；离线模式不预取
+    /// 预读窗口：当前位置向后预取固定 3 个分片（发热优化）。
+    /// - 逐分片去重：read 由串流代理按 512KB 一块反复调用，不去重时同一窗口会被反复预取，
+    ///   每次即使命中磁盘缓存也是一次 1MB 文件读 + Data 拷贝，持续播放即持续发热；
+    /// - 窗口与 `preloadSeconds` 解耦：后者是播放器内部前向缓冲目标（AVPlayer/VLC），
+    ///   代理侧预读只需覆盖网络抖动，窗口过大会让边下边播长期满速下载并反复写盘。
     private func prefetch(afterSegment index: Int64) {
         guard prefetchEnabled, !offlineMode, !isCancelled else { return }
         let count = max(1, Int(ceil(Double(Self.readaheadBytes) / Double(SegmentCache.segmentLength))))
         let maxSegment = (contentLength - 1) / SegmentCache.segmentLength
-        for offset in 1...Int64(count) {
-            let next = index + offset
-            guard next <= maxSegment else { break }
+        let upper = min(index + Int64(count), maxSegment)
+        guard upper > index else { return }
+        // 只认领窗口内尚未安排过的分片：播放推进时窗口整体前移，重复 read 直接空转返回
+        let claimed = prefetchTracker.claim(
+            Array((index + 1)...upper), droppingBelow: index + 1
+        )
+        guard !claimed.isEmpty else { return }
+        for next in claimed {
             Task.detached(priority: .utility) { [weak self] in
                 guard let self, !self.isCancelled else { return }
                 await self.prefetchLimiter.acquire()
@@ -141,15 +151,47 @@ final class CachedRangeReader: @unchecked Sendable {
                     await self.prefetchLimiter.release()
                     return
                 }
-                _ = try? await self.segment(next)
+                do {
+                    _ = try await self.segment(next)
+                } catch {
+                    // 预取失败/取消：归还认领，后续 read 仍可重试该分片
+                    self.prefetchTracker.release(next)
+                }
                 await self.prefetchLimiter.release()
             }
         }
     }
 
-    /// 预读窗口字节数：preloadSeconds 秒 × 0.5MB/s（约 4Mbps 平均码率估算；默认 30s ≈ 15MB）
-    static var readaheadBytes: Int64 {
-        Int64(max(1, AppSettings.Player.preloadSeconds) * 0.5 * 1024 * 1024)
+    /// 预读窗口字节数：固定 3MB（3 个分片，约 6 秒 4Mbps 片源）。
+    /// 旧实现按 preloadSeconds × 0.5MB/s 取到 15MB，等于随播放持续满速下载整片并全量落盘缓存。
+    static var readaheadBytes: Int64 { 3 * 1024 * 1024 }
+}
+
+/// 预读窗口记账（线程安全）：记录已安排预取的分片号，避免同一分片被反复预取。
+private final class PrefetchTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scheduled: Set<Int64> = []
+
+    /// 认领窗口内尚未安排的分片；顺带丢弃落后于当前播放位置的记录，避免集合随播放无限增长
+    func claim(_ indices: [Int64], droppingBelow lowerBound: Int64) -> [Int64] {
+        lock.lock()
+        defer { lock.unlock() }
+        if scheduled.contains(where: { $0 < lowerBound }) {
+            scheduled = scheduled.filter { $0 >= lowerBound }
+        }
+        var claimed: [Int64] = []
+        for index in indices where !scheduled.contains(index) {
+            scheduled.insert(index)
+            claimed.append(index)
+        }
+        return claimed
+    }
+
+    /// 预取失败后归还认领，允许后续重试
+    func release(_ index: Int64) {
+        lock.lock()
+        scheduled.remove(index)
+        lock.unlock()
     }
 }
 
@@ -203,7 +245,7 @@ private final class CancelFlag: @unchecked Sendable {
     }
 }
 
-/// 预取并发信号量：限制同时在飞的分片预取数量（避免 seek/拖动时向后 15 个分片并发拉取打爆远端存储连接）
+/// 预取并发信号量：限制同时在飞的分片预取数量（避免 seek/拖动时整窗口分片并发拉取打爆远端存储连接）
 private actor PrefetchLimiter {
     private let limit: Int
     private var running = 0

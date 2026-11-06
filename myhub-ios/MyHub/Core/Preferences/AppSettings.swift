@@ -147,7 +147,13 @@ enum AppSettings {
     enum Player {
         @UserDefault("player.defaultSpeed", default: 1.0) static var defaultSpeed: Double
         @RawUserDefault("player.decodePreference", default: .auto) static var decodePreference: DecodePreference
-        @UserDefault("player.preloadSeconds", default: 30) static var preloadSeconds: Double
+        /// 前向缓冲目标（秒）：AVPlayer `preferredForwardBufferDuration` 与软解 `network-caching` 的取值来源。
+        /// 旧默认 30s 在高码率片源下会让播放器满速缓冲上百 MB（且全部经代理落盘缓存），是真机发热主因之一，
+        /// 故下调为 10s（弱网抗抖动由代理侧预读 + 播放器自身重试承担）。
+        @UserDefault("player.preloadSeconds", default: 10) static var preloadSeconds: Double
+        /// 前向缓冲硬上限（秒）：无论用户把预读窗口调多大，播放器实际缓冲目标都不超过此值——
+        /// 代理侧预读已固定 3MB，播放器再囤过多数据只会持续下载 + 反复写盘（发热）。
+        static let forwardBufferCapSeconds: Double = 12
         @UserDefault("player.audioOnlyByDefault", default: false) static var audioOnlyByDefault: Bool
         @UserDefault("player.volumeStep", default: 0.05) static var volumeStep: Double   // iOS 音量步进，默认 5%
         @UserDefault("player.subtitleFontSize", default: 16) static var subtitleFontSize: Double
@@ -161,6 +167,18 @@ enum AppSettings {
         @RawUserDefault("player.orientationMode", default: .manual) static var orientationMode: PlayerOrientationMode
         /// 手动模式下缓存的方向偏好（true = 横屏）：退出播放页不重置，下次播放沿用
         @UserDefault("player.landscapePreferred", default: false) static var landscapePreferred: Bool
+
+        /// 一次性迁移（发热优化）：旧默认预读窗口 30s 会让播放器与代理持续满速下载并写盘。
+        /// 只下调「从未改过」的旧默认值（== 30），用户手动调过的值保持不动。
+        static func migratePreloadWindowIfNeeded() {
+            let flagKey = "player.preloadSeconds.migrated.v1"
+            guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+            UserDefaults.standard.set(true, forKey: flagKey)
+            if let stored = UserDefaults.standard.object(forKey: "player.preloadSeconds") as? Double,
+               abs(stored - 30) < 0.001 {
+                preloadSeconds = 10
+            }
+        }
     }
 
     /// 浏览器偏好
