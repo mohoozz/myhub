@@ -218,7 +218,15 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
 
     /// 带「期望对象总长」的 Range 流式读取（`RangeVerifyingAdapter`）：
     /// 服务器回报的区间起点 / 对象总长与预期不符时直接失败，绝不把错位或被换源的字节写进分片缓存。
+    /// 协议要求非可选总长，具体实现见下方私有重载（同样兼容「未知总长」）。
     func readStream(
+        _ path: String, range: Range<Int64>?, expectedTotal: Int64
+    ) async throws -> AsyncThrowingStream<Data, Error> {
+        try await readStream(path, range: range, expectedTotal: Optional(expectedTotal))
+    }
+
+    /// 实际实现：`expectedTotal` 为 nil 时跳过总长校验（普通读取）。
+    private func readStream(
         _ path: String, range: Range<Int64>?, expectedTotal: Int64?
     ) async throws -> AsyncThrowingStream<Data, Error> {
         var headers: [String: String] = [:]
