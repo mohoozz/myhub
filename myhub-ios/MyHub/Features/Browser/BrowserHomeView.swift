@@ -35,6 +35,12 @@ struct BrowserHomeView: View {
         horizontalSizeClass == .compact && router.selectedTab == .browser
     }
 
+    /// 汇报浏览器页的真实可见性（页签为浏览器且无全屏播放器遮挡）：
+    /// 会话恢复的标签只有在这一刻才加载网页；不可见时暂停所有页面媒体（TODO 418）
+    private func syncBrowserVisibility() {
+        session.setBrowserVisible(router.selectedTab == .browser && !player.isFullscreen)
+    }
+
     /// 底部预留间距：与页签栏留一段距离；
     /// 有 mini 播放器时再叠加上封面向上溢出量（`MiniPlayer.coverOverflow` 是 `.offset` 视觉位移、
     /// 不参与布局测量，页面底边实际落在 mini 卡片上边界，不补偿就会与突出的封面贴太紧）。
@@ -116,14 +122,24 @@ struct BrowserHomeView: View {
         // 故必须由 `router.selectedTab` 驱动，不能依赖本视图的进出场
         .onChange(of: router.selectedTab) { tab in
             bottomTabBarHidden.wrappedValue = (horizontalSizeClass == .compact && tab == .browser)
+            // 网页加载时机同步（TODO 418）：本视图启动即构建，但只有真正显示时才应加载网页
+            syncBrowserVisibility()
         }
+        // 全屏播放器盖在本页之上时同样视为不可见：避免网页音频与视频声音叠加
+        .onChange(of: player.isFullscreen) { _ in syncBrowserVisibility() }
         // iPad 分屏 / 多任务导致 sizeClass 变化时同步校正（regular 下不隐藏底部装饰）
         .onChange(of: horizontalSizeClass) { sizeClass in
             bottomTabBarHidden.wrappedValue = (sizeClass == .compact && router.selectedTab == .browser)
         }
         // 启动时各保活页签均会触发 onAppear，故按当前页签校正；退场兜底复位，避免底栏永久消失
-        .onAppear { bottomTabBarHidden.wrappedValue = isImmersive }
-        .onDisappear { bottomTabBarHidden.wrappedValue = false }
+        .onAppear {
+            bottomTabBarHidden.wrappedValue = isImmersive
+            syncBrowserVisibility()
+        }
+        .onDisappear {
+            bottomTabBarHidden.wrappedValue = false
+            session.setBrowserVisible(false)
+        }
         .fullScreenCover(isPresented: $showingTabs) {
             TabGridView()
         }
@@ -143,19 +159,23 @@ struct BrowserHomeView: View {
     private var contentArea: some View {
         ZStack {
             ForEach(session.visibleTabs) { tab in
-                // 标签状态变化（滚动 / 刷新 / 导航）必须由持有 `@ObservedObject` 的子视图接收，
-                // 否则 onChange 不会被及时求值（见 `BrowserTabContent` 注释，TODO 399）
-                BrowserTabContent(
-                    tab: tab,
-                    isActive: tab.id == session.activeTabID,
-                    onCollapseToolbar: collapseToolbar,
-                    onURLChange: { url in
-                        // 打开新界面（导航到网页）→ 胶囊；回退到起始页 → 展开地址栏
-                        toolbarMini = (url != nil)
-                        // 地址已随页面变化，编辑态若残留会继续编辑上一页 URL（如提交后又被重定向，TODO 407）
-                        addressEditing = false
-                    }
-                )
+                // 会话恢复但尚未显示的标签不挂载视图：不创建 WKWebView、不渲染（TODO 418）。
+                // 激活标签例外——它马上会在 `syncActiveTab()` 中补加载，随即进入已加载态。
+                if !tab.isPendingRestore || tab.id == session.activeTabID {
+                    // 标签状态变化（滚动 / 刷新 / 导航）必须由持有 `@ObservedObject` 的子视图接收，
+                    // 否则 onChange 不会被及时求值（见 `BrowserTabContent` 注释，TODO 399）
+                    BrowserTabContent(
+                        tab: tab,
+                        isActive: tab.id == session.activeTabID,
+                        onCollapseToolbar: collapseToolbar,
+                        onURLChange: { url in
+                            // 打开新界面（导航到网页）→ 胶囊；回退到起始页 → 展开地址栏
+                            toolbarMini = (url != nil)
+                            // 地址已随页面变化，编辑态若残留会继续编辑上一页 URL（如提交后又被重定向，TODO 407）
+                            addressEditing = false
+                        }
+                    )
+                }
             }
         }
     }

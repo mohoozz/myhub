@@ -38,7 +38,34 @@ private final class ScrollDragMeter: @unchecked Sendable {
 final class BrowserTab: NSObject, ObservableObject, Identifiable {
     let id: UUID
     let isIncognito: Bool
-    let webView: WKWebView
+
+    /// 懒创建（TODO 418）：会话恢复但尚未显示的标签不建 WebKit 实例，
+    /// 避免启动时为几十个历史标签各拉起一套 WebContent 进程；首次访问时才创建。
+    private(set) lazy var webView: WKWebView = {
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        // 与 Safari 默认一致：静音视频可自动播放，**有声媒体必须经用户手势**。
+        // 旧值为 `[]`（完全允许自动播放），恢复的标签/后台标签会被广告页突然放音放视频。
+        config.mediaTypesRequiringUserActionForPlayback = .audio
+        // 无痕：非持久化数据存储，关闭即失忆
+        config.websiteDataStore = isIncognito ? .nonPersistent() : .default()
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.allowsBackForwardNavigationGestures = true
+        webView.customUserAgent = Self.userAgentString()
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+        // 传入实例而非读 self.webView：lazy 初始化期间读自身会递归
+        observe(webView)
+        isWebViewCreated = true
+        return webView
+    }()
+
+    /// `webView` 是否已真正创建：`webView` 是 lazy，判断存在性时不能直接读它（会触发创建）
+    private var isWebViewCreated = false
+
+    /// 是否为「会话恢复但尚未加载」的占位标签：不联网、不建 WebView、不挂载视图。
+    /// 由激活/可见时调用的 `loadPendingURLIfNeeded()` 置为 `false`。
+    @Published private(set) var isPendingRestore = false
 
     // MARK: - 可观察状态（KVO 驱动）
 
@@ -92,30 +119,30 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     weak var refreshControl: UIRefreshControl?
 
     private var observations: [NSKeyValueObservation] = []
+    /// 会话恢复的延迟加载 URL（TODO 418）：
+    /// App 启动不自动联网，等标签真正显示时由 `loadPendingURLIfNeeded()` 补加载
+    private var pendingLoadURL: URL?
 
-    init(id: UUID = UUID(), url: URL?, isIncognito: Bool) {
+    /// - Parameter autoload: 是否立即加载 `url`。
+    ///   会话恢复必须传 `false`：`RootView` 用 ZStack 保活所有页签、启动即构建 `BrowserHomeView`，
+    ///   若在此直接 load，会把上次开过的**全部**网页在启动瞬间一起联网、渲染并（允许自动播放时）出声，
+    ///   用户还没进浏览器就可能看到／听到页面内容（含网页全屏视频等系统层呈现）。
+    init(id: UUID = UUID(), url: URL?, isIncognito: Bool, autoload: Bool = true) {
         self.id = id
         self.isIncognito = isIncognito
-
-        let config = WKWebViewConfiguration()
-        config.allowsInlineMediaPlayback = true
-        config.mediaTypesRequiringUserActionForPlayback = []
-        // 无痕：非持久化数据存储，关闭即失忆
-        config.websiteDataStore = isIncognito ? .nonPersistent() : .default()
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.allowsBackForwardNavigationGestures = true
-        webView.customUserAgent = Self.userAgentString()
-        self.webView = webView
 
         super.init()
 
         self.currentURL = url
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        observe()
 
         if let url {
-            webView.load(URLRequest(url: url))
+            if autoload {
+                webView.load(URLRequest(url: url))
+            } else {
+                // 只记 URL：WebView 与网络请求都推迟到标签真正显示时（`loadPendingURLIfNeeded`）
+                pendingLoadURL = url
+                isPendingRestore = true
+            }
         }
     }
 
@@ -129,8 +156,37 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             startPageBoundary = webView.backForwardList.currentItem
         }
         clearError()
+        // 用户主动导航优先于会话恢复的延迟加载，避免之后又被旧 URL 覆盖
+        pendingLoadURL = nil
+        isPendingRestore = false
         currentURL = url   // 立即更新：隐藏起始页、刷新地址栏
         webView.load(URLRequest(url: url))
+    }
+
+    // MARK: - 可见性与媒体播放（TODO 418）
+
+    /// 会话恢复的延迟加载：标签首次真正显示时调用（重复调用无副作用）
+    func loadPendingURLIfNeeded() {
+        guard let url = pendingLoadURL else { return }
+        pendingLoadURL = nil
+        isPendingRestore = false   // 先置位：视图据此外挂载 WebView
+        clearError()
+        webView.load(URLRequest(url: url))
+    }
+
+    /// 暂停页面内媒体播放（标签切走 / 浏览器页签不可见 / App 进入后台）。
+    /// 标签常驻保活且允许自动播放：不暂停的话，后台标签会继续出声、占用音频会话，
+    /// 甚至在锁屏后继续消耗流量。
+    func suspendMediaPlayback() {
+        // 未创建的占位标签没有媒体可暂停，读 `webView` 反而会触发 lazy 创建
+        guard isWebViewCreated else { return }
+        webView.setAllMediaPlaybackSuspended(true, completionHandler: nil)
+    }
+
+    /// 解除媒体暂停（标签重新显示 / 回到前台）：只恢复可播放状态，不主动播放
+    func resumeMediaPlayback() {
+        guard isWebViewCreated else { return }
+        webView.setAllMediaPlaybackSuspended(false, completionHandler: nil)
     }
 
     func reload() {
@@ -196,7 +252,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     // MARK: - KVO
 
-    private func observe() {
+    /// - Parameter webView: 由 `webView` 的 lazy 初始化传入（避免初始化期间读取 `self.webView` 递归）
+    private func observe(_ webView: WKWebView) {
         // 滚动计量器：随下方 contentOffset 观察闭包一同存活，仅在主线程 KVO 回调内访问
         let dragMeter = ScrollDragMeter()
         observations = [

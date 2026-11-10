@@ -82,10 +82,15 @@ struct MyHubApp: App {
                     if phase == .background {
                         appLock.lockForBackground()
                         browserSession.persistNow()
+                        // 网页媒体兜底暂停（TODO 418）：标签常驻保活且允许自动播放，
+                        // 不暂停会在锁屏/切后台后继续出声、占用音频会话并耗流量
+                        browserSession.suspendAllMediaPlayback()
                         NetworkRecovery.shared.noteDidEnterBackground()
                         Task { await SegmentCache.shared.flushIndexNow() }   // 分片索引合并落盘的兜底落盘
                     } else if phase == .active {
                         NetworkRecovery.shared.recoverAfterReturningToForeground()
+                        // 回到前台重算浏览器可见性：可见才解除媒体暂停（TODO 418）
+                        browserSession.setBrowserVisible(router.selectedTab == .browser)
                     }
                 }
                 .overlay {

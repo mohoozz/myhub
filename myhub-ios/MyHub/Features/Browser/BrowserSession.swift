@@ -74,12 +74,16 @@ final class BrowserSessionStore: ObservableObject {
         } else {
             persist()
         }
+        // 切到的标签可能是「会话恢复但尚未加载」的：补加载并解除媒体暂停（TODO 418）
+        syncActiveTab()
     }
 
     func switchTab(_ id: UUID) {
         guard tabs.contains(where: { $0.id == id }) else { return }
         activeTabID = id
         persist()
+        // 切到另一个标签：仅新激活标签补加载/恢复媒体，旧标签暂停（TODO 418）
+        syncActiveTab()
     }
 
     /// 拖拽排序：将 `fromID` 标签移动到 `toID` 标签所在位置（实时交换，标签卡片长按拖动）
@@ -116,6 +120,43 @@ final class BrowserSessionStore: ObservableObject {
             newTab()
         }
         persist()
+        // 切换模式后激活标签可能变化：同步补加载 / 媒体暂停（TODO 418）
+        syncActiveTab()
+    }
+
+    // MARK: - 可见性与媒体播放（TODO 418）
+
+    /// 浏览器页签当前是否真正显示（默认否：启动时本对象即已构建，但用户可能停在别的页签）
+    private var isBrowserVisible = false
+
+    /// 由浏览器视图 / App 生命周期汇报可见性：
+    /// - 可见：只加载**激活标签**并解除它的媒体暂停，其余标签保持暂停（不联网、不出声）；
+    /// - 不可见：暂停所有页面媒体，避免切到别的页签或播放器全屏后网页继续播放。
+    func setBrowserVisible(_ visible: Bool) {
+        isBrowserVisible = visible
+        if visible {
+            syncActiveTab()
+        } else {
+            tabs.forEach { $0.suspendMediaPlayback() }
+        }
+    }
+
+    /// App 进入后台：暂停全部页面媒体（锁屏后不再出声、不抢占音频会话、不继续耗流量）
+    func suspendAllMediaPlayback() {
+        tabs.forEach { $0.suspendMediaPlayback() }
+    }
+
+    /// 同步激活标签：补加载（会话恢复的延迟加载）+ 解除媒体暂停，其余标签暂停
+    private func syncActiveTab() {
+        guard isBrowserVisible else { return }
+        for tab in tabs {
+            if tab.id == activeTabID {
+                tab.loadPendingURLIfNeeded()
+                tab.resumeMediaPlayback()
+            } else {
+                tab.suspendMediaPlayback()
+            }
+        }
     }
 
     // MARK: - 会话持久化（退出保存 + 启动恢复）
@@ -147,7 +188,11 @@ final class BrowserSessionStore: ObservableObject {
 
         let restored: [BrowserTab] = snapshots.map { snapshot in
             let url = snapshot.urlString.flatMap(URL.init(string:))
-            let tab = BrowserTab(id: snapshot.id, url: url, isIncognito: false)
+            // autoload: false —— 只恢复地址与标题，**不在启动时联网**（TODO 418）。
+            // 本对象由 App 层 @StateObject 持有，启动即构建；若在此加载，上次开过的所有网页
+            // 会在用户还没进入浏览器时一起加载/渲染/出声（`RootView` 的 ZStack 保活会让它们
+            // 全部挂在视图树里），表现为「在别的页面突然出现网页内容」。
+            let tab = BrowserTab(id: snapshot.id, url: url, isIncognito: false, autoload: false)
             tab.title = snapshot.title
             configure(tab)
             return tab
