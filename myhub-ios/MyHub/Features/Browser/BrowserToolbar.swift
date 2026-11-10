@@ -14,6 +14,9 @@ struct BrowserToolbar: View {
     @ObservedObject var tab: BrowserTab
     let tabCount: Int
     let menuItems: [PopupMenuItem]
+    /// 底部浮层共享的形变命名空间（F1 + A1）：与收起态小胶囊共用同一身份，
+    /// 形态切换时由 `matchedGeometryEffect` 把背景「长大 / 缩回」，而不是两条视图各自淡入淡出。
+    let morphNamespace: Namespace.ID?
     let onTabs: () -> Void
     /// 地址栏是否处于编辑态（由父级持有，Safari 风格整条变输入框）
     @Binding var isEditingAddress: Bool
@@ -24,8 +27,6 @@ struct BrowserToolbar: View {
     /// 低于 iOS 44pt 最小点击区，相邻导航键易误触；抬到 60pt 后内部可容纳 48pt 触控格。
     /// 条高公开为静态常量供兄弟视图复用（如 `BrowserExitHandle` 的垂直落点），避免多处写死漂移。
     static let barHeight: CGFloat = 60
-    /// 圆角取条高一半 → 始终为正胶囊（而非圆角矩形），维持与悬浮页签栏一致的胶囊语言
-    private var cornerRadius: CGFloat { Self.barHeight / 2 }
 
     var body: some View {
         // 子视图位置保持恒定（左区条件插入 / 右区 if-else 二选一，地址栏固定在第二位）：
@@ -87,17 +88,10 @@ struct BrowserToolbar: View {
         }
         .padding(.horizontal, 6)
         .frame(height: Self.barHeight)
-        .background(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(AppColors.cardBackground)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        // 1pt 极浅描边：白底主界面下与内容分割（与全局悬浮页签栏 / mini 播放器统一为 cardBorder，TODO 376/379）
-        .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(AppColors.cardBorder, lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+        .clipShape(Capsule())
+        // 胶囊底（白底 + 1pt 描边 + 轻阴影）由 `ChromeCapsule` 统一绘制：
+        // 与收起态小胶囊共用同一 `matchedGeometryEffect` 身份，形态切换时描边 / 阴影跟着一起形变
+        .background { ChromeCapsule(morphNamespace: morphNamespace) }
         // 左右内缩 12pt：与全局悬浮页签栏对齐，形成上下「双胶囊」节奏
         .padding(.horizontal, 12)
         .animation(.appFast, value: tab.isShowingStartPage)
@@ -131,6 +125,41 @@ struct BrowserToolbar: View {
         .buttonStyle(ToolbarButtonStyle(cornerRadius: 24))
         .foregroundStyle(disabled ? AppColors.textSecondary.opacity(0.35) : AppColors.textPrimary)
         .disabled(disabled)
+    }
+}
+
+// MARK: - 底部浮层胶囊底
+
+/// 页面底部浮层（展开的操作栏 / 收起态小胶囊）共用的胶囊底：白底 + 1pt 灰描边 + 轻阴影。
+///
+/// 抽出来是为了让两种形态共用同一个 `matchedGeometryEffect` 身份（F1 + A1）：
+/// 形态切换时是同一块底从小胶囊的 frame 长大成整条操作栏（描边与阴影跟着一起走），
+/// 而不是旧实现那样「胶囊缩放着淡出 + 操作栏滑入淡入」——中间帧会同时出现两条、读成闪跳。
+struct ChromeCapsule: View {
+    /// `matchedGeometryEffect` 的身份键：底部浮层全局只此一块
+    static let morphID = "browserBottomChrome"
+
+    /// 父级命名空间；为 nil 时退化为普通胶囊底（不影响外观）
+    var morphNamespace: Namespace.ID? = nil
+
+    var body: some View {
+        Group {
+            if let morphNamespace {
+                shape.matchedGeometryEffect(id: Self.morphID, in: morphNamespace)
+            } else {
+                shape
+            }
+        }
+        // 先合成再投影：描边与填充作为整体投影，形变过程中阴影不会跳变
+        .compositingGroup()
+        .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
+    }
+
+    // 1pt 极浅描边：白底主界面下与内容分割（与全局悬浮页签栏 / mini 播放器统一为 cardBorder，TODO 376/379）
+    private var shape: some View {
+        Capsule()
+            .fill(AppColors.cardBackground)
+            .overlay(Capsule().stroke(AppColors.cardBorder, lineWidth: 1))
     }
 }
 

@@ -21,6 +21,9 @@ struct StartPage: View {
                 shortcutSection
             }
             .padding(16)
+            // 底部让出操作栏高度：操作栏已改为浮在网页之上的浮层（F1），
+            // 起始页滑到底时最后一行快捷入口不该被它盖住
+            .padding(.bottom, BrowserToolbar.barHeight)
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
             .onTapGesture { Keyboard.dismiss() }

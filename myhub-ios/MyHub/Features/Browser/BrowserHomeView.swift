@@ -24,8 +24,22 @@ struct BrowserHomeView: View {
     /// 网页上的可点遮罩与左下角退出钮的显隐也都要读这个状态，故不能封在 `AddressBar` 内部。
     @State private var addressEditing = false
 
+    /// 底部浮层「小胶囊 ⇄ 操作栏」形变的共享命名空间（F1 + A1）：
+    /// 两种形态的胶囊底共用同一 `matchedGeometryEffect` 身份，切换时是一块底在长大 / 缩回，
+    /// 而不是两条视图交叉淡入淡出（旧实现中间帧会同时出现一大一小两条，读成闪跳）。
+    @Namespace private var chromeMorphNS
+
+    /// 底部浮层形态切换曲线（A1）：单容器形变的轻弹簧。
+    /// 旧实现用的 `.appFast`（150ms 缓出）只适合按压反馈，做形态变化太短、收尾生硬；
+    /// 这里 340ms + 高阻尼，落位时「弹一下坐住」，且不回弹过头。
+    private static let chromeMorph = Animation.spring(response: 0.34, dampingFraction: 0.86)
+
     /// 操作栏 / 收起态小胶囊与底部页签栏之间的视觉间距（左右内缩 12pt 形成上下「双胶囊」节奏）
     private let tabBarGap: CGFloat = 12
+
+    /// 沉浸态下浮层到系统底部安全区边缘的间距（F1）：8pt 即距 Home 指示条上沿 8pt，
+    /// 是「挪到最下面」的极限位置，再低就会压到系统 Home 指示条本身。
+    private let immersiveBarGap: CGFloat = 8
 
     /// 沉浸态（原型 `prototype/browser-exit-handle-collapse-options.html` 策略 S1）：
     /// iPhone 上停留在「浏览器」页签期间隐藏全局页签栏与 mini 播放器，把约 128pt 竖向空间还给网页；
@@ -44,11 +58,24 @@ struct BrowserHomeView: View {
     /// 底部预留间距：与页签栏留一段距离；
     /// 有 mini 播放器时再叠加上封面向上溢出量（`MiniPlayer.coverOverflow` 是 `.offset` 视觉位移、
     /// 不参与布局测量，页面底边实际落在 mini 卡片上边界，不补偿就会与突出的封面贴太紧）。
-    /// 沉浸态下底部装饰已整体隐藏（仅剩 `RootView.phoneBottomChrome` 的 8pt 外边距），
-    /// 此时沿用 12pt 会把操作栏推离屏底过远，故收窄为 4pt。
+    /// 沉浸态下底部装饰已整体隐藏（`RootView.phoneBottomChrome` 高度归零），浮层直接贴着系统底部安全区，
+    /// 间距即「距 Home 指示条 8pt」；非沉浸态仍按页签栏口径留 12pt（+ mini 播放器封面溢出补偿）。
     private var bottomBarGap: CGFloat {
-        if isImmersive { return 4 }
+        if isImmersive { return immersiveBarGap }
         return player.isMini ? tabBarGap + MiniPlayer.coverOverflow : tabBarGap
+    }
+
+    /// 网页层是否铺满整屏（F1）：仅沉浸态 + 已打开真实网页时生效。
+    /// 起始页是我们自绘的搜索页，搜索框不该钻到刘海下面，故仍按安全区排布；
+    /// 这个开关只影响网页层，底部浮层始终相对安全区底部定位，因此页面加载时浮层不会跳动。
+    private var contentIgnoresSafeArea: Bool {
+        guard isImmersive, let tab = session.activeTab else { return false }
+        return !tab.isShowingStartPage
+    }
+
+    /// 网页层要压满的安全区边缘（F1）：全屏时上下一起压到屏幕边，其余情况维持安全区排布
+    private var fullBleedEdges: Edge.Set {
+        contentIgnoresSafeArea ? [.top, .bottom] : []
     }
 
     /// 左下角退出钮的垂直落点：底部操作栏胶囊之上 10pt。
@@ -59,58 +86,41 @@ struct BrowserHomeView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                contentArea
-                    // 编辑态遮罩（Safari 风格）：压暗网页并吃掉点击，点任意处即取消编辑。
-                    // 只盖内容区、不盖操作栏本身，避免挡住输入框与「取消」。
-                    .overlay {
-                        if addressEditing {
-                            Color.black.opacity(0.10)
-                                .contentShape(Rectangle())
-                                .onTapGesture { addressEditing = false }
-                                .transition(.opacity)
-                        }
-                    }
-                // 展开态：完整操作栏占位底部
-                if !toolbarMini, let tab = session.activeTab {
-                    BrowserToolbar(
-                        tab: tab,
-                        tabCount: session.visibleTabs.count,
-                        menuItems: menuItems,
-                        onTabs: {
-                            // 打开标签网格前先退出编辑：否则键盘会留在全屏页签网格下方
-                            addressEditing = false
-                            showingTabs = true
-                        },
-                        isEditingAddress: $addressEditing,
-                        onSubmitAddress: { url in session.open(url) }
-                    )
-                    // 与底部页签栏留出一段距离（有 mini 播放器时补偿封面向上溢出的 8pt）
-                    .padding(.bottom, bottomBarGap)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+            // 网页层（F1）：沉浸态下铺满整屏——顶部压到状态栏、底部压到 Home 指示条，上下不再留白。
+            // 起始页（自绘 UI，搜索框不该钻刘海）仍按安全区排布，见 `contentIgnoresSafeArea`。
+            contentArea
+                .ignoresSafeArea(.container, edges: fullBleedEdges)
+
+            // 编辑态遮罩（Safari 风格）：压暗网页并吃掉点击，点任意处即取消编辑。
+            // 与网页层同为「压满全屏」的兄弟层，但不盖底部浮层，避免挡住输入框与「取消」。
+            if addressEditing {
+                Color.black.opacity(0.10)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { addressEditing = false }
+                    .transition(.opacity)
             }
-            // 收起态：底部中央小胶囊（Safari 风格），点击展开完整操作栏
-            if toolbarMini, let tab = session.activeTab, !tab.isShowingStartPage {
-                miniCapsule(tab)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-                    // 与展开态操作栏底部对齐：同样避开页签栏 / mini 播放器封面溢出部分
-                    .padding(.bottom, bottomBarGap)
+
+            // 底部浮层（F1 + A1）：操作栏 / 小胶囊浮在网页之上，不再与网页上下分栏——
+            // 展开收起时网页高度不再变化（旧动画卡顿的主因：WKWebView 每帧都要重排重绘）。
+            // 作为 ZStack 兄弟层，落点是系统安全区底部，`bottomBarGap` 即到 Home 指示条的距离。
+            bottomChrome
+
+            // 沉浸态左下角退出钮（+ 有播放会话时的播放微件）：
+            // 收缩态与操作栏的 `toolbarMini` 同源联动（T1），贴边半隐仅露 14pt。
+            // 编辑态整体隐藏：该钮按展开态条高定位，键盘弹起后操作栏已被系统抬走，
+            // 它会悬在半空并与输入框抢视线（TODO 407）。
+            if isImmersive, !addressEditing {
+                HStack(spacing: 0) {
+                    BrowserExitHandle(collapsed: toolbarMini, onExit: exitImmersive)
+                        .padding(.bottom, exitHandleBottomInset)
+                        .transition(.opacity)
+                    Spacer(minLength: 0)
+                }
             }
         }
         .background(AppColors.pageBackground)
-        // 沉浸态左下角退出钮（+ 有播放会话时的播放微件）：
-        // 收缩态与操作栏的 `toolbarMini` 同源联动（T1），贴边半隐仅露 14pt。
-        // 编辑态整体隐藏：该钮按展开态条高定位，键盘弹起后操作栏已被系统抬走，
-        // 它会悬在半空并与输入框抢视线（TODO 407）。
-        .overlay(alignment: .bottomLeading) {
-            if isImmersive && !addressEditing {
-                BrowserExitHandle(collapsed: toolbarMini, onExit: exitImmersive)
-                    .padding(.bottom, exitHandleBottomInset)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.appFast, value: toolbarMini)
+        .animation(Self.chromeMorph, value: toolbarMini)
         .animation(.appFast, value: addressEditing)
         .onChange(of: session.activeTabID) { _ in
             // 打开/切换到网页标签 → 收为胶囊；起始页（需输入网址）→ 展开地址栏
@@ -180,6 +190,42 @@ struct BrowserHomeView: View {
         }
     }
 
+    // MARK: - 底部浮层（展开态操作栏 / 收起态小胶囊）
+
+    /// 底部浮层的唯一出口：同一位置上二选一，二者共用 `chromeMorphNS` 的胶囊底（F1 + A1）。
+    /// 内容只做透明度交叉（无位移、无缩放），几何变化全部交给那块共享的胶囊底去形变，
+    /// 因此切换过程中屏上始终只有「一块底」，不会再出现旧实现那种一大一小两条同屏的重叠。
+    @ViewBuilder
+    private var bottomChrome: some View {
+        if let tab = session.activeTab {
+            if toolbarMini, !tab.isShowingStartPage {
+                // 加上热区补的 8pt：让「视觉胶囊」而不是热区落到与操作栏同一水平线上
+                miniCapsule(tab)
+                    .padding(.bottom, bottomBarGap + Self.capsuleHitInset)
+                    // 只做透明度交叉：位移/缩放交给共享胶囊底的形变，
+                    // 也不要给 transition 单独挂动画——那会把同一事务里的形态形变一起改成短时长
+                    .transition(.opacity)
+            } else {
+                BrowserToolbar(
+                    tab: tab,
+                    tabCount: session.visibleTabs.count,
+                    menuItems: menuItems,
+                    morphNamespace: chromeMorphNS,
+                    onTabs: {
+                        // 打开标签网格前先退出编辑：否则键盘会留在全屏页签网格下方
+                        addressEditing = false
+                        showingTabs = true
+                    },
+                    isEditingAddress: $addressEditing,
+                    onSubmitAddress: { url in session.open(url) }
+                )
+                // 与底部页签栏留出一段距离（有 mini 播放器时补偿封面向上溢出的 8pt）
+                .padding(.bottom, bottomBarGap)
+                .transition(.opacity)
+            }
+        }
+    }
+
     // MARK: - 行为
 
     /// 退出沉浸态：回到进入浏览器前的页签，页签栏与 mini 播放器随 `bottomTabBarHidden` 复位滑回。
@@ -190,7 +236,8 @@ struct BrowserHomeView: View {
 
     private func expandToolbar() {
         guard toolbarMini else { return }
-        toolbarMini = false
+        // 显式包一层弹簧（A1）：点击展开的落位动画由形变的同一曲线驱动，收尾「弹一下坐住」
+        withAnimation(Self.chromeMorph) { toolbarMini = false }
     }
 
     /// 收起为底部小胶囊（滑动页面 / 刷新页面触发）。
@@ -202,30 +249,38 @@ struct BrowserHomeView: View {
 
     // MARK: - 收起态小胶囊（Safari 风格）
 
+    /// 收起态小胶囊的视觉高度（S1）：对齐 Safari 收起态地址胶囊的尺度。
+    /// 旧值 44pt + 15pt 字在满屏网页上是一颗「胖药丸」，视觉重量压过内容。
+    private static let capsuleHeight: CGFloat = 28
+    /// 视觉胶囊外再补的透明内边距（上下各 8pt）：28 + 8×2 = 44pt，命中区仍满足 iOS 下限（TODO 406）
+    private static let capsuleHitInset: CGFloat = 8
+
     /// 操作栏收起后缩为底部中央的小胶囊：锁图标 + 域名，点击展开完整操作栏。
-    /// 高度取 44pt（原 34pt 低于 iOS 最小点击区、贴近屏底易误触，TODO 406），对齐 Safari 收起态地址胶囊尺度。
+    ///
+    /// 尺寸对齐 Safari（S1，见 `prototype/browser-fullscreen-options.html`）：视觉 28pt 高 / 12pt 字 / 左右 11pt，
+    /// 外面再套 8pt 透明内边距把点击热区补到 44pt —— 视觉小一圈、命中不变，两个诉求不冲突。
+    /// 胶囊底交给 `ChromeCapsule` 并与操作栏共享形变身份（A1），展开时是同一块底长大成整条操作栏。
     private func miniCapsule(_ tab: BrowserTab) -> some View {
         Button {
             expandToolbar()
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: tab.hasOnlySecureContent ? "lock.fill" : "lock.open")
-                    .font(.caption)
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(AppColors.textSecondary)
                 Text(tab.currentURL?.host ?? "网页")
-                    .font(.subheadline.weight(.medium))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AppColors.textPrimary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    // 限宽：超长域名中段省略，胶囊不会横到屏幕两端
+                    .frame(maxWidth: 190)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 44)
-            .background(
-                Capsule()
-                    .fill(AppColors.cardBackground)
-                    .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
-            )
-            // 描边与全局悬浮页签栏 / mini 播放器 / 操作栏胶囊统一为 cardBorder（TODO 377 方案 A）
-            .overlay(Capsule().stroke(AppColors.cardBorder, lineWidth: 1))
+            .padding(.horizontal, 11)
+            .frame(height: Self.capsuleHeight)
+            .background { ChromeCapsule(morphNamespace: chromeMorphNS) }
+            .padding(.vertical, Self.capsuleHitInset)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("展开浏览器操作栏")

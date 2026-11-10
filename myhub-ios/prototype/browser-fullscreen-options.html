@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内置浏览器 · 全屏化 + 底部小胶囊方案</title>
+<style>
+:root{--primary:#2563EB;--tb-line:#D1D5DB;--card-line:#EDF0F3;--sep:#E5E7EB;--tp:#1A1A2E;--ts:#6B7280;--fill:#F3F4F6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+h3.sec{font-size:16px;margin:38px 0 14px;padding-left:9px;border-left:3px solid var(--primary)}
+.subtitle{color:var(--ts);font-size:13px;line-height:1.75;max-width:1100px}
+.subtitle b{color:var(--tp)}
+code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.locked{display:inline-flex;align-items:center;gap:6px;background:#FEF3C7;color:#92400E;font-size:12px;font-weight:600;padding:5px 11px;border-radius:8px;margin:12px 0 4px}
+.shipped{background:#DCFCE7;border:1px solid #86EFAC;border-radius:12px;padding:13px 16px;font-size:12px;color:#166534;line-height:1.85;max-width:1100px;margin:14px 0 4px}
+.shipped b{color:#065F46}
+.alert{background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px;padding:13px 16px;font-size:12px;color:#92400E;line-height:1.8;max-width:1100px;margin-top:14px}
+.alert b{color:#78350F}
+.alert .ok{color:#047857}
+/* ===== 方案板 ===== */
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:330px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}
+.tag.warn{background:#FEF3C7;color:#92400E}
+.tag.bad{background:#FEE2E2;color:#991B1B}
+.desc{font-size:12px;color:var(--ts);line-height:1.75;min-height:150px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+/* ===== 手机框（393×852 → 330×715 等比） ===== */
+.phone{width:330px;height:560px;border:8px solid #111827;border-radius:38px;overflow:hidden;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+.phone .statusbar{position:absolute;inset:0 0 auto 0;height:39px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;font-weight:600;z-index:6;pointer-events:none}
+.phone .hi{position:absolute;left:50%;transform:translateX(-50%);bottom:7px;width:104px;height:4px;border-radius:2px;background:#111827;opacity:.25;z-index:6}
+/* 网页层：全屏铺满（含状态栏与 Home 指示条区域） */
+.web{position:absolute;inset:0;overflow:hidden;padding:48px 14px 0;background:#fff}
+.wimg{height:96px;border-radius:12px;background:linear-gradient(135deg,#DBEAFE,#EEF4FB);display:flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:10px}
+.wh{font-size:15px;font-weight:700}
+.wm{font-size:10px;color:var(--ts);margin:3px 0 8px}
+.wline{height:8px;border-radius:4px;background:#EEF1F4;margin-bottom:7px}
+.wline.s{width:62%}.wline.m{width:84%}
+.wgap{height:8px}
+/* 参考线：安全区 / 空白区 */
+.guide{position:absolute;left:0;right:0;border-top:1px dashed #F59E0B;z-index:7;pointer-events:none}
+.guide .lb{position:absolute;right:5px;top:2px;font-size:8px;color:#B45309;background:#FEF3C7;padding:0 3px;border-radius:3px;line-height:1.4}
+.guide.cur{border-top-color:#DC2626}
+.guide.cur .lb{color:#991B1B;background:#FEE2E2}
+.blank{position:absolute;left:0;right:0;background:repeating-linear-gradient(45deg,#FEE2E2,#FEE2E2 4px,#FEF2F2 4px,#FEF2F2 8px);z-index:1;border-left:0}
+.blank .lb{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:8px;color:#991B1B;background:#fff;padding:0 4px;border-radius:3px}
+/* 操作栏（展开态，60pt → 42px） */
+.tb{position:absolute;left:10px;right:10px;bottom:34px;height:42px;display:flex;align-items:center;gap:3px;padding:0 5px;background:#fff;border:1px solid var(--tb-line);border-radius:21px;box-shadow:0 3px 8px rgba(0,0,0,.12);z-index:8}
+.tb .nb{width:26px;height:34px;display:flex;align-items:center;justify-content:center;font-size:12px;flex:none;color:#9CA3AF}
+.tb .addr{flex:1;height:28px;border-radius:14px;background:var(--fill);padding:0 8px;display:flex;align-items:center;gap:4px;font-size:10px;min-width:0}
+.tb .addr .u{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb .tsq{display:flex;align-items:center;gap:2px;font-size:9px;height:26px;padding:0 4px;border-radius:13px;background:var(--fill);flex:none}
+/* 收起态胶囊：尺寸由内联 style 控制（1pt = 0.9px 比例） */
+.cap{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:4px;background:#fff;border:1px solid var(--tb-line);box-shadow:0 3px 8px rgba(0,0,0,.12);z-index:8;white-space:nowrap;border-radius:999px}
+.cap .lk{font-size:8px;color:var(--ts)}
+.cap .host{font-size:9px;font-weight:600;color:var(--tp)}
+/* ===== 1:1 尺寸对照（不缩放，直接看真实像素） ===== */
+.sizes{display:flex;flex-wrap:wrap;gap:14px;background:#fff;border:1px solid var(--card-line);border-radius:14px;padding:16px 18px;box-shadow:0 2px 10px rgba(17,24,39,.05);align-items:flex-end;max-width:1100px}
+.sizes .u{display:flex;flex-direction:column;align-items:center;gap:7px}
+.sizes .lb{font-size:10px;color:#9CA3AF;text-align:center;line-height:1.35}
+.sizes .lb b{color:var(--tp)}
+.real{display:flex;align-items:center;gap:5px;background:#fff;border:1px solid var(--tb-line);box-shadow:0 2px 6px rgba(0,0,0,.10);border-radius:999px;white-space:nowrap}
+.real.safari{background:#F1F3F5;border-color:#DDE1E6;box-shadow:none}
+/* 卡片 / 表格 */
+.cards{display:flex;flex-wrap:wrap;gap:16px}
+.card{width:340px;background:#fff;border:1px solid var(--card-line);border-radius:14px;padding:14px 16px;box-shadow:0 2px 10px rgba(17,24,39,.05)}
+.card.pick{border-color:#93C5FD;box-shadow:0 2px 14px rgba(37,99,235,.14)}
+.card h4{font-size:13px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.card p{font-size:12px;color:var(--ts);line-height:1.78}
+.card p b{color:var(--tp)}
+table{border-collapse:collapse;margin-top:14px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);width:100%;max-width:1100px}
+th,td{padding:9px 13px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:18px;font-size:12px;color:var(--ts);line-height:1.95;max-width:1100px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+
+<h1>内置浏览器 · 切底全屏 + 底部小胶囊</h1>
+<p class="subtitle">
+  本次要解决三件事：①上下各留一段空白、网页实际可视面积比屏幕小；②胶囊标题要挪到屏幕最下方，且尺寸比现在小一圈（对齐 Safari 收起态）；③点胶囊展开的那一下有卡顿。<br>
+  下面把三件事拆成 <b>F（全屏化布局）</b> / <b>S（胶囊尺寸）</b> / <b>A（展开动画）</b> 三组候选，每组的推荐项标了 <span class="tag rec">推荐</span>，确认后我按「F1 + S1 + A1」直接改代码。
+</p>
+<div class="shipped">
+  <b>已实施（F1 + S1 + A1）</b><br>
+  <b>BrowserHomeView</b>：根容器改 <code>ZStack(alignment:.bottom)</code>；网页层 <code>.ignoresSafeArea(.container, edges: fullBleedEdges)</code>（沉浸态 + 已加载网页时上下压满，起始页仍走安全区）；操作栏 / 小胶囊从 <code>VStack</code> 分栏改为 ZStack 兄弟浮层，网页高度不再随展开收起变化；<code>immersiveBarGap = 8</code>；新增 <code>bottomChrome</code> 单一出口 + <code>@Namespace chromeMorphNS</code> + <code>chromeMorph</code> 弹簧（response 0.34 / damping 0.86）；小胶囊改 28pt 视觉高 / 12pt 字 / 左右 11pt / 上下 8pt 透明热区（命中 44pt），底距补 <code>+8pt</code> 让视觉胶囊落到 8pt。<br>
+  <b>BrowserToolbar</b>：胶囊底抽为 <code>ChromeCapsule</code>（白底 + 1pt cardBorder + shadow 0.10），与胶囊共用 <code>matchedGeometryEffect(id: "browserBottomChrome")</code>；移除自带 <code>cornerRadius</code> 背景链，改 <code>.clipShape(Capsule())</code> + <code>.background { ChromeCapsule }</code>。<br>
+  <b>RootView</b>：<code>phoneBottomChrome</code> 隐藏态 <code>.padding(.bottom, 0)</code>，底部装饰高度归零。
+</div>
+
+<div class="alert">
+  <b>先说清空白的来源（实测当前沉浸态）：</b><br>
+  iPhone 15（393×852）：顶部状态栏 <b>59pt</b> + 底部 <b>8pt 外边距 + 34pt Home 指示条 = 42pt</b>，网页只占中间 <b>751pt</b>，上下合计被吃掉 <b>101pt（约 12%）</b>。<br>
+  根因是结构性的：网页在 <code>VStack</code> 里与操作栏<b>上下分栏</b>（操作栏占位 → 网页高度 <code>852−59−34−8</code> 再减去 60pt 条高／4pt 间距），而根容器本身没 <code>ignoresSafeArea</code>，于是上下安全区各留一条真空。<br>
+  <span class="ok">改法：网页层改为「全屏铺满 + 操作栏浮在网页之上」（Safari 的做法），导航层不再给浏览器留边距。</span>
+</div>
+
+<h3 class="sec">一、全屏化布局 F1–F3</h3>
+<div class="boards">
+
+  <div class="board">
+    <h2>F1 · 网页全屏铺满 + 操作栏悬浮<span class="tag rec">推荐</span></h2>
+    <div class="desc">
+      <b>网页从屏幕第一像素画到最后像素</b>（含状态栏、Home 指示条区域），操作栏/胶囊从「纵向分栏的兄弟」改为 <b>浮层（overlay）</b>，压在网页之上。<br>
+      顶部：网页背景（白/页面底色）一直画到屏幕顶，<code>WKWebView</code> 的 <code>contentInsetAdjustment</code> 自动让正文避开状态栏 —— <b>看起来是满屏，但不压在刘海下面</b>。<br>
+      底部：网页一直画到屏底，胶囊浮在 Home 指示条上方。<br>
+      <span class="pros">优点：空白彻底消失、可视面积 +101pt；顺带修掉第③条卡顿——网页不再随操作栏出现/消失而改变高度（见 A 段）。</span><br>
+      <span class="cons">缺点：网页最底部的内容会短暂被操作栏盖住（滑到底时停止滚动，Safari 同样如此）。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">全屏铺满的网页</div><div class="wm">example.com · 正文从状态栏下方开始，背景一直到屏底</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="tb">
+        <div class="nb">‹</div><div class="nb">›</div><div class="nb">↻</div>
+        <div class="addr"><span>🔒</span><span class="u">example.com/article</span></div>
+        <div class="tsq">▣ 3</div><div class="nb">⋯</div>
+      </div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>F2 · 只去掉下半段留白（保守）<span class="tag warn">不彻底</span></h2>
+    <div class="desc">
+      只把 <code>phoneBottomChrome</code> 的 8pt 外边距收掉、网页底边放到 Home 指示条上沿，顶部维持现状。<br>
+      <span class="pros">优点：改动最小，一条 <code>padding</code> 归零。</span><br>
+      <span class="cons">缺点：顶部 59pt 空白仍在，网页只多出 8pt；操作栏仍与网页分栏，第③条卡顿不会改善。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="blank" style="top:0;height:39px"><span class="lb">顶部空白 59pt</span></div>
+      <div class="web" style="top:39px;padding-top:9px">
+        <div class="wimg">🏞️</div><div class="wh">网页从状态栏下沿开始</div><div class="wm">顶部那条空白仍然存在</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div>
+      </div>
+      <div class="guide" style="top:39px"><span class="lb">网页上边界</span></div>
+      <div class="tb" style="bottom:12px">
+        <div class="nb">‹</div><div class="nb">›</div><div class="nb">↻</div>
+        <div class="addr"><span>🔒</span><span class="u">example.com</span></div>
+        <div class="tsq">▣ 3</div><div class="nb">⋯</div>
+      </div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>F3 · 全屏 + 网页额外让出操作栏高度<span class="tag">Safari 避让版</span></h2>
+    <div class="desc">
+      F1 之上再给 <code>WKWebView</code> 加底部 <code>contentInset</code>（约 60pt），滑到页尾时最后一行正文能完整露在操作栏上方，而不是被盖住。<br>
+      <span class="pros">优点：正文永不被遮挡，阅读型页面更舒服。</span><br>
+      <span class="cons">缺点：<b>等于又把 60pt 还回去了</b>——可视面积与现在几乎一样，正是你想去掉的那种"留白"；而且操作栏收起/展开时 inset 变化会再次触发网页重排。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">全屏背景 + 底部 inset</div><div class="wm">正文止于操作栏上沿</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="blank" style="bottom:0;height:76px"><span class="lb">操作栏 + 底部让位</span></div>
+      <div class="tb">
+        <div class="nb">‹</div><div class="nb">›</div><div class="nb">↻</div>
+        <div class="addr"><span>🔒</span><span class="u">example.com</span></div>
+        <div class="tsq">▣ 3</div><div class="nb">⋯</div>
+      </div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+</div>
+
+<h3 class="sec">二、收起态小胶囊 S0–S4（下方为 1:1 真实尺寸，不缩放）</h3>
+<div class="sizes">
+  <div class="u">
+    <div class="real safari" style="height:30px;padding:0 12px"><span style="font-size:11px;color:#6B7280">🔒</span><span style="font-size:13px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>参考：Safari</b><br>高约 30pt</div>
+  </div>
+  <div class="u">
+    <div class="real safari" style="height:28px;padding:0 11px"><span style="font-size:10px;color:#6B7280">🔒</span><span style="font-size:12px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>S1</b> 28pt / 12pt 字<br><span style="color:#047857">推荐</span></div>
+  </div>
+  <div class="u">
+    <div class="real safari" style="height:30px;padding:0 12px"><span style="font-size:11px;color:#6B7280">🔒</span><span style="font-size:13px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>S2</b> 30pt / 13pt 字</div>
+  </div>
+  <div class="u">
+    <div class="real safari" style="height:34px;padding:0 14px"><span style="font-size:11px;color:#6B7280">🔒</span><span style="font-size:13px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>S3</b> 34pt（原型旧值）</div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:44px;padding:0 18px"><span style="font-size:12px;color:#6B7280">🔒</span><span style="font-size:15px;font-weight:500">apple.com</span></div>
+    <div class="lb"><b>S0</b> 44pt（<span style="color:#B45309">现状</span>）</div>
+  </div>
+</div>
+<div class="footnote">
+  现状 <code>S0 = 44pt / 15pt 字 / 左右 18pt</code>，是当初为了 44pt 最小点击区的"妥协"——视觉上就成了一颗<b>胖胶囊</b>，跟 Safari 的精巧小胶囊差一档。
+  建议 <b>S1</b>：<b>视觉 28pt（12pt 字、左右 11pt、锁图标 10pt）</b>，同时用 <code>.padding(.vertical, 8) + contentShape</code> 把<b>点击热区仍撑到 44pt</b> —— 视觉变小、手指命中不变，两个诉求不冲突。
+</div>
+
+<div class="boards" style="margin-top:18px">
+  <div class="board">
+    <h2>S1 · 28pt 小胶囊（视觉小 + 44pt 热区）<span class="tag rec">推荐</span></h2>
+    <div class="desc">
+      对齐 Safari 收起态：高度 28pt、字号 <code>.caption</code> 量级、锁图标 10pt、横向内边距 11pt，宽度随域名增长但<b>限宽 60% 屏宽</b>，超长域名截断为 <code>…</code>。<br>
+      外圈包一层透明 <code>padding(.vertical, 8)</code> 把命中区补到 44pt。<br>
+      <span class="pros">优点：视觉体积比现在小 36%，屏底占用明显轻；热区仍达标。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:15px;height:28px;padding:0 11px"><span class="lk">🔒</span><span class="host" style="font-size:12px">example.com</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>S2 · 30pt（更接近 Safari 原尺寸）</h2>
+    <div class="desc">
+      与 Safari 完全同尺，字号 13pt。比 S1 只差 2pt，但在中文域名（如 <code>zhihu.com</code> 的 15pt 视觉重量）上会显得略实。<br>
+      <span class="cons">缺点：优势不明显，实际观感与 S1 差别极小，不如直接选更轻的 S1。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:14px;height:30px;padding:0 12px"><span class="lk">🔒</span><span class="host" style="font-size:13px">example.com</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>S0 · 维持 44pt（仅下移）<span class="tag bad">不满足"小胶囊"</span></h2>
+    <div class="desc">
+      尺寸不动，只按 F1 把胶囊下移到 Home 指示条上方。<br>
+      <span class="cons">缺点：44pt 高 + 15pt 字，在满屏网页上像一颗"胖药丸"，视觉重量压过内容，与你说的"完全改成一个小胶囊"不符。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:12px;height:44px;padding:0 18px"><span class="lk" style="font-size:12px">🔒</span><span class="host" style="font-size:15px;font-weight:500">example.com</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+</div>
+
+<h3 class="sec">三、点击胶囊 → 展开的动画 A1–A3（下方为自动循环示意）</h3>
+<div class="alert">
+  <b>现在为什么"卡"？</b>三个原因叠在一起：<br>
+  ①<b>网页在跟着抖</b>：操作栏在 <code>VStack</code> 里<b>占位</b>，它一出现网页高度就从 A 变到 B，<code>WKWebView</code> 每一帧都要重新布局 + 重绘，30fps 动画里等于把最贵的操作乘以 18 帧 —— 这是卡顿的主因，<span class="ok">F1 把它改成就变成浮层（不占位）后，这条根因直接消失。</span><br>
+  ②<b>两个视图各自做动画、还同时在屏</b>：胶囊 <code>.scale(0.6)+opacity</code> 淡出、操作栏 <code>.move(edge:.bottom)+opacity</code> 淡入，两者中途重叠 → 一瞬间出现"一大一小两条"，眼睛读成闪跳。<br>
+  ③<b>曲线不对</b>：<code>.appFast</code> 是 150ms 的 <code>easeOut</code>，只够做"按压反馈"，做"形态变化"太短且没有回弹，收尾生硬。
+</div>
+
+<div class="boards">
+  <div class="board">
+    <h2>A1 · 单容器形变（morph）+ 轻弹簧<span class="tag rec">推荐</span></h2>
+    <div class="desc">
+      胶囊和操作栏<b>不是两个视图</b>，而是同一个浮层容器的两个状态：展开时宽 369×60（左右内缩 12pt），收起时 28pt 高的自适应小胶囊，居中。<br>
+      切换只做三件事：<b>改 frame</b>（宽/高/圆角跟着插值 → 视觉上就是"长大成一条"）+ <b>内容交叉淡入</b>（地址栏文字淡入、锁 + 域名淡出）+ <b>弹簧曲线</b> <code>.spring(response: 0.34, dampingFraction: 0.86)</code>。<br>
+      <span class="pros">优点：只有一个元素在动，不会有"两条同时在屏"的重叠；配上 F1 后网页不参与布局，全程 60fps；回弹收尾有 Safari 那种"弹一下坐住"的手感。</span><br>
+      <span class="cons">缺点：胶囊→操作栏中间态的宽度是插值出来的，地址栏字号要做等比缩放（1~2 行代码）。</span>
+    </div>
+    <div class="stage">
+      <div class="stageweb"></div>
+      <div class="morph a1"><span class="capin">🔒 example.com</span><span class="barin"><i>‹</i><i>›</i><i>↻</i><em>🔒 example.com/article</em><i>▣</i></span></div>
+      <div class="stagehi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>A2 · 先收内容、再变尺寸（两段式）<span class="tag">保守</span></h2>
+    <div class="desc">
+      第一段 90ms：操作栏内部控件整体淡出；第二段 180ms：容器从 60pt 收到 28pt，同时域名淡入。<br>
+      <span class="pros">优点：中间态不会有"半张脸"的字；纯 <code>withAnimation</code> 顺序控制，实现最直白。</span><br>
+      <span class="cons">缺点：两段加起来 270ms，比 A1 慢一档，体感"分两步走"，不如一次形变利落。</span>
+    </div>
+    <div class="stage">
+      <div class="stageweb"></div>
+      <div class="morph a2"><span class="capin">🔒 example.com</span><span class="barin"><i>‹</i><i>›</i><i>↻</i><em>🔒 example.com/article</em><i>▣</i></span></div>
+      <div class="stagehi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>A3 · 现状（scale 0.6 淡出 + move 淡入）<span class="tag bad">有卡顿</span></h2>
+    <div class="desc">
+      胶囊从 60% 放大淡出、操作栏从屏底滑入淡入，两条交叉 150ms。<br>
+      <span class="cons">缺点：①两条重叠期肉眼可见"双影"；②150ms 太短，眼睛还没跟上就结束了，反像掉帧；③网页在同步改高度，最贵的那一帧被塞进了动画里。</span>
+    </div>
+    <div class="stage">
+      <div class="stageweb"></div>
+      <div class="morph a3"><span class="capin">🔒 example.com</span><span class="barin"><i>‹</i><i>›</i><i>↻</i><em>🔒 example.com/article</em><i>▣</i></span></div>
+      <div class="stagehi"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+/* ===== 动画示意舞台 ===== */
+.stage{position:relative;width:330px;height:250px;border:8px solid #111827;border-radius:34px;overflow:hidden;background:#fff;box-shadow:0 12px 28px rgba(17,24,39,.18)}
+.stageweb{position:absolute;inset:0;background:repeating-linear-gradient(to bottom,#EEF1F4 0 8px,transparent 8px 18px);opacity:.85}
+.stagehi{position:absolute;left:50%;transform:translateX(-50%);bottom:7px;width:100px;height:4px;border-radius:2px;background:#111827;opacity:.22}
+.morph{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);height:42px;width:294px;background:#fff;border:1px solid var(--tb-line);border-radius:21px;box-shadow:0 3px 8px rgba(0,0,0,.12);display:flex;align-items:center;overflow:hidden}
+.morph .capin{position:absolute;left:0;right:0;text-align:center;font-size:11px;font-weight:600;white-space:nowrap}
+.morph .barin{position:absolute;inset:0;display:flex;align-items:center;gap:4px;padding:0 8px;font-size:10px}
+.morph .barin i{font-style:normal;color:#9CA3AF;flex:none}
+.morph .barin em{font-style:normal;flex:1;height:26px;display:flex;align-items:center;padding:0 8px;border-radius:13px;background:var(--fill);color:var(--ts);font-size:9px;white-space:nowrap;overflow:hidden}
+/* A1：同一元素改 frame + 内容交叉淡入，弹簧 */
+@keyframes a1morph{
+  0%,16%{width:132px;height:26px;border-radius:13px}
+  40%,66%{width:294px;height:42px;border-radius:21px}
+  90%,100%{width:132px;height:26px;border-radius:13px}
+}
+@keyframes a1cap{
+  0%,16%{opacity:1}38%,64%{opacity:0}88%,100%{opacity:1}
+}
+@keyframes a1bar{
+  0%,16%{opacity:0}44%,60%{opacity:1}82%,100%{opacity:0}
+}
+.a1{animation:a1morph 6s infinite cubic-bezier(.34,1.28,.64,1)}
+.a1 .capin{animation:a1cap 6s infinite}
+.a1 .barin{animation:a1bar 6s infinite}
+/* A2：先淡出内容，再变尺寸（两段） */
+@keyframes a2morph{
+  0%,18%{width:132px;height:26px;border-radius:13px}
+  26%{width:132px;height:26px;border-radius:13px}
+  50%,64%{width:294px;height:42px;border-radius:21px}
+  76%,86%{width:294px;height:42px;border-radius:21px}
+  96%,100%{width:132px;height:26px;border-radius:13px}
+}
+@keyframes a2cap{0%,22%{opacity:1}32%,74%{opacity:0}88%,100%{opacity:1}}
+@keyframes a2bar{0%,34%{opacity:0}48%,74%{opacity:1}84%,100%{opacity:0}}
+.a2{animation:a2morph 6s infinite ease-in-out}
+.a2 .capin{animation:a2cap 6s infinite}
+.a2 .barin{animation:a2bar 6s infinite}
+/* A3：现状——胶囊缩放淡出 + 操作栏滑入淡入（两元素重叠） */
+.a3{width:294px;height:42px;animation:a3barSlide 6s infinite}
+.a3 .capin{animation:a3capOut 6s infinite}
+.a3 .barin{animation:a3barIn 6s infinite}
+@keyframes a3barSlide{
+  0%,18%{transform:translate(-50%,46px);opacity:0}
+  34%,62%{transform:translate(-50%,0);opacity:1}
+  80%,100%{transform:translate(-50%,46px);opacity:0}
+}
+@keyframes a3capOut{
+  0%,18%{opacity:1;transform:scale(1)}
+  32%,100%{opacity:0;transform:scale(.6)}
+}
+@keyframes a3barIn{0%,18%{opacity:0}30%,62%{opacity:1}78%,100%{opacity:0}}
+@media (prefers-reduced-motion: reduce){.a1,.a2,.a3,.a1 .capin,.a1 .barin,.a2 .capin,.a2 .barin,.a3 .capin,.a3 .barin{animation:none}}
+</style>
+
+<h3 class="sec">四、推荐组合与落点</h3>
+<table>
+  <tr><th>项</th><th>推荐</th><th>为什么</th></tr>
+  <tr><td>布局</td><td>F1 网页全屏 + 浮层操作栏</td><td>唯一能同时解决"上下空白"和"展开卡顿主因"的方案；Safari 同款结构。</td></tr>
+  <tr><td>胶囊尺寸</td><td>S1 28pt（热区仍 44pt）</td><td>视觉小一圈对齐 Safari，手指命中不变。</td></tr>
+  <tr><td>胶囊位置</td><td>贴 Home 指示条上方 8pt</td><td>「挪到最下面」的极限位置；再低会压到系统 Home 指示条。</td></tr>
+  <tr><td>展开动画</td><td>A1 单容器形变 + 弹簧 .34/0.86</td><td>无重叠双影、网页不参与布局，全程顺滑。</td></tr>
+</table>
+
+<div class="footnote">
+  <b>改动落点（确认后执行）：</b><br>
+  <code>BrowserHomeView.swift</code> —— <code>contentArea</code> 加 <code>.ignoresSafeArea(edges:[.top,.bottom])</code>；操作栏与胶囊从 <code>VStack</code> 内挪进 <code>.overlay(alignment:.bottom)</code>，合并为单容器形变；
+  <code>miniCapsule</code> 28pt / 12pt 字 / 左右 11pt / 限宽 60% / 垂直 <code>padding(8)</code> 补热区；<code>bottomBarGap</code> 改 8（不再叠 <code>phoneBottomChrome</code> 的 8pt）。<br>
+  <code>RootView.swift</code> —— <code>phoneBottomChrome</code> 的 <code>.padding(.bottom, 8)</code> 改为隐藏态取 0（仅影响 iPhone 浏览器沉浸态）。
+  <code>Motion.swift</code> 无需改，新曲线就地写在形变处。<br>
+  <b>不改动</b>：收起/展开的<b>触发逻辑</b>（滑动/刷新收起、点击网页或胶囊展开）保持现状，仅换视觉与动效。
+</div>
+
+</body>
+</html>

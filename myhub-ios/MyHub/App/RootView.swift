@@ -164,7 +164,9 @@ struct RootView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        // 隐藏态（iPhone 浏览器沉浸态）连这条 8pt 外边距也不占：整条装饰高度归零，
+        // 网页才能真正画到屏底（F1，见 prototype/browser-fullscreen-options.html）
+        .padding(.bottom, bottomTabBarHidden ? 0 : 8)
         .animation(.appQuick, value: bottomTabBarHidden)
         .background {
             GeometryReader { proxy in
