@@ -1,0 +1,134 @@
+name: CI
+
+# 流水线分工（刻意如此）：
+#   workflow 只负责「装环境」——MSVC / Qt / vcpkg / LLVM / libmpv / mpvqt；
+#   「做什么」全部在 myhub-pc/scripts/ci.ps1 里（构建 → 单测 → 规范校验）。
+# 这样本地与 CI 走同一条脚本路径，不会出现「本地绿、CI 红」的两套逻辑漂移。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'myhub-pc/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'myhub-pc/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: '6.8.3'
+  # ⚠️ 这些路径必须与 myhub-pc/CMakePresets.json 中 windows-base 的 environment 一致。
+  # CMake 预设里的 environment 会覆盖父进程环境变量（已实测），因此不能让预设来读 CI
+  # 的路径，只能反过来把 Qt / vcpkg 装到预设写死的位置。
+  QT_ROOT: 'C:/Qt/6.8.3/msvc2022_64'
+  VCPKG_INSTALLED: 'C:/vcpkg/installed'
+  LLVM_BIN: 'C:\Program Files\LLVM\bin'
+
+jobs:
+  windows:
+    name: Windows / MSVC 2022 + Ninja
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: myhub-pc
+    env:
+      # vcpkg 会把 manifest 依赖装到 $VCPKG_INSTALLED_DIR/<triplet>
+      VCPKG_INSTALLED_DIR: 'C:/vcpkg/installed'
+      VCPKG_BINARY_SOURCES: 'clear;files,C:\vcpkg-bincache,readwrite'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 导入 MSVC 环境
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: 安装 Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          dir: 'C:/Qt'
+          modules: 'qtwebengine'
+          cache: true
+
+      - name: 检查 LLVM 工具
+        shell: pwsh
+        run: |
+          # .clang-format 依赖 clang-format 19 的行为；版本漂移会表现为「同一份代码
+          # 在 CI 上要重排」。先把版本打出来，判据不符时一眼能看出是环境而非代码。
+          foreach ($t in 'clang-format', 'clang-tidy') {
+              $exe = Join-Path $env:LLVM_BIN "$t.exe"
+              if (-not (Test-Path $exe)) { throw "缺少 $exe（runner 镜像未自带 LLVM？）" }
+              & $exe --version
+          }
+
+      - name: 缓存 vcpkg 二进制包
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-bincache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('myhub-pc/vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      - name: 安装 vcpkg 依赖
+        shell: pwsh
+        run: |
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT 'vcpkg.exe'
+          & $vcpkg install --triplet x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # ecm 仅供 mpvqt 构建期使用（不是应用依赖）
+          & $vcpkg install ecm:x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 缓存 libmpv / mpvqt
+        uses: actions/cache@v4
+        with:
+          path: |
+            myhub-pc/third_party/libmpv
+            myhub-pc/third_party/mpvqt
+            myhub-pc/third_party/mpvqt-install
+            myhub-pc/third_party/mpvqt-install-debug
+          key: mpv-${{ runner.os }}-${{ hashFiles('myhub-pc/third_party/fetch-libmpv.ps1', 'myhub-pc/third_party/build-mpvqt.ps1', 'myhub-pc/third_party/patches/**') }}
+
+      - name: 获取 libmpv
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File third_party\fetch-libmpv.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 构建 mpvqt
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File third_party\build-mpvqt.ps1 `
+              -QtRoot $env:QT_ROOT -VcpkgInstalled $env:VCPKG_INSTALLED -SkipVsEnv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # windows-debug 预设需要 Debug 版 mpvqt：Release 版依赖 Qt6Quick.dll，
+          # 与 Debug 应用的 Qt6Quickd.dll 混用会在实例化 MpvAbstractItem 时崩溃
+          pwsh -NoProfile -File third_party\build-mpvqt.ps1 -Config Debug `
+              -QtRoot $env:QT_ROOT -VcpkgInstalled $env:VCPKG_INSTALLED -SkipVsEnv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 构建 + 单测 + 规范校验
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts\ci.ps1 `
+              -Preset windows-debug -QtRoot $env:QT_ROOT -SkipVsEnv -LlvmBin $env:LLVM_BIN
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 失败时收集日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: |
+            myhub-pc/build/**/Testing/Temporary/LastTest.log
+            myhub-pc/build/**/CMakeCache.txt
+          if-no-files-found: ignore

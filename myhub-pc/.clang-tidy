@@ -1,0 +1,66 @@
+# myhub-pc 静态分析配置（clang-tidy 19 / MSVC 2022 / Qt 6.8）
+#
+# 取舍原则：只开「能指向真实 bug 或真实性能问题」的检查。
+#   - 不开 readability-identifier-naming / -magic-numbers 之类的纯风格检查，
+#     它们会让 CI 常红而没人看，最终等于关闭整个 lint。
+#   - 风格交给 clang-format（见 .clang-format），两者职责不重叠。
+#
+# 用法：
+#   clang-tidy -p build/windows-debug src/main.cpp
+#   scripts/lint.ps1                      # 全量
+---
+# 注意：Checks 是一个折叠字符串，**里面不能写 YAML 注释**——`#` 会被当成
+# glob 的一部分，导致后面的 `-xxx` 关闭项静默失效（首版就踩了这个坑）。
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  performance-*,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-default-member-init,
+  modernize-use-emplace,
+  modernize-loop-convert,
+  modernize-make-unique,
+  modernize-make-shared,
+  misc-unused-parameters,
+  misc-unused-using-decls,
+  misc-throw-by-value-catch-by-reference,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-pro-type-const-cast,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-signal-handler,
+  -performance-enum-size,
+  -performance-unnecessary-value-param,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  -modernize-use-auto,
+  -modernize-concat-nested-namespaces,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-owning-memory,
+  -modernize-return-braced-init-list
+
+# 明确关掉的噪声项（逐条给出理由，避免以后被人「顺手打开」）
+#   bugprone-easily-swappable-parameters：Qt 大量 (QString, QString) 签名，纯噪声
+#   bugprone-narrowing-conversions：int -> qreal / qsizetype 转换在 Qt API 里属于常态
+#   bugprone-signal-handler：Qt 的 SIGNAL/SLOT 宏写法不在本项目使用范围
+#   performance-enum-size：Qt 枚举与 QMetaEnum 对齐，改动收益为零
+#   modernize-use-trailing-return-type：与 Qt 风格与可读性相悖
+#   modernize-avoid-c-arrays / -use-auto：会与 Qt 容器写法冲突
+CheckOptions:
+  - key: bugprone-easily-swappable-parameters.MinimumLength
+    value: '4'
+  - key: readability-function-size.LineThreshold
+    value: '200'
+
+# 只对项目自己的代码出报告，第三方与生成代码不看
+HeaderFilterRegex: '(src|tests)\/.*\.(h|hpp)$'
+ExcludeHeaderFilterRegex: '(third_party|build|research)\/.*'
+
+WarningsAsErrors: ''
+# 不看系统头：Qt 6.8 的头在 clang 19 下会触发 qplugin.h 的 constexpr 误报
+# （clang-diagnostic-error），以及 qsharedpointer 的伪内存泄漏；打开只会淹没有效信号。
+SystemHeaders: false
+FormatStyle: file
+UseColor: false

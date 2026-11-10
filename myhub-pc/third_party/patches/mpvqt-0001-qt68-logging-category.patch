@@ -1,0 +1,19 @@
+diff --git a/src/mpvrenderer.cpp b/src/mpvrenderer.cpp
+index 50f4e5f..ec97e3d 100644
+--- a/src/mpvrenderer.cpp
++++ b/src/mpvrenderer.cpp
+@@ -16,6 +16,14 @@
+ #include "mpvabstractitem_p.h"
+ #include "mpvcontroller.h"
+ 
++// MyHub patch: Q_STATIC_LOGGING_CATEGORY was introduced in Qt 6.9, but this
++// project targets Qt 6.8 LTS. Fall back to the equivalent static form.
++#if QT_VERSION < QT_VERSION_CHECK(6, 9, 0)
++#ifndef Q_STATIC_LOGGING_CATEGORY
++#define Q_STATIC_LOGGING_CATEGORY(name, ...) static Q_LOGGING_CATEGORY(name, __VA_ARGS__)
++#endif
++#endif
++
+ Q_STATIC_LOGGING_CATEGORY(MpvQt_MpvRenderer, "MpvQt.MpvRenderer")
+ 
+ static void *get_proc_address_mpv(void *ctx, const char *name)

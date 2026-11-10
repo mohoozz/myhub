@@ -1,0 +1,37 @@
+# ---- 构建产物 ----
+build/
+out/
+*-build/
+cmake-build-*/
+
+# ---- 原生依赖：体积大或可复现获取，不入库 ----
+# libmpv 由 third_party/fetch-libmpv.ps1 按锁定版本 + SHA256 获取
+third_party/libmpv/*
+!third_party/libmpv/make-implib.ps1
+
+# mpvqt 源码由 build-mpvqt.ps1 克隆（锁定 tag v1.2.0），构建产物不入库
+third_party/mpvqt/
+third_party/mpvqt-install/
+third_party/mpvqt-build-debug/
+third_party/mpvqt-install-debug/
+
+# 依赖自检的构建输出
+third_party/deps-check/build/
+
+# ---- M-1 预研产物 ----
+# 探针脚本与源码入库（可复现），构建输出、截帧与报告不入库
+research/*/build/
+research/**/*.png
+research/**/s1-*-report.txt
+research/**/s6-*-report.txt
+
+# ---- vcpkg ----
+vcpkg_installed/
+
+# ---- IDE / 系统 ----
+.vs/
+.vscode/
+.idea/
+*.user
+Thumbs.db
+.DS_Store

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "myhub-pc",
+  "version": "1.0.0",
+  "description": "MyHub desktop (Windows/macOS) native dependencies",
+  "builtin-baseline": "44ccfd88b3eca6929d6d16398c7b19945c29a5f6",
+  "dependencies": [
+    "zlib",
+    {
+      "name": "sqlite3",
+      "features": [
+        "json1"
+      ]
+    },
+    {
+      "name": "libarchive",
+      "default-features": false,
+      "features": [
+        "bzip2",
+        "crypto",
+        "lzma"
+      ]
+    },
+    "libsmb2"
+  ],
+  "overrides": [
+    {
+      "name": "zlib",
+      "version": "1.3.2",
+      "port-version": 2
+    },
+    {
+      "name": "sqlite3",
+      "version": "3.53.4",
+      "port-version": 2
+    },
+    {
+      "name": "libarchive",
+      "version": "3.8.9"
+    },
+    {
+      "name": "libsmb2",
+      "version": "6.2"
+    }
+  ]
+}

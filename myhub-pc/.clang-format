@@ -1,0 +1,100 @@
+# myhub-pc C++ 风格（C++20 / Qt）
+#
+# 目标：与既有源码**零差异**——风格是从现有代码归纳出来的，不是反过来改代码。
+# 要点：类/结构体/函数的左花括号换行（Allman），但 namespace 与控制语句保持同行；
+#       4 空格缩进、指针靠右、列宽 100、访问修饰符顶格。
+#
+# 用法：
+#   clang-format -i src/**/*.cpp          # 本地格式化
+#   scripts/lint.ps1 -Fix                 # 全量格式化 + 校验
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+
+# 基本排版
+ColumnLimit: 100
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+MaxEmptyLinesToKeep: 1
+
+# 花括号：类型与函数换行，namespace / 控制语句 / 初始化器不换行
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterControlStatement: Never
+  AfterNamespace: false
+  AfterExternBlock: false
+  AfterObjCDeclaration: false
+  BeforeCatch: false
+  BeforeElse: false
+  BeforeLambdaBody: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# 与源码一致：`T value{}` 不留空格；`if (x)` 带空格
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInParentheses: false
+SpacesInAngles: false
+
+# 指针/引用靠右：`QObject *parent`
+PointerAlignment: Right
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
+
+# 模板声明独占一行，结构体名不并到模板行
+BreakTemplateDeclarations: Yes
+
+# 短形式：仅允许内联定义的单行函数/ lambda
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+
+# 访问修饰符顶格（Qt 传统：public: 与 class 同列）
+AccessModifierOffset: -4
+
+# include：**不排序、不重排分组**。
+# 排序会让「格式化」变成移动行，diff 里真假难辨；而且各文件的 include 分组
+# 本来就是按「本文件头 / 项目头 / Qt / 标准库」人工排的，clang-format 排不出这个语义。
+# 这条也是校验不变式的关键：关掉排序后，格式化只可能改空白与换行。
+IncludeBlocks: Preserve
+SortIncludes: Never
+
+# 参数/实参换行：允许把多个实参挤在一行（首版设 false，把 18 个 QStringLiteral
+# 拆成 18 行，diff 上千行且更难读）；注释一律不重排，中文注释是人工排版的
+BinPackParameters: true
+BinPackArguments: true
+AlignAfterOpenBracket: Align
+AlignOperands: DontAlign
+BreakBeforeBinaryOperators: NonAssignment
+ReflowComments: false
+
+# 构造初始化列表：沿用源码的「每行一项 + 逗号在前」写法
+BreakConstructorInitializers: BeforeComma
+PackConstructorInitializers: Never
+
+# 对齐类检查一律关闭：源码不靠列对齐表达语义，开启会制造大面积无意义 diff
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: None
+AlignEscapedNewlines: Left
+AlignTrailingComments: true
+
+# 其他
+FixNamespaceComments: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+IndentCaseLabels: false
+...
