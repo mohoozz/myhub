@@ -89,10 +89,11 @@ tr:last-child td{border-bottom:none}
   下面把三件事拆成 <b>F（全屏化布局）</b> / <b>S（胶囊尺寸）</b> / <b>A（展开动画）</b> 三组候选，每组的推荐项标了 <span class="tag rec">推荐</span>，确认后我按「F1 + S1 + A1」直接改代码。
 </p>
 <div class="shipped">
-  <b>已实施（F1 + S1 + A1）</b><br>
+  <b>已实施（F1 + S1 + A1）</b>　|　<b style="color:#047857">本轮已实施：W5（去掉锁 + 按内容贴合）+ H2（32pt）+ 位置下沉（浮层忽略底部安全区，21pt 量到屏幕物理底边）</b><br>
   <b>BrowserHomeView</b>：根容器改 <code>ZStack(alignment:.bottom)</code>；网页层 <code>.ignoresSafeArea(.container, edges: fullBleedEdges)</code>（沉浸态 + 已加载网页时上下压满，起始页仍走安全区）；操作栏 / 小胶囊从 <code>VStack</code> 分栏改为 ZStack 兄弟浮层，网页高度不再随展开收起变化；<code>immersiveBarGap = 8</code>；新增 <code>bottomChrome</code> 单一出口 + <code>@Namespace chromeMorphNS</code> + <code>chromeMorph</code> 弹簧（response 0.34 / damping 0.86）；小胶囊改 28pt 视觉高 / 12pt 字 / 左右 11pt / 上下 8pt 透明热区（命中 44pt），底距补 <code>+8pt</code> 让视觉胶囊落到 8pt。<br>
   <b>BrowserToolbar</b>：胶囊底抽为 <code>ChromeCapsule</code>（白底 + 1pt cardBorder + shadow 0.10），与胶囊共用 <code>matchedGeometryEffect(id: "browserBottomChrome")</code>；移除自带 <code>cornerRadius</code> 背景链，改 <code>.clipShape(Capsule())</code> + <code>.background { ChromeCapsule }</code>。<br>
-  <b>RootView</b>：<code>phoneBottomChrome</code> 隐藏态 <code>.padding(.bottom, 0)</code>，底部装饰高度归零。
+  <b>RootView</b>：<code>phoneBottomChrome</code> 隐藏态 <code>.padding(.bottom, 0)</code>，底部装饰高度归零。<br>
+  <b>本轮（W5 + H2 + 位置）</b>：<code>capsuleHeight 28 → 32</code>、<code>capsuleHitInset 8 → 6</code>（视觉高 + inset 恒为 44pt 热区）；胶囊去掉锁图标、只显示 <code>capsuleHost(tab)</code>（超 18 字符中段省略）；宽度改用 <code>.fixedSize(horizontal: true)</code> 按内容贴合（旧 <code>frame(maxWidth: 190)</code> 是长条根源）；<b>位置</b>：<code>immersiveBarGap 8 → 21</code> 且浮层与退出钮在沉浸态 <code>.ignoresSafeArea(.container, edges: .bottom)</code> —— 旧算法「安全区 34pt + 8pt」= 胶囊底边离屏幕底边 42pt（约 8mm，读成浮在半空），现在从屏幕物理底边量 21pt（Home 指示条可见横条上沿 13pt + 8pt）。
 </div>
 
 <div class="alert">
@@ -210,13 +211,48 @@ tr:last-child td{border-bottom:none}
   建议 <b>S1</b>：<b>视觉 28pt（12pt 字、左右 11pt、锁图标 10pt）</b>，同时用 <code>.padding(.vertical, 8) + contentShape</code> 把<b>点击热区仍撑到 44pt</b> —— 视觉变小、手指命中不变，两个诉求不冲突。
 </div>
 
+<h3 class="sec">二·补 胶囊宽度 W1–W5（高度一律 28pt 不变，1:1 真实尺寸）</h3>
+<div class="alert">
+  <b>为什么现在是一根"长条"？</b>代码里给域名文本加了 <code>.frame(maxWidth: 190)</code>，短域名（<code>apple.com</code> ≈ 58pt）也被撑到 190pt，再加锁图标与左右 11pt 内边距，实测胶囊宽 <b>≈ 227pt（屏宽 54%）</b> —— 不再是"S1 的小胶囊"，而是一根横条。<br>
+  <b>"宽度缩小 90%"要说明一下</b>：按字面执行 = 227 × 10% ≈ <b>23pt</b>，这个宽度装不下「锁 + 域名」（域名最短也要 ~50pt），视觉上会退化成一个 23×28 的小圆点，所以下面给的是<b>四档可行区间</b>，W4 就是"字面 -90%"的示意，标了不可行。<br>
+  <b>真正要做的那件事</b>：把 <code>maxWidth: 190</code> 这个"假贴合"去掉，让胶囊<b>按内容贴合</b>（短域名就短），只留一个<b>更小的上限</b>防超长域名。
+</div>
+
+<div class="sizes">
+  <div class="u">
+    <div class="real" style="height:28px;width:204px;padding:0 11px"><span style="font-size:10px;color:#6B7280">🔒</span><span style="font-size:12px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>W0 现状</b><br>≈227pt / 54% 屏宽<br><span style="color:#B91C1C">长条</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:28px;padding:0 11px"><span style="font-size:10px;color:#6B7280">🔒</span><span style="font-size:12px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>W1 贴合内容</b><br>≈95pt / 24%<br><span style="color:#047857">推荐</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:28px;padding:0 11px"><span style="font-size:12px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>W5 W1 去掉锁</b><br>≈74pt / 19%<br><span style="color:#047857">本轮新增</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:28px;padding:0 9px"><span style="font-size:10px;color:#6B7280">🔒</span><span style="font-size:11px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>W2 更紧凑</b><br>≈80pt / 20%（11pt 字）</div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:28px;width:44px;padding:0;justify-content:center"><span style="font-size:11px;color:#6B7280">🔒</span></div>
+    <div class="lb"><b>W3 仅锁图标</b><br>44pt / 11%（无域名）<br><span style="color:#B45309">信息量太低</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:28px;width:23px;padding:0;justify-content:center"><span style="font-size:8px;color:#6B7280">🔒</span></div>
+    <div class="lb"><b>W4 字面 -90%</b><br>23pt（≈小圆点）<br><span style="color:#B91C1C">不可行</span></div>
+  </div>
+</div>
+
 <div class="boards" style="margin-top:18px">
   <div class="board">
-    <h2>S1 · 28pt 小胶囊（视觉小 + 44pt 热区）<span class="tag rec">推荐</span></h2>
+    <h2>W1 · 按内容贴合（短域名就短）<span class="tag rec">推荐</span></h2>
     <div class="desc">
-      对齐 Safari 收起态：高度 28pt、字号 <code>.caption</code> 量级、锁图标 10pt、横向内边距 11pt，宽度随域名增长但<b>限宽 60% 屏宽</b>，超长域名截断为 <code>…</code>。<br>
-      外圈包一层透明 <code>padding(.vertical, 8)</code> 把命中区补到 44pt。<br>
-      <span class="pros">优点：视觉体积比现在小 36%，屏底占用明显轻；热区仍达标。</span>
+      去掉 <code>.frame(maxWidth: 190)</code>，让 <code>HStack</code> 按「锁 + 域名」的<b>真实文字宽度</b>收口：<code>apple.com</code> → <b>≈95pt</b>（现在的 42%），<code>zhihu.com</code> → <b>≈85pt</b>。<br>
+      只保留一个<b>小上限</b>（建议 <code>132pt</code>）给超长域名，超出后中段省略（<code>app…ple.com</code>）—— 上限从 190 收到 132，等于"最坏的宽也再收掉 30%"。<br>
+      <span class="pros">优点：短域名立刻回到"小胶囊"，长域名也不会长成横条；高度与热区完全不动（28pt 视觉 / 44pt 命中）。</span><br>
+      <span class="cons">缺点：宽度随域名变化，同一屏上不同网页胶囊会长短不一（Safari 也这样，属于预期行为）。</span>
     </div>
     <div class="phone">
       <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
@@ -226,7 +262,152 @@ tr:last-child td{border-bottom:none}
         <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
         <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
       </div>
-      <div class="cap" style="bottom:15px;height:28px;padding:0 11px"><span class="lk">🔒</span><span class="host" style="font-size:12px">example.com</span></div>
+      <div class="cap" style="bottom:15px;height:28px;padding:0 11px"><span class="lk">🔒</span><span class="host" style="font-size:12px">apple.com</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>W5 · 贴合内容 + 去掉锁图标<span class="tag rec">本轮新增</span></h2>
+    <div class="desc">
+      在 W1 基础上把锁图标整个去掉，胶囊里只剩域名：<code>apple.com</code> → <b>≈74pt</b>（现状 227pt 的 <b>33%</b>，比带锁再窄 21pt），<code>zhihu.com</code> → ≈66pt。<br>
+      <span class="pros">优点：视觉最接近"一个小胶囊"，且域名成了唯一焦点；Safari 收起态本身也不强调锁，风格不违和。</span><br>
+      <span class="cons">缺点：失去 HTTPS / 证书异常的即时提示（现在的 <code>lock.open</code> 黄色警告在收起态就看不到了）。折中做法：证书异常时<b>才</b>显示锁（正常时不显示），既不占常态宽度、也不丢告警。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:15px;height:28px;padding:0 11px"><span class="host" style="font-size:12px">apple.com</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>W3 · 极窄：只留锁图标<span class="tag bad">信息量不足</span></h2>
+    <div class="desc">
+      宽度 44pt（现在的 19%，约等于"再收掉 80%"），只显示锁图标，域名彻底隐藏 —— 这是<b>最接近"缩小 90%"的可行形状</b>。<br>
+      <span class="cons">缺点：收起态就再也看不出在哪个网站；安全性提示（锁/无锁）也只剩一个符号，故不推荐。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:15px;height:28px;width:44px;padding:0;justify-content:center"><span class="lk" style="font-size:11px">🔒</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+</div>
+
+<div class="footnote">
+  <b>宽度尺子（同一台 393pt 屏）</b>：W0 227pt（54%）→ W1 95pt（24%，短域名）/ 132pt 上限（34%，长域名）→ <b>W5 74pt（19%，W1 去掉锁）</b>→ W2 80pt（20%）→ W3 44pt（11%）→ W4 23pt（6%，不可行）。<br>
+  <b>实现要点</b>：<code>Text</code> 靠 <code>.lineLimit(1) + .truncationMode(.middle)</code> 收口，宽度上限用 <code>.frame(maxWidth: 132)</code> 且<b>不再</b>让它占满；<code>HStack</code> 加 <code>.fixedSize(horizontal: true, vertical: false)</code> 保证按内容贴合（这才是"变短"的关键，单靠 <code>maxWidth</code> 只会撑满）。
+</div>
+
+<h3 class="sec">二·补2 胶囊高度 H0–H4（宽度沿用 W5 无锁 ≈74pt，1:1 真实尺寸）</h3>
+<div class="alert">
+  <b>要点：加高不影响点击热区。</b>热区靠外层透明 <code>padding</code> 补到 44pt，所以「视觉高 + 上下 inset = 44」这条恒等式只要跟着改 inset 即可：
+  28pt 时 inset 8、<b>32pt 时 inset 6</b>、34pt 时 inset 5、38pt 时 inset 3。<br>
+  <b>加高的收益</b>：28pt 在 3× 屏上是 84 物理像素，圆角半径只有 14pt，看上去偏"细线"；到 32pt 后圆角 16pt、域名上下留白更匀，和 60pt 操作栏、悬浮页签栏的胶囊节奏更接近。代价仅仅是多占 4pt 高度。
+</div>
+
+<div class="sizes">
+  <div class="u">
+    <div class="real" style="height:28px;padding:0 11px"><span style="font-size:12px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>H0 当前</b><br>28pt / inset 8<br><span style="color:#6B7280">偏细</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:30px;padding:0 11px"><span style="font-size:12px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>H1</b><br>30pt / inset 7<br><span style="color:#B45309">几乎看不出</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:32px;padding:0 11px"><span style="font-size:12px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>H2 稍微加高</b><br>32pt / inset 6<br><span style="color:#047857">推荐</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:34px;padding:0 11px"><span style="font-size:13px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>H3</b><br>34pt / inset 5（13pt 字）<br><span style="color:#6B7280">= Safari 旧值</span></div>
+  </div>
+  <div class="u">
+    <div class="real" style="height:38px;padding:0 12px"><span style="font-size:13px;font-weight:600">apple.com</span></div>
+    <div class="lb"><b>H4 偏胖</b><br>38pt / inset 3<br><span style="color:#B91C1C">又回到药丸感</span></div>
+  </div>
+</div>
+
+<div class="boards" style="margin-top:18px">
+  <div class="board">
+    <h2>H2 · 32pt（四周各 6pt 透明热区 → 命中仍 44pt）<span class="tag rec">推荐</span></h2>
+    <div class="desc">
+      视觉高度 28 → <b>32pt</b>（+4pt），圆角随之 16pt；宽度仍是 W5 的贴合值 <b>≈74pt</b>，整体比例 <b>74 × 32</b> 比现在的 227 × 28 短得多、也"立"得起来。<br>
+      字号保持 12pt（32pt 高 + 12pt 字 = 上下各 10pt 净空，比例更接近 Safari）；若嫌字偏小，可走 H3 的 13pt。<br>
+      <span class="pros">优点：只多 4pt 高度，换掉"细线感"；inset 由 8 改 6，热区、落点、动画全不变。</span><br>
+      <span class="cons">缺点：几乎没有 —— 唯一要同步的是 <code>capsuleHitInset</code> 常量，漏改会让热区变 40pt（低于 44pt 下限）。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:15px;height:32px;padding:0 11px"><span class="host" style="font-size:12px">apple.com</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+
+  <div class="board">
+    <h2>H3 · 34pt + 13pt 字（Safari 原尺度，取景更满）</h2>
+    <div class="desc">
+      高度 34pt、字号 13pt，是 iOS Safari 收起态地址栏的量级 —— 比 H2 再"实"一点，但视觉重量也开始回到药丸。<br>
+      <span class="cons">缺点：比 H2 多占 2pt 且字更大，长域名更容易触到 132pt 上限；屏底存在感会明显强于 32pt 版。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:15px;height:34px;padding:0 11px"><span class="host" style="font-size:13px">apple.com</span></div>
+      <div class="hi"></div>
+    </div>
+  </div>
+</div>
+
+<div class="footnote">
+  <b>高度尺子</b>：H0 28pt（inset 8）→ H1 30pt（7）→ <b>H2 32pt（6）</b>→ H3 34pt（5）→ H4 38pt（3）；五档<b>视觉高 + 上下 inset 恒等于 44pt</b>，所以点击热区、与操作栏的水平对齐、形变动画都不用重算。<br>
+  <b>代码落点</b>：只改两个常量 —— <code>capsuleHeight: 28 → 32</code>、<code>capsuleHitInset: 8 → 6</code>；<code>bottomChrome</code> 里的 <code>+ Self.capsuleHitInset</code> 补偿项自动跟着变，落点仍与操作栏同一水平线。<br>
+  <b>附：位置问题诊断（用户反馈"离底部还有一个小拇指"）</b>不是布局 bug，是<b>两段间距叠加</b>：浮层锚在「系统底部安全区」（<code>safeAreaInsets.bottom = 34pt</code>，为 Home 指示条 + 系统手势预留），再叠 <code>immersiveBarGap = 8pt</code>，于是胶囊底边离屏幕底边 <b>42pt ≈ 8mm</b>。而 Home 指示条的<b>可见横条</b>只占屏幕底边往上 8–13pt，中间那 21pt 是空白预留，所以视觉上就是"浮在半空"。<br>
+  修法：沉浸态下让浮层（含退出钮）<code>.ignoresSafeArea(.container, edges: .bottom)</code>，间距直接从屏幕物理底边量 —— <code>immersiveBarGap = 21pt</code>（指示条上沿 13pt + 8pt 净空）。这就是原型里画的"贴底"效果，也是 Safari 收起态的观感。
+</div>
+
+<div class="boards" style="margin-top:18px">
+  <div class="board">
+    <h2>S1 · 小胶囊（视觉小 + 44pt 热区）<span class="tag rec">推荐</span></h2>
+    <div class="desc">
+      对齐 Safari 收起态：高度 <b>32pt（本轮 H2，原 28pt）</b>、字号 12pt、横向内边距 11pt、无锁图标（W5），宽度<b>按内容贴合、上限 132pt</b>（详见上节 W1），超长域名截断为 <code>…</code>。<br>
+      外圈包一层透明 <code>padding(.vertical, 6)</code> 把命中区补到 44pt。<br>
+      <span class="pros">优点：视觉体积比现在（44pt / 227pt 宽）小得多，屏底占用明显轻；热区仍达标。</span>
+    </div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>􀙇 􀖀 􀛨</span></div>
+      <div class="web">
+        <div class="wimg">🏞️</div><div class="wh">网页全屏</div><div class="wm">example.com</div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline m"></div><div class="wline"></div><div class="wline s"></div><div class="wgap"></div>
+        <div class="wline"></div><div class="wline m"></div><div class="wline s"></div>
+      </div>
+      <div class="cap" style="bottom:15px;height:32px;padding:0 11px"><span class="host" style="font-size:12px">example.com</span></div>
       <div class="hi"></div>
     </div>
   </div>
@@ -289,7 +470,7 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="stage">
       <div class="stageweb"></div>
-      <div class="morph a1"><span class="capin">🔒 example.com</span><span class="barin"><i>‹</i><i>›</i><i>↻</i><em>🔒 example.com/article</em><i>▣</i></span></div>
+      <div class="morph a1"><span class="capin">example.com</span><span class="barin"><i>‹</i><i>›</i><i>↻</i><em>🔒 example.com/article</em><i>▣</i></span></div>
       <div class="stagehi"></div>
     </div>
   </div>
@@ -303,7 +484,7 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="stage">
       <div class="stageweb"></div>
-      <div class="morph a2"><span class="capin">🔒 example.com</span><span class="barin"><i>‹</i><i>›</i><i>↻</i><em>🔒 example.com/article</em><i>▣</i></span></div>
+      <div class="morph a2"><span class="capin">example.com</span><span class="barin"><i>‹</i><i>›</i><i>↻</i><em>🔒 example.com/article</em><i>▣</i></span></div>
       <div class="stagehi"></div>
     </div>
   </div>
@@ -334,9 +515,9 @@ tr:last-child td{border-bottom:none}
 .morph .barin em{font-style:normal;flex:1;height:26px;display:flex;align-items:center;padding:0 8px;border-radius:13px;background:var(--fill);color:var(--ts);font-size:9px;white-space:nowrap;overflow:hidden}
 /* A1：同一元素改 frame + 内容交叉淡入，弹簧 */
 @keyframes a1morph{
-  0%,16%{width:132px;height:26px;border-radius:13px}
+  0%,16%{width:84px;height:29px;border-radius:14.5px}
   40%,66%{width:294px;height:42px;border-radius:21px}
-  90%,100%{width:132px;height:26px;border-radius:13px}
+  90%,100%{width:84px;height:29px;border-radius:14.5px}
 }
 @keyframes a1cap{
   0%,16%{opacity:1}38%,64%{opacity:0}88%,100%{opacity:1}
@@ -349,11 +530,11 @@ tr:last-child td{border-bottom:none}
 .a1 .barin{animation:a1bar 6s infinite}
 /* A2：先淡出内容，再变尺寸（两段） */
 @keyframes a2morph{
-  0%,18%{width:132px;height:26px;border-radius:13px}
-  26%{width:132px;height:26px;border-radius:13px}
+  0%,18%{width:84px;height:29px;border-radius:14.5px}
+  26%{width:84px;height:29px;border-radius:14.5px}
   50%,64%{width:294px;height:42px;border-radius:21px}
   76%,86%{width:294px;height:42px;border-radius:21px}
-  96%,100%{width:132px;height:26px;border-radius:13px}
+  96%,100%{width:84px;height:29px;border-radius:14.5px}
 }
 @keyframes a2cap{0%,22%{opacity:1}32%,74%{opacity:0}88%,100%{opacity:1}}
 @keyframes a2bar{0%,34%{opacity:0}48%,74%{opacity:1}84%,100%{opacity:0}}
@@ -381,7 +562,9 @@ tr:last-child td{border-bottom:none}
 <table>
   <tr><th>项</th><th>推荐</th><th>为什么</th></tr>
   <tr><td>布局</td><td>F1 网页全屏 + 浮层操作栏</td><td>唯一能同时解决"上下空白"和"展开卡顿主因"的方案；Safari 同款结构。</td></tr>
-  <tr><td>胶囊尺寸</td><td>S1 28pt（热区仍 44pt）</td><td>视觉小一圈对齐 Safari，手指命中不变。</td></tr>
+  <tr><td>胶囊尺寸</td><td>S1 → H2：32pt（热区仍 44pt）</td><td>比 28pt 稍高一点点，去掉"细线感"；inset 8 → 6，命中不变。</td></tr>
+  <tr><td>胶囊宽度</td><td>W1 按内容贴合 + 上限 132pt</td><td><code>apple.com</code> ≈95pt（现状 227pt 的 42%）；去掉 <code>maxWidth:190</code> 这个"假贴合"才不会再变长条。</td></tr>
+  <tr><td>胶囊内容</td><td>W5 去掉锁图标，只留域名</td><td>再窄 21pt（≈74pt / 19%）；代价是常态看不到 HTTPS 提示，可选"仅证书异常时才显示锁"。</td></tr>
   <tr><td>胶囊位置</td><td>贴 Home 指示条上方 8pt</td><td>「挪到最下面」的极限位置；再低会压到系统 Home 指示条。</td></tr>
   <tr><td>展开动画</td><td>A1 单容器形变 + 弹簧 .34/0.86</td><td>无重叠双影、网页不参与布局，全程顺滑。</td></tr>
 </table>
@@ -389,7 +572,8 @@ tr:last-child td{border-bottom:none}
 <div class="footnote">
   <b>改动落点（确认后执行）：</b><br>
   <code>BrowserHomeView.swift</code> —— <code>contentArea</code> 加 <code>.ignoresSafeArea(edges:[.top,.bottom])</code>；操作栏与胶囊从 <code>VStack</code> 内挪进 <code>.overlay(alignment:.bottom)</code>，合并为单容器形变；
-  <code>miniCapsule</code> 28pt / 12pt 字 / 左右 11pt / 限宽 60% / 垂直 <code>padding(8)</code> 补热区；<code>bottomBarGap</code> 改 8（不再叠 <code>phoneBottomChrome</code> 的 8pt）。<br>
+  <code>miniCapsule</code> 28pt / 12pt 字 / 左右 11pt / 垂直 <code>padding(8)</code> 补热区；<code>bottomBarGap</code> 改 8（不再叠 <code>phoneBottomChrome</code> 的 8pt）。<br>
+  <b>本轮（宽度 + 内容 + 高度）改动</b>：<code>miniCapsule</code> 去掉 <code>Text.frame(maxWidth: 190)</code>（长条根因），改为 <code>.lineLimit(1) + .truncationMode(.middle) + .fixedSize(horizontal: true, vertical: false)</code> 让 HStack 按内容收口，仅保留 <code>.frame(maxWidth: 132)</code> 作超长上限；<b>删掉锁图标</b>（W5），只留域名；<code>capsuleHeight</code> 28 → <b>32</b>、<code>capsuleHitInset</code> 8 → <b>6</b>（视觉高 + 上下 inset 仍 = 44pt 热区）。<br>
   <code>RootView.swift</code> —— <code>phoneBottomChrome</code> 的 <code>.padding(.bottom, 8)</code> 改为隐藏态取 0（仅影响 iPhone 浏览器沉浸态）。
   <code>Motion.swift</code> 无需改，新曲线就地写在形变处。<br>
   <b>不改动</b>：收起/展开的<b>触发逻辑</b>（滑动/刷新收起、点击网页或胶囊展开）保持现状，仅换视觉与动效。

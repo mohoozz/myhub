@@ -37,9 +37,13 @@ struct BrowserHomeView: View {
     /// 操作栏 / 收起态小胶囊与底部页签栏之间的视觉间距（左右内缩 12pt 形成上下「双胶囊」节奏）
     private let tabBarGap: CGFloat = 12
 
-    /// 沉浸态下浮层到系统底部安全区边缘的间距（F1）：8pt 即距 Home 指示条上沿 8pt，
-    /// 是「挪到最下面」的极限位置，再低就会压到系统 Home 指示条本身。
-    private let immersiveBarGap: CGFloat = 8
+    /// 沉浸态下浮层底边到「屏幕物理底边」的距离（F1）：21pt = Home 指示条可见横条上沿（约 13pt）+ 8pt。
+    ///
+    /// 旧实现是相对「系统底部安全区」留 8pt，而安全区本身就占 34pt（为指示条与系统手势预留），
+    /// 两者叠加后胶囊底边离屏幕底边有 42pt ≈ 8mm，看起来正是「浮在半空、离底部还差一小截」。
+    /// 现在浮层在沉浸态下自己忽略底部安全区（见 `bottomChrome` 的 `ignoresSafeArea`），
+    /// 这个值直接从屏幕物理底边量起，才是真的「贴底」。
+    private let immersiveBarGap: CGFloat = 21
 
     /// 沉浸态（原型 `prototype/browser-exit-handle-collapse-options.html` 策略 S1）：
     /// iPhone 上停留在「浏览器」页签期间隐藏全局页签栏与 mini 播放器，把约 128pt 竖向空间还给网页；
@@ -103,8 +107,10 @@ struct BrowserHomeView: View {
 
             // 底部浮层（F1 + A1）：操作栏 / 小胶囊浮在网页之上，不再与网页上下分栏——
             // 展开收起时网页高度不再变化（旧动画卡顿的主因：WKWebView 每帧都要重排重绘）。
-            // 作为 ZStack 兄弟层，落点是系统安全区底部，`bottomBarGap` 即到 Home 指示条的距离。
+            // 沉浸态下自己忽略底部安全区：`bottomBarGap` 从屏幕物理底边量起，
+            // 否则 34pt 安全区会与间距叠加，胶囊看起来离底部还差一小截（用户反馈的"浮在半空"）。
             bottomChrome
+                .ignoresSafeArea(.container, edges: isImmersive ? .bottom : [])
 
             // 沉浸态左下角退出钮（+ 有播放会话时的播放微件）：
             // 收缩态与操作栏的 `toolbarMini` 同源联动（T1），贴边半隐仅露 14pt。
@@ -117,6 +123,9 @@ struct BrowserHomeView: View {
                         .transition(.opacity)
                     Spacer(minLength: 0)
                 }
+                // 与底部浮层同一套基准：退出钮按展开态条高定位，浮层下沉多少它也要下沉多少，
+                // 否则会与操作栏之间凭空多出 34pt 安全区的空档
+                .ignoresSafeArea(.container, edges: .bottom)
             }
         }
         .background(AppColors.pageBackground)
@@ -249,41 +258,52 @@ struct BrowserHomeView: View {
 
     // MARK: - 收起态小胶囊（Safari 风格）
 
-    /// 收起态小胶囊的视觉高度（S1）：对齐 Safari 收起态地址胶囊的尺度。
-    /// 旧值 44pt + 15pt 字在满屏网页上是一颗「胖药丸」，视觉重量压过内容。
-    private static let capsuleHeight: CGFloat = 28
-    /// 视觉胶囊外再补的透明内边距（上下各 8pt）：28 + 8×2 = 44pt，命中区仍满足 iOS 下限（TODO 406）
-    private static let capsuleHitInset: CGFloat = 8
+    /// 收起态小胶囊的视觉高度（S1 → H2）：32pt 是在 28pt「细线感」与 44pt「胖药丸」之间的取值，
+    /// 只多 4pt 视觉高度就能让域名上下留白变匀、圆角（16pt）与页签栏胶囊语言更接近（见原型 H0–H4）。
+    private static let capsuleHeight: CGFloat = 32
+    /// 视觉胶囊外再补的透明内边距（上下各 6pt）：32 + 6×2 = 44pt，命中区仍满足 iOS 下限（TODO 406）
+    private static let capsuleHitInset: CGFloat = 6
 
-    /// 操作栏收起后缩为底部中央的小胶囊：锁图标 + 域名，点击展开完整操作栏。
+    /// 收起态胶囊里显示的域名（W1）：按内容贴合，超长才中段省略。
     ///
-    /// 尺寸对齐 Safari（S1，见 `prototype/browser-fullscreen-options.html`）：视觉 28pt 高 / 12pt 字 / 左右 11pt，
-    /// 外面再套 8pt 透明内边距把点击热区补到 44pt —— 视觉小一圈、命中不变，两个诉求不冲突。
+    /// 不用 `.frame(maxWidth:)` 收口：胶囊外层用了 `fixedSize(horizontal:)`（不这么写就会被
+    /// ZStack 的整宽提案拉成 227pt 的长条），此时 `maxWidth` 拿不到确定宽度、截断不出省略号、
+    /// 只剩硬裁切。改为「字符预算 + 手写省略号」，宽度确定、也不会出现半截字形。
+    /// 18 字符 ≈ 12pt 字下 130pt，正好卡在 W1 的 132pt 上限内。
+    private func capsuleHost(_ tab: BrowserTab) -> String {
+        let host = tab.currentURL?.host ?? "网页"
+        guard host.count > 18 else { return host }
+        // 保留头 9 + 尾 6：既认得出站点，也留得住 .com / .cn 这类后缀
+        return "\(host.prefix(9))…\(host.suffix(6))"
+    }
+
+    /// 操作栏收起后缩为底部中央的小胶囊：只显示域名，点击展开完整操作栏。
+    ///
+    /// 尺寸对齐 Safari（S1 + H2 + W5，见 `prototype/browser-fullscreen-options.html`）：
+    /// 视觉 32pt 高 / 12pt 字 / 左右 11pt，外面再套 6pt 透明内边距把点击热区补到 44pt —— 视觉小、命中不变。
+    /// 不再画 HTTPS 锁图标（W5）：常态只留域名，胶囊宽度直接少 21pt；证书状态仍由展开态地址栏承担。
+    /// 宽度按内容贴合而不是 `maxWidth: 190`（W1）——旧写法把短语域名也撑到 190pt，胶囊就变成长条。
     /// 胶囊底交给 `ChromeCapsule` 并与操作栏共享形变身份（A1），展开时是同一块底长大成整条操作栏。
     private func miniCapsule(_ tab: BrowserTab) -> some View {
         Button {
             expandToolbar()
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: tab.hasOnlySecureContent ? "lock.fill" : "lock.open")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(AppColors.textSecondary)
-                Text(tab.currentURL?.host ?? "网页")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    // 限宽：超长域名中段省略，胶囊不会横到屏幕两端
-                    .frame(maxWidth: 190)
-            }
-            .padding(.horizontal, 11)
-            .frame(height: Self.capsuleHeight)
-            .background { ChromeCapsule(morphNamespace: chromeMorphNS) }
-            .padding(.vertical, Self.capsuleHitInset)
-            .contentShape(Rectangle())
+            Text(capsuleHost(tab))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppColors.textPrimary)
+                .lineLimit(1)
+                // 按内容贴合（W1）：不加 fixedSize，胶囊会被外层整宽提案撑成 227pt 的横条
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 11)
+                .frame(height: Self.capsuleHeight)
+                .background { ChromeCapsule(morphNamespace: chromeMorphNS) }
+                .padding(.vertical, Self.capsuleHitInset)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("展开浏览器操作栏")
+        // 锁图标去掉后，证书状态改为语音提示，VoiceOver 仍能听出是否 HTTPS
+        .accessibilityHint(tab.hasOnlySecureContent ? "当前网页为安全连接" : "当前网页连接不安全")
     }
 
     // MARK: - 菜单
