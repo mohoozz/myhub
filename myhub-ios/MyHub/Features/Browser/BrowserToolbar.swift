@@ -4,7 +4,7 @@ import SwiftUI
 /// 一行整合：后退 / 前进 / 刷新（加载中变停止）+ 地址栏 + 标签 / 菜单，
 /// 整体为与全局悬浮页签栏同语言的圆角胶囊（内缩 12pt、全圆角胶囊、1pt 灰描边 + 轻阴影）；
 /// 内部导航键用弱填充圆底、地址栏为胶囊内浅灰填充块。
-/// 地址栏起始页（自带大搜索框）时隐藏并退化为占位；后退/前进按钮依据 `canGoBack` / `canGoForward` 动态启用；「菜单」走全局 `PopupMenu`。
+/// 地址栏起始页（自带大搜索框）时隐藏并退化为占位；后退/前进按钮依据 `canGoBackOrStartPage` / `canGoForwardOrHistory` 动态启用；「菜单」走全局 `PopupMenu`。
 ///
 /// 编辑态（TODO 407，对齐 Safari 显示流程）：点击地址栏后本视图整体变为「输入条」——
 /// 左侧导航键与右侧标签 / 菜单全部让出横向空间，地址栏铺满，仅余右侧「取消」；
@@ -39,7 +39,7 @@ struct BrowserToolbar: View {
             if !isEditingAddress {
                 HStack(spacing: 2) {
                     navButton("chevron.left", disabled: !tab.canGoBackOrStartPage) { tab.goBack() }
-                    navButton("chevron.right", disabled: !tab.canGoForward) { tab.goForward() }
+                    navButton("chevron.right", disabled: !tab.canGoForwardOrHistory) { tab.goForward() }
                     navButton(tab.isLoading ? "xmark" : "arrow.clockwise", disabled: false) {
                         if tab.isLoading { tab.stopLoading() } else { tab.reload() }
                     }

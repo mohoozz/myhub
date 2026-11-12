@@ -74,6 +74,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         didSet {
             // 相同值（如重定向回原 URL）不重复触发；init 中的初始赋值不会触发 didSet
             guard currentURL != oldValue else { return }
+            noteHistoryNavigation()
             onStateChange?()
         }
     }
@@ -104,6 +105,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 回退到该条目即视为回到起始页，避免回退越过起始页误入更早的残留历史（多退一页）。
     private var startPageBoundary: WKBackForwardListItem?
 
+    // MARK: - 跨重启历史栈
+
+    /// 含当前页在内的历史 URL（按时间顺序）。正常运行时由 `WKBackForwardList` 同步而来，
+    /// 重启恢复后作为回退/前进的唯一依据（WebKit 没有「注入历史」的公开 API）。
+    private var historyURLs: [String] = []
+    /// 当前页在 `historyURLs` 中的下标；`-1` 表示无当前页（起始页）
+    private var historyIndex = -1
+    /// 是否由 `historyURLs` 驱动回退/前进：仅「会话恢复且历史跨进程丢失」的标签为 `true`。
+    /// 此模式下原生 back/forward 顺序不可靠（每次回退都是一次新导航），故禁用系统侧滑手势、
+    /// 改由工具栏按钮与自定义边缘手势走本栈。
+    private(set) var usesRestoredHistory = false
+
     /// `target=_blank` / `window.open` 回调：交给 `BrowserSessionStore` 新建标签
     var onOpenNewTab: ((URL) -> Void)?
 
@@ -127,13 +140,40 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     ///   会话恢复必须传 `false`：`RootView` 用 ZStack 保活所有页签、启动即构建 `BrowserHomeView`，
     ///   若在此直接 load，会把上次开过的**全部**网页在启动瞬间一起联网、渲染并（允许自动播放时）出声，
     ///   用户还没进浏览器就可能看到／听到页面内容（含网页全屏视频等系统层呈现）。
-    init(id: UUID = UUID(), url: URL?, isIncognito: Bool, autoload: Bool = true) {
+    /// - Parameters:
+    ///   - restoredHistory: 会话恢复时读回的历史 URL 列表（含当前页），用于重建回退能力
+    ///   - restoredIndex: 当前页在上述列表中的下标
+    ///   - startedFromStartPage: 会话恢复时读回的「从起始页进入」标记
+    init(
+        id: UUID = UUID(),
+        url: URL?,
+        isIncognito: Bool,
+        autoload: Bool = true,
+        restoredHistory: [String] = [],
+        restoredIndex: Int = -1,
+        startedFromStartPage: Bool = false
+    ) {
         self.id = id
         self.isIncognito = isIncognito
 
         super.init()
 
         self.currentURL = url
+
+        // 重启恢复：原生历史栈已丢失，改用磁盘里的 URL 栈驱动回退/前进。
+        // 仅当栈里确有可回退/可前进的条目时才接管，避免把普通标签也拖进自定义模式。
+        if let url, restoredHistory.count > 1,
+           restoredHistory.indices.contains(restoredIndex) {
+            var stack = restoredHistory
+            if stack[restoredIndex] != url.absoluteString {
+                // 落盘后又发生过重定向/跳转：以实际当前地址为准，避免回退到错位的一页
+                stack[restoredIndex] = url.absoluteString
+            }
+            historyURLs = stack
+            historyIndex = restoredIndex
+            usesRestoredHistory = true
+        }
+        self.startedFromStartPage = startedFromStartPage
 
         if let url {
             if autoload {
@@ -154,6 +194,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             startedFromStartPage = true
             // 记录当前历史边界：后续回退到此条目即回到起始页（避免多退一页到残留历史）
             startPageBoundary = webView.backForwardList.currentItem
+            // 起始页是逻辑第一页：历史从这里重新累积（重启恢复后从起始页出发同样适用）
+            historyURLs = []
+            historyIndex = -1
         }
         clearError()
         // 用户主动导航优先于会话恢复的延迟加载，避免之后又被旧 URL 覆盖
@@ -204,7 +247,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 起始页本身是标签的逻辑第一页，不可再回退。
     var canGoBackOrStartPage: Bool {
         guard !isShowingStartPage else { return false }
+        if usesRestoredHistory { return historyIndex > 0 || startedFromStartPage }
         return webView.canGoBack || startedFromStartPage
+    }
+
+    /// 前进可用性（工具栏按钮用）：重启恢复后原生历史栈为空，改看自定义栈
+    var canGoForwardOrHistory: Bool {
+        if usesRestoredHistory { return historyIndex >= 0 && historyIndex < historyURLs.count - 1 }
+        return webView.canGoForward
     }
 
     /// 回退一步是否将回到起始页（即已到达「从起始页出发」时记录的历史边界）
@@ -216,12 +266,24 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 下一步回退是否为「回到起始页」（供手势层决定是否拦截系统 back 手势）
     var backLeadsToStartPage: Bool {
         guard !isShowingStartPage, startedFromStartPage else { return false }
+        // 重启恢复：自定义栈退到底即起始页
+        if usesRestoredHistory { return historyIndex <= 0 }
         // 无更早历史，或回退将越过起始页边界 → 下一步即起始页
         return !webView.canGoBack || reachedStartPageBoundary
     }
 
     /// 回退：优先走 webView 历史栈；到达起始页边界（或栈空且从起始页进入）时回退到起始页
     func goBack() {
+        if usesRestoredHistory {
+            guard !isShowingStartPage else { return }
+            if historyIndex > 0 {
+                historyIndex -= 1
+                loadHistoryEntry()
+            } else if startedFromStartPage {
+                showStartPage()
+            }
+            return
+        }
         if webView.canGoBack, !reachedStartPageBoundary {
             webView.goBack()
         } else if startedFromStartPage, !isShowingStartPage {
@@ -229,12 +291,23 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
     }
 
-    func goForward() { webView.goForward() }
+    func goForward() {
+        if usesRestoredHistory {
+            guard historyIndex >= 0, historyIndex < historyURLs.count - 1 else { return }
+            historyIndex += 1
+            loadHistoryEntry()
+            return
+        }
+        webView.goForward()
+    }
 
     /// 回退到起始页：清空 URL 展示起始页（起始页始终是标签的逻辑第一页）
     private func showStartPage() {
         startedFromStartPage = false
         startPageBoundary = nil
+        // 自定义历史栈同步清空：起始页是标签的第一页，之后从起始页出发重新累积
+        historyURLs = []
+        historyIndex = -1
         currentURL = nil
         // 注：WKBackForwardList 无公开的清空历史栈 API；此处只重置 UI 状态，webView 历史栈保留。
         // 再次从起始页导航时会依据 `startPageBoundary` 重新界定回退边界，从而不会多退一页到残留历史。
@@ -242,12 +315,68 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     /// 展示标签卡片网格所需的快照（用于持久化）
     var snapshot: BrowserTabSnapshot {
-        BrowserTabSnapshot(id: id, urlString: currentURL?.absoluteString, title: title)
+        // 先与原生历史栈对齐，保证落盘的是「最后一次导航后」的真实历史
+        refreshNativeHistory()
+        return BrowserTabSnapshot(
+            id: id,
+            urlString: currentURL?.absoluteString,
+            title: title,
+            historyURLs: historyURLs.isEmpty ? nil : historyURLs,
+            currentIndex: historyIndex >= 0 ? historyIndex : nil,
+            startedFromStartPage: startedFromStartPage
+        )
     }
 
     /// 是否显示起始页（空白标签：未加载 URL 且无错误）
     var isShowingStartPage: Bool {
         currentURL == nil && !isLoading && !hasError
+    }
+
+    // MARK: - 历史栈维护
+
+    /// 从原生历史栈同步（正常运行时唯一来源）。
+    /// 重启恢复模式下跳过：那时原生栈是本栈「回放」出来的，条目顺序与真实历史相反，不能反向覆盖。
+    private func refreshNativeHistory() {
+        // 未创建的占位标签不能读 `webView`（会触发 lazy 创建、拉起 WebContent 进程），沿用已恢复的栈
+        guard !usesRestoredHistory, isWebViewCreated else { return }
+        let list = webView.backForwardList
+        guard let current = list.currentItem else {
+            historyURLs = []
+            historyIndex = -1
+            return
+        }
+        let back = list.backList
+        historyURLs = (back + [current] + list.forwardList).map(\.url.absoluteString)
+        historyIndex = back.count
+    }
+
+    /// 重启恢复模式下的历史记账：新导航丢弃前进项后追加当前页
+    private func noteHistoryNavigation() {
+        // 正常模式由 `refreshNativeHistory()` 从原生栈同步，这里只管自定义栈
+        guard usesRestoredHistory else { return }
+        // 地址置空（回到起始页 / 加载失败）不改写栈：起始页由 `showStartPage()` 显式清空，
+        // 失败时保留历史才能让用户回退离开出错页
+        guard let url = currentURL?.absoluteString else { return }
+        // 历史回放（goBack/goForward 引起的地址变化）：位置已由调用方设置，不新增条目
+        if historyURLs.indices.contains(historyIndex), historyURLs[historyIndex] == url { return }
+        if historyIndex >= 0 {
+            historyURLs = Array(historyURLs.prefix(historyIndex + 1))
+        } else {
+            historyURLs = []
+        }
+        historyURLs.append(url)
+        historyIndex = historyURLs.count - 1
+    }
+
+    /// 按自定义栈加载当前下标对应的页面（WebKit 无注入历史 API，只能重新发起导航）
+    private func loadHistoryEntry() {
+        guard historyURLs.indices.contains(historyIndex),
+              let url = URL(string: historyURLs[historyIndex]) else { return }
+        clearError()
+        pendingLoadURL = nil
+        isPendingRestore = false
+        currentURL = url
+        webView.load(URLRequest(url: url))
     }
 
     // MARK: - KVO
@@ -552,7 +681,8 @@ struct BrowserWebView: UIViewRepresentable {
         if tab.isShowingStartPage {
             tab.webView.allowsBackForwardNavigationGestures = false
             context.coordinator.edgeGesture?.isEnabled = false
-        } else if tab.backLeadsToStartPage {
+        } else if tab.backLeadsToStartPage || tab.usesRestoredHistory {
+            // 重启恢复的标签：原生历史栈由「回放」产生，方向不可靠，统一交给自定义边缘手势
             tab.webView.allowsBackForwardNavigationGestures = false
             context.coordinator.edgeGesture?.isEnabled = true
         } else {
@@ -595,9 +725,19 @@ struct BrowserWebView: UIViewRepresentable {
     }
 }
 
-/// 标签会话快照（持久化用，仅保存 URL/标题，无痕标签不参与）
+/// 标签会话快照（持久化用，无痕标签不参与）
+///
+/// `historyURLs` / `currentIndex` 是**跨重启保留回退能力**的关键：
+/// `WKBackForwardList` 无法序列化，重启后新建的 `WKWebView` 历史栈只有当前一条，
+/// 不把历史一起落盘就只剩「能打开上次的页面，但回退键永远置灰」。
 struct BrowserTabSnapshot: Codable {
     let id: UUID
     let urlString: String?
     let title: String
+    /// 含当前页在内的完整历史（按时间顺序）；`nil` 表示无历史（起始页 / 旧版本数据）
+    var historyURLs: [String]? = nil
+    /// 当前页在 `historyURLs` 中的下标
+    var currentIndex: Int? = nil
+    /// 「从起始页进入」标记：决定回退到底时是否退回起始页
+    var startedFromStartPage: Bool? = nil
 }

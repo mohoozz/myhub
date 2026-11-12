@@ -39,9 +39,19 @@ final class ReadingHistoryStore: ObservableObject {
             "ReadingHistoryStore.reload 第 \(reloadCount) 次", level: .debug, module: "history"
         )
         guard let db = AppDatabase.shared.dbQueue else { return }
-        records = (try? db.read {
-            try ReadingProgress.order(Column("updatedAt").desc).fetchAll($0)
-        }) ?? []
+        do {
+            records = try db.read {
+                try ReadingProgress.order(Column("updatedAt").desc).fetchAll($0)
+            }
+        } catch {
+            // 读取失败时保留上一次的列表：此前 `?? []` 会把整页清成空态，
+            // 表现为「记录全部消失，必须重启 app 才能恢复」。日志留痕便于定位。
+            AppLogger.shared.log(
+                "ReadingHistoryStore.reload 失败，保留旧列表：\(error)",
+                level: .error,
+                module: "history"
+            )
+        }
     }
 
     // MARK: - 删除阅读记录（手动移除；不影响源文件）

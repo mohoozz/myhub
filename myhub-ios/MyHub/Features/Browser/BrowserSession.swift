@@ -192,7 +192,17 @@ final class BrowserSessionStore: ObservableObject {
             // 本对象由 App 层 @StateObject 持有，启动即构建；若在此加载，上次开过的所有网页
             // 会在用户还没进入浏览器时一起加载/渲染/出声（`RootView` 的 ZStack 保活会让它们
             // 全部挂在视图树里），表现为「在别的页面突然出现网页内容」。
-            let tab = BrowserTab(id: snapshot.id, url: url, isIncognito: false, autoload: false)
+            // 历史栈一并恢复：WKWebView 重启后 backForwardList 必然为空，
+            // 只恢复当前 URL 会让「回退」永久置灰（跨重启丢失上一页）
+            let tab = BrowserTab(
+                id: snapshot.id,
+                url: url,
+                isIncognito: false,
+                autoload: false,
+                restoredHistory: snapshot.historyURLs ?? [],
+                restoredIndex: snapshot.currentIndex ?? -1,
+                startedFromStartPage: snapshot.startedFromStartPage ?? false
+            )
             tab.title = snapshot.title
             configure(tab)
             return tab

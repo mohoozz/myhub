@@ -45,6 +45,11 @@ struct ReadingHomeView: View {
     @State private var infoRecord: ReadingProgress?
     /// 左滑删除后的「撤销」提示条（TODO 408）
     @StateObject private var undoToast = UndoToastState()
+    /// 列表滚动视图重建令牌：批量删除（多选删记录 / 删源文件）后内容高度骤减，
+    /// SwiftUI 的 ScrollView 会残留越界的滚动偏移，剩余条目全部落到可视区之外，
+    /// 表现为「没被选中的记录也不见了」，且页签保活下切换页面也不会恢复，只能重启 app。
+    /// 批量删除后递增本令牌重建 ScrollView，等价于重启后的全新布局（偏移归零）。
+    @State private var listEpoch = 0
 
     private var isSelecting: Bool { selection != nil }
 
@@ -79,6 +84,8 @@ struct ReadingHomeView: View {
                 if let ids = confirmDeleteIDs {
                     history.remove(ids: ids)
                     selection = nil
+                    // 批量移除后重建列表，避免残留滚动偏移（详见 listEpoch）
+                    listEpoch += 1
                 }
                 confirmDeleteIDs = nil
             }
@@ -187,6 +194,8 @@ struct ReadingHomeView: View {
                 // 多选操作栏的占位由 safeAreaInset（固定高度）为 ScrollView 预留内容内边距（TODO 379），
                 // 操作栏本体是 overlay，不再手工叠加底部留白
             }
+            // 批量删除后重建滚动视图，清理残留的越界滚动偏移（详见 listEpoch）
+            .id(listEpoch)
         }
     }
 
@@ -746,6 +755,8 @@ struct ReadingHomeView: View {
         // 无论文件删除是否全部成功，对应阅读记录一并清理（源文件没了 / 连接没了，记录失去意义）
         history.remove(ids: ids)
         selection = nil
+        // 批量移除后重建列表，避免残留滚动偏移（详见 listEpoch）
+        listEpoch += 1
         return moved
     }
 
@@ -761,6 +772,8 @@ struct ReadingHomeView: View {
         }
         history.remove(ids: ids)
         selection = nil
+        // 批量移除后重建列表，避免残留滚动偏移（详见 listEpoch）
+        listEpoch += 1
         message = "已彻底删除 \(ids.count) 个源文件，并清理阅读记录"
     }
 
