@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内置浏览器 · 所有标签页 UI 优化方案原型</title>
+<style>
+:root{--primary:#2563EB;--line:#D1D5DB;--hair:#EDF0F3;--sep:#E5E7EB;--tp:#1A1A2E;--ts:#6B7280;--fill:#F3F4F6;--hl:#EEF4FB;--canvas:#F5F6F8}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI Emoji","Apple Color Emoji",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:26px;line-height:1.75;max-width:1120px}
+.subtitle code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.subtitle b{color:var(--tp)}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:340px}
+.board h2{font-size:15px;height:26px;margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:nowrap;white-space:nowrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.before{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.7;height:296px;overflow:hidden}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:340px;height:700px;border:8px solid #111827;border-radius:40px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+.statusbar{height:26px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;font-weight:600}
+/* 新 chrome：大标题 + 悬浮胶囊底栏 */
+.hdr{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:#fff}
+.hdr .ttl{font-size:19px;font-weight:700;letter-spacing:-.2px;display:flex;align-items:center;gap:6px}
+.hdr .cnt{font-size:11px;font-weight:600;color:var(--ts);background:var(--fill);border-radius:9px;padding:2px 7px;letter-spacing:0}
+.hright{display:flex;align-items:center;gap:8px}
+.icbtn{width:30px;height:30px;border-radius:50%;border:1px solid var(--sep);display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--ts);background:#fff}
+.done{height:30px;padding:0 13px;border-radius:15px;background:var(--hl);color:var(--primary);font-size:12.5px;font-weight:600;display:flex;align-items:center}
+.canvas{flex:1;overflow:hidden;background:var(--canvas);padding:4px 16px 0}
+.fbar{flex:none;margin:8px 12px 10px;height:56px;border-radius:28px;background:#fff;border:1px solid var(--line);box-shadow:0 6px 18px rgba(17,24,39,.10);display:flex;align-items:center;justify-content:space-between;padding:0 10px}
+.fright{display:flex;align-items:center;gap:14px}
+.fnew{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--primary)}
+.fnew .plus{width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:0 3px 8px rgba(37,99,235,.35)}
+.vdiv{width:1px;height:22px;background:var(--sep)}
+.finc{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--tp)}
+.feye{width:15px;height:15px;flex:none;display:block;opacity:.8}
+.fdone{height:34px;padding:0 15px;border-radius:17px;background:#E8F0FE;color:var(--primary);font-size:13px;font-weight:600;display:flex;align-items:center}
+.sw{width:38px;height:23px;border-radius:12px;background:#D9DDE3;position:relative;flex:none}
+.sw i{position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.22)}
+.sw.on{background:var(--primary)}.sw.on i{left:auto;right:2px}
+/* 现状 */
+.nav.old{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:#fff;border-bottom:1px solid var(--sep)}
+.nav.old .l{font-size:13px;color:var(--primary);font-weight:500}
+.nav.old .c{font-size:14px;font-weight:600}
+.nav.old .r{font-size:15px;color:var(--ts)}
+.grid.old{flex:1;overflow:hidden;background:#fff;padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start}
+.ocard{height:140px;border-radius:12px;background:#fff;border:.5px solid var(--sep);padding:12px;display:flex;flex-direction:column}
+.ocard.active{background:var(--hl);border:1.5px solid var(--primary)}
+.ocard .top{display:flex;align-items:flex-start;justify-content:space-between}
+.fav{width:20px;height:20px;border-radius:4px;background:var(--fill);display:flex;align-items:center;justify-content:center;font-size:11px}
+.xb{width:20px;height:20px;border-radius:50%;background:var(--hl);color:var(--ts);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700}
+.ocard .t{font-size:12.5px;font-weight:600;line-height:1.35;margin-top:auto;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ocard .h{font-size:10.5px;color:var(--ts);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bbar{flex:none;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#fff;border-top:1px solid var(--sep)}
+.bbar .nb2{display:flex;align-items:center;gap:5px;font-size:13px;font-weight:500;color:var(--primary)}
+.bbar .inc{display:flex;align-items:center;gap:8px;font-size:13px}
+/* 缩略图骨架（A / D 共用） */
+.snap{position:relative;height:112px;overflow:hidden;padding:9px 10px;background:#fff}
+.snap::before{content:"";position:absolute;inset:0;background:var(--b);opacity:.09}
+.snap>*{position:relative}
+.sbar{display:flex;align-items:center;gap:3px;margin-bottom:8px}
+.sbar u{width:4px;height:4px;border-radius:50%;background:rgba(17,24,39,.22)}
+.sbar em{flex:1;height:5px;border-radius:3px;background:rgba(17,24,39,.14);margin-left:3px}
+.sline{height:5px;border-radius:3px;background:rgba(17,24,39,.13);margin-bottom:6px}
+.sblock{height:54px;border-radius:5px;background:var(--b);opacity:.32}
+/* 方案 A：缩略图卡片 */
+.grid.a{flex:1;overflow:hidden;background:var(--canvas);padding:4px 16px 0;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start}
+.acard{position:relative;border-radius:14px;overflow:hidden;background:#fff;border:1px solid var(--hair);box-shadow:0 2px 6px rgba(17,24,39,.06);display:flex;flex-direction:column}
+.acard.active{border:2px solid var(--primary);box-shadow:0 8px 20px rgba(37,99,235,.20)}
+.acard .cap{height:38px;display:flex;align-items:center;gap:6px;padding:0 10px;background:#fff}
+.acard .cap .t{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acard .x{position:absolute;top:7px;right:7px;width:21px;height:21px;border-radius:50%;background:rgba(255,255,255,.94);box-shadow:0 1px 4px rgba(17,24,39,.22);color:#4B5563;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.acard .now{position:absolute;top:8px;left:8px;padding:2px 8px;border-radius:8px;background:rgba(37,99,235,.94);color:#fff;font-size:9.5px;font-weight:600}
+/* 方案 B：图标信息卡 */
+.grid.b{flex:1;overflow:hidden;background:var(--canvas);padding:4px 16px 0;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start}
+.bcard{height:140px;border-radius:16px;background:#fff;border:1px solid var(--hair);box-shadow:0 2px 6px rgba(17,24,39,.05);padding:12px;display:flex;flex-direction:column;gap:8px;position:relative}
+.bcard.active{background:var(--hl);border:1.5px solid var(--primary);box-shadow:0 8px 20px rgba(37,99,235,.16)}
+.bcard .row1{display:flex;align-items:flex-start;justify-content:space-between}
+.ava{width:34px;height:34px;border-radius:10px;background:var(--b);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 5px rgba(17,24,39,.16)}
+.bcard .t{font-size:12.5px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:auto}
+.bcard .h{align-self:flex-start;font-size:10px;color:var(--ts);background:var(--fill);border-radius:6px;padding:2.5px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.bcard .x2{width:20px;height:20px;border-radius:50%;background:var(--fill);color:var(--ts);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.bcard .now2{font-size:9.5px;font-weight:600;color:var(--primary);background:#fff;border:1px solid #C7DBFB;border-radius:8px;padding:2px 7px;display:flex;align-items:center;gap:3px}
+/* 方案 C：列表行 */
+.list.c{flex:1;overflow:hidden;background:var(--canvas);padding:6px 16px 0}
+.sect{font-size:11px;font-weight:600;color:var(--ts);margin:10px 2px 7px;display:flex;align-items:center;gap:6px}
+.sect:first-child{margin-top:2px}
+.sect .n{font-weight:500;color:#9CA3AF}
+.crow{display:flex;align-items:center;gap:10px;height:70px;background:#fff;border:1px solid var(--hair);border-radius:14px;margin-bottom:9px;padding-right:10px;overflow:hidden;position:relative;box-shadow:0 2px 5px rgba(17,24,39,.04)}
+.crow.active{background:var(--hl);border-color:#C7DBFB}
+.crow.active::before{content:"";position:absolute;left:0;top:19px;width:3px;height:32px;background:var(--primary);border-radius:0 2px 2px 0}
+.cthumb{width:62px;height:70px;flex:none;position:relative;display:flex;align-items:center;justify-content:center;font-size:22px;overflow:hidden}
+.cthumb::before{content:"";position:absolute;inset:0;background:var(--b);opacity:.13}
+.cthumb span{position:relative}
+.cmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.cmain .t{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmain .h{font-size:10.5px;color:var(--ts);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmain .badge{font-size:9.5px;color:var(--primary);font-weight:600}
+.crow .x3{width:22px;height:22px;border-radius:50%;background:var(--fill);color:var(--ts);font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
+/* 方案 D：分层看板 */
+.dv.d{flex:1;overflow:hidden;background:var(--canvas);padding:4px 16px 0}
+.dhero{border-radius:16px;overflow:hidden;background:#fff;border:2px solid var(--primary);box-shadow:0 10px 24px rgba(37,99,235,.18)}
+.dhero .snap{height:118px}
+.dhero .info{height:46px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#fff}
+.dhero .info .fav{width:18px;height:18px;border-radius:5px}
+.dhero .info .t{font-size:12.5px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dhero .info .h{font-size:10px;color:var(--ts);white-space:nowrap}
+.dgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.dcard{height:88px;border-radius:14px;background:#fff;border:1px solid var(--hair);padding:10px;display:flex;flex-direction:column;gap:6px;box-shadow:0 2px 5px rgba(17,24,39,.04)}
+.dcard .t{font-size:11px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.dcard .h{font-size:9.5px;color:var(--ts);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dcard .ava{width:20px;height:20px;border-radius:6px;font-size:10px;box-shadow:none}
+/* 无痕深色变体 */
+.phone.dark{background:#0B0B0F;border-color:#000}
+.phone.dark .statusbar,.phone.dark .hdr .ttl{color:#E5E7EB}
+.phone.dark .hdr{background:#0B0B0F}
+.phone.dark .hdr .cnt{background:#1C1C22;color:#8A8F98}
+.phone.dark .icbtn{background:#1C1C22;border-color:#2C2C33;color:#8A8F98}
+.phone.dark .done{background:#12203A;color:#60A5FA}
+.phone.dark .canvas,.phone.dark .grid.a,.phone.dark .dv.d,.phone.dark .list.c{background:#08080B}
+.phone.dark .acard{background:#141419;border-color:#26262C}
+.phone.dark .acard.active{border-color:#3B82F6;box-shadow:0 8px 20px rgba(59,130,246,.22)}
+.phone.dark .acard .cap{background:#141419}
+.phone.dark .acard .cap .t{color:#E5E7EB}
+.phone.dark .snap{background:#0F0F13}
+.phone.dark .snap::before{opacity:.16}
+.phone.dark .sline{background:rgba(255,255,255,.14)}
+.phone.dark .sblock{opacity:.46}
+.phone.dark .sbar em{background:rgba(255,255,255,.15)}
+.phone.dark .sbar u{background:rgba(255,255,255,.2)}
+.phone.dark .acard .x{background:rgba(30,30,36,.92);color:#C7CBD3}
+.phone.dark .fbar{background:#141419;border-color:#3A3A3C;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.phone.dark .finc{color:#E5E7EB}
+.phone.dark .fdone{background:#12203A;color:#60A5FA}
+.phone.dark .vdiv{background:#2C2C33}
+table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1120px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>内置浏览器 · 所有标签页 UI 优化</h1>
+<p class="subtitle">
+  现状 <code>TabGridView</code> 是 <b>2 列 × 140pt 纯文字卡片</b>：卡片里只有 20pt 小图标 + 标题 2 行 + 域名 1 行，九张卡长得一模一样、<b>没有视觉地标</b>，只能靠读文字找页；当前标签仅靠「浅蓝底 + 1.5pt 细蓝边」区分，混在网格里并不跳；
+  顶部是系统导航栏（居中标题 + 左「完成」+ 右眼睛图标），底部是一条<b>通栏直角白条</b>（左「＋ 新建标签」纯文字、右「无痕」开关），与本 App 已有的悬浮圆角胶囊语言（TODO 376/377）不一致。<br>
+  以下为「现状 + 4 个候选方案 + 无痕深色变体」。<b>所有方案均保留现有能力</b>：点按切换、长按拖拽排序、× 关闭、下滑关闭网格、打开时自动定位当前标签（TODO 422）。
+</p>
+<div class="boards">
+<!-- 现状 -->
+<div class="board">
+  <h2>现状<span class="tag before">Before</span></h2>
+  <div class="desc">
+    系统导航栏 + 2 列文字卡 + 通栏底栏。<br>
+    <span class="cons">问题：①九张卡完全同构，没有截图 / 大图标等地标，只能靠读文字找页；②「当前标签」的浅蓝底 + 细蓝边在网格里太弱，一屏扫不出「我在哪」；
+    ③标题 12.5pt + 域名 10.5pt 两级字号偏小，卡片约 40% 面积是空白；④底栏是直角通栏白条，与主界面胶囊语言冲突，「新建标签」还是纯文字链接、点击感弱。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="nav old"><span class="l">完成</span><span class="c">标签页</span><span class="r">👁</span></div>
+    <div class="grid old">
+      <div class="ocard"><div class="top"><div class="fav">📘</div><div class="xb">✕</div></div><div class="t">MyHub 开发者文档</div><div class="h">docs.myhub.dev</div></div>
+      <div class="ocard"><div class="top"><div class="fav">🐙</div><div class="xb">✕</div></div><div class="t">moyu/browser: SMB + WebKit 混编示例</div><div class="h">github.com</div></div>
+      <div class="ocard active"><div class="top"><div class="fav">📺</div><div class="xb">✕</div></div><div class="t">【4K】这可能是今年最好看的动画</div><div class="h">bilibili.com</div></div>
+      <div class="ocard"><div class="top"><div class="fav">✍️</div><div class="xb">✕</div></div><div class="t">少数派 · 效率工具指南</div><div class="h">sspai.com</div></div>
+      <div class="ocard"><div class="top"><div class="fav">🍎</div><div class="xb">✕</div></div><div class="t">Apple Newsroom</div><div class="h">apple.com</div></div>
+      <div class="ocard"><div class="top"><div class="fav">💬</div><div class="xb">✕</div></div><div class="t">如何评价 SwiftUI 的 LazyVGrid 性能？</div><div class="h">zhihu.com</div></div>
+    </div>
+    <div class="bbar">
+      <div class="nb2">＋ 新建标签</div>
+      <div class="inc">无痕<div class="sw"><i></i></div></div>
+    </div>
+  </div>
+</div>
+<!-- 方案 A：缩略图卡片 -->
+<div class="board">
+  <h2>方案 A · 缩略图卡片<span class="tag rec">推荐</span><span class="tag">Safari 18 / Chrome</span></h2>
+  <div class="desc">
+    卡片上半部改为<b>网页缩略图</b>（真实快照；未就绪时用「站点品牌色 + 骨架」占位，即本原型所示），下半部一条 38pt 的<b>图标 + 标题</b>胶囊条，卡片约 150pt 高、圆角 14。<br>
+    <b>当前标签</b>：2pt 主色环 + 蓝色投影 + 缩略图左上「当前」徽标，一屏就能锁定；<b>关闭键</b>收进缩略图右上角的半透明白色小圆 ✕（当前标签不显示，避免误关）。<br>
+    新 chrome：顶部只留大标题 + 数量 chip，<b>动作全部下放到底部</b>——一条居中悬浮胶囊装下「圆形 ＋（不写文字，触控区仍 44pt）| 无痕开关 | 完成」；浅灰画布让白卡浮起。<br>
+    <span class="pros">优点：视觉地标最强——认图比读字快；观感最接近系统浏览器。</span><br>
+    <span class="cons">缺点：要接 <code>takeSnapshot</code> 快照管线（异步 + 内存上限 + 失败回落）；单屏可见数由 6 降到 4。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="hdr"><div class="ttl">标签页<span class="cnt">9</span></div></div>
+    <div class="grid a">
+      <div class="acard"><div class="snap" style="--b:#2563EB"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:74%"></div><div class="sline" style="width:48%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav">📘</div><div class="t">MyHub 开发者文档</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#24292F"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:62%"></div><div class="sline" style="width:80%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav">🐙</div><div class="t">moyu/browser</div></div></div>
+      <div class="acard active"><div class="snap" style="--b:#FB7299"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:70%"></div><div class="sline" style="width:44%"></div><div class="sblock"></div></div><div class="now">当前</div><div class="cap"><div class="fav">📺</div><div class="t">【4K】今年最好看的动画</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#D71A1B"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:56%"></div><div class="sline" style="width:76%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav">✍️</div><div class="t">少数派 · 效率指南</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#111111"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:66%"></div><div class="sline" style="width:38%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav">🍎</div><div class="t">Apple Newsroom</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#0066FF"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:80%"></div><div class="sline" style="width:58%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav">💬</div><div class="t">如何评价 LazyVGrid 性能</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#1F2937"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:60%"></div><div class="sline" style="width:82%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav">💬</div><div class="t">V2EX · 酷工作</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#000000"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:78%"></div><div class="sline" style="width:50%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav">📗</div><div class="t">MDN · WKWebView 指南</div></div></div>
+    </div>
+    <div class="fbar"><div class="fnew"><div class="plus">＋</div></div><div class="fright"><div class="finc"><svg class="feye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.9 12S5.6 5.6 12 5.6 22.1 12 22.1 12 18.4 18.4 12 18.4 1.9 12 1.9 12Z"/><circle cx="12" cy="12" r="2.7"/></svg>无痕<div class="sw"><i></i></div></div><div class="vdiv"></div><div class="fdone">完成</div></div></div>
+  </div>
+</div>
+<!-- 方案 B：图标信息卡 -->
+<div class="board">
+  <h2>方案 B · 图标信息卡<span class="tag">零快照成本</span></h2>
+  <div class="desc">
+    不做快照，靠<b>视觉重量</b>取胜：顶部一枚 <b>34pt 站点主色圆角头像</b>，标题 12.5pt 两行，域名改为<b>浅灰 chip</b>（可读性高于裸文字）；卡片 140pt 高、圆角 16、白底 + 极浅描边 + 微投影。<br>
+    <b>当前标签</b>：浅蓝底 + 1.5pt 主色环 + 右上「● 当前」白底徽标；其余卡片右上保留小 ✕。<br>
+    chrome 与 A 完全一致（大标题 + 浅灰画布 + 悬浮胶囊底栏）。<br>
+    <span class="pros">优点：<b>纯 SwiftUI 改动、不动 WebKit</b>，风险最低；「站点色头像 + chip」让每张卡有了辨识色块，观感立刻从「文字块」变「应用卡」。</span><br>
+    <span class="cons">缺点：同站点的多个标签仍难区分（无截图）；单屏可见数同样 4，视觉信息量弱于 A。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="hdr"><div class="ttl">标签页<span class="cnt">9</span></div></div>
+    <div class="grid b">
+      <div class="bcard"><div class="row1"><div class="ava" style="--b:#2563EB">📘</div><div class="x2">✕</div></div><div class="t">MyHub 开发者文档</div><div class="h">docs.myhub.dev</div></div>
+      <div class="bcard"><div class="row1"><div class="ava" style="--b:#24292F">🐙</div><div class="x2">✕</div></div><div class="t">moyu/browser: SMB + WebKit 混编示例</div><div class="h">github.com</div></div>
+      <div class="bcard active"><div class="row1"><div class="ava" style="--b:#FB7299">📺</div><div class="now2">● 当前</div></div><div class="t">【4K】这可能是今年最好看的动画</div><div class="h">bilibili.com</div></div>
+      <div class="bcard"><div class="row1"><div class="ava" style="--b:#D71A1B">✍️</div><div class="x2">✕</div></div><div class="t">少数派 · 效率工具指南</div><div class="h">sspai.com</div></div>
+      <div class="bcard"><div class="row1"><div class="ava" style="--b:#111111">🍎</div><div class="x2">✕</div></div><div class="t">Apple Newsroom</div><div class="h">apple.com</div></div>
+      <div class="bcard"><div class="row1"><div class="ava" style="--b:#0066FF">💬</div><div class="x2">✕</div></div><div class="t">如何评价 SwiftUI 的 LazyVGrid 性能？</div><div class="h">zhihu.com</div></div>
+      <div class="bcard"><div class="row1"><div class="ava" style="--b:#1F2937">💬</div><div class="x2">✕</div></div><div class="t">V2EX · 酷工作</div><div class="h">v2ex.com</div></div>
+      <div class="bcard"><div class="row1"><div class="ava" style="--b:#000000">📗</div><div class="x2">✕</div></div><div class="t">MDN · WKWebView 指南</div><div class="h">developer.mozilla.org</div></div>
+    </div>
+    <div class="fbar"><div class="fnew"><div class="plus">＋</div></div><div class="fright"><div class="finc"><svg class="feye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.9 12S5.6 5.6 12 5.6 22.1 12 22.1 12 18.4 18.4 12 18.4 1.9 12 1.9 12Z"/><circle cx="12" cy="12" r="2.7"/></svg>无痕<div class="sw"><i></i></div></div><div class="vdiv"></div><div class="fdone">完成</div></div></div>
+  </div>
+</div>
+<!-- 方案 C：分组列表 -->
+<div class="board">
+  <h2>方案 C · 分组列表<span class="tag">Chrome 式</span><span class="tag">标签多时最省事</span></h2>
+  <div class="desc">
+    放弃网格，改<b>通栏行</b>（70pt 高、圆角 14、左侧 62pt 品牌色缩略块）；按「当前」与「其他 N 个标签」<b>分组</b>，当前页置顶且带左侧 3pt 主色竖条。<br>
+    单行标题不折行，靠<b>行内扫读</b>找页：一屏可见 7~8 条，比网格多近一倍。<br>
+    <span class="pros">优点：标签数量多时效率最高（本项目标签数常到十几个）；分组后「当前在哪」最明确；实现比 A 更简单（行 = HStack，无快照也能用图标块）。</span><br>
+    <span class="cons">缺点：卡片感弱、不够「浏览器」；缩略块窄，视觉吸引力不如 A/B；拖拽排序的行间距需重新调（现为网格内拖拽）。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="hdr"><div class="ttl">标签页<span class="cnt">9</span></div></div>
+    <div class="list c">
+      <div class="sect">当前页面</div>
+      <div class="crow active">
+        <div class="cthumb" style="--b:#FB7299"><span>📺</span></div>
+        <div class="cmain"><div class="t">【4K】这可能是今年最好看的动画</div><div class="h">bilibili.com/video/BV1…</div><div class="badge">● 正在查看</div></div>
+        <div class="x3">✕</div>
+      </div>
+      <div class="sect">其他标签<span class="n">· 8</span></div>
+      <div class="crow"><div class="cthumb" style="--b:#2563EB"><span>📘</span></div><div class="cmain"><div class="t">MyHub 开发者文档</div><div class="h">docs.myhub.dev</div></div><div class="x3">✕</div></div>
+      <div class="crow"><div class="cthumb" style="--b:#24292F"><span>🐙</span></div><div class="cmain"><div class="t">moyu/browser: SMB + WebKit 混编示例</div><div class="h">github.com/moyu/browser</div></div><div class="x3">✕</div></div>
+      <div class="crow"><div class="cthumb" style="--b:#D71A1B"><span>✍️</span></div><div class="cmain"><div class="t">少数派 · 效率工具指南</div><div class="h">sspai.com</div></div><div class="x3">✕</div></div>
+      <div class="crow"><div class="cthumb" style="--b:#111111"><span>🍎</span></div><div class="cmain"><div class="t">Apple Newsroom</div><div class="h">apple.com/newsroom</div></div><div class="x3">✕</div></div>
+      <div class="crow"><div class="cthumb" style="--b:#0066FF"><span>💬</span></div><div class="cmain"><div class="t">如何评价 SwiftUI 的 LazyVGrid 性能？</div><div class="h">zhihu.com/question/…</div></div><div class="x3">✕</div></div>
+    </div>
+    <div class="fbar"><div class="fnew"><div class="plus">＋</div></div><div class="fright"><div class="finc"><svg class="feye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.9 12S5.6 5.6 12 5.6 22.1 12 22.1 12 18.4 18.4 12 18.4 1.9 12 1.9 12Z"/><circle cx="12" cy="12" r="2.7"/></svg>无痕<div class="sw"><i></i></div></div><div class="vdiv"></div><div class="fdone">完成</div></div></div>
+  </div>
+</div>
+<!-- 方案 D：分层看板 -->
+<div class="board">
+  <h2>方案 D · 分层看板<span class="tag">当前页主导</span></h2>
+  <div class="desc">
+    把「当前标签」单独提到顶部做成<b>通栏大卡</b>（2pt 主色环 + 118pt 缩略图 + 46pt 信息栏），其余标签降为下方 <b>2 列小卡</b>（88pt：头像 + 标题两行 + 域名）。<br>
+    层级从「九张平级卡」变成「1 主 + N 次」，当前页的存在感最强，也天然形成「回到当前页 / 切走」的两段操作。<br>
+    <span class="pros">优点：当前页最突出、层级最清晰；小卡更矮，同一屏能看到 1 大 + 6 小，兼顾「认当前」与「找其他」。</span><br>
+    <span class="cons">缺点：大卡占掉约 165pt 常驻空间，纯切页场景要多滑一下；同一套网格里混两种卡片尺寸，拖拽排序的落位逻辑要额外处理。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="hdr"><div class="ttl">标签页<span class="cnt">9</span></div></div>
+    <div class="dv d">
+      <div class="dhero">
+        <div class="snap" style="--b:#FB7299"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:72%"></div><div class="sline" style="width:46%"></div><div class="sblock"></div></div>
+        <div class="info"><div class="fav">📺</div><div class="t">【4K】这可能是今年最好看的动画</div><div class="h">bilibili.com</div></div>
+      </div>
+      <div class="sect">其他标签<span class="n">· 8</span></div>
+      <div class="dgrid">
+        <div class="dcard"><div class="ava" style="--b:#2563EB">📘</div><div class="t">MyHub 开发者文档</div><div class="h">docs.myhub.dev</div></div>
+        <div class="dcard"><div class="ava" style="--b:#24292F">🐙</div><div class="t">moyu/browser 混编示例</div><div class="h">github.com</div></div>
+        <div class="dcard"><div class="ava" style="--b:#D71A1B">✍️</div><div class="t">少数派 · 效率指南</div><div class="h">sspai.com</div></div>
+        <div class="dcard"><div class="ava" style="--b:#111111">🍎</div><div class="t">Apple Newsroom</div><div class="h">apple.com</div></div>
+        <div class="dcard"><div class="ava" style="--b:#0066FF">💬</div><div class="t">LazyVGrid 性能讨论</div><div class="h">zhihu.com</div></div>
+        <div class="dcard"><div class="ava" style="--b:#1F2937">💬</div><div class="t">V2EX · 酷工作</div><div class="h">v2ex.com</div></div>
+        <div class="dcard"><div class="ava" style="--b:#000000">📗</div><div class="t">MDN · WKWebView 指南</div><div class="h">mozilla.org</div></div>
+        <div class="dcard"><div class="ava" style="--b:#107C10">🧩</div><div class="t">少数派会员文章</div><div class="h">sspai.com</div></div>
+        <div class="dcard"><div class="ava" style="--b:#7C3AED">🎬</div><div class="t">YouTube · WWDC 回放</div><div class="h">youtube.com</div></div>
+      </div>
+    </div>
+    <div class="fbar"><div class="fnew"><div class="plus">＋</div></div><div class="fright"><div class="finc"><svg class="feye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.9 12S5.6 5.6 12 5.6 22.1 12 22.1 12 18.4 18.4 12 18.4 1.9 12 1.9 12Z"/><circle cx="12" cy="12" r="2.7"/></svg>无痕<div class="sw"><i></i></div></div><div class="vdiv"></div><div class="fdone">完成</div></div></div>
+  </div>
+</div>
+<!-- 无痕深色变体 -->
+<div class="board">
+  <h2>无痕模式（推荐方案的深色态）<span class="tag">状态变体</span></h2>
+  <div class="desc">
+    无痕不是「加个开关」，而是<b>整页换皮肤</b>：画布 <code>#08080B</code>、卡片 <code>#141419</code>、主色切到 <code>#3B82F6</code>（与 <code>AppColors</code> 暗色主色一致），标题走 <code>#E5E7EB</code>。<br>
+    顶部眼睛圆钮点亮为主色、「完成」胶囊走深蓝底浅蓝字，底栏胶囊同步转深色——一眼就能确认「现在是无痕」，比现状一个白色底栏 + 绿色开关更直观。<br>
+    <span class="pros">优点：模式切换有明确的「环境变化」反馈；深色下缩略图留白更少、卡片更整体。</span><br>
+    <span class="cons">缺点：缩略图本身多为白底网页，深色画布上会出现「白块」反差（可给缩略图叠 8% 黑或降饱和缓解）。</span>
+  </div>
+  <div class="phone dark">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="hdr"><div class="ttl">无痕浏览<span class="cnt" style="background:#12203A;color:#60A5FA">4</span></div></div>
+    <div class="grid a">
+      <div class="acard"><div class="snap" style="--b:#4B5563"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:70%"></div><div class="sline" style="width:46%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav" style="background:#1C1C22">🔍</div><div class="t">Google 搜索</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#374151"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:58%"></div><div class="sline" style="width:74%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav" style="background:#1C1C22">🌐</div><div class="t">Apple 官网</div></div></div>
+      <div class="acard active"><div class="snap" style="--b:#3B82F6"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:66%"></div><div class="sline" style="width:40%"></div><div class="sblock"></div></div><div class="now">当前</div><div class="cap"><div class="fav" style="background:#1C1C22">📄</div><div class="t">匿名文档预览</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#6B7280"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:76%"></div><div class="sline" style="width:52%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav" style="background:#1C1C22">🧭</div><div class="t">未登录新闻站</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#4B5563"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:64%"></div><div class="sline" style="width:78%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav" style="background:#1C1C22">🔒</div><div class="t">隐私政策说明</div></div></div>
+      <div class="acard"><div class="snap" style="--b:#374151"><div class="sbar"><u></u><u></u><u></u><em></em></div><div class="sline" style="width:72%"></div><div class="sline" style="width:44%"></div><div class="sblock"></div></div><div class="x">✕</div><div class="cap"><div class="fav" style="background:#1C1C22">🧪</div><div class="t">临时测试页</div></div></div>
+    </div>
+    <div class="fbar"><div class="fnew" style="color:#60A5FA"><div class="plus" style="background:#3B82F6;box-shadow:0 3px 8px rgba(59,130,246,.4)">＋</div></div><div class="fright"><div class="finc"><svg class="feye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.9 12S5.6 5.6 12 5.6 22.1 12 22.1 12 18.4 18.4 12 18.4 1.9 12 1.9 12Z"/><circle cx="12" cy="12" r="2.7"/></svg>无痕<div class="sw on"><i></i></div></div><div class="vdiv"></div><div class="fdone">完成</div></div></div>
+  </div>
+</div>
+</div>
+<table>
+  <tr><th>方案</th><th>形态</th><th>单屏可见</th><th>找页效率</th><th>视觉现代度</th><th>实现成本</th><th>主要风险 / 取舍</th></tr>
+  <tr><td>现状</td><td>2 列文字卡（140pt）+ 通栏底栏</td><td>6</td><td>一般：只能读标题</td><td>★★☆</td><td>—</td><td>同质卡片、无地标；当前页不突出</td></tr>
+  <tr><td>A 缩略图卡片</td><td>2 列「快照 + 标题条」（≈150pt）</td><td>4</td><td>最好：认图不用读</td><td>★★★★★</td><td>中高：需快照管线</td><td>快照异步 / 内存 / 隐私（无痕页不留帧）</td></tr>
+  <tr><td>B 图标信息卡</td><td>2 列「站点色头像 + 标题 + 域名 chip」（158pt）</td><td>4</td><td>好：色块 + 标题双线索</td><td>★★★★</td><td>低：纯 SwiftUI</td><td>同站点多标签仍难分；长标题截断</td></tr>
+  <tr><td>C 分组列表</td><td>通栏行（70pt），按「当前 / 其他」分组</td><td>7~8</td><td>极好：单行扫读</td><td>★★★☆</td><td>低中：行布局 + 拖拽改网格→列表</td><td>卡片感弱；不像「浏览器」</td></tr>
+  <tr><td>D 分层看板</td><td>1 张当前大卡 + 2 列小卡（88pt）</td><td>1 + 6</td><td>好：当前页永远第一眼</td><td>★★★★☆</td><td>中：混排两种卡 + 拖拽落位</td><td>大卡常驻 165pt，纯切页多滑一下</td></tr>
+</table>
+
+<div class="footnote">
+  <b>共同前提：</b>四套方案共用同一套「新 chrome」——顶部只有左对齐大标题 + 数量 chip（<b>不再放任何动作按钮</b>），全部动作下放到一条<b>居中悬浮底栏</b>：主色圆形 ＋ / 无痕开关 / 「完成」淡蓝胶囊；画布 <code>#F5F6F8</code>（仅本页，主界面仍纯白），与主界面 Tab 栏、mini 播放器、操作栏的圆角语言（TODO 376/377）统一；灰描边 <code>#D1D5DB</code>、浅灰填充 <code>#F3F4F6</code> 均取 <code>AppColors</code> 既有值。现有交互全部保留：点按切换、长按拖拽排序、× 关闭、下滑关闭网格、打开自动定位当前标签。<br>
+  <b>关于快照（A）：</b><code>WKWebView.takeSnapshot</code> 异步抓取，缓存到标签模型；只在打开网格时对本页 + 最近用过的 N 张抓一次（建议 ≤ 12 张、单张限宽 400pt），失败或未就绪即回落 B 的「品牌色 + 骨架」占位。无痕标签<b>不抓快照</b>（避免截图落盘/被系统快照缓存看到页面内容），直接走占位形态。<br>
+  <b>推荐：A + B 组合。</b>两者共用同一个卡片容器，差别只在「预览区」放什么——先按 B 落地（纯 SwiftUI、一天内可见效果，且它就是 A 的占位态），再把快照管线作为增量加上去换 A；这样风险可控，也不会因为快照做不完而卡住整体视觉升级。若更看重「几十个标签时找页快」，则选 C。<br>
+  <b>请确认：</b>想先按哪套做？我可以只做 A 的容器 + B 的占位（推荐，后续可无缝升级到真快照），或直接上快照。
+</div>
+</body>
+</html>

@@ -74,6 +74,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         didSet {
             // 相同值（如重定向回原 URL）不重复触发；init 中的初始赋值不会触发 didSet
             guard currentURL != oldValue else { return }
+            // 页面已经换掉：旧缩略图不再代表当前内容，清空让网格重抓（TODO 423）
+            if thumbnailSourceURL != currentURL?.absoluteString { thumbnail = nil }
             noteHistoryNavigation()
             onStateChange?()
         }
@@ -311,6 +313,55 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         currentURL = nil
         // 注：WKBackForwardList 无公开的清空历史栈 API；此处只重置 UI 状态，webView 历史栈保留。
         // 再次从起始页导航时会依据 `startPageBoundary` 重新界定回退边界，从而不会多退一页到残留历史。
+    }
+
+    // MARK: - 卡片缩略图（标签网格方案 A，TODO 423）
+
+    /// 标签卡片的预览图：由 `captureThumbnailIfNeeded()` 异步抓取，与本标签的生命周期绑定。
+    /// 无痕标签**永不抓取**——截图会以图像形式留在内存与系统快照缓存里，
+    /// 与「无痕不落盘」的承诺冲突，网格直接走品牌色占位形态。
+    @Published private(set) var thumbnail: UIImage?
+    /// 当前缩略图对应的 URL：用于判断「缓存是否还能代表现在这一页」
+    private var thumbnailSourceURL: String?
+    /// 抓取进行中标记：同一标签只允许一次在途快照，避免打开网格时重复排队
+    private var isCapturingThumbnail = false
+
+    /// 抓取卡片缩略图（打开标签网格时按需调用，可安全重复调用）。
+    ///
+    /// 三条硬约束：
+    /// - **无痕不抓**：隐私优先，宁可看占位图；
+    /// - **不建 WebView**：会话恢复但尚未显示的标签不能读 `webView`（lazy 会拉起 WebContent 进程）；
+    /// - **只抓顶部一屏**：卡片预览只露上半部分，抓整页既慢又占内存。
+    ///
+    /// - Parameter targetWidth: 快照目标宽度（pt）。卡片实际宽度约 160pt，取 2.5 倍保证 Retina 下清晰。
+    func captureThumbnailIfNeeded(targetWidth: CGFloat = 400) {
+        guard !isIncognito else { return }
+        guard isWebViewCreated, !isPendingRestore else { return }
+        guard let key = currentURL?.absoluteString, !isShowingStartPage else { return }
+        // 命中缓存：同一页面已经抓过
+        if key == thumbnailSourceURL, thumbnail != nil { return }
+        guard !isCapturingThumbnail else { return }
+
+        let size = webView.bounds.size
+        // 标签尚未布局（从未显示）时抓不到有效画面，等下次打开网格再试
+        guard size.width > 1, size.height > 1 else { return }
+
+        isCapturingThumbnail = true
+        let configuration = WKSnapshotConfiguration()
+        configuration.snapshotWidth = NSNumber(value: Double(targetWidth))
+        configuration.rect = CGRect(origin: .zero, size: size)
+
+        webView.takeSnapshot(with: configuration) { [weak self] image, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isCapturingThumbnail = false
+                guard let image else { return }
+                // 抓取期间页面可能已经跳走：过期的帧直接丢弃，否则卡片会显示上一页的内容
+                guard key == self.currentURL?.absoluteString else { return }
+                self.thumbnailSourceURL = key
+                self.thumbnail = image
+            }
+        }
     }
 
     /// 展示标签卡片网格所需的快照（用于持久化）
@@ -651,7 +702,8 @@ struct BrowserWebView: UIViewRepresentable {
         tab.refreshControl = refresh
 
         // 左边缘滑动：默认交给系统 backForward 手势做页面间回退；
-        // 仅「下一步回退即起始页」时（见 updateUIView）改用本手势回到起始页
+        // 「下一步回退即起始页」与重启恢复的标签（见 updateUIView）改用本手势——
+        // 由它自己做跟手位移 + 松手完成/回弹的过渡（Safari 侧滑返回，TODO 421）
         let edge = UIScreenEdgePanGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleEdgeSwipe(_:))
@@ -689,18 +741,148 @@ struct BrowserWebView: UIViewRepresentable {
             tab.webView.allowsBackForwardNavigationGestures = true
             context.coordinator.edgeGesture?.isEnabled = false
         }
+
+        // 位移 / 透明度兜底（TODO 421）：侧滑把容器挪动过之后，若因标签切换、媒体可见性等
+        // 打断了收尾动画（completion 不再回调），容器会卡在偏移或半透明态。
+        // 手势进行中与收尾动画进行中都不能动它，其余时机一律归位。
+        let gesture = context.coordinator.edgeGesture
+        let gestureActive = gesture?.state == .began || gesture?.state == .changed
+        if !gestureActive, !context.coordinator.isCompletingBack {
+            if container.transform != .identity { container.transform = .identity }
+            if container.alpha != 1 { container.alpha = 1 }
+        }
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: BrowserWebView
         weak var edgeGesture: UIScreenEdgePanGestureRecognizer?
+        /// 侧滑返回的收尾动画（回弹 / 「滑出 → 滑入」）是否仍在进行。
+        /// 是 `updateUIView` 归位兜底的唯一豁免依据：动画进行中若被兜底把 `transform` 归零，
+        /// 就会退化成「一帧瞬移」，回弹的阻尼与滑入的位移全部失效。
+        private(set) var isCompletingBack = false
+
+        /// 侧滑「代号」：每次手势 `.began` 自增。收尾动画的 completion 必须核对代号——
+        /// 手势可能在上一轮收尾动画还没走完时再次起手（`removeAllAnimations` 会让旧 completion
+        /// 提前回调），若不核对就会用旧的判定再 `goBack()` 一次，退成连退两页。
+        private var swipeGeneration = 0
 
         init(_ parent: BrowserWebView) { self.parent = parent }
 
+        /// 侧滑返回（TODO 421）：跟手位移 + 松手后完成/回弹，对齐 Safari 的交互式返回。
+        ///
+        /// 旧实现只在 `.ended` 里 `goBack()`：全程没有位移反馈，画面在松手瞬间直接换掉，
+        /// 读起来就是「滑一下、猝不及防地跳转」。现在 `.changed` 阶段整块网页容器跟着手指右移，
+        /// 下层（起始页预览 / 页面底色）逐帧露出；松手按位移比例 + 速度决定完成还是回弹。
         @objc func handleEdgeSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
-            guard gesture.state == .ended else { return }
-            // 仅在「下一步回退即起始页」时启用本手势：回退到起始页，绝不删除页签
-            parent.tab.goBack()
+            guard let container = gesture.view else { return }
+            let width = max(container.bounds.width, 1)
+            // 位移换算基准取 **window**（退化为父视图）：容器本身正被 `transform` 挪动，
+            // 以它为坐标空间会让 translation 反过来被自身位移缩放，形成跟手距离衰减 / 抖动
+            // （与 `MiniPlayer` 下滑收起、播放页手势同一处坑）；window 也没有任何祖先变换，
+            // 位移与手指在屏幕上的移动严格 1:1。
+            let space = container.window ?? container.superview ?? container
+
+            switch gesture.state {
+            case .began:
+                // 新一次起手：作废上一轮收尾动画（`removeAllAnimations` 会立刻回调其 completion，
+                // 靠代号一致性检查让它空转），并把位移 / 透明度归零，避免残值叠加
+                swipeGeneration &+= 1
+                isCompletingBack = false
+                container.layer.removeAllAnimations()
+                container.transform = .identity
+                container.alpha = 1
+            case .changed:
+                let dx = gesture.translation(in: space).x
+                container.transform = CGAffineTransform(translationX: max(0, dx), y: 0)
+            case .ended:
+                let dx = gesture.translation(in: space).x
+                let velocity = gesture.velocity(in: space).x
+                let progress = min(max(dx / width, 0), 1)
+                // 位移过 32% 或带明显右甩速度即完成，否则回弹（比例与阈值对齐系统侧滑返回的手感）
+                if progress > 0.32 || velocity > 700 {
+                    completeBack(on: container)
+                } else {
+                    springBack(container)
+                }
+            default:
+                // .cancelled / .failed（如页面被其它手势抢占）：一律回弹，不能半途换页
+                springBack(container)
+            }
+        }
+
+        /// 未过阈值：带阻尼弹回原位（`beginFromCurrentState` 保证从当前手势位移处接着动，不跳帧）
+        private func springBack(_ container: UIView) {
+            guard !isCompletingBack else { return }
+            isCompletingBack = true
+            let generation = swipeGeneration
+            UIView.animate(
+                withDuration: 0.26,
+                delay: 0,
+                usingSpringWithDamping: 0.9,
+                initialSpringVelocity: 0,
+                options: [.allowUserInteraction, .beginFromCurrentState]
+            ) {
+                container.transform = .identity
+            } completion: { [weak self] _ in
+                // 代号不符说明手势已重新起手，新一轮自己管自己的状态
+                guard let self, generation == self.swipeGeneration else { return }
+                self.isCompletingBack = false
+            }
+        }
+
+        /// 过阈值：先让当前页整块滑出，再在新页面上做入场，把「内容替换」藏进不可见的那一帧。
+        ///
+        /// 为什么不能直接 `goBack()` 了事：重启恢复的标签走的是自定义历史栈（`usesRestoredHistory`），
+        /// 回退只能重新发起导航（WebKit 没有注入历史的 API），内容必然整块替换；旧实现的
+        /// 「松手即 `goBack()`」就把这次替换完全暴露出来。这里分两种情况收尾：
+        /// - **回退到起始页**：下层常驻起始页预览（`BrowserView.showsStartPagePreview`），
+        ///   纯滑动退出即可，替换发生在容器完全移出屏幕之后，观感是「上一页滑走 → 起始页留在原位」；
+        /// - **页面间回退**：新内容要等导航回来，故叠加淡出/淡入，让中间那次替换落在半透明处。
+        private func completeBack(on container: UIView) {
+            guard !isCompletingBack else { return }
+            isCompletingBack = true
+
+            let width = max(container.bounds.width, 1)
+            let returnsToStartPage = parent.tab.backLeadsToStartPage
+            let generation = swipeGeneration
+            container.layer.removeAllAnimations()
+
+            UIView.animate(
+                withDuration: 0.20,
+                delay: 0,
+                options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
+            ) {
+                container.transform = CGAffineTransform(translationX: width, y: 0)
+                if !returnsToStartPage { container.alpha = 0 }
+            } completion: { [weak self] _ in
+                guard let self, generation == self.swipeGeneration else { return }
+                self.parent.tab.goBack()
+
+                // 起始页由下层常驻预览无缝接手：容器此刻完全在屏外，暂不归位——
+                // 让「起始页插入」与「容器归位」落在同一次 SwiftUI 更新里（由 `updateUIView` 的
+                // 兜底完成）。若在这里立刻归位，旧页面有可能抢在起始页渲染之前闪回一帧。
+                if returnsToStartPage || self.parent.tab.isShowingStartPage {
+                    container.alpha = 1
+                    self.isCompletingBack = false
+                    return
+                }
+
+                // 页面间回退：从左侧 25% 处滑入，与离场方向构成一次连贯的左右推进
+                container.transform = CGAffineTransform(translationX: -width * 0.25, y: 0)
+                UIView.animate(
+                    withDuration: 0.28,
+                    delay: 0,
+                    usingSpringWithDamping: 0.92,
+                    initialSpringVelocity: 0,
+                    options: [.curveEaseOut, .allowUserInteraction]
+                ) {
+                    container.transform = .identity
+                    container.alpha = 1
+                } completion: { [weak self] _ in
+                    guard let self, generation == self.swipeGeneration else { return }
+                    self.isCompletingBack = false
+                }
+            }
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {

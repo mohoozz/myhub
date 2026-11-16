@@ -45,4 +45,11 @@ enum AppColors {
     static let destructiveSecondary = Color(uiColor: .systemGray)
     /// 播放器/阅读器等沉浸场景统一纯黑
     static let immersiveBackground = Color.black
+
+    // MARK: - 标签页网格（缩略图卡片，方案 A）
+
+    /// 网格画布：浅灰底让白色卡片浮起（仅本页，主界面仍纯白；暗色下压到近黑）
+    static let gridCanvas = Color(light: Color(hex: 0xF5F6F8), dark: Color(hex: 0x08080B))
+    /// 网格底栏「完成」胶囊底色：主色浅底（暗色用深蓝底 + 浅蓝字）
+    static let gridDoneFill = Color(light: Color(hex: 0xE8F0FE), dark: Color(hex: 0x12203A))
 }

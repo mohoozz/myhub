@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// 内置浏览器主页（TODO §8.1/§8.2，IOS-401）：
@@ -62,16 +63,18 @@ struct BrowserHomeView: View {
     /// 底部预留间距：与页签栏留一段距离；
     /// 有 mini 播放器时再叠加上封面向上溢出量（`MiniPlayer.coverOverflow` 是 `.offset` 视觉位移、
     /// 不参与布局测量，页面底边实际落在 mini 卡片上边界，不补偿就会与突出的封面贴太紧）。
-    /// 沉浸态下底部装饰已整体隐藏（`RootView.phoneBottomChrome` 高度归零），浮层直接贴着系统底部安全区，
-    /// 间距即「距 Home 指示条 8pt」；非沉浸态仍按页签栏口径留 12pt（+ mini 播放器封面溢出补偿）。
+    /// 沉浸态下底部装饰已整体隐藏（`RootView.phoneBottomChrome` 高度归零），浮层在 ZStack 层已经
+    /// 忽略底部安全区（见 `body` 末尾），这里量的是「距屏幕物理底边」——`immersiveBarGap` 21pt
+    /// 即 Home 指示条上沿 13pt + 8pt。非沉浸态仍按页签栏口径留 12pt（+ mini 播放器封面溢出补偿）。
     private var bottomBarGap: CGFloat {
         if isImmersive { return immersiveBarGap }
         return player.isMini ? tabBarGap + MiniPlayer.coverOverflow : tabBarGap
     }
 
     /// 网页层是否铺满整屏（F1）：仅沉浸态 + 已打开真实网页时生效。
-    /// 起始页是我们自绘的搜索页，搜索框不该钻到刘海下面，故仍按安全区排布；
-    /// 这个开关只影响网页层，底部浮层始终相对安全区底部定位，因此页面加载时浮层不会跳动。
+    /// 起始页是我们自绘的搜索页，搜索框不该钻到刘海下面，故仍按安全区排布。
+    /// 它同时决定底部浮层的落点是否压到屏幕物理底边（见 `body` 末尾）：起始页浮层仍在安全区之上，
+    /// 真实网页则与网页层一起贴底；两者切换恰好伴随「展开态 ⇄ 小胶囊」的形变，不会读成跳动。
     private var contentIgnoresSafeArea: Bool {
         guard isImmersive, let tab = session.activeTab else { return false }
         return !tab.isShowingStartPage
@@ -107,10 +110,9 @@ struct BrowserHomeView: View {
 
             // 底部浮层（F1 + A1）：操作栏 / 小胶囊浮在网页之上，不再与网页上下分栏——
             // 展开收起时网页高度不再变化（旧动画卡顿的主因：WKWebView 每帧都要重排重绘）。
-            // 沉浸态下自己忽略底部安全区：`bottomBarGap` 从屏幕物理底边量起，
-            // 否则 34pt 安全区会与间距叠加，胶囊看起来离底部还差一小截（用户反馈的"浮在半空"）。
+            // 注意：这里**不能**挂 `ignoresSafeArea`——落点由外层 ZStack 的 `alignment: .bottom` 决定，
+            // 加在子视图上改不动父级已经算好的对齐点（见 body 末尾 ZStack 上的说明）。
             bottomChrome
-                .ignoresSafeArea(.container, edges: isImmersive ? .bottom : [])
 
             // 沉浸态左下角退出钮（+ 有播放会话时的播放微件）：
             // 收缩态与操作栏的 `toolbarMini` 同源联动（T1），贴边半隐仅露 14pt。
@@ -123,11 +125,16 @@ struct BrowserHomeView: View {
                         .transition(.opacity)
                     Spacer(minLength: 0)
                 }
-                // 与底部浮层同一套基准：退出钮按展开态条高定位，浮层下沉多少它也要下沉多少，
-                // 否则会与操作栏之间凭空多出 34pt 安全区的空档
-                .ignoresSafeArea(.container, edges: .bottom)
             }
         }
+        // 沉浸态 + 真实网页：把整个浮层坐标系压到**屏幕物理底边**，而不是系统底部安全区底边。
+        // 关键点：这一步必须加在 ZStack 上。加在 `bottomChrome` / 退出钮这类子视图上时，
+        // ZStack 早已按安全区底边算好 `alignment: .bottom` 的落点，子视图的 `ignoresSafeArea`
+        // 只扩大自己的可用区域、改不动父级给的位置，于是胶囊看起来永远「浮在离底一小截」
+        // （用户两次反馈同一现象：只改 `immersiveBarGap` 没用）。放在容器这一层，
+        // 安全区 34pt（以及隐藏后仍残留的页签栏 inset）才真的被吃掉。
+        // 起始页不压满：搜索页是自绘 UI，底部内容不该钻到 Home 指示条下面。
+        .ignoresSafeArea(.container, edges: contentIgnoresSafeArea ? .bottom : [])
         .background(AppColors.pageBackground)
         .animation(Self.chromeMorph, value: toolbarMini)
         .animation(.appFast, value: addressEditing)
@@ -396,10 +403,37 @@ private struct TabGridView: View {
 
     /// 下滑关闭的跟手位移（TODO 409）
     @State private var dragOffset: CGFloat = 0
-    /// 列表是否处于顶部：仅顶部允许下滑关闭，避免与「向上滚动列表」争抢
-    @State private var atTop = true
+    /// 列表当前滚动偏移（0 为顶部）：由顶部零高探测器经 preference 上报
+    @State private var scrollOffset: CGFloat = 0
+    /// 本次拖动的手势身份：在手势**第一个回调**时确定，之后整段手势不再改判（TODO 419）。
+    ///
+    /// 旧实现把「是否在顶部」直接写在 `simultaneousGesture(_:including:)` 的 mask 上
+    /// （`atTop ? .all : .subviews`），看似等价，实则埋了一颗雷：mask 一变，SwiftUI 会**重建**
+    /// 这个 `DragGesture`，而新手势的 `translation` 是相对**触点按下那一刻**算的完整位移。
+    /// 于是「标签很多 → 从底部往上滚 → 滚到顶的瞬间 atTop 翻真 → 手势被重新装填」时，
+    /// 累积的几百 pt 位移会一次性灌进 `onChanged`，当场把 `dragOffset` 顶过阈值，
+    /// 松手即触发关闭整个标签网格的动画。改为手势常驻、身份由首个回调决定后，
+    /// 只有「按下时列表就已经在顶部」的那一次拖动才可能关闭。
+    @State private var dragMode: DragMode = .idle
 
-    private let columns = [GridItem(.adaptive(minimum: 160), spacing: 12)]
+    private enum DragMode {
+        /// 尚未收到本次拖动的首个回调（松手后复位）
+        case idle
+        /// 起点在顶部且向下拖：本次手势属于「下滑关闭」
+        case armed
+        /// 起点不在顶部（或方向向上）：整段手势让给列表滚动
+        case ignored
+    }
+
+    /// 固定两列（方案 A）：卡片宽度按屏宽均分，缩略图比例稳定；
+    /// 原自适应列在 iPad 上会摊成 3~4 列，每列窄到 160pt 时截图已经认不出内容。
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
+    /// 打开网格时单次补抓的缩略图上限：标签多时避免一次拉起十几个快照
+    private static let maxThumbnailCaptures = 12
 
     /// 关闭阈值：位移超过 110pt，或按松手速度外推的终点超过 220pt（轻扫即关）。
     /// 与 mini 播放器下滑收起（`MiniPlayer`）取同一量级，手感统一。
@@ -407,54 +441,92 @@ private struct TabGridView: View {
     private let dismissFlickDistance: CGFloat = 220
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                // 顶部零高探测器：滚动偏移经 preference 上报，限定下滑关闭只在顶部生效
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: TabGridScrollOffsetKey.self,
-                        value: proxy.frame(in: .named("tabGridScroll")).minY
-                    )
-                }
-                .frame(height: 0)
-
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(session.visibleTabs) { tab in
-                        tabCard(tab)
-                    }
-                }
-                .padding(16)
+        // 自动定位到当前标签（TODO 422）：定位要用 `ScrollViewReader` 给的 proxy，
+        // 故把整个网格包进 reader；真正的定位动作在 `.onAppear`（见 `scrollToActiveTab`）。
+        ScrollViewReader { positionProxy in
+            VStack(spacing: 0) {
+                header
+                tabGrid
             }
-            .coordinateSpace(name: "tabGridScroll")
-            .onPreferenceChange(TabGridScrollOffsetKey.self) { value in
-                // 留 1pt 容差：顶部回弹时 minY 会在 0 附近抖动
-                atTop = value >= -1
-            }
-            // 下滑关闭（TODO 409）：与滚动同时识别，故用 `simultaneousGesture`——
-            // 非顶部时降级为 `.subviews`，把手势完全让给 ScrollView 的滚动与卡片自身交互。
-            .simultaneousGesture(dismissDrag, including: atTop ? .all : .subviews)
-            .background(AppColors.pageBackground)
-            .navigationTitle(session.isIncognito ? "无痕浏览" : "标签页")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("完成") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        session.toggleIncognito()
-                    } label: {
-                        Image(systemName: session.isIncognito ? "eye.slash.fill" : "eye")
-                            .foregroundStyle(session.isIncognito ? AppColors.primary : AppColors.textSecondary)
-                    }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                bottomBar
+            // 画布色铺满全屏（含状态栏区域），与原型一致：浅灰底托住白卡
+            .background(AppColors.gridCanvas.ignoresSafeArea())
+            // 整体跟手下移（含标题栏与底部栏），松手未过阈值则弹回（TODO 409）
+            .offset(y: dragOffset)
+            .safeAreaInset(edge: .bottom) { bottomBar }
+            // 打开即对齐到当前标签（TODO 422）并补齐缩略图（TODO 423）
+            .onAppear {
+                scrollToActiveTab(positionProxy)
+                primeThumbnails()
             }
         }
-        // 整体跟手下移（含导航栏与底部栏），松手未过阈值则弹回
-        .offset(y: dragOffset)
+    }
+
+    // MARK: - 顶部标题栏
+
+    /// 顶部只保留「大标题 + 数量 chip」（方案 A）：完成 / 无痕全部下放到底栏，
+    /// 导航栏不再占一行，视觉重心落到卡片本身。
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(session.isIncognito ? "无痕浏览" : "标签页")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(AppColors.textPrimary)
+
+            Text("\(session.visibleTabs.count)")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppColors.textSecondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(AppColors.fieldFill))
+                // 与标题基线对齐：chip 比 28pt 标题矮很多，交给 firstTextBaseline 会偏上
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+    }
+
+    // MARK: - 网格
+
+    private var tabGrid: some View {
+        ScrollView {
+            // 顶部零高探测器：滚动偏移经 preference 上报，限定下滑关闭只在顶部生效
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: TabGridScrollOffsetKey.self,
+                    value: geometry.frame(in: .named("tabGridScroll")).minY
+                )
+            }
+            .frame(height: 0)
+
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(session.visibleTabs) { tab in
+                    // 带上 id，供 `ScrollViewReader` 把当前标签滚进视口
+                    tabCard(tab).id(tab.id)
+                }
+            }
+            .padding(16)
+        }
+        .coordinateSpace(name: "tabGridScroll")
+        .onPreferenceChange(TabGridScrollOffsetKey.self) { value in
+            scrollOffset = value
+        }
+        // 下滑关闭（TODO 409 / 419）：与滚动同时识别，故用 `simultaneousGesture`。
+        // 手势常驻、不做条件挂载（见 `dragMode` 注释）：是否生效由手势首个回调里的
+        // 「起始时是否在顶部」决定，避免滚动途中被重新装填而误判为关闭手势。
+        .simultaneousGesture(dismissDrag)
+    }
+
+    /// 打开网格时补抓缩略图（TODO 423）：当前标签优先，单次最多 12 张。
+    /// 已有缓存（URL 未变）的标签在 `captureThumbnailIfNeeded()` 里直接命中，不会重复抓取。
+    private func primeThumbnails() {
+        let tabs = session.visibleTabs
+        let active = tabs.filter { $0.id == session.activeTabID }
+        let others = tabs.filter { $0.id != session.activeTabID }
+        for tab in (active + others).prefix(Self.maxThumbnailCaptures) {
+            tab.captureThumbnailIfNeeded()
+        }
     }
 
     // MARK: - 下滑关闭手势
@@ -471,14 +543,27 @@ private struct TabGridView: View {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
             .onChanged { value in
                 guard draggingTab == nil else { return }
-                // 仅向下、且以纵向位移为主（横向滑动交给其它交互）
-                guard value.translation.height > 0,
-                      value.translation.height > abs(value.translation.width)
-                else { return }
-                dragOffset = value.translation.height
+                // 手势身份只在「位移还很小、尚未产生跟手位移」时判定：
+                // ①每段新拖动的首个回调（`minimumDistance` 16pt）都落在这里——那一刻列表是否已到顶部、
+                //   方向是否向下，决定整段手势是「关闭」还是「滚动」，之后即使滚到顶也不改判；
+                // ②手势被系统打断（切后台 / 被其它识别器抢占）时不会回调 `onEnded`，
+                //   残留的上一轮结论也能在这里自愈，不会把「列表中部下滑」误当成关闭。
+                if dragOffset == 0,
+                   abs(value.translation.height) <= 24,
+                   abs(value.translation.width) <= 24 {
+                    dragMode = (scrollOffset >= -1 && value.translation.height > 0) ? .armed : .ignored
+                }
+                guard dragMode == .armed else { return }
+                // 仅向下、且以纵向位移为主（横向滑动交给其它交互）；
+                // 回拖到负值时位移归零，避免松手前出现「反向也跟手」
+                guard value.translation.height > abs(value.translation.width) else { return }
+                dragOffset = max(0, value.translation.height)
             }
             .onEnded { value in
-                guard draggingTab == nil else {
+                let wasArmed = dragMode == .armed && draggingTab == nil
+                dragMode = .idle
+                guard wasArmed else {
+                    // 整段手势都被判定为「滚动列表」：不关闭，也不要有残留位移
                     withAnimation(.appFast) { dragOffset = 0 }
                     return
                 }
@@ -492,52 +577,45 @@ private struct TabGridView: View {
             }
     }
 
+    // MARK: - 自动定位到当前标签
+
+    /// 打开标签网格时把当前标签滚进视口（TODO 422）。
+    ///
+    /// 标签一多，网格默认停在最顶部，当前标签常常在屏幕外——用户得先自己翻一遍才知道「我现在在哪一页」。
+    /// 这里在出现时把当前标签滚到视口中央（Safari 的标签总览同样以当前页为中心）。
+    ///
+    /// 三个要点：
+    /// - **无动画**：不包 `withAnimation`。定位发生在网格上滑入场的首帧，用户看到的是「一打开就停在这里」，
+    ///   而不是「打开之后再挪一下」；
+    /// - **锚点 `.center` 天然克制**：目标在前几行时，居中所需的偏移是负值，`ScrollView` 会夹到 0，
+    ///   于是「当前标签本来就靠上」时画面纹丝不动，只有它确实在下方时才会滚动；
+    /// - **补一次重试**：`LazyVGrid` 的卡片是按需实例化的，首帧可能还没算出目标位置，
+    ///   首次 `scrollTo` 会落空；隔一帧再调一次——`scrollTo` 幂等，已对齐时不会有任何变化。
+    private func scrollToActiveTab(_ positionProxy: ScrollViewProxy) {
+        guard let activeID = session.activeTabID,
+              session.visibleTabs.contains(where: { $0.id == activeID })
+        else { return }
+        positionProxy.scrollTo(activeID, anchor: .center)
+        Task { @MainActor in
+            // 网格入场时首帧布局与页面切换交错，隔一帧再对齐一次兜底
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            positionProxy.scrollTo(activeID, anchor: .center)
+        }
+    }
+
     // MARK: - 标签卡片
 
     private func tabCard(_ tab: BrowserTab) -> some View {
         let isActive = tab.id == session.activeTabID
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                favicon(tab)
-                Spacer()
-                if tab.isLoading {
-                    ProgressView().controlSize(.mini)
-                }
-            }
-            Spacer(minLength: 0)
-            Text(tab.title.isEmpty ? "新标签页" : tab.title)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(AppColors.textPrimary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            Text(tab.currentURL?.host ?? "")
-                .font(.caption)
-                .foregroundStyle(AppColors.textSecondary)
-                .lineLimit(1)
-        }
-        .padding(12)
-        .frame(height: 140)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isActive ? AppColors.highlightBackground : AppColors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isActive ? AppColors.primary : AppColors.separator, lineWidth: isActive ? 1.5 : 0.5)
+        return TabThumbnailCard(
+            tab: tab,
+            isActive: isActive,
+            onSelect: {
+                session.switchTab(tab.id)
+                dismiss()
+            },
+            onClose: { session.closeTab(tab.id) }
         )
-        .overlay(alignment: .topTrailing) {
-            Button {
-                session.closeTab(tab.id)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppColors.textSecondary)
-                    .padding(6)
-                    .background(Circle().fill(AppColors.highlightBackground))
-                    .padding(4)
-            }
-            .buttonStyle(.plain)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         // 长按拖动排序：拖起时记录来源，拖入其它卡片时实时重排
         .onDrag {
             draggingTab = tab
@@ -548,66 +626,126 @@ private struct TabGridView: View {
             delegate: TabDropDelegate(item: tab, dragging: $draggingTab, session: session)
         )
         .opacity(draggingTab?.id == tab.id ? 0.35 : 1)
-        .onTapGesture {
-            session.switchTab(tab.id)
-            dismiss()
-        }
-    }
-
-    @ViewBuilder
-    private func favicon(_ tab: BrowserTab) -> some View {
-        if let url = tab.faviconURL {
-            AsyncImage(url: url) { phase in
-                if case .success(let image) = phase {
-                    image.resizable().scaledToFit()
-                } else {
-                    fallbackFavicon
-                }
-            }
-            .frame(width: 20, height: 20)
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        } else {
-            fallbackFavicon
-        }
-    }
-
-    private var fallbackFavicon: some View {
-        Image(systemName: "globe")
-            .font(.caption)
-            .foregroundStyle(AppColors.textSecondary)
-            .frame(width: 20, height: 20)
     }
 
     // MARK: - 底部操作
 
+    /// 通栏胶囊（与主界面 Tab 栏同宽同高）：左「圆形 ＋」、右「无痕 ｜ 完成」。
+    /// 顶部导航栏不再放任何动作，全部收进这条底栏（方案 A）。
     private var bottomBar: some View {
-        HStack {
-            Button {
-                session.newTab()
-            } label: {
-                Label("新建标签", systemImage: "plus")
-                    .font(.subheadline)
+        HStack(spacing: 0) {
+            // 新建：只留圆形 ＋，不写「新建标签」文字，语义由加号承担；
+            // 视觉 34pt，触控区补到 44pt。
+            Button(action: newTabAndEnter) {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        Circle()
+                            .fill(AppColors.primary)
+                            .shadow(color: AppColors.primary.opacity(0.35), radius: 4, y: 2)
+                    )
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(AppColors.primary)
+            .buttonStyle(CirclePressButtonStyle())
 
-            Spacer()
+            Spacer(minLength: 8)
+
+            incognitoSwitch
+
+            Rectangle()
+                .fill(AppColors.separator)
+                .frame(width: 1, height: 22)
+                .padding(.horizontal, 12)
+
+            doneButton
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 56)
+        .background(ChromeCapsule())
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+        // 底栏挂在 `safeAreaInset` 上：画布色要自己衔接到屏幕底边，
+        // 否则 home indicator 区域会露出 fullScreenCover 的系统底色。
+        .background(AppColors.gridCanvas.ignoresSafeArea(edges: .bottom))
+    }
+
+    /// 无痕：眼睛图腾 + 文字 + 开关。状态由开关本身呈现，不需要再靠图标点亮来暗示。
+    private var incognitoSwitch: some View {
+        HStack(spacing: 6) {
+            Image(systemName: session.isIncognito ? "eye.slash.fill" : "eye")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(session.isIncognito ? AppColors.primary : AppColors.textSecondary)
+
+            Text("无痕")
+                .font(.system(size: 12.5))
+                .foregroundStyle(AppColors.textPrimary)
 
             Toggle(isOn: Binding(
                 get: { session.isIncognito },
                 set: { _ in session.toggleIncognito() }
             )) {
                 Text("无痕")
-                    .font(.subheadline)
-                    .foregroundStyle(AppColors.textPrimary)
             }
+            .labelsHidden()
             .toggleStyle(.switch)
             .tint(AppColors.primary)
+            // 系统开关视觉偏大（51×31），压到 0.82 与左侧文字、右侧胶囊同重
+            .scaleEffect(0.82)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(AppColors.cardBackground.ignoresSafeArea(edges: .bottom))
-        .overlay(alignment: .top) { Divider().overlay(AppColors.separator) }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 完成：淡蓝胶囊（暗色为深蓝底 + 浅蓝字），替代原来的导航栏左按钮
+    private var doneButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Text("完成")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppColors.primary)
+                .padding(.horizontal, 15)
+                .frame(height: 34)
+                .background(Capsule().fill(AppColors.gridDoneFill))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - 行为
+
+    /// 新建标签并**自动进入**（TODO 420）：先给按钮一次完整的按压回弹，再收起网格；
+    /// 网格下滑退场的同时新标签的起始页接手，地址栏也从收起态展开——一次连贯的「进入新标签页」。
+    ///
+    /// 0.12s 的延迟只为让按压动画播完：`dismiss()` 一旦开始全屏覆盖退场，底部栏会被一起带走，
+    /// 按压回弹就看不到了（旧实现点一下毫无反馈，正是因为「无样式 + 不进入新标签」两件事）。
+    private func newTabAndEnter() {
+        // 与其它自绘控件一致：按压即给一次轻触觉，确认这一下被吃到了
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred()
+
+        // 新标签成为激活标签（`activeTabID` 变化会带动底部浮层收展动画，见 `BrowserHomeView`）
+        session.newTab()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            dismiss()
+        }
+    }
+}
+
+/// 底栏圆形「＋」的按压样式（TODO 420）：按钮自带主色圆底，
+/// 只需缩放 + 与其它自绘控件一致的短缓出回弹。
+/// 动画来源锁死为真实按压信号：按下瞬时跟手（nil），抬起才回弹——
+/// 不这么写的话，外层转场事务（网格退场）会顺手驱动这里的插值（同 TODO 406 的坑）。
+private struct CirclePressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .animation(configuration.isPressed ? nil : .appFast, value: configuration.isPressed)
     }
 }
 
@@ -631,5 +769,223 @@ private struct TabDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         dragging = nil
         return true
+    }
+}
+
+// MARK: - 标签卡片（方案 A：缩略图 + 标题条）
+
+/// 一张标签卡：上半部网页缩略图（未就绪 / 无痕时走品牌色占位），下半部 38pt 图标 + 标题条。
+///
+/// 用 `@ObservedObject` 包住标签本身：缩略图是 `BrowserTab` 上的 `@Published`，
+/// 抓取完成后这一张卡会自己刷新，不需要整个网格重算。
+private struct TabThumbnailCard: View {
+    @ObservedObject var tab: BrowserTab
+    let isActive: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    private let corner: CGFloat = 14
+
+    var body: some View {
+        VStack(spacing: 0) {
+            preview
+                .frame(height: 112)
+                .frame(maxWidth: .infinity)
+                .clipped()
+
+            caption
+        }
+        .background(AppColors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            if !isActive { closeButton.padding(6) }
+        }
+        .overlay(alignment: .topLeading) {
+            if isActive { currentBadge.padding(6) }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .strokeBorder(
+                    isActive ? AppColors.primary : AppColors.cardBorder,
+                    lineWidth: isActive ? 2 : 0.8
+                )
+        )
+        // 投影挂在底板形状上（而不是整卡）：避免 `clipped()` 把描边和阴影一起裁掉
+        .background(
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(AppColors.cardBackground)
+                .shadow(
+                    color: isActive ? AppColors.primary.opacity(0.28) : Color.black.opacity(0.06),
+                    radius: isActive ? 10 : 6,
+                    y: isActive ? 4 : 2
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .onTapGesture(perform: onSelect)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
+    private var accessibilityTitle: String {
+        let name = tab.title.isEmpty ? "新标签页" : tab.title
+        return isActive ? "\(name)，当前标签页" : name
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if let image = tab.thumbnail {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+        } else {
+            ThumbnailPlaceholder(url: tab.currentURL, isIncognito: tab.isIncognito)
+        }
+    }
+
+    private var caption: some View {
+        HStack(spacing: 6) {
+            favicon
+
+            Text(tab.title.isEmpty ? "新标签页" : tab.title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(AppColors.textPrimary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            if tab.isLoading {
+                ProgressView().controlSize(.mini)
+            }
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 38)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var favicon: some View {
+        Group {
+            if let url = tab.faviconURL {
+                AsyncImage(url: url) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().scaledToFit()
+                    } else {
+                        globeIcon
+                    }
+                }
+            } else {
+                globeIcon
+            }
+        }
+        .frame(width: 14, height: 14)
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
+
+    private var globeIcon: some View {
+        Image(systemName: "globe")
+            .font(.system(size: 10))
+            .foregroundStyle(AppColors.textSecondary)
+    }
+
+    /// 关闭键：收进缩略图右上角（半透明白底小圆），当前标签不显示，避免误关
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(AppColors.textSecondary)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(0.92)))
+                .shadow(color: Color.black.opacity(0.14), radius: 2, y: 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("关闭标签页")
+    }
+
+    private var currentBadge: some View {
+        Text("当前")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2.5)
+            .background(Capsule().fill(AppColors.primary))
+    }
+}
+
+/// 缩略图占位（也是无痕标签的固定形态）：
+/// 站点品牌色淡淡铺一层 + 骨架线条，既表达「这里是一张网页」，又不冒充真实内容。
+private struct ThumbnailPlaceholder: View {
+    let url: URL?
+    let isIncognito: Bool
+
+    var body: some View {
+        let brand = isIncognito ? AppColors.textSecondary : SiteBrandColor.color(for: url)
+        ZStack(alignment: .topLeading) {
+            LinearGradient(
+                colors: [brand.opacity(0.16), brand.opacity(0.05)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 3) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Circle()
+                            .fill(AppColors.textPrimary.opacity(0.16))
+                            .frame(width: 4, height: 4)
+                    }
+                    Capsule()
+                        .fill(AppColors.textPrimary.opacity(0.12))
+                        .frame(height: 5)
+                        .padding(.leading, 2)
+                }
+                Capsule().fill(AppColors.textPrimary.opacity(0.13)).frame(width: 96, height: 5)
+                Capsule().fill(AppColors.textPrimary.opacity(0.11)).frame(width: 62, height: 5)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(brand.opacity(0.22))
+                    .frame(height: 46)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.top, 9)
+
+            Image(systemName: isIncognito ? "eye.slash" : "globe")
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(brand.opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .center)
+                .offset(y: 56)
+        }
+    }
+}
+
+/// 站点品牌色：按主域稳定散列到一组品牌色，同一站点永远是同一色（纯本地计算，零网络成本）。
+enum SiteBrandColor {
+    private static let palette: [Color] = [
+        Color(hex: 0x2563EB),
+        Color(hex: 0x24292F),
+        Color(hex: 0xFB7299),
+        Color(hex: 0xD71A1B),
+        Color(hex: 0x111111),
+        Color(hex: 0x0066FF),
+        Color(hex: 0x1F2937),
+        Color(hex: 0x7C3AED)
+    ]
+
+    static func color(for url: URL?) -> Color {
+        guard let host = url?.host?.lowercased(), !host.isEmpty else {
+            return AppColors.textSecondary
+        }
+        // 只取主域：docs.example.com 与 www.example.com 同色
+        let parts = host.split(separator: ".")
+        let key = parts.count >= 2 ? parts.suffix(2).joined(separator: ".") : host
+
+        var hash: UInt64 = 5381
+        for scalar in key.unicodeScalars {
+            hash = (hash &* 33) &+ UInt64(scalar.value)
+        }
+        return palette[Int(hash % UInt64(palette.count))]
     }
 }
