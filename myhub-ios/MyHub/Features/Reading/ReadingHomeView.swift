@@ -104,10 +104,8 @@ struct ReadingHomeView: View {
                 if let ids = deletingSourceIDs {
                     Task {
                         do {
-                            let moved = try await deleteSourceFiles(ids: ids)
-                            message = moved == ids.count
-                                ? "已将 \(ids.count) 个源文件移入回收站，并清理阅读记录"
-                                : "已将 \(moved) 个源文件移入回收站（\(ids.count - moved) 个源文件已不存在），并清理阅读记录"
+                            let result = try await deleteSourceFiles(ids: ids)
+                            message = sourceDeleteMessage(ids: ids, result: result)
                         } catch {
                             forceDeletingSourceIDs = ids   // 回收站不可用 → 降级为彻底删除确认
                         }
@@ -117,7 +115,7 @@ struct ReadingHomeView: View {
             }
             Button("取消", role: .cancel) { deletingSourceIDs = nil }
         } message: {
-            Text("将删除 \(deletingSourceIDs?.count ?? 0) 个源文件及对应阅读记录（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）")
+            Text("将删除 \(deletingSourceIDs?.count ?? 0) 个源文件及对应阅读记录\(sameNameHint)（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）")
         }
         .alert(
             "无法使用回收站",
@@ -134,7 +132,7 @@ struct ReadingHomeView: View {
             }
             Button("取消", role: .cancel) { forceDeletingSourceIDs = nil }
         } message: {
-            Text("连接源不支持回收站，将彻底删除 \(forceDeletingSourceIDs?.count ?? 0) 个源文件及其阅读记录，不可恢复。")
+            Text("连接源不支持回收站，将彻底删除 \(forceDeletingSourceIDs?.count ?? 0) 个源文件\(sameNameHint)及其阅读记录，不可恢复。")
         }
         .alert("提示", isPresented: Binding(
             get: { message != nil },
@@ -721,13 +719,73 @@ struct ReadingHomeView: View {
 
     // MARK: - 删除源文件
 
+    /// 删除源文件的统计（供提示文案区分「源文件」与「同名文件」数量）
+    private struct SourceDeleteResult {
+        /// 实际移入回收站 / 删除的源文件数量（不含同名文件）
+        var moved: Int = 0
+        /// 一并处理掉的主名相同、扩展名不同的文件数量
+        var companions: Int = 0
+    }
+
+    /// 开启「删除时移除同名文件」时的确认文案补充（阅读页没有目录列表，弹窗内无法预知同名文件数量）
+    private var sameNameHint: String {
+        AppSettings.Browse.deleteSameNameFiles ? "，以及同目录下与它们同名的其他类型文件" : ""
+    }
+
+    /// 删除源文件后的提示文案（区分源文件与同名文件数量）
+    private func sourceDeleteMessage(ids: [Int64], result: SourceDeleteResult) -> String {
+        var text = result.moved == ids.count
+            ? "已将 \(ids.count) 个源文件移入回收站"
+            : "已将 \(result.moved) 个源文件移入回收站（\(ids.count - result.moved) 个源文件已不存在）"
+        if result.companions > 0 {
+            text += "，另含 \(result.companions) 个同名文件"
+        }
+        return text + "，并清理阅读记录"
+    }
+
+    /// 同目录、主名相同但扩展名不同的其他文件（`movie.mp4` → `movie.srt` / `movie.jpg`）。
+    ///
+    /// 与浏览界面 `BrowseDirectoryViewModel.sameStemSiblings` 同一规则：只认文件、扩展名都非空且不同，
+    /// 主名区分大小写（大小写敏感的 SMB 上不会把 `movie.mkv` 与 `Movie.srt` 当一组）。
+    private static func sameStemSiblings(of entry: FileEntry, in listing: [FileEntry]) -> [FileEntry] {
+        guard !entry.isDir else { return [] }
+        let name = entry.name as NSString
+        let ext = name.pathExtension
+        let stem = name.deletingPathExtension
+        guard !ext.isEmpty, !stem.isEmpty else { return [] }
+        return listing.filter { candidate in
+            guard !candidate.isDir, candidate.path != entry.path else { return false }
+            let candidateName = candidate.name as NSString
+            let candidateExt = candidateName.pathExtension
+            guard !candidateExt.isEmpty, candidateExt.lowercased() != ext.lowercased() else { return false }
+            return candidateName.deletingPathExtension == stem
+        }
+    }
+
+    /// 预取本批记录涉及的目录列表（同一目录只 LIST 一次）。
+    /// 失败按空列表处理——联动删除是尽力而为，不能影响主流程。
+    private func prefetchListings(
+        for records: [ReadingProgress],
+        adapter: StorageAdapter
+    ) async -> [String: [FileEntry]] {
+        var listings: [String: [FileEntry]] = [:]
+        for directory in Set(records.map { StoragePath.parent(of: $0.filePath) }) {
+            listings[directory] = (try? await adapter.list(directory)) ?? []
+        }
+        return listings
+    }
+
     /// 删除源文件（回收站优先，与浏览界面同机制）：
     /// 按连接分组，将文件移动到挂载点下 `.trash/时间戳-原名` 并写 `.meta.json` 还原元数据；
     /// 源文件已不存在 / 连接不可用的记录只清理阅读记录；返回实际移入回收站数量。
+    ///
+    /// 开启「删除时移除同名文件」（设置 → 文件操作）后，同目录下主名相同、扩展名不同的文件
+    /// （字幕/封面/元数据）也会一并移入回收站；它们失败只跳过，不影响源文件删除。
     @discardableResult
-    private func deleteSourceFiles(ids: [Int64]) async throws -> Int {
+    private func deleteSourceFiles(ids: [Int64]) async throws -> SourceDeleteResult {
         let records = history.records.filter { ids.contains($0.id ?? -1) }
-        var moved = 0
+        let expandSameName = AppSettings.Browse.deleteSameNameFiles
+        var result = SourceDeleteResult()
         let groups = Dictionary(grouping: records, by: \.connectionID)
         for (connectionID, group) in groups {
             guard let adapter = adapters[connectionID] else { continue }   // 连接不可用：仅清理记录
@@ -735,6 +793,11 @@ struct ReadingHomeView: View {
                 try await adapter.mkdir("/.trash")
             } catch {
                 // 目录已存在或创建失败均继续尝试移动
+            }
+            // 阅读页没有目录列表，联动删除需按目录 LIST 一次（同目录只拉一次）
+            var listings: [String: [FileEntry]] = [:]
+            if expandSameName {
+                listings = await prefetchListings(for: group, adapter: adapter)
             }
             let stamp = Self.trashStamp()
             for record in group {
@@ -746,10 +809,31 @@ struct ReadingHomeView: View {
                     fileEntry = nil
                 }
                 guard let fileEntry else { continue }
+                // 同名文件需在移动前确定（移动后目录内容已变）
+                let companions = expandSameName
+                    ? Self.sameStemSiblings(
+                        of: fileEntry,
+                        in: listings[StoragePath.parent(of: fileEntry.path)] ?? []
+                    )
+                    : []
                 let trashPath = "/.trash/\(stamp)-\(fileEntry.name)"
                 try await adapter.move(fileEntry.path, trashPath)
                 await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: fileEntry)
-                moved += 1
+                result.moved += 1
+                for companion in companions {
+                    let companionTrashPath = "/.trash/\(stamp)-\(companion.name)"
+                    do {
+                        try await adapter.move(companion.path, companionTrashPath)
+                    } catch {
+                        continue   // 同名文件失败不影响已完成的源文件删除
+                    }
+                    await writeTrashMeta(
+                        adapter: adapter,
+                        trashPath: companionTrashPath,
+                        entry: companion
+                    )
+                    result.companions += 1
+                }
             }
         }
         // 无论文件删除是否全部成功，对应阅读记录一并清理（源文件没了 / 连接没了，记录失去意义）
@@ -757,24 +841,45 @@ struct ReadingHomeView: View {
         selection = nil
         // 批量移除后重建列表，避免残留滚动偏移（详见 listEpoch）
         listEpoch += 1
-        return moved
+        return result
     }
 
-    /// 彻底删除源文件（回收站不可用时的降级路径）：按连接分组直接删除，已不存在的文件忽略
+    /// 彻底删除源文件（回收站不可用时的降级路径）：按连接分组直接删除，已不存在的文件忽略。
+    /// 开启「删除时移除同名文件」时，同目录下主名相同、扩展名不同的文件一并删除（尽力而为）。
     private func forceDeleteSourceFiles(ids: [Int64]) async {
         let records = history.records.filter { ids.contains($0.id ?? -1) }
+        let expandSameName = AppSettings.Browse.deleteSameNameFiles
+        var companions = 0
         let groups = Dictionary(grouping: records, by: \.connectionID)
         for (connectionID, group) in groups {
             guard let adapter = adapters[connectionID] else { continue }
+            // 阅读页没有目录列表，联动删除需按目录 LIST 一次（同目录只拉一次）
+            var listings: [String: [FileEntry]] = [:]
+            if expandSameName {
+                listings = await prefetchListings(for: group, adapter: adapter)
+            }
             for record in group {
-                try? await adapter.delete(record.filePath)
+                var targets = [record.filePath]
+                if expandSameName, let entry = try? await adapter.stat(record.filePath) {
+                    let siblings = Self.sameStemSiblings(
+                        of: entry,
+                        in: listings[StoragePath.parent(of: entry.path)] ?? []
+                    )
+                    targets += siblings.map(\.path)
+                    companions += siblings.count
+                }
+                for path in targets {
+                    try? await adapter.delete(path)
+                }
             }
         }
         history.remove(ids: ids)
         selection = nil
         // 批量移除后重建列表，避免残留滚动偏移（详见 listEpoch）
         listEpoch += 1
-        message = "已彻底删除 \(ids.count) 个源文件，并清理阅读记录"
+        message = companions > 0
+            ? "已彻底删除 \(ids.count) 个源文件及 \(companions) 个同名文件，并清理阅读记录"
+            : "已彻底删除 \(ids.count) 个源文件，并清理阅读记录"
     }
 
     /// 写回收站还原元数据（与浏览界面 `BrowseDirectoryViewModel.TrashMeta` 一致，供回收站页还原）

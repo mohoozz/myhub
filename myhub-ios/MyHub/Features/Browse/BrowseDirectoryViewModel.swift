@@ -471,8 +471,48 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
     // MARK: - 删除（回收站机制：挂载点下 .trash；不支持时降级由 UI 确认真删）
 
+    /// 与条目同目录、主名相同但扩展名不同的其他文件（`movie.mp4` → `movie.srt` / `movie.jpg`）。
+    ///
+    /// 只比对当前目录已加载的 `entries`，不额外发起网络请求；目录不参与匹配，
+    /// 无扩展名的文件也不参与（避免把 `movie` 与 `movie.srt` 误判成一组）。
+    /// 主名区分大小写（避免在大小写敏感的 SMB 上把 `movie.mkv` 与 `Movie.srt` 当同一组），
+    /// 扩展名不区分大小写（`movie.MKV` 与 `movie.mkv` 视为同类型，不会互相牵连）。
+    private func sameStemSiblings(of entry: FileEntry) -> [FileEntry] {
+        guard !entry.isDir else { return [] }
+        let name = entry.name as NSString
+        let ext = name.pathExtension
+        guard !ext.isEmpty else { return [] }
+        let stem = name.deletingPathExtension
+        guard !stem.isEmpty else { return [] }
+        let directory = StoragePath.parent(of: entry.path)
+        return entries.filter { candidate in
+            guard !candidate.isDir, !candidate.path.hasSuffix("/") else { return false }
+            guard candidate.path != entry.path else { return false }
+            let candidateName = candidate.name as NSString
+            let candidateExt = candidateName.pathExtension
+            guard !candidateExt.isEmpty, candidateExt.lowercased() != ext.lowercased() else { return false }
+            return candidateName.deletingPathExtension == stem
+                && StoragePath.parent(of: candidate.path) == directory
+        }
+    }
+
+    /// 实际删除目标：开启「删除时移除同名文件」（设置 → 文件操作，默认关闭）后，
+    /// 把主名相同、扩展名不同的兄弟文件一并纳入。
+    func deleteTargets(for paths: Set<String>) -> Set<String> {
+        guard AppSettings.Browse.deleteSameNameFiles else { return paths }
+        var result = paths
+        for path in paths {
+            guard let entry = entry(for: path) else { continue }
+            for sibling in sameStemSiblings(of: entry) {
+                result.insert(sibling.path)
+            }
+        }
+        return result
+    }
+
     func delete(paths: Set<String>) async throws {
         guard let adapter else { return }
+        let targets = deleteTargets(for: paths)
         do {
             try await adapter.mkdir("/.trash")
         } catch {
@@ -484,7 +524,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         var movedDirs: Set<String> = []
         var failureReason: String?
         do {
-            for sourcePath in paths.sorted() {
+            for sourcePath in targets.sorted() {
                 guard let entry = entry(for: sourcePath) else { continue }
                 let trashName = "\(stamp)-\(entry.name)"
                 let trashPath = "/.trash/\(trashName)"
@@ -543,9 +583,13 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
     /// 左滑删除的撤销句柄：记录回收站落点与被一并清理的阅读记录，供「撤销」原样还原
     struct SwipeTrashReceipt {
-        let entry: FileEntry
-        let trashPath: String
-        /// 删除前该路径（含目录下子路径）的阅读记录快照
+        /// 被移入回收站的条目（首项为主条目；开启「删除时移除同名文件」时会带上同名兄弟文件）
+        struct Item {
+            let entry: FileEntry
+            let trashPath: String
+        }
+        let items: [Item]
+        /// 删除前这些路径（含目录下子路径）的阅读记录快照
         let readingRecords: [ReadingProgress]
     }
 
@@ -557,49 +601,83 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// - **不**出「已移入回收站」轻提示，反馈改由可撤销提示条承担。
     func deleteToTrash(_ entry: FileEntry) async throws -> SwipeTrashReceipt {
         guard let adapter else { throw StorageError.invalidPath("连接不可用") }
+        // 同名文件需在 await 前取快照：期间 entries 可能被并发刷新替换
+        let companions = AppSettings.Browse.deleteSameNameFiles ? sameStemSiblings(of: entry) : []
         do {
             try await adapter.mkdir("/.trash")
         } catch {
             // 目录已存在或创建失败均继续尝试移动
         }
-        let trashPath = "/.trash/\(Self.trashStamp())-\(entry.name)"
+        let stamp = Self.trashStamp()
+        let trashPath = "/.trash/\(stamp)-\(entry.name)"
         // 占用类瞬时失败自动重试（TODO 373）
         try await Self.withOccupancyRetry { try await adapter.move(entry.path, trashPath) }
         await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: entry)
+        var items: [SwipeTrashReceipt.Item] = [.init(entry: entry, trashPath: trashPath)]
+
+        // 同名文件：尽力移入回收站，失败不阻断主条目（仅在日志留痕）
+        for companion in companions {
+            let companionTrashPath = "/.trash/\(stamp)-\(companion.name)"
+            do {
+                try await Self.withOccupancyRetry {
+                    try await adapter.move(companion.path, companionTrashPath)
+                }
+            } catch {
+                AppLogger.shared.log(
+                    "同名文件移入回收站失败 name=\(companion.name) error=\(error.localizedDescription)",
+                    level: .warn, module: "browse"
+                )
+                continue
+            }
+            await writeTrashMeta(adapter: adapter, trashPath: companionTrashPath, entry: companion)
+            items.append(.init(entry: companion, trashPath: companionTrashPath))
+        }
 
         // 撤销需还原阅读记录，故在清理前先取快照（目录需连同子路径下的记录）
-        let snapshot = readingRecordsSnapshot(under: entry)
+        let snapshot = items.flatMap { readingRecordsSnapshot(under: $0.entry) }
         // isDir 直接用手里的 entry：上面两个 await 期间 entries 可能已被并发刷新替换
-        finishTrashMove([entry.path], knownDirs: entry.isDir ? [entry.path] : [])
+        let knownDirs: Set<String> = entry.isDir ? [entry.path] : []
+        finishTrashMove(items.map(\.entry.path), knownDirs: knownDirs)
         await invalidateAndRefresh()
-        return SwipeTrashReceipt(entry: entry, trashPath: trashPath, readingRecords: snapshot)
+        return SwipeTrashReceipt(items: items, readingRecords: snapshot)
     }
 
     /// 撤销左滑删除：把文件从回收站移回原路径（被占用则自动追加序号），并补回阅读记录。
     /// 失败只提示不抛出——撤销是补偿操作，文件仍在回收站里可手动还原。
     func undoDeleteToTrash(_ receipt: SwipeTrashReceipt) async {
-        guard let adapter else { return }
-        let originalPath = receipt.entry.path
-        var candidate = originalPath
-        var counter = 1
-        // 上限保护：部分 WebDAV / 反代对任意路径都返回 200（工程为此有 StorageError.invalidResponse），
-        // stat 恒成功时无上限即变成无限网络请求，撤销按钮一按就卡住
-        while counter <= 20, (try? await adapter.stat(candidate)) != nil {
-            let stem = (receipt.entry.name as NSString).deletingPathExtension
-            let ext = (receipt.entry.name as NSString).pathExtension
-            let suffix = ext.isEmpty ? " (\(counter))" : " (\(counter)).\(ext)"
-            candidate = StoragePath.joining(StoragePath.parent(of: originalPath), stem + suffix)
-            counter += 1
+        guard let adapter, let primary = receipt.items.first else { return }
+        let originalPath = primary.entry.path
+        var failure: String?
+        // 主条目是否原样还原：只有它回到原路径，旧阅读记录才仍然有效
+        var primaryRestoredToOriginal = false
+        for item in receipt.items {
+            var candidate = item.entry.path
+            var counter = 1
+            // 上限保护：部分 WebDAV / 反代对任意路径都返回 200（工程为此有 StorageError.invalidResponse），
+            // stat 恒成功时无上限即变成无限网络请求，撤销按钮一按就卡住
+            while counter <= 20, (try? await adapter.stat(candidate)) != nil {
+                let stem = (item.entry.name as NSString).deletingPathExtension
+                let ext = (item.entry.name as NSString).pathExtension
+                let suffix = ext.isEmpty ? " (\(counter))" : " (\(counter)).\(ext)"
+                candidate = StoragePath.joining(StoragePath.parent(of: item.entry.path), stem + suffix)
+                counter += 1
+            }
+            do {
+                try await Self.withOccupancyRetry { try await adapter.move(item.trashPath, candidate) }
+            } catch {
+                failure = failure ?? error.localizedDescription
+                continue
+            }
+            try? await adapter.delete(item.trashPath + ".meta.json")
+            if item.entry.path == originalPath, candidate == originalPath {
+                primaryRestoredToOriginal = true
+            }
         }
-        do {
-            try await Self.withOccupancyRetry { try await adapter.move(receipt.trashPath, candidate) }
-        } catch {
-            operationError = "撤销失败：\(error.localizedDescription)。文件仍在回收站中，可在「回收站」手动还原"
-            return
+        if let failure {
+            operationError = "撤销失败：\(failure)。文件仍在回收站中，可在「回收站」手动还原"
         }
-        try? await adapter.delete(receipt.trashPath + ".meta.json")
         // 原路径未被占用才补回阅读记录（改名还原后旧记录已对不上文件）
-        if candidate == originalPath, !receipt.readingRecords.isEmpty {
+        if primaryRestoredToOriginal, !receipt.readingRecords.isEmpty {
             ReadingHistoryStore.shared.restore(receipt.readingRecords)
         }
         await invalidateAndRefresh()
@@ -618,11 +696,12 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// 彻底删除（回收站不可用时经用户确认的降级）
     func forceDelete(paths: Set<String>) async {
         guard let adapter else { return }
+        let targets = deleteTargets(for: paths)
         var failed: [String] = []
         var deletedPaths: [String] = []
         // 删除前先记下哪些是目录：循环内的 await 期间 entries 可能被并发刷新替换
-        let dirs = Set(paths.filter { entry(for: $0)?.isDir == true })
-        for sourcePath in paths.sorted() {
+        let dirs = Set(targets.filter { entry(for: $0)?.isDir == true })
+        for sourcePath in targets.sorted() {
             do {
                 // 占用类瞬时失败自动重试（TODO 373）
                 try await Self.withOccupancyRetry { try await adapter.delete(sourcePath) }

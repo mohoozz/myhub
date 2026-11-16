@@ -94,13 +94,22 @@ struct BrowseDirectoryView: View {
 
     // MARK: - 删除前释放文件占用（TODO 372/373）
 
+    /// 删除确认文案：开启「删除时移除同名文件」后，实际删除数量会多于选中项，需如实告知
+    private var deleteConfirmMessage: String {
+        let selected = deletingPaths ?? []
+        let count = viewModel.deleteTargets(for: selected).count
+        let companion = count > selected.count ? "（含 \(count - selected.count) 个同名文件）" : ""
+        return "将删除 \(count) 个项目\(companion)（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）"
+    }
+
     /// 「无法使用回收站」弹窗文案：附失败原因（占用/网络/权限），便于用户判断重试时机
     private var forceDeleteMessage: String {
         var text = "该连接源不支持回收站或部分项目移动失败"
         if let reason = forceDeleteReason, !reason.isEmpty {
             text += "（\(reason)）"
         }
-        text += "，将彻底删除剩余的 \(forceDeletePaths?.count ?? 0) 个项目，不可恢复。"
+        let count = viewModel.deleteTargets(for: forceDeletePaths ?? []).count
+        text += "，将彻底删除剩余的 \(count) 个项目，不可恢复。"
         return text
     }
 
@@ -385,23 +394,26 @@ struct BrowseDirectoryView: View {
         ) {
             Button("移入回收站", role: .destructive) {
                 if let paths = deletingPaths {
+                    // 开启「删除时移除同名文件」后，实际删除范围会大于选中项：
+                    // 统一按展开后的目标集合做停播与降级删除，避免同名文件仍被占用导致 MOVE 失败
+                    let targets = viewModel.deleteTargets(for: paths)
                     Task {
                         // 删除前释放占用：被删文件正在播放（含 mini）时先停播并等待串流会话注销（TODO 373）
-                        await releasePlaybackIfNeeded(paths)
+                        await releasePlaybackIfNeeded(targets)
                         do {
-                            try await viewModel.delete(paths: paths)
+                            try await viewModel.delete(paths: targets)
                         } catch let trashError as BrowseDirectoryViewModel.TrashError {
                             // 回收站不可用 → 仅对未成功的剩余项降级真删确认：
                             // 已移入回收站的项目不再重复删除，避免误报「删除失败」（TODO 369），
                             // 附带失败原因（占用/网络/不支持）供弹窗提示（TODO 373）
-                            let remaining = paths.subtracting(trashError.movedToTrash)
+                            let remaining = targets.subtracting(trashError.movedToTrash)
                             if !remaining.isEmpty {
                                 forceDeleteReason = trashError.reason
                                 forceDeletePaths = remaining
                             }
                         } catch {
                             forceDeleteReason = error.localizedDescription
-                            forceDeletePaths = paths
+                            forceDeletePaths = targets
                         }
                     }
                 }
@@ -409,7 +421,7 @@ struct BrowseDirectoryView: View {
             }
             Button("取消", role: .cancel) { deletingPaths = nil }
         } message: {
-            Text("将删除 \(deletingPaths?.count ?? 0) 个项目（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）")
+            Text(deleteConfirmMessage)
         }
         .alert(
             "无法使用回收站",
@@ -1122,11 +1134,16 @@ struct BrowseDirectoryView: View {
     /// 左滑删除：先释放播放占用（刚播放完的文件服务端句柄可能未释放，TODO 373），
     /// 再移入回收站；失败只提示不弹降级确认框
     private func swipeDelete(_ entry: FileEntry) async {
-        await releasePlaybackIfNeeded([entry.path])
+        // 开启「删除时移除同名文件」时，同名兄弟文件也会被移入回收站，需一并释放占用
+        await releasePlaybackIfNeeded(viewModel.deleteTargets(for: [entry.path]))
         do {
             let receipt = try await viewModel.deleteToTrash(entry)
             let name = entry.name
-            undoToast.show("已将「\(name)」移入回收站") {
+            let count = receipt.items.count
+            let message = count > 1
+                ? "已将「\(name)」等 \(count) 项移入回收站"
+                : "已将「\(name)」移入回收站"
+            undoToast.show(message) {
                 Task { await viewModel.undoDeleteToTrash(receipt) }
             }
         } catch {

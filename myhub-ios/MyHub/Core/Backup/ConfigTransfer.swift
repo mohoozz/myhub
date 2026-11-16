@@ -34,6 +34,8 @@ struct PreferencesSnapshot: Codable {
     var playerOrientationMode: String?
     /// 内嵌字幕编码（auto / utf8 / gb18030 / big5 / shiftJIS）；可选以兼容旧快照
     var playerEmbeddedSubtitleEncoding: String?
+    /// 删除文件时连带删除同目录同名（不同扩展名）文件；可选以兼容旧快照
+    var deleteSameNameFiles: Bool?
 
     static func capture() -> PreferencesSnapshot {
         PreferencesSnapshot(
@@ -55,7 +57,8 @@ struct PreferencesSnapshot: Codable {
             trashRetentionDays: AppSettings.Trash.retentionDays,
             playerAutoPiPOnBackground: AppSettings.Player.autoPiPOnBackground,
             playerOrientationMode: AppSettings.Player.orientationMode.rawValue,
-            playerEmbeddedSubtitleEncoding: AppSettings.Player.embeddedSubtitleEncoding.rawValue
+            playerEmbeddedSubtitleEncoding: AppSettings.Player.embeddedSubtitleEncoding.rawValue,
+            deleteSameNameFiles: AppSettings.Browse.deleteSameNameFiles
         )
     }
 
@@ -84,6 +87,13 @@ struct PreferencesSnapshot: Codable {
         }
         if let raw = playerEmbeddedSubtitleEncoding, let encoding = SubtitleTextEncoding(rawValue: raw) {
             AppSettings.Player.embeddedSubtitleEncoding = encoding
+        }
+        if let deleteSameName = deleteSameNameFiles {
+            AppSettings.Browse.deleteSameNameFiles = deleteSameName
+            // 同步设置页的即时响应镜像，避免导入后开关仍显示旧值
+            Task { @MainActor in
+                BrowseDisplaySettings.shared.deleteSameNameFiles = deleteSameName
+            }
         }
     }
 }

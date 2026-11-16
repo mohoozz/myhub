@@ -50,6 +50,16 @@ struct SettingsHomeView: View {
                 Text("文件/标题过长时按设定行数换行显示（浏览页与阅读页的卡片、列表均生效）。")
             }
 
+            Section {
+                Toggle(isOn: $browseDisplaySettings.deleteSameNameFiles) {
+                    Label("删除时移除同名文件", systemImage: "doc.badge.minus")
+                }
+            } header: {
+                Text("文件操作")
+            } footer: {
+                Text("开启后，删除文件时会把同一目录下与它同名但扩展名不同的其他文件（如 .srt 字幕、.jpg 封面、.nfo 信息）一并移入回收站；浏览页删除与阅读页「删除源文件」均生效，仅对文件有效，目录不受影响。")
+            }
+
             Section("阅读与播放") {
                 NavigationLink { ReaderPreferencesView() } label: {
                     Label("阅读器偏好", systemImage: "book")
