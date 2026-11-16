@@ -103,8 +103,13 @@ protocol PlaybackEngine: AnyObject {
     /// 引擎内部状态快照（诊断日志用，TODO 380）：回前台 / 失败时记录，
     /// 用于区分「卡在等待态」「已停滞」「播放器已释放」等熄屏后异常
     var diagnosticSnapshot: String { get }
+
+    /// 视频画面尺寸（像素，已应用旋转）；未知（音频/未就绪）时返回 .zero。
+    /// 字幕层据此把 ASS 坐标映射到视频实际显示区域，保证竖屏 letterbox 下也贴着画面底部
+    var videoNaturalSize: CGSize { get }
 }
 
 extension PlaybackEngine {
     var diagnosticSnapshot: String { "none" }
+    var videoNaturalSize: CGSize { .zero }
 }

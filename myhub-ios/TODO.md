@@ -124,7 +124,7 @@
   - [x] **调节时中央悬浮胶囊显示数值（`GestureFeedbackCapsule`：目标时间/总时长、音量%、亮度%、倍速、±秒数，0.8s 自动隐去）**
 - [x] `AudioCoverView`：唱片封面旋转（30fps 计时器，播放转/暂停冻结）、封面来源（同目录同名图/cover/folder/front 复用 `CoverService` 约定 → ID3 内嵌 albumart 兜底，占位图标）、「作者 - 标题」文件名解析
 - [x] **纯音频播放模式**（视频可切仅音频：`PlayerCore.setAudioOnly`；软解断开视频轨节电、硬解隐藏画面；音频文件与 `audioOnlyByDefault` 自动进入；控制栏一键切换）
-- [x] `SubtitleManager`：内嵌轨选择（控制栏菜单，与外挂互斥）+ 外挂 srt/ass/ssa 自动匹配同目录同名文件（含 `name.zh.srt` 语言后缀，精确同名优先，启动自动加载）+ SwiftUI 浮层渲染（双引擎统一，二分查找 cue）+ 样式（`subtitleFontSize`）/延迟（`subtitleDelay`）
+- [x] `SubtitleManager`：内嵌轨选择（控制栏菜单，与外挂互斥）+ 外挂 srt/ass/ssa 自动匹配同目录同名文件（含 `name.zh.srt` 语言后缀，精确同名优先，启动自动加载）+ 自绘字幕层渲染（双引擎统一，`SubtitleRenderView`：二分查找 cue、ASS 按 `PlayRes` 映射到视频实际显示区域、支持 `\an`/`\pos`/`\move` 位置与滚动弹幕、颜色/描边/阴影等样式，纯文字无底色、位置不随控制栏显隐移动）+ 样式（`subtitleFontSize`）/延迟（`subtitleDelay`）
 - [x] 多音轨切换（内嵌轨菜单，AVMediaSelectionGroup / VLC trackIndexes，≤1 轨时置灰）
 - [x] `NowPlaying`：后台音频（`AVAudioSession(.playback)` 起播激活/退出释放）+ 锁屏/控制中心（`MPNowPlayingInfoCenter` 标题/作者/时长/进度/倍率 + `MPRemoteCommandCenter` 播放暂停/快进快退/拖动定位）
 - [x] 画中画（PiP）：`AVPictureInPictureController` 挂 AVPlayerLayer（硬解路径），控制栏入口（软解/纯音频自动隐藏）

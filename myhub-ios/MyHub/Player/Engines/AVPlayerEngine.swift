@@ -55,6 +55,14 @@ final class AVPlayerEngine: PlaybackEngine {
     /// 硬解仅隐藏画面（AVPlayer 无便捷途径关闭视频解码；音频文件本就无视频轨）
     func setVideoEnabled(_ enabled: Bool) {}
 
+    /// 画面尺寸（已按 preferredTransform 旋转），字幕层用来定位视频显示区域
+    var videoNaturalSize: CGSize {
+        guard let size = playerItem?.presentationSize,
+              size.width > 1, size.height > 1,
+              size.width.isFinite, size.height.isFinite else { return .zero }
+        return size
+    }
+
     /// 引擎内部状态快照（诊断日志用，TODO 380）
     var diagnosticSnapshot: String {
         guard let player else { return "player=nil item=nil" }

@@ -9,25 +9,21 @@ struct ExternalSubtitleTrack: Equatable, Identifiable {
     let displayName: String
 }
 
-/// 单条字幕 cue
-struct SubtitleCue {
-    var start: TimeInterval
-    var end: TimeInterval
-    var text: String
-}
-
 /// 字幕管理（IOS-201 播放能力）：
 /// - 外挂 srt/ass/ssa 自动匹配同目录同名文件（含语言后缀），启动自动加载最优匹配；
-/// - 双引擎统一以 SwiftUI 浮层渲染（AVPlayer 不原生支持外挂字幕，VLC 亦保持一致体验）；
+/// - 双引擎统一以 `SubtitleRenderView` 浮层渲染（AVPlayer 不原生支持外挂字幕，VLC 亦保持一致体验）；
+/// - ASS 保留样式/位置/滚动动画（B 站弹幕 ASS 不再只能挤在底部），SRT 走底部居中默认样式；
 /// - 样式（AppSettings.Player.subtitleFontSize）与延迟（subtitleDelay，正数=字幕延后）可调；
 /// - 内嵌轨选择走 PlayerCore（selectSubtitleTrack），与外挂互斥。
 @MainActor
 final class SubtitleManager: ObservableObject {
     @Published private(set) var externalTracks: [ExternalSubtitleTrack] = []
     @Published private(set) var activeExternalPath: String?
-    @Published private(set) var currentText: String?
+    @Published private(set) var timeline: SubtitleTimeline = .empty
 
     private var cues: [SubtitleCue] = []
+    /// ASS 脚本分辨率（PlayRes，映射到视频显示区域的基准）
+    private var scriptSize: CGSize?
 
     // MARK: - 发现（PlayerView 打开后调用）
 
@@ -88,21 +84,21 @@ final class SubtitleManager: ObservableObject {
 
         let text = TextEncodingDetector.decode(data).text
         let ext = StoragePath.ext(of: track.path)
-        let parsed: [SubtitleCue]
-        switch ext {
-        case "srt": parsed = Self.parseSRT(text)
-        case "ass", "ssa": parsed = Self.parseASS(text)
-        default: parsed = []
-        }
+        let parsed = await Self.parse(ext: ext, text: text)
         guard !parsed.isEmpty else { return }
-        cues = parsed.sorted { $0.start < $1.start }
+        var resolved = parsed
+        resolved.cues = parsed.cues.sorted { $0.start < $1.start }
+        cues = resolved.cues
+        scriptSize = resolved.scriptSize
+        timeline = resolved
         activeExternalPath = track.path
     }
 
     func clearSelection() {
         activeExternalPath = nil
         cues = []
-        currentText = nil
+        scriptSize = nil
+        timeline = .empty
     }
 
     func reset() {
@@ -110,33 +106,25 @@ final class SubtitleManager: ObservableObject {
         clearSelection()
     }
 
-    // MARK: - 播放同步（PlayerCore.currentTime 驱动）
-
-    /// 按当前播放位置更新浮层文本（延迟：正数 = 字幕延后 subtitleDelay 秒）
-    func update(currentTime: TimeInterval) {
-        guard !cues.isEmpty else {
-            if currentText != nil { currentText = nil }
-            return
-        }
-        let shifted = currentTime - AppSettings.Player.subtitleDelay
-        var lo = 0
-        var hi = cues.count - 1
-        var found: SubtitleCue?
-        while lo <= hi {
-            let mid = (lo + hi) / 2
-            let cue = cues[mid]
-            if shifted < cue.start { hi = mid - 1 }
-            else if shifted > cue.end { lo = mid + 1 }
-            else { found = cue; break }
-        }
-        let text = found?.text
-        if text != currentText { currentText = text }
-    }
-
     // MARK: - 解析
 
-    /// srt：`序号 + 时间轴(00:00:01,000 --> 00:00:04,000) + 文本` 块
-    static func parseSRT(_ text: String) -> [SubtitleCue] {
+    /// 后台解析：B 站弹幕 ASS 可达数万条事件，主线程解析会卡住播放页
+    private static func parse(ext: String, text: String) async -> SubtitleTimeline {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let timeline: SubtitleTimeline
+                switch ext {
+                case "srt": timeline = parseSRT(text)
+                case "ass", "ssa": timeline = ASSParser.parse(text)
+                default: timeline = .empty
+                }
+                continuation.resume(returning: timeline)
+            }
+        }
+    }
+
+    /// srt：`序号 + 时间轴(00:00:01,000 --> 00:00:04,000) + 文本` 块（底部居中，字号取播放器设置）
+    nonisolated static func parseSRT(_ text: String) -> SubtitleTimeline {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         var cues: [SubtitleCue] = []
         for block in normalized.components(separatedBy: "\n\n") {
@@ -152,48 +140,16 @@ final class SubtitleManager: ObservableObject {
             let endRaw = String(timeLine[arrow.upperBound...])
                 .components(separatedBy: " ").first?
                 .trimmingCharacters(in: .whitespaces) ?? ""
-            guard let start = parseTimestamp(startRaw), let end = parseTimestamp(endRaw) else { continue }
+            guard let start = ASSParser.parseTime(startRaw), let end = ASSParser.parseTime(endRaw) else { continue }
             let body = lines.dropFirst().joined(separator: "\n")
             guard !body.isEmpty else { continue }
-            cues.append(SubtitleCue(start: start, end: end, text: body))
+            var style = SubtitleStyleSpec()
+            style.alignment = 2
+            cues.append(SubtitleCue(
+                id: cues.count, start: start, end: end, text: body, style: style, position: nil, move: nil
+            ))
         }
-        return cues
-    }
-
-    /// ass/ssa：解析 [Events] 段 Dialogue 行（`Dialogue: Layer,Start,End,Style,...,Text`），剥离特效标签
-    static func parseASS(_ text: String) -> [SubtitleCue] {
-        var cues: [SubtitleCue] = []
-        for line in text.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.lowercased().hasPrefix("dialogue:") else { continue }
-            let payload = trimmed.dropFirst("dialogue:".count).trimmingCharacters(in: .whitespaces)
-            // 前 9 个逗号为字段分隔，第 10 段起为文本（可含逗号）
-            let parts = payload.components(separatedBy: ",")
-            guard parts.count >= 10,
-                  let start = parseASSTimestamp(parts[1]),
-                  let end = parseASSTimestamp(parts[2]) else { continue }
-            var body = parts.dropFirst(9).joined(separator: ",")
-            body = body.replacingOccurrences(of: "\\N", with: "\n").replacingOccurrences(of: "\\n", with: "\n")
-            body = body.replacingOccurrences(of: #"\{[^}]*\}"#, with: "", options: .regularExpression)
-            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !body.isEmpty else { continue }
-            cues.append(SubtitleCue(start: start, end: end, text: body))
-        }
-        return cues
-    }
-
-    /// `hh:mm:ss,ms` / `hh:mm:ss.ms`
-    private static func parseTimestamp(_ raw: String) -> TimeInterval? {
-        let normalized = raw.replacingOccurrences(of: ",", with: ".")
-        let parts = normalized.components(separatedBy: ":")
-        guard parts.count == 3,
-              let h = Double(parts[0]), let m = Double(parts[1]), let s = Double(parts[2]) else { return nil }
-        return h * 3600 + m * 60 + s
-    }
-
-    /// ass 时间 `h:mm:ss.cc`（厘秒）
-    private static func parseASSTimestamp(_ raw: String) -> TimeInterval? {
-        parseTimestamp(raw.trimmingCharacters(in: .whitespaces))
+        return SubtitleTimeline(cues: cues, scriptSize: nil)
     }
 
     // MARK: - 工具

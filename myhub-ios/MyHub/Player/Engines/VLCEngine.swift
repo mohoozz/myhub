@@ -58,6 +58,14 @@ final class VLCEngine: NSObject, PlaybackEngine {
     /// VLC 无统一缓冲位置接口
     var bufferedTime: TimeInterval { 0 }
 
+    /// 画面尺寸（软解由 VLC 输出帧尺寸决定），字幕层用来定位视频显示区域
+    var videoNaturalSize: CGSize {
+        let size = player.videoSize
+        guard size.width > 1, size.height > 1,
+              size.width.isFinite, size.height.isFinite else { return .zero }
+        return size
+    }
+
     /// 纯音频模式：断开视频轨（-1）关闭画面解码节电；恢复时选回首个视频轨
     func setVideoEnabled(_ enabled: Bool) {
         if enabled {

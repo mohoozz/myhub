@@ -41,6 +41,9 @@ final class PlayerCore: ObservableObject {
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var bufferedTime: TimeInterval = 0
     @Published private(set) var rate: Float = 1
+    /// 视频画面尺寸（像素）；.zero = 未知（纯音频 / 未就绪）。
+    /// 字幕层据此把 ASS 坐标映射到视频实际显示区域（竖屏 letterbox 也能贴画面底部）
+    @Published private(set) var videoSize: CGSize = .zero
     /// 纯音频播放模式（视频可切仅音频，关闭画面解码节电）
     @Published private(set) var isAudioOnly = false
     @Published private(set) var audioTracks: [TrackOption] = []
@@ -396,6 +399,7 @@ final class PlayerCore: ObservableObject {
                 currentTime = current
             }
             bufferedTime = engine?.bufferedTime ?? 0
+            refreshVideoSize()
             healStateIfActuallyPlaying(now: now)
             report()
         case .tracksChanged:
@@ -496,6 +500,7 @@ final class PlayerCore: ObservableObject {
         subtitleTracks = engine?.availableSubtitleTracks ?? []
         selectedAudioTrackID = engine?.currentAudioTrackID
         selectedSubtitleTrackID = engine?.currentSubtitleTrackID
+        refreshVideoSize()
 
         // 记录音轨解析结果与系统音频环境，定位「有画面无声」（TODO 358）
         let session = AVAudioSession.sharedInstance()
@@ -503,6 +508,18 @@ final class PlayerCore: ObservableObject {
             "refreshTracks kind=\(engineKind?.rawValue ?? "nil") count=\(audioTracks.count) audio=\(audioTracks.map { "\($0.id):\($0.name)" }.joined(separator: ",")) selected=\(selectedAudioTrackID.map(String.init) ?? "nil") audioOnly=\(isAudioOnly) volume=\(String(format: "%.2f", session.outputVolume)) category=\(session.category.rawValue)",
             module: "player-audio"
         )
+    }
+
+    /// 同步视频画面尺寸：软解要等首帧输出后才有尺寸，故在时间回调里持续补齐
+    private func refreshVideoSize() {
+        guard !isAudioOnly else {
+            if videoSize != .zero { videoSize = .zero }
+            return
+        }
+        guard let size = engine?.videoNaturalSize,
+              size.width > 1, size.height > 1,
+              size.width.isFinite, size.height.isFinite else { return }
+        if videoSize != size { videoSize = size }
     }
 
     private func teardownSession() {
@@ -521,6 +538,7 @@ final class PlayerCore: ObservableObject {
         currentTime = 0
         duration = 0
         bufferedTime = 0
+        videoSize = .zero
         lastProgressTime = 0
         lastProgressUptime = 0
         pendingResumeAfterSeek = false

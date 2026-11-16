@@ -69,9 +69,6 @@ struct PlayerView: View {
             // onDisappear 在 dismiss 转场「进行中」触发，此刻调用 requestGeometryUpdate
             // 会与全屏封面 dismiss 并发，导致 iOS 16 崩溃（横屏退出/进 mini 都会闪退）。
         }
-        .onChange(of: core.currentTime) { newValue in
-            subtitles.update(currentTime: newValue)
-        }
         .onChange(of: core.state) { newState in
             if newState == .playing { resetHideTimer() }
             if newState == .ended { prepareNext() }
@@ -131,22 +128,19 @@ struct PlayerView: View {
                 onWakeWhileLocked: { wakeLockIcon() }
             )
 
-            // 字幕浮层
-            if let text = subtitles.currentText, !text.isEmpty {
-                VStack {
-                    Spacer()
-                    Text(text)
-                        .font(.system(size: AppSettings.Player.subtitleFontSize, weight: .medium))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.55))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, showControls ? 224 : 48)
-                }
-                .animation(.appQuick, value: showControls)
+            // 字幕浮层：ASS 保留位置/样式/滚动，SRT 底部居中；锚定视频显示区域且不随控制栏移位
+            if !subtitles.timeline.isEmpty, !isAudioPresentation {
+                SubtitleOverlay(
+                    timeline: subtitles.timeline,
+                    videoSize: core.videoSize,
+                    time: core.currentTime,
+                    isPlaying: core.isPlaying,
+                    rate: core.rate,
+                    fontSize: AppSettings.Player.subtitleFontSize,
+                    delay: AppSettings.Player.subtitleDelay
+                )
+                .allowsHitTesting(false)
+                .ignoresSafeArea()
             }
 
             // 中央状态（加载圈 / 大播放键互斥）
