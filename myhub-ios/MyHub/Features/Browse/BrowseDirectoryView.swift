@@ -295,6 +295,15 @@ struct BrowseDirectoryView: View {
         .onAppear {
             bottomTabBarHidden.wrappedValue = viewModel.isSelecting   // 返回本页时按当前多选态校正
             Self.pageAppearCount += 1
+            // 防御：数据源路径与本页路径不一致，说明 SwiftUI 复用了上一位置的 @StateObject，
+            // 页面显示的仍是旧目录（定位会表现为停在目标文件的上一级目录）。
+            // 正常情况下不应出现（BrowseHomeView 已用 `.id(location)` 绑定身份），留日志便于回归排查。
+            if viewModel.path != path {
+                AppLogger.shared.log(
+                    "路径不一致：页面 path=\(path) 数据源 path=\(viewModel.path)（\(viewModel.instanceTag)）",
+                    level: .warn, module: "browse"
+                )
+            }
             AppLogger.shared.log(
                 "页面 onAppear 第 \(Self.pageAppearCount) 次（\(viewModel.instanceTag)）",
                 level: .debug, module: "browse"

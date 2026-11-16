@@ -22,6 +22,14 @@ struct BrowseHomeView: View {
                             navPath: $navPath,
                             connections: store.connections.filter(\.enabled)
                         )
+                        // 视图身份必须绑定「位置值」本身（修复定位到错误目录）：
+                        // 定位到原路径是一次性整体替换 navPath，同一深度上的位置值随之改变，
+                        // 但 SwiftUI 对同类型目的页会按「栈中位置」复用视图身份，@StateObject
+                        // （BrowseDirectoryViewModel，path 是 let）不重建 → 新页面沿用旧目录的数据源，
+                        // 于是页面停在旧目录（最常见就是目标文件的上一级目录），目标文件不在其列表中，
+                        // 滚动定位与呼吸灯都无处可去，表现为「只定位到上一级目录」。
+                        // 手动退回连接源列表（栈清空、所有页面被销毁）再定位就正常，正是同一原因。
+                        .id(location)
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "exclamationmark.triangle")
