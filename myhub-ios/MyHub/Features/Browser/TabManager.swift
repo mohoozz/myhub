@@ -11,6 +11,8 @@ private final class ScrollDragMeter: @unchecked Sendable {
     private let interval: TimeInterval = 0.15
     private var accumulated: CGFloat = 0
     private var lastTickAt: TimeInterval = 0
+    /// 本轮拖动（手指按下 → 抬起）是否已经开始过
+    private var gestureStarted = false
 
     /// 喂入一次位移增量，返回是否应发出「收起操作栏」信号
     func feed(_ delta: CGFloat) -> Bool {
@@ -23,8 +25,25 @@ private final class ScrollDragMeter: @unchecked Sendable {
         return true
     }
 
-    /// 手指离开页面（惯性滚动 / 回弹 / 布局自动调整）时复位，使下一次拖动能立即触发
-    func reset() {
+    /// 记录「手指仍在页面上」的一次位移回调，返回是否属于本轮拖动的**第一个**回调。
+    ///
+    /// 「点击胶囊主动展开操作栏后不再被这轮滑动打回收起态」的抑制判断依赖它：
+    /// 只有真正开始了一轮**新手势**才解除抑制，本轮手势剩余的回调一律不算。
+    func beginGestureIfNeeded() -> Bool {
+        guard !gestureStarted else { return false }
+        gestureStarted = true
+        return true
+    }
+
+    /// 手指离开页面（惯性滚动 / 回弹 / 布局自动调整）时复位：计量值与手势态一并归零，
+    /// 使下一次拖动既能量到完整位移，也会被识别为「新手势」
+    func endGesture() {
+        gestureStarted = false
+        reset()
+    }
+
+    /// 只复位位移计量（保留手势态）
+    private func reset() {
         accumulated = 0
         lastTickAt = 0
     }
@@ -94,6 +113,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 页面滚动计数：用户任意方向拖动页面均自增，用于将底部操作栏收起为胶囊（TODO §8.2）
     /// 用计数器而非布尔，保证「展开后再次滚动」也能再触发收起
     @Published var scrollTick: Int = 0
+
+    /// 忽略「当前这一轮滚动手势」剩余的收起信号：由
+    /// `suppressScrollCollapseForCurrentGesture()` 置位，下一次手指重新按下开始拖动时解除
+    private var suppressesScrollCollapse = false
 
     /// 刷新计数：主动刷新（工具栏刷新键 / 下拉刷新 / 错误页重试）自增，
     /// 与 `scrollTick` 一样用于把底部操作栏收起为胶囊（TODO 399）
@@ -243,6 +266,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func stopLoading() {
         webView.stopLoading()
+    }
+
+    /// 用户点击底部胶囊主动展开操作栏：本轮滚动手势剩余的回调不要再把它收回去。
+    ///
+    /// 收起由 `contentOffset` KVO 驱动，而点击胶囊那一刻这一轮滑动往往还没结束（手指仍在页面上、
+    /// 或页面仍在滚动），紧随其后的回调会把刚展开的操作栏再次收起，表现为「点了有按压动画但没展开」。
+    /// 抑制范围**只限当前这一轮手势**：手指重新按下开始新一轮拖动时由 KVO 自动解除，
+    /// 「展开后滑动页面收起操作栏」的既有行为不受影响。
+    func suppressScrollCollapseForCurrentGesture() {
+        suppressesScrollCollapse = true
     }
 
     /// 回退可用性：非起始页时总可回退（webView 历史栈可退，或可退回起始页）。
@@ -475,15 +508,25 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             // （展开 → webView 变矮 → offset 自动调整 → 立刻又收起，表现为「第一次点击胶囊没展开」）。
             webView.scrollView.observe(\.contentOffset, options: [.new, .old]) { [weak self] scrollView, change in
                 guard scrollView.isTracking || scrollView.isDragging else {
-                    dragMeter.reset()
+                    dragMeter.endGesture()
                     return
                 }
+                // 本轮拖动的第一个回调：用来解除「主动展开后的收起抑制」
+                // （滑动途中点胶囊展开时，本轮手势剩余的回调不该再把操作栏收回去）
+                let beginsGesture = dragMeter.beginGestureIfNeeded()
                 let newY = scrollView.contentOffset.y
                 let oldY = change.oldValue?.y ?? newY
                 // 按「累计位移」判定而非单次增量：慢速拖动时每次回调不足 1pt，
                 // 用单次阈值会永远触发不了收起；累计超过阈值即发一个信号并复位（兼带节流）
-                guard dragMeter.feed(newY - oldY) else { return }
-                Task { @MainActor [weak self] in self?.scrollTick += 1 }
+                let shouldCollapse = dragMeter.feed(newY - oldY)
+                guard beginsGesture || shouldCollapse else { return }
+                // 手势态与收起信号放在同一个主线程任务里处理：新手势先解除抑制，再看本次是否要收起
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if beginsGesture { self.suppressesScrollCollapse = false }
+                    guard shouldCollapse, !self.suppressesScrollCollapse else { return }
+                    self.scrollTick += 1
+                }
             }
         ]
     }

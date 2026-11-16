@@ -252,6 +252,11 @@ struct BrowserHomeView: View {
 
     private func expandToolbar() {
         guard toolbarMini else { return }
+        // 页面正在滑动时点击胶囊：这一轮滚动手势还没结束，紧随其后的 `scrollTick`
+        // 会立刻把刚展开的操作栏收回去（表现为「有按压动画但没展开」）。
+        // 让标签忽略本轮手势剩余的收起信号——手指重新按下开始新一轮拖动时自动解除，
+        // 「展开后滑动页面收起操作栏」的既有行为不受影响。
+        session.activeTab?.suppressScrollCollapseForCurrentGesture()
         // 显式包一层弹簧（A1）：点击展开的落位动画由形变的同一曲线驱动，收尾「弹一下坐住」
         withAnimation(Self.chromeMorph) { toolbarMini = false }
     }
