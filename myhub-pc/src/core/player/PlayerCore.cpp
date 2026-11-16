@@ -351,6 +351,12 @@ void PlayerCore::onPausedChanged(bool paused)
     if (m_state == PlaybackState::Loading) {
         return; // 起播瞬间的 pause 只记录事实，状态等 fileLoaded 再定
     }
+    if (m_state == PlaybackState::Ended) {
+        // keep-open 到末尾时 mpv 自己会置 pause=true；这里若跟着翻成 Paused，
+        // 结束态 UI（「播放结束」+ 重播 + 下一个推荐）会被瞬间冲掉。
+        // 播完后要回到可播状态只有一条路：replay()，或用户回拖进度条（seekTo 里改 Paused）。
+        return;
+    }
     setState(paused ? PlaybackState::Paused : PlaybackState::Playing);
 }
 

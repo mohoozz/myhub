@@ -322,6 +322,8 @@ Item {
     // 播放完成：重播（PC-204，无倒计时、不自动播下一个）
     Column {
         anchors.centerIn: parent
+        // 有「下一个」提示条时整体上提，避免副标题被提示条压住
+        anchors.verticalCenterOffset: nextBanner.hasSuggestion ? -56 : 0
         spacing: AppTheme.spacingMd
         visible: view.ended
 
@@ -358,6 +360,75 @@ Item {
             font.family: AppTheme.fontFamily
             font.pixelSize: AppTheme.fontSizeSmall
             color: Qt.rgba(1, 1, 1, 0.55)
+        }
+    }
+
+    // 播完推荐「下一个」（§4.6）：底部提示条，无倒计时、不自动播，点才走
+    Rectangle {
+        id: nextBanner
+
+        readonly property var suggestion: Player.nextSuggestion || ({})
+        readonly property bool hasSuggestion: suggestion.path !== undefined && suggestion.path !== ""
+
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: controlBar.top
+        anchors.bottomMargin: AppTheme.spacingLg
+        width: Math.min(view.width - AppTheme.spacingXl * 2, 420)
+        height: 64
+        radius: AppTheme.radiusCard
+        color: Qt.rgba(0.06, 0.06, 0.08, 0.88)
+        border.width: AppTheme.borderWidth
+        border.color: Qt.rgba(1, 1, 1, 0.12)
+
+        visible: opacity > 0
+        opacity: view.ended && hasSuggestion ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: Motion.normal } }
+
+        Column {
+            anchors.left: parent.left
+            anchors.leftMargin: AppTheme.spacingLg
+            anchors.right: actions.left
+            anchors.rightMargin: AppTheme.spacingSm
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 2
+
+            Text {
+                width: parent.width
+                text: nextBanner.hasSuggestion ? qsTr("下一个：%1").arg(
+                                                     nextBanner.suggestion.title) : ""
+                elide: Text.ElideMiddle
+                font.family: AppTheme.fontFamily
+                font.pixelSize: AppTheme.fontSizeBody
+                font.bold: true
+                color: "#FFFFFF"
+            }
+
+            Text {
+                text: qsTr("点击播放，不会自动开始")
+                font.family: AppTheme.fontFamily
+                font.pixelSize: AppTheme.fontSizeSmall
+                color: Qt.rgba(1, 1, 1, 0.55)
+            }
+        }
+
+        Row {
+            id: actions
+            anchors.right: parent.right
+            anchors.rightMargin: AppTheme.spacingSm
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: AppTheme.spacingXs
+
+            PlayerButton {
+                text: qsTr("播放")
+                onClicked: Player.playNextSuggestion()
+            }
+
+            PlayerButton {
+                iconName: "x"
+                iconSize: 16
+                tooltip: qsTr("不看下一个")
+                onClicked: Player.dismissNextSuggestion()
+            }
         }
     }
 

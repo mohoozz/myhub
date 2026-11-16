@@ -23,6 +23,8 @@ bool Migrations::migrate(AppDatabase &db)
         ok = v1_initial(db);
     if (ok && current < 2)
         ok = v2_reading_fingerprint(db);
+    if (ok && current < 3)
+        ok = v3_novel_chapter_cache(db);
 
     if (!ok) {
         db.rollback();
@@ -192,6 +194,46 @@ bool Migrations::v2_reading_fingerprint(AppDatabase &db)
         }
     }
     MH_INFO(Database, QStringLiteral("v2_reading_fingerprint applied"));
+    return true;
+}
+
+bool Migrations::v3_novel_chapter_cache(AppDatabase &db)
+{
+    // 章节解码产物落盘（§5 `NovelChapterCache`、§13「小说章节缓存本地化」）。
+    //
+    // 为什么进数据库而不是缓存目录里的散文件：章节是「按书 + 章号」寻址的小块数据，
+    // 一亿个文件的 inode 开销和清理逻辑都不值得；SQLite 一条 DELETE 就能做
+    // 「这本书的缓存全清」「超量修剪」，与索引缓存共用一套生命周期。
+    //
+    // 指纹列冗余在行上（而不是只按书存一行元数据）：文件一变，逐行判得出来，
+    // 不必先删再建，弱网下「旧的还能读就先读」也不需要额外的分支。
+    const QStringList statements = {
+        QStringLiteral(R"(
+            CREATE TABLE IF NOT EXISTS novelChapter (
+                id           TEXT PRIMARY KEY,
+                connectionID TEXT NOT NULL,
+                filePath     TEXT NOT NULL,
+                fileSize     INTEGER NOT NULL DEFAULT 0,
+                modTime      INTEGER NOT NULL DEFAULT 0,
+                chapterIndex INTEGER NOT NULL,
+                title        TEXT NOT NULL DEFAULT '',
+                payload      BLOB NOT NULL,
+                updatedAt    INTEGER NOT NULL
+            ))"),
+        QStringLiteral("CREATE UNIQUE INDEX IF NOT EXISTS idx_novelchapter_unique "
+                       "ON novelChapter(connectionID, filePath, chapterIndex)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_novelchapter_updated "
+                       "ON novelChapter(updatedAt DESC)"),
+    };
+
+    for (const QString &sql : statements) {
+        if (!db.execute(sql)) {
+            MH_ERROR(Database,
+                     QStringLiteral("v3_novel_chapter_cache failed: %1").arg(db.lastError()));
+            return false;
+        }
+    }
+    MH_INFO(Database, QStringLiteral("v3_novel_chapter_cache applied"));
     return true;
 }
 

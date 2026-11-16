@@ -175,6 +175,19 @@ void MpvEngine::configureForLoad()
     */
     setMpv(QStringLiteral("screenshot-format"), QStringLiteral("png"));
     setMpv(QStringLiteral("screenshot-sw"), true);
+
+    /*
+      显示比例（§4.3「不同分辨率（含竖屏）正确适配」）。
+      缩放交给 mpv：目标 FBO 就是窗口大小，mpv 自己按视频宽高比 letterbox，
+      所以 QML 层只管铺满、不自己算比例 —— 自己算会在窗口 resize 时抖一下。
+      这几项显式写死是防回归：keepaspect 一旦关掉，横屏竖屏都会被拉变形。
+      autorotate 负责手机竖拍视频的 rotation 元数据，否则竖屏素材会躺倒。
+    */
+    setMpv(QStringLiteral("keepaspect"), true);
+    setMpv(QStringLiteral("panscan"), 0.0);
+    setMpv(QStringLiteral("video-zoom"), 0.0);
+    setMpv(QStringLiteral("video-unscaled"), false);
+    setMpv(QStringLiteral("autorotate"), true);
 }
 
 void MpvEngine::play()

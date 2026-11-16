@@ -28,10 +28,11 @@ class StorageAdapter;
  *
  * 封面来源优先级：
  *   1. 图片文件自身
- *   2. 内嵌封面（MP3 ID3v2 APIC / FLAC PICTURE / MP4 covr）
- *   3. 音频同目录封面图（同名图 > cover > folder > front）
+ *   2. epub 里 OPF 声明的封面（EPUB3 `cover-image` / EPUB2 `meta name="cover"`）
+ *   3. 内嵌封面（MP3 ID3v2 APIC / FLAC PICTURE / MP4 covr）
+ *   4. 音频同目录封面图（同名图 > cover > folder > front）
  *
- * 尚未支持（见 TODO PC-702）：epub 封面、漫画首页、视频抽帧。
+ * 尚未支持（见 TODO PC-702）：漫画首页、视频抽帧。
  */
 class CoverService : public QObject
 {
@@ -45,8 +46,14 @@ public:
     /// 封面键（贯穿内存 / 磁盘 / 信号）
     Q_INVOKABLE QString coverKey(const QString &connectionId, const QString &path) const;
 
-    /// 同步查缓存：命中返回 file:// URL，未命中返回空串（**不触发 IO 请求**）
-    Q_INVOKABLE QString cachedCover(const QString &connectionId, const QString &path);
+    /**
+     * 同步查缓存：命中返回 file:// URL，否则空串（**不触发 IO 请求**）。
+     *
+     * @param size 文件大小（未知传 -1）；给了就校验「缓存是不是这个文件画出来的」
+     * @param modSecs 文件修改时间（秒，未知传 -1）
+     */
+    Q_INVOKABLE QString cachedCover(const QString &connectionId, const QString &path,
+                                    qint64 size = -1, qint64 modSecs = -1);
 
     /**
      * 异步请求封面。命中缓存时直接发 `coverReady`；
@@ -81,11 +88,21 @@ private:
     void readImageFile(const Job &job, StorageAdapter *adapter, const QString &path,
                        qint64 knownSize);
     void readEmbeddedCover(const Job &job, StorageAdapter *adapter);
+    void readEpubCover(const Job &job, StorageAdapter *adapter);
+    /// 漫画（cbz/zip）封面 = 第一页；只读中央目录 + 那一条，不整包下载
+    void readComicCover(const Job &job, StorageAdapter *adapter);
     void readSiblingCover(const Job &job, StorageAdapter *adapter);
     void submitImageBytes(const Job &job, const QByteArray &raw);
     void completeFailure(const Job &job);
 
-    bool lookupCached(const QString &key, qint64 size, qint64 modSecs, QString *url);
+    /// 磁盘缓存与指纹的关系：没缓存 / 缓存过期（文件被换过）/ 正好命中
+    enum class CacheProbe
+    {
+        Miss,
+        Stale,
+        Hit,
+    };
+    CacheProbe probeCache(const QString &key, qint64 size, qint64 modSecs, QString *url);
     void rememberMemory(const QString &key, const QString &url);
 
     QString coverFile(const QString &key) const;

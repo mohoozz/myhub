@@ -26,6 +26,13 @@ struct ProgressRecord
     double percent = 0.0;
     bool finished = false;
     qint64 updatedAt = 0; ///< epoch ms
+    /**
+     * 写入时文件的大小 / 修改时间（epoch ms）：只用来判断「磁盘上的封面缓存是否过期」，
+     * 不参与进度换算。未知传 -1 —— 播放侧拿不到 modTime，只带 size；
+     * 离线打开的小说两个都未知。
+     */
+    qint64 fileSize = -1;
+    qint64 modTimeMs = -1;
 
     qint64 positionMs() const { return progress.value(QStringLiteral("positionMs")).toLongLong(); }
     qint64 durationMs() const { return progress.value(QStringLiteral("durationMs")).toLongLong(); }

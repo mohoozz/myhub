@@ -78,15 +78,15 @@ void TestE2EBrowse::databaseMigratesToTargetVersion()
 
     QVERIFY2(db.open(), qPrintable(db.lastError()));
     QCOMPARE(readySpy.count(), 1);
-    QCOMPARE(db.schemaVersion(), 2);
+    QCOMPARE(db.schemaVersion(), 3);
 
-    // 9 张表齐备（§5.3）
+    // 10 张表齐备（§5.3 + v3 的章节缓存）
     const QStringList expected = {
         QStringLiteral("connection"),      QStringLiteral("favorite"),
         QStringLiteral("readingProgress"), QStringLiteral("novelIndex"),
         QStringLiteral("bookmark"),        QStringLiteral("browserHistory"),
         QStringLiteral("browserShortcut"), QStringLiteral("downloadTask"),
-        QStringLiteral("feedItem"),
+        QStringLiteral("feedItem"),        QStringLiteral("novelChapter"),
     };
     for (const QString &t : expected) {
         const QVariant n = db.queryScalar(

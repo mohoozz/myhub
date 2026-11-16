@@ -39,11 +39,18 @@ ProgressRecord rowToRecord(const QVariantMap &row)
     record.percent = row.value(QStringLiteral("percent")).toDouble();
     record.finished = row.value(QStringLiteral("finished")).toInt() != 0;
     record.updatedAt = row.value(QStringLiteral("updatedAt")).toLongLong();
+    // 指纹列是 v2 迁移补的，老行是 NULL；toLongLong() 会把 NULL 读成 0，
+    // 而 0 是「大小为 0 的文件」这一合法值，必须显式区分成 -1（未知）
+    const QVariant size = row.value(QStringLiteral("fileSize"));
+    record.fileSize = size.isNull() ? -1 : size.toLongLong();
+    const QVariant modTime = row.value(QStringLiteral("modTime"));
+    record.modTimeMs = modTime.isNull() ? -1 : modTime.toLongLong();
     return record;
 }
 
 constexpr auto kSelectColumns = "SELECT connectionID, filePath, mediaType, title, cover, "
-                                "progressJSON, percent, finished, updatedAt FROM readingProgress";
+                                "progressJSON, percent, finished, updatedAt, fileSize, modTime "
+                                "FROM readingProgress";
 
 } // namespace
 
@@ -139,19 +146,24 @@ bool ProgressRepository::upsert(ProgressRecord record)
 
     // 唯一索引 (connectionID, filePath)：同一文件的多次上报只更新同一行。
     // cover 不在更新列里 —— 播放侧不提供封面，不能把已有封面清空。
+    // 指纹同理：这一次上报不知道（NULL）就保留上一次记下的，否则「打开一次就忘掉指纹」，
+    // 封面缓存再也校验不了新鲜度。
     const bool ok = db.execute(
         QStringLiteral("INSERT INTO readingProgress "
                        "(id, connectionID, filePath, mediaType, title, cover, progressJSON, "
-                       " percent, finished, updatedAt) "
-                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                       " percent, finished, updatedAt, fileSize, modTime) "
+                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                        "ON CONFLICT(connectionID, filePath) DO UPDATE SET "
                        " mediaType = excluded.mediaType, title = excluded.title, "
                        " progressJSON = excluded.progressJSON, percent = excluded.percent, "
-                       " finished = excluded.finished, updatedAt = excluded.updatedAt"),
+                       " finished = excluded.finished, updatedAt = excluded.updatedAt, "
+                       " fileSize = COALESCE(excluded.fileSize, readingProgress.fileSize), "
+                       " modTime = COALESCE(excluded.modTime, readingProgress.modTime)"),
         {QUuid::createUuid().toString(QUuid::WithoutBraces), record.connectionId, record.path,
          record.mediaType, record.title, record.cover.isEmpty() ? QVariant() : record.cover,
-         encodeProgress(record.progress), record.percent, record.finished ? 1 : 0,
-         record.updatedAt});
+         encodeProgress(record.progress), record.percent, record.finished ? 1 : 0, record.updatedAt,
+         record.fileSize >= 0 ? QVariant(record.fileSize) : QVariant(),
+         record.modTimeMs >= 0 ? QVariant(record.modTimeMs) : QVariant()});
 
     if (!ok) {
         MH_ERROR(Player, QStringLiteral("progress upsert failed: %1").arg(db.lastError()));

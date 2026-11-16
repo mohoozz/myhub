@@ -1,8 +1,11 @@
 #include "features/cover/CoverService.h"
 
+#include "core/comic/ComicBook.h"
 #include "core/cover/EmbeddedCoverExtractor.h"
+#include "core/novel/EpubBook.h"
 #include "core/storage/StorageAdapter.h"
 #include "core/storage/StoragePath.h"
+#include "core/stream/AdapterRangeSource.h"
 #include "core/utils/AppPaths.h"
 #include "core/utils/MediaType.h"
 #include "features/connections/ConnectionStore.h"
@@ -21,6 +24,8 @@
 #include <QSaveFile>
 #include <QUrl>
 #include <QtConcurrent>
+
+#include <memory>
 
 namespace myhub {
 namespace {
@@ -87,6 +92,20 @@ bool isAudioPath(const QString &path)
 {
     return MediaType::isAudio(StoragePath::extension(path));
 }
+
+/// epub 取封面期间必须同时在世的两样东西（Range 源要活过 book 的每次读取）
+struct EpubCoverState
+{
+    std::shared_ptr<AdapterRangeSource> source;
+    std::shared_ptr<EpubBook> book;
+};
+
+/// 漫画同理：源要活过「列页 → 解第一页」这两步
+struct ComicCoverState
+{
+    std::shared_ptr<AdapterRangeSource> source;
+    std::shared_ptr<ComicBook> book;
+};
 
 /// 同目录封面图挑选：同名图 > cover > folder > front
 QString pickSiblingCover(const QString &targetPath, const FileEntryList &entries, qint64 *size)
@@ -175,33 +194,39 @@ void CoverService::rememberMemory(const QString &key, const QString &url)
     }
 }
 
-bool CoverService::lookupCached(const QString &key, qint64 size, qint64 modSecs, QString *url)
+CoverService::CacheProbe CoverService::probeCache(const QString &key, qint64 size, qint64 modSecs,
+                                                  QString *url)
 {
-    const auto memIt = m_memory.constFind(key);
-    if (memIt != m_memory.constEnd()) {
-        if (url != nullptr) {
-            *url = *memIt;
+    // 没带指纹（浏览页的普通调用）才走内存直通：给了指纹就是要校验「缓存还是不是这个文件」，
+    // 内存里那条可能正是旧文件画出来的图
+    if (size < 0 && modSecs < 0) {
+        const auto memIt = m_memory.constFind(key);
+        if (memIt != m_memory.constEnd()) {
+            if (url != nullptr) {
+                *url = *memIt;
+            }
+            return CacheProbe::Hit;
         }
-        return true;
     }
 
     const QString jpg = coverFile(key);
     if (!QFile::exists(jpg)) {
-        return false;
+        return CacheProbe::Miss;
     }
+
     // 调用方给了指纹就校验，没给就按「磁盘上有就能用」处理
     if (size >= 0 || modSecs >= 0) {
         const QJsonObject meta = readMeta(metaFile(key));
         if (meta.isEmpty()) {
-            return false;
+            return CacheProbe::Stale;
         }
         if (size >= 0
             && static_cast<qint64>(meta.value(QStringLiteral("size")).toDouble(-1)) != size) {
-            return false;
+            return CacheProbe::Stale;
         }
         if (modSecs >= 0
             && static_cast<qint64>(meta.value(QStringLiteral("modSecs")).toDouble(-1)) != modSecs) {
-            return false;
+            return CacheProbe::Stale;
         }
     }
 
@@ -210,16 +235,17 @@ bool CoverService::lookupCached(const QString &key, qint64 size, qint64 modSecs,
     if (url != nullptr) {
         *url = fileUrl;
     }
-    return true;
+    return CacheProbe::Hit;
 }
 
-QString CoverService::cachedCover(const QString &connectionId, const QString &path)
+QString CoverService::cachedCover(const QString &connectionId, const QString &path, qint64 size,
+                                  qint64 modSecs)
 {
     if (connectionId.isEmpty() || path.isEmpty()) {
         return {};
     }
     QString url;
-    if (lookupCached(coverKey(connectionId, path), -1, -1, &url)) {
+    if (probeCache(coverKey(connectionId, path), size, modSecs, &url) == CacheProbe::Hit) {
         return url;
     }
     return {};
@@ -235,9 +261,20 @@ void CoverService::requestCover(const QString &connectionId, const QString &path
     const QString key = coverKey(connectionId, normalized);
 
     QString url;
-    if (lookupCached(key, size, modSecs, &url)) {
+    const CacheProbe probe = probeCache(key, size, modSecs, &url);
+    if (probe == CacheProbe::Hit) {
         emit coverReady(key, url);
         return;
+    }
+    if (probe == CacheProbe::Stale) {
+        // 同名文件被换过了：旧图必须扔掉，指纹（来自旧文件）也不能当作真实大小去读远程，
+        // 否则按错的长度读区间会解出半张图 / 直接失败
+        m_memory.remove(key);
+        m_memoryOrder.removeAll(key);
+        QFile::remove(coverFile(key));
+        QFile::remove(metaFile(key));
+        size = -1;
+        modSecs = -1;
     }
     if (m_inflight.contains(key)) {
         return; // 已在队列或执行中，完成后统一广播
@@ -284,11 +321,128 @@ void CoverService::produce(const Job &job)
         readImageFile(job, adapter, job.path, job.size);
         return;
     }
+    if (ext.compare(QLatin1String("epub"), Qt::CaseInsensitive) == 0) {
+        readEpubCover(job, adapter);
+        return;
+    }
+    if (MediaType::isComicArchive(ext)) {
+        readComicCover(job, adapter);
+        return;
+    }
     if (isAudioPath(job.path) || EmbeddedCoverExtractor::supports(ext)) {
         readEmbeddedCover(job, adapter);
         return;
     }
     completeFailure(job);
+}
+
+void CoverService::readEpubCover(const Job &job, StorageAdapter *adapter)
+{
+    QPointer<StorageAdapter> guard(adapter);
+
+    // 封面不整包下载：EpubBook 只读 container / OPF 与封面那一条 zip 条目
+    auto fetch = [this, guard](const Job &sized) {
+        if (!guard) {
+            completeFailure(sized);
+            return;
+        }
+        auto state = std::make_shared<EpubCoverState>();
+        state->source = std::make_shared<AdapterRangeSource>(guard.data(), sized.path, sized.size);
+        state->book = std::make_shared<EpubBook>(state->source.get());
+
+        state->book->load([this, sized, guard, state](EpubMetadata, StorageError error) {
+            if (!guard) {
+                completeFailure(sized);
+                return;
+            }
+            if (!error.isNull() || state->book->coverHref().isEmpty()) {
+                completeFailure(sized);
+                return;
+            }
+            state->book->readCover(
+                [this, sized, guard, state](QByteArray bytes, StorageError coverError) {
+                    if (!guard) {
+                        completeFailure(sized);
+                        return;
+                    }
+                    if (!coverError.isNull() || bytes.isEmpty()) {
+                        completeFailure(sized);
+                        return;
+                    }
+                    submitImageBytes(sized, bytes);
+                });
+        });
+    };
+
+    if (job.size > 0) {
+        fetch(job);
+        return;
+    }
+    // 落盘 meta 要带指纹，否则 QML 带真实 size 来查缓存时永远对不上，每次都得重解
+    adapter->stat(job.path, [this, job, guard, fetch](StatResult result) {
+        if (!guard) {
+            completeFailure(job);
+            return;
+        }
+        if (!result.ok() || result.value.size <= 0) {
+            completeFailure(job);
+            return;
+        }
+        Job sized = job;
+        sized.size = result.value.size;
+        sized.modSecs = result.value.modTime.toSecsSinceEpoch();
+        fetch(sized);
+    });
+}
+
+void CoverService::readComicCover(const Job &job, StorageAdapter *adapter)
+{
+    QPointer<StorageAdapter> guard(adapter);
+
+    // 漫画封面就是第一页：列页读中央目录、取页只读那一条，仍然不整包下载
+    auto fetch = [this, guard](const Job &sized) {
+        if (!guard) {
+            completeFailure(sized);
+            return;
+        }
+        auto state = std::make_shared<ComicCoverState>();
+        state->source = std::make_shared<AdapterRangeSource>(guard.data(), sized.path, sized.size);
+        state->book = std::make_shared<ComicBook>(state->source.get());
+
+        state->book->open([this, sized, guard, state](QStringList pages, StorageError error) {
+            if (!guard || !error.isNull() || pages.isEmpty()) {
+                completeFailure(sized);
+                return;
+            }
+            state->book->readPage(
+                0, [this, sized, guard, state](QByteArray bytes, StorageError readError) {
+                    if (!guard || !readError.isNull() || bytes.isEmpty()) {
+                        completeFailure(sized);
+                        return;
+                    }
+                    submitImageBytes(sized, bytes);
+                });
+        });
+    };
+
+    if (job.size > 0) {
+        fetch(job);
+        return;
+    }
+    adapter->stat(job.path, [this, job, guard, fetch](StatResult result) {
+        if (!guard) {
+            completeFailure(job);
+            return;
+        }
+        if (!result.ok() || result.value.size <= 0) {
+            completeFailure(job);
+            return;
+        }
+        Job sized = job;
+        sized.size = result.value.size;
+        sized.modSecs = result.value.modTime.toSecsSinceEpoch();
+        fetch(sized);
+    });
 }
 
 void CoverService::readImageFile(const Job &job, StorageAdapter *adapter, const QString &path,

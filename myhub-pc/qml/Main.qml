@@ -65,6 +65,37 @@ Window {
         onVisibleChanged: if (!visible && !WindowController.floating) shell.restoreFocus()
     }
 
+    // 小说阅读器（§5.1）：同样是全屏覆盖层，可见性由 `Novel.opened` 驱动；
+    // 压在视频渲染面之上（490）、悬浮小窗之下（520）—— 阅读与播放不会同时出现，
+    // 这两个 z 值只是保证退出任一场景时不露出对方的残影
+    NovelReaderView {
+        id: novelView
+        anchors.fill: parent
+        z: 495
+
+        onVisibleChanged: if (!visible && !WindowController.floating) shell.restoreFocus()
+    }
+
+    // 漫画阅读器（§6 PC-207）：与小说阅读器同级，两者不会同时打开
+    ComicReaderView {
+        id: comicView
+        anchors.fill: parent
+        z: 496
+
+        onVisibleChanged: if (!visible && !WindowController.floating) shell.restoreFocus()
+    }
+
+    // 纯文本阅读器（PC-210，第 4 条阅读路由）：txt 的默认去处。
+    // 压在小说阅读器之下：两者不会同时打开（互相移交时会先关掉自己），
+    // z 只决定万一都亮着时谁在上面 —— 小说阅读器有章节与进度，让它赢
+    PlainTextView {
+        id: plainView
+        anchors.fill: parent
+        z: 494
+
+        onVisibleChanged: if (!visible && !WindowController.floating) shell.restoreFocus()
+    }
+
     // 悬浮小窗的内容层（§4.4）：只在 stage.floating 时可见，
     // 视频面仍是上面那一层，这里只有压在画面上的控制带与拖动/缩放热区
     FloatingPlayerOverlay {

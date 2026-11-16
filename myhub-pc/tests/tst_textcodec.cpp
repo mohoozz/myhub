@@ -22,6 +22,8 @@ private slots:
     void encodeKeepsEncodingWhenRepresentable();
     void nameRoundTrip();
     void brokenUtf8DoesNotThrow();
+    void gb18030TruncatedTailStillDetected();
+    void big5TruncatedTailStillDetected();
 };
 
 // GB18030（GBK）里「中文测试，一二三。」的字节，用于不依赖平台 API 的固定样本
@@ -158,6 +160,29 @@ void TestTextCodec::brokenUtf8DoesNotThrow()
     const auto decoded = TextCodec::decode(junk);
     QVERIFY(!decoded.text.isEmpty());
     QVERIFY(decoded.hadErrors);
+}
+
+void TestTextCodec::gb18030TruncatedTailStillDetected()
+{
+    // 采样（文件头 64KB）切在汉字中间是常态：末尾残半个双字节字符，
+    // 严格校验会判整段非法 → 曾把整本 GB18030 书误判成 UTF-8（全本乱码）
+    const QByteArray full = gbSample();
+    const QByteArray truncated = full.left(full.size() - 1);
+
+    const auto decoded = TextCodec::decode(truncated);
+    QCOMPARE(decoded.encoding, TextCodec::Gb18030);
+    QVERIFY(decoded.text.startsWith(QStringLiteral("中文测试")));
+    QVERIFY(!decoded.hadErrors);
+}
+
+void TestTextCodec::big5TruncatedTailStillDetected()
+{
+    const QByteArray full = big5Sample();
+    const QByteArray truncated = full.left(full.size() - 1);
+
+    const auto decoded = TextCodec::decode(truncated);
+    QCOMPARE(decoded.encoding, TextCodec::Big5);
+    QVERIFY(decoded.text.startsWith(QStringLiteral("中文")));
 }
 
 QTEST_MAIN(TestTextCodec)

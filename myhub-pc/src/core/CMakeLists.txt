@@ -31,11 +31,24 @@ add_library(myhub_core STATIC
 
     files/TrashStore.h                 files/TrashStore.cpp
     files/FileOperations.h             files/FileOperations.cpp
+    files/DirectorySort.h              files/DirectorySort.cpp
 
     transfer/TransferManager.h         transfer/TransferManager.cpp
     transfer/RelayStream.h             transfer/RelayStream.cpp
 
     text/TextCodec.h                   text/TextCodec.cpp
+    text/PlainTextDocument.h           text/PlainTextDocument.cpp
+
+    novel/NovelIndex.h                 novel/NovelIndex.cpp
+    novel/NovelIndexStore.h            novel/NovelIndexStore.cpp
+    novel/ChapterRules.h               novel/ChapterRules.cpp
+    novel/ChapterScan.h                novel/ChapterScan.cpp
+    novel/TxtIndexer.h                 novel/TxtIndexer.cpp
+    novel/TxtChapterLoader.h           novel/TxtChapterLoader.cpp
+    novel/EpubBook.h                   novel/EpubBook.cpp
+    novel/NovelChapterCache.h          novel/NovelChapterCache.cpp
+
+    comic/ComicBook.h                  comic/ComicBook.cpp
 
     cover/EmbeddedCoverExtractor.h     cover/EmbeddedCoverExtractor.cpp
 
@@ -47,6 +60,11 @@ add_library(myhub_core STATIC
     player/SubtitleMatcher.h           player/SubtitleMatcher.cpp
 
     network/NetworkHeuristics.h        network/NetworkHeuristics.cpp
+
+    archive/RangeZipReader.h           archive/RangeZipReader.cpp
+    archive/ArchiveReader.h            archive/ArchiveReader.cpp
+    archive/ArchiveFetcher.h           archive/ArchiveFetcher.cpp
+    archive/PageOrder.h                archive/PageOrder.cpp
 
     stream/RangeSource.h               stream/RangeSource.cpp
     stream/AdapterRangeSource.h        stream/AdapterRangeSource.cpp
@@ -74,6 +92,8 @@ target_link_libraries(myhub_core PUBLIC
     Qt6::Concurrent
     unofficial::sqlite3::sqlite3
     Libsmb2::Libsmb2
+    ZLIB::ZLIB # RangeZipReader 解 deflate；测试里造 zip 也要压缩
+    LibArchive::LibArchive # rar / cbr 解包（ArchiveReader）
 )
 
 target_compile_definitions(myhub_core PUBLIC

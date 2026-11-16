@@ -89,6 +89,8 @@ private slots:
     void upsertThenFindRoundTrip();
     void upsertOverwritesSameFile();
     void upsertKeepsExistingCover();
+    void fingerprintRoundTrip();
+    void upsertKeepsExistingFingerprint();
     void recentReturnsNewestFirst();
     void briefsCoversWholeConnection();
     void removeDeletesOnlyThatFile();
@@ -104,6 +106,7 @@ private slots:
     void endMarksFinished();
     void closeKeepsLastProgress();
     void switchingFileFlushesPrevious();
+    void requestFingerprintReachesProgress();
 
 private:
     /// 起播并推进到 positionMs（模拟引擎上报的事实）
@@ -210,6 +213,60 @@ void TestProgress::upsertKeepsExistingCover()
     QVERIFY(repo.find(QStringLiteral("conn-1"), path, &found));
     QCOMPARE(found.cover, QStringLiteral("C:/cache/cover.jpg"));
     QCOMPARE(found.positionMs(), qint64(20000));
+}
+
+void TestProgress::fingerprintRoundTrip()
+{
+    auto &repo = ProgressRepository::instance();
+    const QString path = QStringLiteral("C:/media/novel.epub");
+
+    ProgressRecord withFingerprint = recordFor(path, 0, 0);
+    withFingerprint.mediaType = QStringLiteral("novel");
+    withFingerprint.fileSize = 4096;
+    withFingerprint.modTimeMs = 1'760'000'000'123;
+    QVERIFY(repo.upsert(withFingerprint));
+
+    ProgressRecord found;
+    QVERIFY(repo.find(QStringLiteral("conn-1"), path, &found));
+    QCOMPARE(found.fileSize, qint64(4096));
+    QCOMPARE(found.modTimeMs, qint64(1'760'000'000'123));
+
+    // 从没记过指纹的记录读回来必须是「未知」（-1），不能是 0——0 是合法的空文件长度
+    const QString bare = QStringLiteral("C:/media/bare.mkv");
+    QVERIFY(repo.upsert(recordFor(bare, 1000, 100000)));
+    ProgressRecord bareFound;
+    QVERIFY(repo.find(QStringLiteral("conn-1"), bare, &bareFound));
+    QCOMPARE(bareFound.fileSize, qint64(-1));
+    QCOMPARE(bareFound.modTimeMs, qint64(-1));
+}
+
+void TestProgress::upsertKeepsExistingFingerprint()
+{
+    auto &repo = ProgressRepository::instance();
+    const QString path = QStringLiteral("C:/media/novel2.txt");
+
+    ProgressRecord withFingerprint = recordFor(path, 0, 0);
+    withFingerprint.mediaType = QStringLiteral("novel");
+    withFingerprint.fileSize = 8192;
+    withFingerprint.modTimeMs = 1'760'000'000'000;
+    QVERIFY(repo.upsert(withFingerprint));
+
+    // 播放侧 / 离线打开拿不到指纹：这一次上报是「未知」，不得把上次记下的抹掉
+    QVERIFY(repo.upsert(recordFor(path, 3000, 0)));
+
+    ProgressRecord found;
+    QVERIFY(repo.find(QStringLiteral("conn-1"), path, &found));
+    QCOMPARE(found.fileSize, qint64(8192));
+    QCOMPARE(found.modTimeMs, qint64(1'760'000'000'000));
+
+    // 真拿到新指纹时才覆盖（文件被换过 → 封面缓存才会失效重取）
+    ProgressRecord replaced = recordFor(path, 5000, 0);
+    replaced.fileSize = 9000;
+    replaced.modTimeMs = 1'760'000'999'000;
+    QVERIFY(repo.upsert(replaced));
+    QVERIFY(repo.find(QStringLiteral("conn-1"), path, &found));
+    QCOMPARE(found.fileSize, qint64(9000));
+    QCOMPARE(found.modTimeMs, qint64(1'760'000'999'000));
 }
 
 void TestProgress::recentReturnsNewestFirst()
@@ -334,6 +391,26 @@ void TestProgress::playingIsThrottled()
     QTRY_VERIFY_WITH_TIMEOUT(
         ProgressRepository::instance().find(QStringLiteral("conn-1"), path, &found), 2000);
     QCOMPARE(found.positionMs(), qint64(10000));
+}
+
+void TestProgress::requestFingerprintReachesProgress()
+{
+    // 远程起播时 stat 已经拿到了 size，顺手带进请求 → 进度记录 → 首页校验封面缓存，
+    // 不需要为了封面再单独 stat 一次
+    PlaybackProgressTracker tracker(m_core, &ProgressRepository::instance());
+    const QString path = QStringLiteral("C:/media/fingerprint.mkv");
+    PlaybackRequest request = requestFor(path);
+    request.fileSize = 4096;
+    request.fileModTimeMs = 1'760'000'000'000;
+    m_core->open(request);
+    playTo(30000);
+
+    emit m_engine->pausedChanged(true);
+
+    ProgressRecord found;
+    QVERIFY(ProgressRepository::instance().find(QStringLiteral("conn-1"), path, &found));
+    QCOMPARE(found.fileSize, qint64(4096));
+    QCOMPARE(found.modTimeMs, qint64(1'760'000'000'000));
 }
 
 void TestProgress::seekFlushesImmediately()

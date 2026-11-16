@@ -29,7 +29,8 @@ if ($SkipLint) {
     Write-Host '### lint (skipped)' -ForegroundColor Yellow
 } else {
     Write-Host '### lint' -ForegroundColor Cyan
-    & (Join-Path $root 'scripts\lint.ps1') -Preset $Preset -QtRoot $QtRoot -LlvmBin $LlvmBin -SkipTidy:$SkipTidy
+    # 必须 -All：CI 是干净 checkout，lint.ps1 的默认「只查改动文件」在这里等于全绿空跑
+    & (Join-Path $root 'scripts\lint.ps1') -Preset $Preset -QtRoot $QtRoot -LlvmBin $LlvmBin -SkipTidy:$SkipTidy -All
     if ($LASTEXITCODE -ne 0) { Write-Host 'LINT FAILED' -ForegroundColor Red; exit 1 }
 }
 

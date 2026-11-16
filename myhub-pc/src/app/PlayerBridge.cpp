@@ -1,11 +1,13 @@
 #include "PlayerBridge.h"
 
+#include "core/files/DirectorySort.h"
 #include "core/history/ProgressRepository.h"
 #include "core/player/PlaybackProgressTracker.h"
 #include "core/player/PlayerCore.h"
 #include "core/player/SubtitleMatcher.h"
 #include "core/preferences/AppSettings.h"
 #include "core/storage/StorageAdapter.h"
+#include "core/storage/StoragePath.h"
 #include "core/utils/AppLogger.h"
 #include "core/utils/TrackName.h"
 #include "features/connections/ConnectionStore.h"
@@ -164,7 +166,8 @@ PlayerBridge::PlayerBridge(QObject *parent)
                     return;
                 const PlaybackRequest request = PlayerCore::instance().currentRequest();
                 const qint64 position = PlayerCore::instance().positionMs();
-                beginRequest(url, request.path, request.title, position, request.connectionId);
+                beginRequest(url, request.path, request.title, position, request.connectionId,
+                             request.fileSize, request.fileModTimeMs);
             });
 
     // 起播即报错且处于远程会话时，探一次活：监听僵死 → 换端口 → 上面的信号把播放接上。
@@ -176,6 +179,18 @@ PlayerBridge::PlayerBridge(QObject *parent)
             return;
         m_remoteRetried = true;
         PlaybackStreamService::instance().verifyHealth();
+    });
+
+    // §4.6 连续播放：播完查一次同目录同类型的下一个；离开结束态（切新项 / 重播 / 关闭）
+    // 立刻撤销提示条并复位「已取消」，这样下一集播完还能再推。
+    connect(&core, &PlayerCore::stateChanged, this, [this]() {
+        if (PlayerCore::instance().state() == PlaybackState::Ended) {
+            resolveNextSuggestion();
+            return;
+        }
+        m_nextDismissed = false;
+        ++m_nextQueryId; // 在途的目录列举回来就作废
+        clearNextSuggestion();
     });
 }
 
@@ -334,7 +349,8 @@ void PlayerBridge::open(const QUrl &url, const QString &title, qint64 startMs,
 }
 
 void PlayerBridge::beginRequest(const QUrl &url, const QString &path, const QString &title,
-                                qint64 startMs, const QString &connectionId)
+                                qint64 startMs, const QString &connectionId, qint64 fileSize,
+                                qint64 fileModTimeMs)
 {
     const auto &settings = AppSettings::instance();
     auto &core = PlayerCore::instance();
@@ -343,6 +359,8 @@ void PlayerBridge::beginRequest(const QUrl &url, const QString &path, const QStr
     request.url = url;
     request.title = title;
     request.path = path;
+    request.fileSize = fileSize;
+    request.fileModTimeMs = fileModTimeMs;
     request.connectionId =
         connectionId.isEmpty() ? QString::fromLatin1(kLocalConnectionId) : connectionId;
 
@@ -380,6 +398,14 @@ void PlayerBridge::openRemote(const QString &connectionId, const QString &path,
                               const QString &title, qint64 size, const QString &fingerprint,
                               qint64 startMs)
 {
+    // QML 侧只有 size + 指纹，修改时间未知（-1）；补 stat 的分支会带上真实值
+    openRemoteImpl(connectionId, path, title, size, fingerprint, startMs, -1);
+}
+
+void PlayerBridge::openRemoteImpl(const QString &connectionId, const QString &path,
+                                  const QString &title, qint64 size, const QString &fingerprint,
+                                  qint64 startMs, qint64 modTimeMs)
+{
     const QString id =
         connectionId.isEmpty() ? QString::fromLatin1(kLocalConnectionId) : connectionId;
     if (id == QString::fromLatin1(kLocalConnectionId)) {
@@ -416,7 +442,9 @@ void PlayerBridge::openRemote(const QString &connectionId, const QString &path,
                                                               : result.error.message());
                 return;
             }
-            openRemote(id, path, title, result.value.size, result.value.fingerprint(), startMs);
+            // stat 已经拿到改时间，顺手带下去：首页封面缓存要用它判断「文件是不是被换过」
+            openRemoteImpl(id, path, title, result.value.size, result.value.fingerprint(), startMs,
+                           result.value.modTime.toMSecsSinceEpoch());
         });
         return;
     }
@@ -431,7 +459,7 @@ void PlayerBridge::openRemote(const QString &connectionId, const QString &path,
     releaseStreamSession();
     m_streamId = prepared.streamId;
     m_remoteRetried = false;
-    beginRequest(prepared.url, path, title, startMs, id);
+    beginRequest(prepared.url, path, title, startMs, id, size, modTimeMs);
 }
 
 void PlayerBridge::releaseStreamSession()
@@ -473,6 +501,148 @@ QVariantMap PlayerBridge::progressFor(const QString &connectionId, const QString
     info.insert(QStringLiteral("updatedAt"), record.updatedAt);
     info.insert(QStringLiteral("resumeMs"), ProgressRepository::resumePositionMs(record));
     return info;
+}
+
+// ---------------------------------------------------------------- 连续播放（§4.6）
+
+void PlayerBridge::resolveNextSuggestion()
+{
+    if (m_nextDismissed)
+        return;
+
+    const PlaybackRequest request = PlayerCore::instance().currentRequest();
+    if (request.path.isEmpty())
+        return;
+
+    // 本地会话的 connectionId 可能为空，统一成 "local"，否则后面判不出该走哪个入口
+    const QString connectionId = request.connectionId.isEmpty()
+        ? QString::fromLatin1(kLocalConnectionId)
+        : request.connectionId;
+
+    const QString dir = StoragePath::parent(request.path);
+    if (dir.isEmpty())
+        return;
+
+    // 顺序必须与浏览页一致：先取该目录的排序偏好，没有则回退全局
+    const auto &settings = AppSettings::instance();
+    const QVariantMap pref = settings.directorySortPreference(connectionId, dir);
+    const QString sortKey = pref.value(QStringLiteral("key"), settings.sortKey()).toString();
+    const bool ascending = pref.value(QStringLiteral("asc"), settings.sortAscending()).toBool();
+
+    // 目录列举是异步的：回来时若已换片 / 已取消 / 又播完一轮，直接丢弃
+    const QPointer<PlayerBridge> guard(this);
+    const int queryId = ++m_nextQueryId;
+
+    // 有归属连接（含本地路径连接）一律走适配器：浏览页就是 `adapter->list(dir)`，
+    // 这里必须拿同一份结果，否则「当前项」可能在自己的目录里按字符串比不出来
+    StorageError error;
+    if (StorageAdapter *adapter = ConnectionStore::instance().adapterFor(connectionId, &error)) {
+        const QString currentPath = StoragePath::normalize(request.path);
+        adapter->list(dir,
+                      [this, guard, queryId, currentPath, connectionId, sortKey,
+                       ascending](ListResult result) {
+                          if (!guard || queryId != m_nextQueryId || !result.ok())
+                              return;
+                          const PlaybackRequest current = PlayerCore::instance().currentRequest();
+                          if (StoragePath::normalize(current.path) != currentPath
+                              || current.connectionId != connectionId) {
+                              return;
+                          }
+                          setNextSuggestion(DirectorySort::nextSibling(result.value, currentPath,
+                                                                       sortKey, ascending),
+                                            connectionId);
+                      });
+        return;
+    }
+
+    // 没有归属连接（"local" 直开绝对路径，如文件关联打开）：没有适配器可借，
+    // 就地列父目录。两侧都收敛成 `X:/a/b` 形式，否则盘符路径比不出来
+    const auto flatten = [](const QString &path) {
+        QString flat = QDir::fromNativeSeparators(path);
+        if (flat.size() > 2 && flat.at(0) == QLatin1Char('/') && flat.at(2) == QLatin1Char(':'))
+            flat.remove(0, 1);
+        return flat;
+    };
+    const QString currentPath = flatten(request.path);
+    const QString localDir = flatten(dir);
+
+    FileEntryList entries;
+    const QFileInfoList infos =
+        QDir(localDir).entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::NoSort);
+    entries.reserve(infos.size());
+    for (const QFileInfo &info : infos) {
+        FileEntry entry;
+        entry.name = info.fileName();
+        entry.path = QDir::fromNativeSeparators(info.absoluteFilePath());
+        entry.size = info.size();
+        entry.modTime = info.lastModified();
+        entry.ext = info.suffix().toLower();
+        entries.append(entry);
+    }
+    setNextSuggestion(DirectorySort::nextSibling(entries, currentPath, sortKey, ascending),
+                      connectionId);
+}
+
+void PlayerBridge::setNextSuggestion(const FileEntry &entry, const QString &connectionId)
+{
+    if (!entry.isValid()) {
+        MH_INFO(Player, QStringLiteral("连续播放候选：无"));
+        clearNextSuggestion();
+        return;
+    }
+
+    MH_INFO(Player, QStringLiteral("连续播放候选：%1").arg(entry.name));
+
+    QVariantMap suggestion;
+    suggestion.insert(QStringLiteral("path"), entry.path);
+    suggestion.insert(QStringLiteral("title"), StoragePath::baseName(entry.path));
+    suggestion.insert(QStringLiteral("name"), entry.name);
+    suggestion.insert(QStringLiteral("size"), entry.size);
+    suggestion.insert(QStringLiteral("fingerprint"), entry.fingerprint());
+    suggestion.insert(QStringLiteral("connectionId"), connectionId);
+
+    m_nextSuggestion = suggestion;
+    emit nextSuggestionChanged();
+}
+
+void PlayerBridge::clearNextSuggestion()
+{
+    if (m_nextSuggestion.isEmpty())
+        return;
+    m_nextSuggestion.clear();
+    emit nextSuggestionChanged();
+}
+
+void PlayerBridge::playNextSuggestion()
+{
+    if (m_nextSuggestion.isEmpty())
+        return;
+
+    const QVariantMap suggestion = m_nextSuggestion;
+    clearNextSuggestion();
+
+    const QString id = suggestion.value(QStringLiteral("connectionId")).toString();
+    const QString path = suggestion.value(QStringLiteral("path")).toString();
+    const QString title = suggestion.value(QStringLiteral("title")).toString();
+
+    // 入口必须与浏览页点击时一致：本地路径走 openLocalFile，远程源走回环代流
+    const ConnectionRecord record = ConnectionStore::instance().byId(id);
+    const bool localFile = !record.isValid() || record.type == ConnectionType::Local;
+
+    // 从头播（startMs = 0）：推荐的是「下一集」，不是回到上次看到的地方
+    if (localFile) {
+        openLocalFile(path, title, 0, id);
+        return;
+    }
+    openRemote(id, path, title, suggestion.value(QStringLiteral("size")).toLongLong(),
+               suggestion.value(QStringLiteral("fingerprint")).toString(), 0);
+}
+
+void PlayerBridge::dismissNextSuggestion()
+{
+    m_nextDismissed = true;
+    ++m_nextQueryId;
+    clearNextSuggestion();
 }
 
 void PlayerBridge::close()

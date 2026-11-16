@@ -42,6 +42,7 @@ qt_add_qml_module(MyHub
         qml/components/PrimaryButton.qml
         qml/components/ProgressRing.qml
         qml/components/RevealHalo.qml
+        qml/components/RubberBand.qml
         qml/components/SearchField.qml
         qml/components/SelectionTick.qml
         qml/components/StatusDot.qml
@@ -66,6 +67,10 @@ qt_add_qml_module(MyHub
         qml/reading/ReadingHome.qml
         qml/reading/ReadingGridCell.qml
         qml/reading/ReadingListRow.qml
+        qml/reading/NovelReaderView.qml
+        qml/reading/ComicReaderView.qml
+        qml/reading/PlainTextView.qml
+        qml/reading/ReaderButton.qml
 
         qml/settings/SettingsHome.qml
         qml/settings/ConnectionListView.qml
@@ -87,5 +92,5 @@ qt_add_qml_module(MyHub
 
         qml/placeholder/ModulePlaceholder.qml
     RESOURCES
-        resources/icons/app.svg
+        resources/icons/app.png
 )

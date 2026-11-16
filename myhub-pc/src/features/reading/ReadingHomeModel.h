@@ -58,6 +58,8 @@ public:
         RelativeTimeRole,
         UpdatedAtRole,
         ResumeMsRole,
+        FileSizeRole,
+        FileModSecsRole,
     };
     Q_ENUM(Roles)
 

@@ -93,6 +93,8 @@ ProgressRecord PlaybackProgressTracker::buildRecord(const PlaybackRequest &reque
     record.title = request.title;
     record.finished = ended || ProgressRepository::isNearEnd(position, duration);
     record.percent = duration > 0 ? qBound(0.0, double(position) / double(duration), 1.0) : 0.0;
+    record.fileSize = request.fileSize;
+    record.modTimeMs = request.fileModTimeMs;
 
     QVariantMap progress;
     progress.insert(QStringLiteral("positionMs"), position);

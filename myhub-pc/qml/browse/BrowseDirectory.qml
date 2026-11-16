@@ -990,6 +990,22 @@ Item {
             const info = dirModel.get(targetIndex)
             return !!info && Object.keys(info).length > 0 && info.textEditable === true
         }
+        /// 右键目标能用小说阅读器打开：`.txt`（可能有章节）与 epub
+        readonly property bool targetCanOpenAsNovel: {
+            dirModel.revision
+            const info = dirModel.get(targetIndex)
+            if (!info || Object.keys(info).length === 0 || info.isDir)
+                return false
+            return info.mediaKind === "novel" || info.name.toLowerCase().endsWith(".txt")
+        }
+        /// 右键目标能用漫画阅读器打开：cbz / zip（§6 PC-207）
+        readonly property bool targetCanOpenAsComic: {
+            dirModel.revision
+            const info = dirModel.get(targetIndex)
+            if (!info || Object.keys(info).length === 0 || info.isDir)
+                return false
+            return info.mediaKind === "comic"
+        }
         /// 右键目标是否已收藏（PC-107）
         readonly property bool targetIsFavorite: {
             Favorites.revision
@@ -1013,6 +1029,28 @@ Item {
             text: qsTr("编辑文本")
             enabled: contextMenu.targetIsTextEditable
             onTriggered: root.requestEditText(contextMenu.targetIndex)
+        }
+        // PC-210：`.txt` 默认进纯文本阅读器（不建索引、不记进度），
+        // 想按章节读、想记续读位置的人从这里转过去
+        C.Action {
+            text: qsTr("以小说阅读器打开")
+            enabled: contextMenu.targetCanOpenAsNovel
+            onTriggered: {
+                const info = dirModel.get(contextMenu.targetIndex)
+                if (!info || Object.keys(info).length === 0)
+                    return
+                Novel.open(dirModel.connectionId, info.filePath, info.name)
+            }
+        }
+        C.Action {
+            text: qsTr("以漫画阅读器打开")
+            enabled: contextMenu.targetCanOpenAsComic
+            onTriggered: {
+                const info = dirModel.get(contextMenu.targetIndex)
+                if (!info || Object.keys(info).length === 0)
+                    return
+                Comic.open(dirModel.connectionId, info.filePath, info.name)
+            }
         }
         C.Action {
             text: qsTr("以纯文本查看")
@@ -1474,8 +1512,24 @@ Item {
             playItem(info)
             return
         }
-        // 纯文本类：直接进入在线编辑（PC-103），保存即回源
+        // epub 是压缩包，不是纯文本：不能被下面的 textEditable 兜住（§5.1 PC-205）
+        if (info.mediaKind === "novel") {
+            Novel.open(dirModel.connectionId, info.filePath, info.name)
+            return
+        }
+        // cbz / zip → 漫画阅读器（§6 PC-207）。同样不能落到 textEditable 之外的兜底分支
+        if (info.mediaKind === "comic") {
+            Comic.open(dirModel.connectionId, info.filePath, info.name)
+            return
+        }
+        // 纯文本类：`.txt` 进纯文本阅读器（PC-210，第 4 条阅读路由 —— 不建索引、
+        // 不记进度，打开即读；默认读的是「文件」而不是「书」，所以不必先跑一遍分章索引）；
+        // 配置 / 字幕 / 日志这类仍然直接进在线编辑（PC-103），保存即回源
         if (info.textEditable) {
+            if (info.name.toLowerCase().endsWith(".txt")) {
+                Plain.open(dirModel.connectionId, info.filePath)
+                return
+            }
             textEditor.openFor(dirModel.connectionId, info.filePath, info.name)
             return
         }

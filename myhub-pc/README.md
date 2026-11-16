@@ -226,15 +226,20 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Test
 
 | 工具 | 管什么 | 配置 | 当前基线 |
 | --- | --- | --- | --- |
-| `clang-format` | 排版（**只动空白**） | `.clang-format`（clang-format 19） | 68 个文件零 diff |
-| `clang-tidy` | 语义 / 性能 | `.clang-tidy`（需 `compile_commands.json`） | 37 个 TU、0 findings |
-| `qmllint` | QML 静态检查 | `.qmllint.ini` | 30 个 QML 文件干净 |
+| `clang-format` | 排版（**只动空白**） | `.clang-format`（clang-format 19） | 198 个文件零 diff |
+| `clang-tidy` | 语义 / 性能 | `.clang-tidy`（需 `compile_commands.json`） | 114 个 TU、0 findings |
+| `qmllint` | QML 静态检查 | `.qmllint.ini` | 62 个 QML 文件干净 |
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\lint.ps1            # 校验（退出码 0/1）
-powershell -ExecutionPolicy Bypass -File scripts\lint.ps1 -Fix       # 就地格式化
+powershell -ExecutionPolicy Bypass -File scripts\lint.ps1            # 只查改动文件（日常，几十秒）
+powershell -ExecutionPolicy Bypass -File scripts\lint.ps1 -All       # 全量（提交前 / CI）
+powershell -ExecutionPolicy Bypass -File scripts\lint.ps1 -Fix       # 就地格式化（同样只改改动文件）
 powershell -ExecutionPolicy Bypass -File scripts\lint.ps1 -SkipTidy  # 跳过最慢的一段
 ```
+
+默认只查 `git diff HEAD` + 未跟踪文件：全量 clang-tidy 要几分钟，而一轮迭代通常只碰几个文件。
+`-All` 是提交前与 CI 的用法（**CI 必须显式传**，否则干净 checkout 的改动集为空，直接全绿）。
+clang-format / qmllint 一次吃一批文件，clang-tidy 按 TU 走进程池并行（`-Jobs` 可调，默认核数上限 16）。
 
 一条命令跑完整流水线（构建 → 单测 → 规范校验），与 CI 执行体是**同一份脚本**：
 

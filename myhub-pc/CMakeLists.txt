@@ -89,7 +89,7 @@ include(RuntimeLibs)
 # ---------------------------------------------------------------------------
 qt_add_executable(MyHub
     src/main.cpp
-    # 窗口图标资源（main.cpp 里的 :/icons/app.svg）
+    # 窗口图标资源（main.cpp 里的 :/icons/app.png）
     resources/icons.qrc
 
     src/app/AppState.h                      src/app/AppState.cpp
@@ -121,6 +121,12 @@ qt_add_executable(MyHub
     src/features/transfer/TransferListModel.cpp
     src/features/reading/ReadingHomeModel.h
     src/features/reading/ReadingHomeModel.cpp
+    src/features/reading/NovelBridge.h
+    src/features/reading/NovelBridge.cpp
+    src/features/reading/ComicBridge.h
+    src/features/reading/ComicBridge.cpp
+    src/features/reading/PlainTextBridge.h
+    src/features/reading/PlainTextBridge.cpp
     src/features/favorites/FavoriteListModel.h
     src/features/favorites/FavoriteListModel.cpp
     src/features/favorites/FavoritesBridge.h
@@ -136,6 +142,22 @@ set_target_properties(MyHub PROPERTIES
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
 )
+
+# ---------------------------------------------------------------------------
+# 平台原生应用图标（与 resources/icons.qrc 里的窗口图标同一张图）
+#
+# Windows：资源管理器 / 任务栏 / 快捷方式只认可执行文件内嵌的 .ico；
+# macOS  ：Dock 只认 bundle 内的 .icns（setWindowIcon 在 macOS 上不生效）。
+# ---------------------------------------------------------------------------
+if(WIN32)
+    target_sources(MyHub PRIVATE resources/icons/app.rc)
+elseif(APPLE)
+    target_sources(MyHub PRIVATE resources/icons/app.icns)
+    set_source_files_properties(resources/icons/app.icns PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
+    set_target_properties(MyHub PROPERTIES MACOSX_BUNDLE_ICON_FILE "app.icns")
+endif()
 
 # qmltyperegistrar 生成的注册代码以**裸文件名**包含头文件
 # （#include <AppState.h>），故需把各含 QML_ELEMENT 的目录加入搜索路径。

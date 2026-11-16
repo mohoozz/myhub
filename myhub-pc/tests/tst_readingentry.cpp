@@ -65,6 +65,7 @@ private slots:
     void fromRecordFallsBackToFileName();
     void finishedRecordShowsCompleteTextAndRestarts();
     void fromRecordsKeepsOrder();
+    void fromRecordCarriesFingerprint();
 };
 
 void TestReadingEntry::percentText_data()
@@ -180,6 +181,25 @@ void TestReadingEntry::finishedRecordShowsCompleteTextAndRestarts()
     QCOMPARE(entry.percentText, QStringLiteral("100%"));
     QCOMPARE(entry.finishedText, QStringLiteral("已看完"));
     QCOMPARE(entry.resumeMs, qint64(0)); // 已看完 → 再打开从头播
+}
+
+void TestReadingEntry::fromRecordCarriesFingerprint()
+{
+    // 首页靠这两个字段校验封面缓存：大小原样透出，修改时间降到秒（与封面 meta 同口径）
+    ProgressRecord record =
+        recordFor(QStringLiteral("C:/media/book.epub"), QStringLiteral("novel"), 0.5);
+    record.fileSize = 12'345;
+    record.modTimeMs = 1'760'000'000'789;
+
+    const ReadingEntry entry = ReadingEntry::fromRecord(record, nowMs());
+    QCOMPARE(entry.fileSize, qint64(12'345));
+    QCOMPARE(entry.fileModSecs, qint64(1'760'000'000));
+
+    // 未知指纹保持 -1：不能被当成「0 字节的文件」去比对
+    const ReadingEntry bare = ReadingEntry::fromRecord(
+        recordFor(QStringLiteral("C:/media/bare.mkv"), QStringLiteral("video"), 0.1), nowMs());
+    QCOMPARE(bare.fileSize, qint64(-1));
+    QCOMPARE(bare.fileModSecs, qint64(-1));
 }
 
 void TestReadingEntry::fromRecordsKeepsOrder()

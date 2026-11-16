@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/player/PlaybackTypes.h"
+#include "core/storage/FileEntry.h"
 
 #include <QMetaObject>
 #include <QObject>
@@ -10,6 +11,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 
 namespace myhub {
 
@@ -49,6 +51,14 @@ class PlayerBridge : public QObject
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
     Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY audioTracksChanged)
     Q_PROPERTY(QVariantList subtitleTracks READ subtitleTracks NOTIFY subtitleTracksChanged)
+    /**
+     * 播完后推荐的「同目录下一个」（§4.6）。
+     *
+     * 空 map = 没有候选（末项 / 目录里没有同类型文件 / 目录读不到）。
+     * **只给候选，绝不自动播放**：是否有倒计时、播不播都由 UI 与用户决定。
+     * 会话切新项或重播时自动清空（状态离开 Ended 就撤）。
+     */
+    Q_PROPERTY(QVariantMap nextSuggestion READ nextSuggestion NOTIFY nextSuggestionChanged)
     Q_PROPERTY(qreal brightness READ brightness WRITE setBrightness NOTIFY brightnessChanged)
     // 播放行为偏好（只读镜像，写入统一走 AppSettings.setValue，改动即时生效）
     Q_PROPERTY(double volumeStep READ volumeStep NOTIFY preferencesChanged)
@@ -106,6 +116,7 @@ public:
     QString errorText() const;
     QVariantList audioTracks() const;
     QVariantList subtitleTracks() const;
+    QVariantMap nextSuggestion() const { return m_nextSuggestion; }
     qreal brightness() const;
     double volumeStep() const;
     int seekStepSeconds() const;
@@ -176,6 +187,16 @@ public:
     /// 读取某条目的进度（§7 首页/后续「从头播放」菜单用）；无记录返回空 map
     Q_INVOKABLE QVariantMap progressFor(const QString &connectionId, const QString &path) const;
 
+    /**
+     * 播放推荐的下一个（§4.6）：**从头开始**，不续播。
+     *
+     * 本地与远程走各自既有入口（`openLocalFile` / `openRemote`），
+     * 远程带上目录模型给的大小与指纹，省一次 stat 往返。
+     */
+    Q_INVOKABLE void playNextSuggestion();
+    /// 用户取消推荐：收起提示条，且本次结束态不再重复查询
+    Q_INVOKABLE void dismissNextSuggestion();
+
 signals:
     void stateChanged();
     void titleChanged();
@@ -199,11 +220,23 @@ signals:
     /// 截图结果（§4.3）：failed 的 reason 已是可读文案
     void screenshotSaved(const QString &filePath);
     void screenshotFailed(const QString &reason);
+    /// 播完推荐候选变化（§4.6）；空 map 表示没有可推荐的下一项
+    void nextSuggestionChanged();
 
 private:
-    /// 统一的起播实现：`path` 是进度记录用的远端路径（不是回环 URL）
+    /// 统一的起播实现：`path` 是进度记录用的远端路径（不是回环 URL）；
+    /// `fileSize` / `fileModTimeMs` 已知就带下来（进进度记录做封面缓存校验），未知传 -1
     void beginRequest(const QUrl &url, const QString &path, const QString &title, qint64 startMs,
-                      const QString &connectionId);
+                      const QString &connectionId, qint64 fileSize = -1, qint64 fileModTimeMs = -1);
+
+    /**
+     * `openRemote` 的本体。
+     *
+     * 多一个 `modTimeMs`：目录模型只给 size + 指纹，拿不到修改时间；补 stat 那条路径
+     * 顺手把 stat 结果里的改时间传进来，别为封面再 stat 一次。
+     */
+    void openRemoteImpl(const QString &connectionId, const QString &path, const QString &title,
+                        qint64 size, const QString &fingerprint, qint64 startMs, qint64 modTimeMs);
     void releaseStreamSession();
     /// 把字幕字号 / 延迟下发给引擎（运行期即时生效）
     void applySubtitleStyle();
@@ -212,6 +245,13 @@ private:
      * 已经有外挂轨（用户手动加过 / 换端口重开后已恢复）就直接返回，不重复叠加。
      */
     void autoAttachSubtitle();
+    /**
+     * 查「同目录下一个」（§4.6）。播完自动触发一次；本地同步、远程异步。
+     * 排序跟随该目录的排序偏好，与浏览页所见顺序完全一致。
+     */
+    void resolveNextSuggestion();
+    void setNextSuggestion(const FileEntry &entry, const QString &connectionId);
+    void clearNextSuggestion();
 
     /// 当前远程会话 id；空表示本地/直链播放
     QString m_streamId;
@@ -229,6 +269,13 @@ private:
     QVariantList m_audioTracks;
     QVariantList m_subtitleTracks;
     qreal m_brightness = 1.0;
+
+    /// 播完推荐候选（§4.6）；空 map = 无候选
+    QVariantMap m_nextSuggestion;
+    /// 用户已取消本次结束态的推荐：状态回到非 Ended 才复位
+    bool m_nextDismissed = false;
+    /// 目录列举是异步的：回来时若已换片 / 已取消，靠这个序号丢弃结果
+    int m_nextQueryId = 0;
 };
 
 } // namespace myhub

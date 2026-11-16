@@ -36,7 +36,10 @@ Item {
         coverImage.source = ""
         if (root.isDir || root._key === "")
             return
-        const cached = CoverService.cachedCover(root.connectionId, root.filePath)
+        // 带指纹查缓存：文件被换过（大小/时间变了）就当作没缓存，交给 C++ 重取，
+        // 免得把上一版封面的图当成本文件一直显示
+        const cached = CoverService.cachedCover(root.connectionId, root.filePath,
+                                                root.fileSize, root.fileModSecs)
         if (cached !== "") {
             coverImage.source = cached
             return

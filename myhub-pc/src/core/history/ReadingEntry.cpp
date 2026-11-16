@@ -39,6 +39,9 @@ ReadingEntry ReadingEntry::fromRecord(const ProgressRecord &record, qint64 nowMs
     entry.updatedAt = record.updatedAt;
     entry.relativeTime = relativeTimeFor(record.updatedAt, nowMs);
     entry.resumeMs = ProgressRepository::resumePositionMs(record);
+    entry.fileSize = record.fileSize;
+    // 封面缓存按秒比对修改时间；记录里存的是毫秒（和其它表统一），到这里再降精度
+    entry.fileModSecs = record.modTimeMs > 0 ? record.modTimeMs / 1000 : -1;
     return entry;
 }
 

@@ -3,13 +3,13 @@
 #include "features/connections/ConnectionStore.h"
 
 #include "core/cache/DirectoryCache.h"
+#include "core/files/DirectorySort.h"
 #include "core/preferences/AppSettings.h"
 #include "core/storage/StorageAdapter.h"
 #include "core/storage/StoragePath.h"
 #include "core/utils/AppLogger.h"
 #include "core/utils/Formatters.h"
 #include "core/utils/MediaType.h"
-#include "core/utils/NaturalSort.h"
 
 #include <QPointer>
 #include <algorithm>
@@ -380,24 +380,8 @@ void BrowseDirectoryModel::rebuildVisible()
         }
     }
 
-    // 排序：目录恒在文件之前
-    const QString key = m_sortKey;
-    const bool asc = m_sortAscending;
-    std::sort(filtered.begin(), filtered.end(), [key, asc](const FileEntry &a, const FileEntry &b) {
-        if (a.isDir != b.isDir)
-            return a.isDir;
-
-        int cmp = 0;
-        if (key == QLatin1String("size")) {
-            cmp = (a.size < b.size) ? -1 : (a.size > b.size ? 1 : 0);
-        } else if (key == QLatin1String("time")) {
-            if (a.modTime != b.modTime)
-                cmp = (a.modTime < b.modTime) ? -1 : 1;
-        }
-        if (cmp == 0)
-            cmp = NaturalSort::compare(a.name, b.name);
-        return asc ? (cmp < 0) : (cmp > 0);
-    });
+    // 排序：目录恒在文件之前；规则见 core/files/DirectorySort（与「下一个」共用同一份）
+    DirectorySort::sort(filtered, m_sortKey, m_sortAscending);
 
     beginResetModel();
     m_visible = std::move(filtered);

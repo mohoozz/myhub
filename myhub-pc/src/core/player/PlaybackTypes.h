@@ -35,6 +35,13 @@ struct PlaybackRequest
     qint64 startPositionMs = 0; // 精准续播起点（PC-209）
     bool audioOnly = false;     // 纯音频模式起播（PC-206）
 
+    /**
+     * 文件指纹（-1 = 未知）：进度记录会把它一起落库，首页据此校验封面缓存是否过期。
+     * 只传「起播前已经知道」的值——远程 stat 拿到的 size / modTime 顺手带下来，不为它额外发请求。
+     */
+    qint64 fileSize = -1;
+    qint64 fileModTimeMs = -1;
+
     bool isValid() const { return url.isValid() && !url.isEmpty(); }
 };
 

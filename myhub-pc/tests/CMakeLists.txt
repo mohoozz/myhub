@@ -2,8 +2,8 @@
 #
 # 覆盖目标：StoragePath 归一化、错误自愈分类、PROPFIND 解析、
 #          自然排序、内外网判定、数据库迁移与浏览链路集成。
-# （RangeZipReader / TextEncodingDetector / ChapterRuleTable / 锚点换算
-#   随 M3 阅读器实现后补充）
+# M3 阅读器：Zip 区间读取、epub 解包（目录/分章）、txt 建索引、章节规则、
+#          进度锚点换算、NovelBridge 的 epub 端到端链路。
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Test Qml)
 
@@ -65,10 +65,57 @@ myhub_add_test(tst_streamcache)
 myhub_add_test(tst_streamproxy)
 myhub_add_test(tst_movecopy)
 myhub_add_test(tst_textcodec)
+myhub_add_test(tst_plaintextdocument)
 myhub_add_test(tst_favorite)
 myhub_add_test(tst_trackname)
 myhub_add_test(tst_screenshotpath)
 myhub_add_test(tst_subtitlematcher)
+myhub_add_test(tst_directorysort)
+myhub_add_test(tst_chapterrules)
+myhub_add_test(tst_txtindexer)
+myhub_add_test(tst_rangezip)
+myhub_add_test(tst_comicbook)
+myhub_add_test(tst_archivereader)
+myhub_add_test(tst_epubbook)
+myhub_add_test(tst_novelchaptercache)
+
+# epub 接入阅读器：NovelBridge 同样在 features/ 下（带 QML_ELEMENT，需 Qt6::Qml），
+# 且依赖 ConnectionStore，故单列目标；走真实 sqlite + 磁盘上的 epub 文件。
+qt_add_executable(tst_novelbridge
+    tst_novelbridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/reading/NovelBridge.h
+    ${CMAKE_SOURCE_DIR}/src/features/reading/NovelBridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/cover/CoverService.h
+    ${CMAKE_SOURCE_DIR}/src/features/cover/CoverService.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/connections/ConnectionStore.h
+    ${CMAKE_SOURCE_DIR}/src/features/connections/ConnectionStore.cpp
+)
+target_include_directories(tst_novelbridge PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/src/features/reading"
+    "${CMAKE_SOURCE_DIR}/src/features/connections"
+)
+target_link_libraries(tst_novelbridge PRIVATE myhub_core Qt6::Test Qt6::Qml Qt6::Gui)
+set_target_properties(tst_novelbridge PROPERTIES WIN32_EXECUTABLE FALSE)
+myhub_register_test(tst_novelbridge)
+
+# 漫画阅读器桥接（§6 PC-207）：与小说桥接同一套理由 —— 源文件编在 MyHub 目标里，
+# 测试自带；ComicBridge 带 QML_SINGLETON，额外链接 Qt6::Qml。
+qt_add_executable(tst_comicbridge
+    tst_comicbridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/reading/ComicBridge.h
+    ${CMAKE_SOURCE_DIR}/src/features/reading/ComicBridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/connections/ConnectionStore.h
+    ${CMAKE_SOURCE_DIR}/src/features/connections/ConnectionStore.cpp
+)
+target_include_directories(tst_comicbridge PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/src/features/reading"
+    "${CMAKE_SOURCE_DIR}/src/features/connections"
+)
+target_link_libraries(tst_comicbridge PRIVATE myhub_core Qt6::Test Qt6::Qml Qt6::Gui)
+set_target_properties(tst_comicbridge PROPERTIES WIN32_EXECUTABLE FALSE)
+myhub_register_test(tst_comicbridge)
 
 # 浏览页状态角标：features/ 下的模型编在 MyHub 可执行目标里（不在 myhub_core），
 # 故测试目标自带这两份源文件；它们都带 QML_ELEMENT，需额外链接 Qt6::Qml。

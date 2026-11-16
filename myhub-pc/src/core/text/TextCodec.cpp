@@ -127,7 +127,7 @@ bool looksLikeUtf16(const QByteArray &data, bool *littleEndian)
     return false;
 }
 
-QString decodeAs(const QByteArray &data, const char *codec, bool *hadErrors)
+QString decodeWith(const QByteArray &data, const char *codec, bool *hadErrors)
 {
     QStringDecoder decoder(codec);
     if (!decoder.isValid()) {
@@ -199,6 +199,31 @@ bool decodeMultibyte(const QByteArray &data, TextCodec::Encoding encoding, QStri
 #endif
 }
 
+/**
+ * 严格解码 GB18030 / Big5，返回「为解通而必须回退的字节数」，解不通返回 -1。
+ *
+ * 只回退 0/1/2 字节：双字节编码的残缺尾巴最多 2 字节，超过就不是「切在字符中间」，
+ * 而是真的非法数据 —— 那种情况必须让调用方走 UTF-8 兜底，不能靠不断回退掩盖。
+ */
+int strictMultibyteDrop(const QByteArray &data, TextCodec::Encoding encoding, QString *text)
+{
+    for (int drop = 0; drop <= 2; ++drop) {
+        const int size = static_cast<int>(data.size()) - drop;
+        if (size <= 0) {
+            break;
+        }
+        bool errored = false;
+        QString decoded;
+        if (decodeMultibyte(data.left(size), encoding, &decoded, &errored) && !errored) {
+            if (text) {
+                *text = decoded;
+            }
+            return drop;
+        }
+    }
+    return -1;
+}
+
 bool encodeMultibyte(const QString &text, TextCodec::Encoding encoding, QByteArray *data)
 {
     if (text.isEmpty()) {
@@ -267,17 +292,17 @@ TextCodec::Decoded decodeBody(const QByteArray &body, TextCodec::Encoding encodi
     bool errored = false;
     switch (encoding) {
     case TextCodec::Utf16LE:
-        decoded.text = decodeAs(body, "UTF-16LE", &errored);
+        decoded.text = decodeWith(body, "UTF-16LE", &errored);
         decoded.hadErrors = errored;
         break;
     case TextCodec::Utf16BE:
-        decoded.text = decodeAs(body, "UTF-16BE", &errored);
+        decoded.text = decodeWith(body, "UTF-16BE", &errored);
         decoded.hadErrors = errored;
         break;
     case TextCodec::Gb18030:
     case TextCodec::Big5:
         if (!decodeMultibyte(body, encoding, &decoded.text, &errored)) {
-            decoded.text = decodeAs(body, "UTF-8", &errored);
+            decoded.text = decodeWith(body, "UTF-8", &errored);
             decoded.encoding = TextCodec::Utf8;
             decoded.hadErrors = true;
             break;
@@ -285,7 +310,7 @@ TextCodec::Decoded decodeBody(const QByteArray &body, TextCodec::Encoding encodi
         decoded.hadErrors = errored;
         break;
     default:
-        decoded.text = decodeAs(body, "UTF-8", &errored);
+        decoded.text = decodeWith(body, "UTF-8", &errored);
         decoded.encoding = TextCodec::Utf8;
         decoded.hadErrors = errored;
         break;
@@ -371,7 +396,7 @@ TextCodec::Decoded TextCodec::decode(const QByteArray &data)
 
     // 3) 严格 UTF-8：非法即不是 UTF-8（纯 ASCII 也走这里，两侧等价）
     bool utf8Errored = false;
-    const QString utf8Text = decodeAs(data, "UTF-8", &utf8Errored);
+    const QString utf8Text = decodeWith(data, "UTF-8", &utf8Errored);
     if (!utf8Errored) {
         Decoded decoded;
         decoded.text = utf8Text;
@@ -380,37 +405,88 @@ TextCodec::Decoded TextCodec::decode(const QByteArray &data)
     }
 
     // 4) GB18030 / Big5：能否解码 + 常用字命中率择优
-    bool gbError = false;
-    bool big5Error = false;
+    //
+    // 采样（文件头 64KB）几乎必有 50% 的概率切在双字节汉字中间。严格校验下
+    // 「末尾半个字符」会让**整段**判定为非法，进而把 GB18030 书误判成 UTF-8，
+    // 整本变乱码。所以这里允许最多回退 2 字节再严格校验：
+    // 只要去掉残缺尾巴就能解通，就按该编码采信（丢掉的那半个字在采样之外）。
     QString gbText;
     QString big5Text;
-    const bool gbOk = decodeMultibyte(data, Gb18030, &gbText, &gbError) && !gbError;
-    const bool big5Ok = decodeMultibyte(data, Big5, &big5Text, &big5Error) && !big5Error;
+    const int gbDrop = strictMultibyteDrop(data, Gb18030, &gbText);
+    const int big5Drop = strictMultibyteDrop(data, Big5, &big5Text);
+    const bool gbOk = gbDrop >= 0;
+    const bool big5Ok = big5Drop >= 0;
 
     if (gbOk && !big5Ok) {
-        return decodeBody(data, Gb18030, false);
+        return decodeBody(data.left(data.size() - gbDrop), Gb18030, false);
     }
     if (big5Ok && !gbOk) {
-        return decodeBody(data, Big5, false);
+        return decodeBody(data.left(data.size() - big5Drop), Big5, false);
     }
     if (gbOk && big5Ok) {
         const int gbScore = commonScore(gbText);
         const int big5Score = commonScore(big5Text);
         if (big5Score > gbScore) {
-            return decodeBody(data, Big5, false);
+            return decodeBody(data.left(data.size() - big5Drop), Big5, false);
         }
         if (big5Score == gbScore && trailingAsciiPercent(data) > 15) {
-            return decodeBody(data, Big5, false);
+            return decodeBody(data.left(data.size() - big5Drop), Big5, false);
         }
-        return decodeBody(data, Gb18030, false);
+        return decodeBody(data.left(data.size() - gbDrop), Gb18030, false);
     }
 
     // 5) 都解不开：UTF-8 带替换符兜底（宁可显示乱码，也不拒绝打开）
     Decoded fallback;
-    fallback.text = decodeAs(data, "UTF-8", nullptr);
+    fallback.text = decodeWith(data, "UTF-8", nullptr);
     fallback.encoding = Utf8;
     fallback.hadErrors = true;
     return fallback;
+}
+
+TextCodec::Decoded TextCodec::decodeAs(const QByteArray &data, Encoding encoding)
+{
+    const Encoding target = encoding == Unknown ? Utf8 : encoding;
+
+    Decoded decoded;
+    decoded.encoding = target;
+
+    // BOM 不是正文：只认「与本编码对应」的那个。
+    // 编码不符的 BOM 字节在错误编码下是合法内容（FF FE 在 GBK 里是正常双字节），
+    // 不能一律扔掉，否则首行开头会被啃掉两个字节。
+    int bomBytes = 0;
+    if (target == Utf16LE && data.startsWith(utf16LeBom())) {
+        bomBytes = utf16LeBom().size();
+    } else if (target == Utf16BE && data.startsWith(utf16BeBom())) {
+        bomBytes = utf16BeBom().size();
+    } else if (target != Utf16LE && target != Utf16BE && data.startsWith(utf8Bom())) {
+        bomBytes = utf8Bom().size();
+    }
+    decoded.hadBom = bomBytes > 0;
+
+    const QByteArray body = data.mid(bomBytes);
+    bool errored = false;
+    switch (target) {
+    case Utf16LE:
+        decoded.text = decodeWith(body, "UTF-16LE", &errored);
+        break;
+    case Utf16BE:
+        decoded.text = decodeWith(body, "UTF-16BE", &errored);
+        break;
+    case Gb18030:
+    case Big5:
+        if (!decodeMultibyte(body, target, &decoded.text, &errored)) {
+            decoded.text = decodeWith(body, "UTF-8", &errored);
+            decoded.encoding = Utf8;
+            errored = true;
+        }
+        break;
+    default:
+        decoded.text = decodeWith(body, "UTF-8", &errored);
+        decoded.encoding = Utf8;
+        break;
+    }
+    decoded.hadErrors = errored;
+    return decoded;
 }
 
 bool TextCodec::canEncode(const QString &text, Encoding encoding)

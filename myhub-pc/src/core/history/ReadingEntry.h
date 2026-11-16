@@ -28,6 +28,9 @@ struct ReadingEntry
     bool finished = false;
     qint64 updatedAt = 0;
     qint64 resumeMs = 0; ///< 续播起点；已读完或接近结尾为 0
+    /// 记录写入时的文件指纹，只用于校验封面缓存是否过期；-1 = 未知
+    qint64 fileSize = -1;
+    qint64 fileModSecs = -1;
 
     /// 单条记录 → 展示行（`nowMs` 便于单测固定「现在」）
     static ReadingEntry fromRecord(const ProgressRecord &record, qint64 nowMs);

@@ -38,6 +38,9 @@ namespace {
 // 信号处理期间不可分配内存，故路径预先缓存为 C 字符串
 char g_crashPath[1024] = {0};
 
+/// 上一次会话是否崩溃：install() 在追加本次 session 行之前算好（见 install）
+bool g_previousSessionCrashed = false;
+
 void rawAppend(const char *text)
 {
     if (g_crashPath[0] == '\0' || text == nullptr)
@@ -111,6 +114,18 @@ void CrashReporter::install()
     std::strncpy(g_crashPath, path.constData(), sizeof(g_crashPath) - 1);
     g_crashPath[sizeof(g_crashPath) - 1] = '\0';
 
+    /*
+      「上次会话是否崩溃」必须在写本次 session 行**之前**判定，否则自己写的行
+      会把最后一个会话段盖掉。crash.log 是累积文件（从不清理），早先版本的
+      `contains("==== CRASH ====")` 会让历史上任何一次崩溃之后每次启动都误报。
+    */
+    {
+        const QString previous = readReport();
+        const int lastSession = previous.lastIndexOf(QStringLiteral("---- session "));
+        g_previousSessionCrashed = lastSession >= 0
+            && previous.indexOf(QStringLiteral("==== CRASH ===="), lastSession) >= 0;
+    }
+
     // 记录本次会话启动时间，便于判断崩溃发生在哪次运行
     {
         QFile f(crashLogPath());
@@ -140,10 +155,8 @@ QString CrashReporter::crashLogPath()
 
 bool CrashReporter::hasPendingReport()
 {
-    QFile f(crashLogPath());
-    if (!f.exists())
-        return false;
-    return readReport().contains(QStringLiteral("==== CRASH ===="));
+    // 由 install() 在追加本次 session 行之前算好：只看上一次会话段
+    return g_previousSessionCrashed;
 }
 
 QString CrashReporter::readReport()

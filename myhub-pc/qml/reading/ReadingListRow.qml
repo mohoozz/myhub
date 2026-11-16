@@ -20,6 +20,9 @@ Item {
     property string entryRelativeTime: ""
     property string entryConnectionId: ""
     property string entryPath: ""
+    /// 记录写入时的文件指纹（未知 -1）：交给封面组件校验磁盘缓存是否过期
+    property real entryFileSize: -1
+    property real entryFileModSecs: -1
     property bool selected: false
 
     signal clicked(var mouse)
@@ -55,6 +58,8 @@ Item {
             connectionId: root.entryConnectionId
             filePath: root.entryPath
             mediaKind: root.entryMediaKind
+            fileSize: root.entryFileSize
+            fileModSecs: root.entryFileModSecs
             radius: AppTheme.radiusInput
             iconRatio: 0.5
         }

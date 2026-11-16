@@ -76,7 +76,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationDomain(QStringLiteral("myhub.com"));
     QCoreApplication::setApplicationName(QStringLiteral("MyHub"));
     QCoreApplication::setApplicationVersion(QLatin1String(MYHUB_VERSION));
-    app.setWindowIcon(QIcon(QStringLiteral(":/icons/app.svg")));
+    app.setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
 
     // 单实例检查
     if (notifyExistingInstance())

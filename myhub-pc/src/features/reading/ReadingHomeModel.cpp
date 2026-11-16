@@ -87,6 +87,10 @@ QVariant ReadingHomeModel::data(const QModelIndex &index, int role) const
         return entry.updatedAt;
     case ResumeMsRole:
         return entry.resumeMs;
+    case FileSizeRole:
+        return entry.fileSize;
+    case FileModSecsRole:
+        return entry.fileModSecs;
     default:
         return {};
     }
@@ -110,6 +114,8 @@ QHash<int, QByteArray> ReadingHomeModel::roleNames() const
         {RelativeTimeRole, "relativeTime"},
         {UpdatedAtRole, "updatedAt"},
         {ResumeMsRole, "resumeMs"},
+        {FileSizeRole, "fileSize"},
+        {FileModSecsRole, "fileModSecs"},
     };
 }
 
@@ -218,6 +224,8 @@ QVariantMap ReadingHomeModel::get(int row) const
     map.insert(QStringLiteral("finishedText"), entry.entry.finishedText);
     map.insert(QStringLiteral("relativeTime"), entry.entry.relativeTime);
     map.insert(QStringLiteral("resumeMs"), entry.entry.resumeMs);
+    map.insert(QStringLiteral("fileSize"), entry.entry.fileSize);
+    map.insert(QStringLiteral("fileModSecs"), entry.entry.fileModSecs);
     return map;
 }
 
