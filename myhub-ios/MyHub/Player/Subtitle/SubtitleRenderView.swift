@@ -239,9 +239,13 @@ final class SubtitleRenderView: UIView {
         // 异常 `\fs` 兜底：字号不超过画面高度
         let fontSize = min(rawSize, max(24, bounds.height))
         // 描边/阴影宽度是 PlayRes 单位，需与字号同步缩放；简单字幕给一层细描边保证可读性
-        let outlineWidth = metrics.isAss
+        let rawOutline = metrics.isAss
             ? cue.style.outlineWidth * metrics.fontScale
             : max(1.2, simpleFontSize * 0.09)
+        // ASS 的 Outline 是 PlayRes 单位，弹幕/字幕文件里常出现「小字号配大描边」（如 25 号字配 2 描边）。
+        // CoreText 描边是**居中**绘制的，描边越宽字形填充被吃掉越多——白字会被描边糊成深色一团。
+        // 按字号单边限幅 5%，既保留原来的粗细比例，又保证填充始终可见（SRT 的描边是调过的，不动）。
+        let outlineWidth = metrics.isAss ? min(rawOutline, fontSize * 0.05) : rawOutline
         let shadowOffset = metrics.isAss ? cue.style.shadow * metrics.fontScale : 0
         let cached = attributedText(
             for: cue,
@@ -358,7 +362,7 @@ final class SubtitleRenderView: UIView {
 
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: style.primaryColor,
+            .foregroundColor: readableFill(for: style),
             .paragraphStyle: paragraph
         ]
         // 描边：strokeWidth 为字号百分比，负值 = 填充 + 描边（外描边宽度按一半折算）
@@ -384,6 +388,29 @@ final class SubtitleRenderView: UIView {
         if textCache.count > 800 { textCache.removeAll() }
         textCache[key] = result
         return result
+    }
+
+    /// 填充色可读性兜底：ASS 原样照搬作者配色，但「深色填充 + 深色描边」在视频上等于没字
+    /// （以前所有字幕统一白字 + 半透明黑底，所以不会出现）。仅当填充和描边都明显偏深时才提亮为白色；
+    /// 「黑字 + 白描边」这类刻意配色（描边是浅色）保持原样。
+    private func readableFill(for style: SubtitleStyleSpec) -> UIColor {
+        guard styleFillAndOutlineBothDark(style) else { return style.primaryColor }
+        return .white
+    }
+
+    private func styleFillAndOutlineBothDark(_ style: SubtitleStyleSpec) -> Bool {
+        relativeLuminance(of: style.primaryColor) < 0.25 && relativeLuminance(of: style.outlineColor) < 0.25
+    }
+
+    /// 0（黑）~1（白）；解析不了（含动态色）时按浅色处理，避免误改
+    private func relativeLuminance(of color: UIColor) -> CGFloat {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return 1 }
+        guard a > 0.35 else { return 1 }   // 本身就是半透明/几乎不可见，不当作深色
+        return 0.299 * r + 0.587 * g + 0.114 * b
     }
 
     private func resolveFont(name: String, size: CGFloat, bold: Bool, italic: Bool) -> UIFont {
