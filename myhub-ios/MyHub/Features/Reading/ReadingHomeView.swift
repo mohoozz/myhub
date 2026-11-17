@@ -719,47 +719,39 @@ struct ReadingHomeView: View {
 
     // MARK: - 删除源文件
 
-    /// 删除源文件的统计（供提示文案区分「源文件」与「同名文件」数量）
+    /// 删除源文件的统计（供提示文案区分「源文件」与「关联文件」数量）
     private struct SourceDeleteResult {
-        /// 实际移入回收站 / 删除的源文件数量（不含同名文件）
+        /// 实际移入回收站 / 删除的源文件数量（不含关联文件）
         var moved: Int = 0
-        /// 一并处理掉的主名相同、扩展名不同的文件数量
+        /// 一并处理掉的关联文件数量（主名相同的其他类型文件 + 语言后缀字幕）
         var companions: Int = 0
     }
 
-    /// 开启「删除时移除同名文件」时的确认文案补充（阅读页没有目录列表，弹窗内无法预知同名文件数量）
+    /// 开启「删除时移除同名文件」时的确认文案补充（阅读页没有目录列表，弹窗内无法预知关联文件数量，
+    /// 实际数量在删除完成的提示里给出）
     private var sameNameHint: String {
-        AppSettings.Browse.deleteSameNameFiles ? "，以及同目录下与它们同名的其他类型文件" : ""
+        AppSettings.Browse.deleteSameNameFiles
+            ? "，以及同目录下与它们同名或带语言后缀（如 .zh.srt）的字幕等文件"
+            : ""
     }
 
-    /// 删除源文件后的提示文案（区分源文件与同名文件数量）
+    /// 删除源文件后的提示文案（区分源文件与关联文件数量）
     private func sourceDeleteMessage(ids: [Int64], result: SourceDeleteResult) -> String {
         var text = result.moved == ids.count
             ? "已将 \(ids.count) 个源文件移入回收站"
             : "已将 \(result.moved) 个源文件移入回收站（\(ids.count - result.moved) 个源文件已不存在）"
         if result.companions > 0 {
-            text += "，另含 \(result.companions) 个同名文件"
+            text += "，另含 \(result.companions) 个同名/语言后缀文件"
         }
         return text + "，并清理阅读记录"
     }
 
-    /// 同目录、主名相同但扩展名不同的其他文件（`movie.mp4` → `movie.srt` / `movie.jpg`）。
+    /// 同目录、可随源文件一起删除的关联文件（`movie.mp4` → `movie.srt` / `movie.zh.srt`）。
     ///
-    /// 与浏览界面 `BrowseDirectoryViewModel.sameStemSiblings` 同一规则：只认文件、扩展名都非空且不同，
-    /// 主名区分大小写（大小写敏感的 SMB 上不会把 `movie.mkv` 与 `Movie.srt` 当一组）。
+    /// 与浏览界面 `BrowseDirectoryViewModel.sameStemSiblings` 同一口径，规则集中在 `CompanionFiles`：
+    /// 主名精确相同，或字幕带语言后缀（`movie.zh.srt` / `movie.en.ass`）。
     private static func sameStemSiblings(of entry: FileEntry, in listing: [FileEntry]) -> [FileEntry] {
-        guard !entry.isDir else { return [] }
-        let name = entry.name as NSString
-        let ext = name.pathExtension
-        let stem = name.deletingPathExtension
-        guard !ext.isEmpty, !stem.isEmpty else { return [] }
-        return listing.filter { candidate in
-            guard !candidate.isDir, candidate.path != entry.path else { return false }
-            let candidateName = candidate.name as NSString
-            let candidateExt = candidateName.pathExtension
-            guard !candidateExt.isEmpty, candidateExt.lowercased() != ext.lowercased() else { return false }
-            return candidateName.deletingPathExtension == stem
-        }
+        CompanionFiles.sameStemSiblings(of: entry, in: listing)
     }
 
     /// 预取本批记录涉及的目录列表（同一目录只 LIST 一次）。
@@ -780,7 +772,8 @@ struct ReadingHomeView: View {
     /// 源文件已不存在 / 连接不可用的记录只清理阅读记录；返回实际移入回收站数量。
     ///
     /// 开启「删除时移除同名文件」（设置 → 文件操作）后，同目录下主名相同、扩展名不同的文件
-    /// （字幕/封面/元数据）也会一并移入回收站；它们失败只跳过，不影响源文件删除。
+    /// （字幕/封面/元数据）以及带语言后缀的字幕（`movie.zh.srt`）也会一并移入回收站；
+    /// 它们失败只跳过，不影响源文件删除（规则见 `CompanionFiles`）。
     @discardableResult
     private func deleteSourceFiles(ids: [Int64]) async throws -> SourceDeleteResult {
         let records = history.records.filter { ids.contains($0.id ?? -1) }
@@ -878,7 +871,7 @@ struct ReadingHomeView: View {
         // 批量移除后重建列表，避免残留滚动偏移（详见 listEpoch）
         listEpoch += 1
         message = companions > 0
-            ? "已彻底删除 \(ids.count) 个源文件及 \(companions) 个同名文件，并清理阅读记录"
+            ? "已彻底删除 \(ids.count) 个源文件及 \(companions) 个同名/语言后缀文件，并清理阅读记录"
             : "已彻底删除 \(ids.count) 个源文件，并清理阅读记录"
     }
 
