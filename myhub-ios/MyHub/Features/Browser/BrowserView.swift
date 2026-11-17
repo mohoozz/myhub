@@ -52,9 +52,9 @@ struct BrowserView: View {
     /// `backLeadsToStartPage` 会读 `webView`（`lazy`），必须在占位恢复标签上短路，
     /// 否则会在标签尚未显示时提前拉起 WebContent 进程（与 TODO 418 的延迟加载相悖）。
     ///
-    /// 只在「下一步回退就是起始页」时挂载——这一条件与边缘手势的启用条件（`updateUIView`）
-    /// 完全对齐，所以预览必然在需要它的那一刻已经就位；其余页面（历史更深）不挂，
-    /// 避免每个标签都常驻一份起始页视图。
+    /// 只在「下一步回退就是起始页」时挂载，预览必然在需要它的那一刻已经就位；
+    /// 其余页面（页面间回退）不挂，避免每个标签都常驻一份起始页视图——这类页面侧滑时
+    /// 露出的是页面底色，收尾时等新页面就绪后再滑入（见 `Coordinator.slideInWhenPageReady`）。
     private var showsStartPagePreview: Bool {
         !tab.isPendingRestore && !tab.isShowingStartPage && tab.backLeadsToStartPage
     }

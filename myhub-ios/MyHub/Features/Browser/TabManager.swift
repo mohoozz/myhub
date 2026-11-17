@@ -769,21 +769,15 @@ struct BrowserWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ container: UIView, context: Context) {
-        // 手势分工（保证「一直回退最终回到起始页」且绝不误删页签）：
+        // 回退手势统一由下面的自定义边缘手势承担（保证跟手位移 + 绝不越过起始页多退一页）：
         // - 起始页：标签第一页，左滑不做任何事（既不删页签，也不跳到残留历史）
-        // - 下一步回退即起始页：用自定义边缘手势拦截，关闭系统 back 手势（避免越过起始页多退一页）
-        // - 其余（页面间回退）：交给系统 back 手势，保留跟手滑动动画
-        if tab.isShowingStartPage {
-            tab.webView.allowsBackForwardNavigationGestures = false
-            context.coordinator.edgeGesture?.isEnabled = false
-        } else if tab.backLeadsToStartPage || tab.usesRestoredHistory {
-            // 重启恢复的标签：原生历史栈由「回放」产生，方向不可靠，统一交给自定义边缘手势
-            tab.webView.allowsBackForwardNavigationGestures = false
-            context.coordinator.edgeGesture?.isEnabled = true
-        } else {
-            tab.webView.allowsBackForwardNavigationGestures = true
-            context.coordinator.edgeGesture?.isEnabled = false
-        }
+        // - 其余页面：无论「下一步即起始页」还是「页面间回退」，都走同一条跟手路径
+        //
+        // 不再把页面间回退交给系统 `allowsBackForwardNavigationGestures`：它的跟手动画依赖
+        // WebKit 内部快照，在「SwiftUI 托管的 container + scrollView 上挂 refreshControl」这套
+        // 结构里会退化——滑动时画面完全不动，松手直接换页并闪一下，且与自定义手势观感割裂。
+        tab.webView.allowsBackForwardNavigationGestures = false
+        context.coordinator.edgeGesture?.isEnabled = !tab.isShowingStartPage
 
         // 位移 / 透明度兜底（TODO 421）：侧滑把容器挪动过之后，若因标签切换、媒体可见性等
         // 打断了收尾动画（completion 不再回调），容器会卡在偏移或半透明态。
@@ -835,8 +829,10 @@ struct BrowserWebView: UIViewRepresentable {
                 container.transform = .identity
                 container.alpha = 1
             case .changed:
-                let dx = gesture.translation(in: space).x
-                container.transform = CGAffineTransform(translationX: max(0, dx), y: 0)
+                // 夹在 [0, width]：只允许向右滑出，且最多移出一屏（回拖到负值时归零，
+                // 避免松手前出现「反向也跟手」）
+                let dx = min(max(gesture.translation(in: space).x, 0), width)
+                container.transform = CGAffineTransform(translationX: dx, y: 0)
             case .ended:
                 let dx = gesture.translation(in: space).x
                 let velocity = gesture.velocity(in: space).x
@@ -875,56 +871,84 @@ struct BrowserWebView: UIViewRepresentable {
 
         /// 过阈值：先让当前页整块滑出，再在新页面上做入场，把「内容替换」藏进不可见的那一帧。
         ///
-        /// 为什么不能直接 `goBack()` 了事：重启恢复的标签走的是自定义历史栈（`usesRestoredHistory`），
-        /// 回退只能重新发起导航（WebKit 没有注入历史的 API），内容必然整块替换；旧实现的
-        /// 「松手即 `goBack()`」就把这次替换完全暴露出来。这里分两种情况收尾：
-        /// - **回退到起始页**：下层常驻起始页预览（`BrowserView.showsStartPagePreview`），
-        ///   纯滑动退出即可，替换发生在容器完全移出屏幕之后，观感是「上一页滑走 → 起始页留在原位」；
-        /// - **页面间回退**：新内容要等导航回来，故叠加淡出/淡入，让中间那次替换落在半透明处。
+        /// 旧实现的两个问题（用户反馈：滑动中画面不跟手、松手后闪一下才回到上一页）：
+        /// 1. 页面间回退走的是系统 `allowsBackForwardNavigationGestures`，其跟手动画在本结构下失效，
+        ///    现已统一交给本手势（见 `updateUIView`）；
+        /// 2. 收尾时一边淡出当前页、一边 `goBack()` 后立刻滑入，而 WebKit 换页要几帧到几百毫秒——
+        ///    滑进来的还是旧页面/白底，中途被替换，读起来就是「闪一下」。
+        ///
+        /// 现在收尾只做纯位移（不淡出，避免露出底色再淡回来），且容器在屏外**等新页面就绪**
+        /// （`slideInWhenPageReady`）才滑入：
+        /// - **回到起始页**：下层常驻起始页预览（`BrowserView.showsStartPagePreview`），
+        ///   容器移出屏幕后直接归位即可无缝接手；
+        /// - **页面间回退**：等 `isLoading` 落下来再滑入，入场帧里已经是上一页。
         private func completeBack(on container: UIView) {
             guard !isCompletingBack else { return }
             isCompletingBack = true
 
             let width = max(container.bounds.width, 1)
-            let returnsToStartPage = parent.tab.backLeadsToStartPage
             let generation = swipeGeneration
             container.layer.removeAllAnimations()
 
             UIView.animate(
-                withDuration: 0.20,
+                withDuration: 0.18,
                 delay: 0,
                 options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
             ) {
                 container.transform = CGAffineTransform(translationX: width, y: 0)
-                if !returnsToStartPage { container.alpha = 0 }
             } completion: { [weak self] _ in
                 guard let self, generation == self.swipeGeneration else { return }
                 self.parent.tab.goBack()
 
-                // 起始页由下层常驻预览无缝接手：容器此刻完全在屏外，暂不归位——
-                // 让「起始页插入」与「容器归位」落在同一次 SwiftUI 更新里（由 `updateUIView` 的
-                // 兜底完成）。若在这里立刻归位，旧页面有可能抢在起始页渲染之前闪回一帧。
-                if returnsToStartPage || self.parent.tab.isShowingStartPage {
+                // 起始页由下层常驻预览无缝接手：容器此刻完全在屏外，直接归位
+                // （若在这里留到 SwiftUI 更新时再归位，起始页尚未插入就会先露出底色一帧）
+                if self.parent.tab.isShowingStartPage {
+                    container.transform = .identity
                     container.alpha = 1
                     self.isCompletingBack = false
                     return
                 }
 
-                // 页面间回退：从左侧 25% 处滑入，与离场方向构成一次连贯的左右推进
-                container.transform = CGAffineTransform(translationX: -width * 0.25, y: 0)
-                UIView.animate(
-                    withDuration: 0.28,
-                    delay: 0,
-                    usingSpringWithDamping: 0.92,
-                    initialSpringVelocity: 0,
-                    options: [.curveEaseOut, .allowUserInteraction]
-                ) {
-                    container.transform = .identity
-                    container.alpha = 1
-                } completion: { [weak self] _ in
-                    guard let self, generation == self.swipeGeneration else { return }
-                    self.isCompletingBack = false
+                self.slideInWhenPageReady(on: container, width: width, generation: generation, attempt: 0)
+            }
+        }
+
+        /// 等回退后的页面真正就绪（`isLoading` 落下，最多约 0.6s）再从左侧滑入。
+        ///
+        /// 回退是异步导航：`goBack()` 返回时 WebKit 往往还没换完页。若此刻就滑入，
+        /// 动画播的是旧页面，换页发生在众目睽睽之下（闪屏）。这里让容器先在屏外等着，
+        /// 就绪后从左侧 30% 处弹入，与离场方向构成一次连贯的左右推进。
+        private func slideInWhenPageReady(
+            on container: UIView,
+            width: CGFloat,
+            generation: Int,
+            attempt: Int
+        ) {
+            guard generation == swipeGeneration else { return }
+            let tab = parent.tab
+            // 首轮先让出一帧多：`goBack()` 触发的是 next runloop 的导航状态更新，
+            // 立刻读 `isLoading` 永远是旧值（false），会当场滑入
+            let delay: TimeInterval = attempt == 0 ? 0.06 : 0.03
+            if (attempt == 0 || tab.isLoading), attempt < 20 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.slideInWhenPageReady(on: container, width: width, generation: generation, attempt: attempt + 1)
                 }
+                return
+            }
+
+            container.transform = CGAffineTransform(translationX: -width * 0.3, y: 0)
+            UIView.animate(
+                withDuration: 0.26,
+                delay: 0,
+                usingSpringWithDamping: 0.92,
+                initialSpringVelocity: 0,
+                options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
+            ) {
+                container.transform = .identity
+                container.alpha = 1
+            } completion: { [weak self] _ in
+                guard let self, generation == self.swipeGeneration else { return }
+                self.isCompletingBack = false
             }
         }
 
