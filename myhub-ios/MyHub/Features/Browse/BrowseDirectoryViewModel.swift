@@ -471,33 +471,17 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
     // MARK: - 删除（回收站机制：挂载点下 .trash；不支持时降级由 UI 确认真删）
 
-    /// 与条目同目录、主名相同但扩展名不同的其他文件（`movie.mp4` → `movie.srt` / `movie.jpg`）。
+    /// 与条目同目录、可随它一起删除的关联文件（`movie.mp4` → `movie.srt` / `movie.zh.srt`）。
     ///
-    /// 只比对当前目录已加载的 `entries`，不额外发起网络请求；目录不参与匹配，
-    /// 无扩展名的文件也不参与（避免把 `movie` 与 `movie.srt` 误判成一组）。
-    /// 主名区分大小写（避免在大小写敏感的 SMB 上把 `movie.mkv` 与 `Movie.srt` 当同一组），
-    /// 扩展名不区分大小写（`movie.MKV` 与 `movie.mkv` 视为同类型，不会互相牵连）。
+    /// 只比对当前目录已加载的 `entries`，不额外发起网络请求。规则集中在
+    /// `CompanionFiles.sameStemSiblings`（阅读页「删除源文件」共用同一口径）：
+    /// 主名精确相同，或字幕带语言后缀（`movie.zh.srt` / `movie.en.ass`）。
     private func sameStemSiblings(of entry: FileEntry) -> [FileEntry] {
-        guard !entry.isDir else { return [] }
-        let name = entry.name as NSString
-        let ext = name.pathExtension
-        guard !ext.isEmpty else { return [] }
-        let stem = name.deletingPathExtension
-        guard !stem.isEmpty else { return [] }
-        let directory = StoragePath.parent(of: entry.path)
-        return entries.filter { candidate in
-            guard !candidate.isDir, !candidate.path.hasSuffix("/") else { return false }
-            guard candidate.path != entry.path else { return false }
-            let candidateName = candidate.name as NSString
-            let candidateExt = candidateName.pathExtension
-            guard !candidateExt.isEmpty, candidateExt.lowercased() != ext.lowercased() else { return false }
-            return candidateName.deletingPathExtension == stem
-                && StoragePath.parent(of: candidate.path) == directory
-        }
+        CompanionFiles.sameStemSiblings(of: entry, in: entries)
     }
 
     /// 实际删除目标：开启「删除时移除同名文件」（设置 → 文件操作，默认关闭）后，
-    /// 把主名相同、扩展名不同的兄弟文件一并纳入。
+    /// 把主名相同、扩展名不同的兄弟文件，以及带语言后缀的字幕（`movie.zh.srt`）一并纳入。
     func deleteTargets(for paths: Set<String>) -> Set<String> {
         guard AppSettings.Browse.deleteSameNameFiles else { return paths }
         var result = paths

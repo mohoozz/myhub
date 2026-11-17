@@ -392,7 +392,12 @@ private struct BrowserTabContent: View {
 /// 本该是「向上滚动列表」的操作会被误判为关闭手势。
 /// 与 `BrowseScrollOffsetKey`（TODO 336）同一套做法：零高探测器 + preference 上报。
 private struct TabGridScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    /// 「没有任何视图上报」时的哨兵值——**刻意不用 0**（TODO 424）。
+    ///
+    /// 0 在本 key 里的语义是「列表正停在最上方」，而探测器在内容重建的某一帧里缺席时，
+    /// preference 会回落到 `defaultValue`，等于向判定方谎报「已经到顶了」。
+    /// 取负无穷后任何比较都落在「不在顶部」，宁可少一帧不能关闭，也不误触发关闭动画。
+    static var defaultValue: CGFloat = -.infinity
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
@@ -408,27 +413,23 @@ private struct TabGridView: View {
 
     /// 下滑关闭的跟手位移（TODO 409）
     @State private var dragOffset: CGFloat = 0
-    /// 列表当前滚动偏移（0 为顶部）：由顶部零高探测器经 preference 上报
+    /// 列表当前滚动偏移（0 为顶部，负值为已向下滚动）：由顶部零高探测器经 preference 上报
     @State private var scrollOffset: CGFloat = 0
-    /// 本次拖动的手势身份：在手势**第一个回调**时确定，之后整段手势不再改判（TODO 419）。
+    /// 本次下滑关闭的基准位移：**列表到达最上方那一刻**的手势纵向位移（TODO 424）。
     ///
-    /// 旧实现把「是否在顶部」直接写在 `simultaneousGesture(_:including:)` 的 mask 上
-    /// （`atTop ? .all : .subviews`），看似等价，实则埋了一颗雷：mask 一变，SwiftUI 会**重建**
-    /// 这个 `DragGesture`，而新手势的 `translation` 是相对**触点按下那一刻**算的完整位移。
-    /// 于是「标签很多 → 从底部往上滚 → 滚到顶的瞬间 atTop 翻真 → 手势被重新装填」时，
-    /// 累积的几百 pt 位移会一次性灌进 `onChanged`，当场把 `dragOffset` 顶过阈值，
-    /// 松手即触发关闭整个标签网格的动画。改为手势常驻、身份由首个回调决定后，
-    /// 只有「按下时列表就已经在顶部」的那一次拖动才可能关闭。
-    @State private var dragMode: DragMode = .idle
-
-    private enum DragMode {
-        /// 尚未收到本次拖动的首个回调（松手后复位）
-        case idle
-        /// 起点在顶部且向下拖：本次手势属于「下滑关闭」
-        case armed
-        /// 起点不在顶部（或方向向上）：整段手势让给列表滚动
-        case ignored
-    }
+    /// 关闭位移只算「越过顶部的部分」（`translation.height - dragAnchor`）：
+    /// 列表还没到顶时不管手指拖多远都只交给列表滚动，卡片一动不动；等列表滚到最上方、
+    /// 手指继续往下，卡片才从 0 开始跟手。于是「页面内滚动」与「下滑关闭」严格分先后，
+    /// 结构上不可能再同时发生——这正是此前两版修法的缺口（旧版按「起手瞬间是否在顶部」
+    /// 一次性判定，且判定结果整段手势不再更新，一旦判定错了或偏移上报漏了一帧，
+    /// 就会边滚边关）。`nil` 表示本次手势尚未接管（列表还没到顶，或手指在往上）。
+    @State private var dragAnchor: CGFloat?
+    /// 上一次手势回调的时间：用于识别「上一段拖动被系统打断、没有回调 `onEnded`」后残留的状态。
+    /// 拖动过程中回调间隔是 8~16ms，间隔超过 0.2s 只可能是新的一段手势。
+    @State private var lastDragTime = Date.distantPast
+    /// 已触发关闭（或正在退场）：此后手势与偏移回写都不再改 `dragOffset`，
+    /// 避免退场动画期间被「回弹归零」拽一下。
+    @State private var isDismissing = false
 
     /// 固定两列（方案 A）：卡片宽度按屏宽均分，缩略图比例稳定；
     /// 原自适应列在 iPad 上会摊成 3~4 列，每列窄到 160pt 时截图已经认不出内容。
@@ -516,10 +517,16 @@ private struct TabGridView: View {
         .coordinateSpace(name: "tabGridScroll")
         .onPreferenceChange(TabGridScrollOffsetKey.self) { value in
             scrollOffset = value
+            // 列表一旦离开最上方，任何已产生的跟手位移立刻作废（TODO 424）：
+            // 保证「卡片跟着手指往下走」只可能发生在列表已经滚到头之后。
+            // 探测器缺席时上报的是 `-.infinity`，非有限值不参与这条判定（见 key 注释）。
+            if !isDismissing, value.isFinite, value < -1, dragOffset != 0 {
+                cancelDismissDrag()
+            }
         }
-        // 下滑关闭（TODO 409 / 419）：与滚动同时识别，故用 `simultaneousGesture`。
-        // 手势常驻、不做条件挂载（见 `dragMode` 注释）：是否生效由手势首个回调里的
-        // 「起始时是否在顶部」决定，避免滚动途中被重新装填而误判为关闭手势。
+        // 下滑关闭（TODO 409 / 419 / 424）：与滚动同时识别，故用 `simultaneousGesture`。
+        // 手势常驻、不做条件挂载（旧版把「是否在顶部」写在 mask 上会让 SwiftUI 重建手势、
+        // 累积位移一次性灌进 `onChanged`）。是否接管由**每帧实时判定**决定，见 `dismissDrag`。
         .simultaneousGesture(dismissDrag)
     }
 
@@ -536,7 +543,7 @@ private struct TabGridView: View {
 
     // MARK: - 下滑关闭手势
 
-    /// 从空白区域（或列表顶部）下滑关闭标签页（TODO 409）。
+    /// 从空白区域（或列表最上方）下滑关闭标签页（TODO 409）。
     ///
     /// 坐标空间取 `.global`：本视图会随 `dragOffset` 整体下移，若用默认 `.local`，
     /// 视图自身位移会反过来改变 translation 的换算基准，形成正反馈 → 拖动抖动、跟随距离减半
@@ -544,42 +551,73 @@ private struct TabGridView: View {
     ///
     /// 卡片拖拽排序期间（`draggingTab != nil`）直接早退：`simultaneousGesture` 会与卡片的
     /// `onDrag` 同时识别，不排除的话长按拖动卡片时整个网格会跟着下移。
+    ///
+    /// 接管条件**每帧实时判定**（TODO 424），而不是像旧版那样在首个回调里一次性定死：
+    /// - 列表没到最上方（`scrollOffset < -1`）或手指在往上 → 一律不接管，并且把已有位移清零；
+    /// - 列表到达最上方的**那一刻**记下基准位移 `dragAnchor`，之后只把「越过顶部的部分」
+    ///   算作关闭位移，所以「先滚到顶、再继续往下拖」是一条连续的、有先后的动作，
+    ///   而不是「一边滚页面、一边把标签网格往下拉」。
     private var dismissDrag: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
             .onChanged { value in
-                guard draggingTab == nil else { return }
-                // 手势身份只在「位移还很小、尚未产生跟手位移」时判定：
-                // ①每段新拖动的首个回调（`minimumDistance` 16pt）都落在这里——那一刻列表是否已到顶部、
-                //   方向是否向下，决定整段手势是「关闭」还是「滚动」，之后即使滚到顶也不改判；
-                // ②手势被系统打断（切后台 / 被其它识别器抢占）时不会回调 `onEnded`，
-                //   残留的上一轮结论也能在这里自愈，不会把「列表中部下滑」误当成关闭。
-                if dragOffset == 0,
+                guard !isDismissing, draggingTab == nil else { return }
+
+                // 上一段拖动被系统打断（切后台 / 被其它识别器抢占）时不会回调 `onEnded`，
+                // 用「间隔够久 + 位移还很小」识别「新的一段手势」，避免沿用上一段的基准与残留位移。
+                // 加位移条件是因为手指按住在原地停顿同样会制造时间间隔，那种情况必须继续沿用基准，
+                // 否则卡片会在停顿后突然弹回原位。
+                if value.time.timeIntervalSince(lastDragTime) > 0.2,
                    abs(value.translation.height) <= 24,
                    abs(value.translation.width) <= 24 {
-                    dragMode = (scrollOffset >= -1 && value.translation.height > 0) ? .armed : .ignored
+                    dragAnchor = nil
+                    if dragOffset != 0 { dragOffset = 0 }
                 }
-                guard dragMode == .armed else { return }
+                lastDragTime = value.time
+
+                // 列表还没滚到最上方 / 手指在往上：整段手势让给列表滚动，并立刻作废跟手位移。
+                // 这一条是「不同时触发」的硬保证——只要列表还能往上滚，卡片就一动不动。
+                guard scrollOffset >= -1, value.translation.height > 0 else {
+                    cancelDismissDrag()
+                    return
+                }
+
+                // 列表刚到达最上方：此刻的手势位移已全部被列表滚动消耗掉，作为基准扣掉
+                if dragAnchor == nil { dragAnchor = value.translation.height }
+                guard let anchor = dragAnchor else { return }
+
                 // 仅向下、且以纵向位移为主（横向滑动交给其它交互）；
                 // 回拖到负值时位移归零，避免松手前出现「反向也跟手」
                 guard value.translation.height > abs(value.translation.width) else { return }
-                dragOffset = max(0, value.translation.height)
+                dragOffset = max(0, value.translation.height - anchor)
             }
             .onEnded { value in
-                let wasArmed = dragMode == .armed && draggingTab == nil
-                dragMode = .idle
-                guard wasArmed else {
+                let anchor = dragAnchor
+                // 用「实际跟手出去的距离」判定距离阈值，与用户看到的位移严格一致
+                let travelled = dragOffset
+                dragAnchor = nil
+                lastDragTime = .distantPast
+                guard !isDismissing, draggingTab == nil, anchor != nil, travelled > 0 else {
                     // 整段手势都被判定为「滚动列表」：不关闭，也不要有残留位移
-                    withAnimation(.appFast) { dragOffset = 0 }
+                    cancelDismissDrag()
                     return
                 }
-                let reachedByDistance = value.translation.height > dismissDistance
-                let reachedByFlick = value.predictedEndTranslation.height > dismissFlickDistance
+                let reachedByDistance = travelled > dismissDistance
+                let reachedByFlick = value.predictedEndTranslation.height - (anchor ?? 0) > dismissFlickDistance
                 guard reachedByDistance || reachedByFlick else {
-                    withAnimation(.appFast) { dragOffset = 0 }
+                    cancelDismissDrag()
                     return
                 }
+                isDismissing = true
                 dismiss()
             }
+    }
+
+    /// 作废本次下滑关闭：清掉基准并把跟手位移弹回 0，不关闭。
+    /// 列表滚动期间每帧都会走到这里，必须足够廉价（无位移时直接返回，不触发额外重绘）。
+    private func cancelDismissDrag() {
+        if dragAnchor != nil { dragAnchor = nil }
+        guard dragOffset != 0 else { return }
+        withAnimation(.appFast) { dragOffset = 0 }
     }
 
     // MARK: - 自动定位到当前标签

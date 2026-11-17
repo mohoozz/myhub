@@ -95,10 +95,11 @@ struct BrowseDirectoryView: View {
     // MARK: - 删除前释放文件占用（TODO 372/373）
 
     /// 删除确认文案：开启「删除时移除同名文件」后，实际删除数量会多于选中项，需如实告知
+    /// （关联范围含主名相同的其他类型文件与语言后缀字幕 `movie.zh.srt`，见 `CompanionFiles`）
     private var deleteConfirmMessage: String {
         let selected = deletingPaths ?? []
         let count = viewModel.deleteTargets(for: selected).count
-        let companion = count > selected.count ? "（含 \(count - selected.count) 个同名文件）" : ""
+        let companion = count > selected.count ? "（含 \(count - selected.count) 个同名/语言后缀文件）" : ""
         return "将删除 \(count) 个项目\(companion)（保留 \(AppSettings.Trash.retentionDays) 天，可在回收站还原）"
     }
 
