@@ -29,7 +29,7 @@ actor FingerprintDiskCache {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? data.write(to: entryURL(named: name, for: file), options: .atomic)
         touchIdentity(for: file)
-        evictIfNeeded()
+        evictIfNeeded(keeping: dir)
     }
 
     /// 条目 URL（供大文件直接读写，如远程 rar 整包）；调用方写入后应调用 `touch(_:)` 触发淘汰检查
@@ -42,7 +42,7 @@ actor FingerprintDiskCache {
     /// 外部写入完成后的统一入口：刷新访问时间 + 淘汰检查
     func touch(_ file: SegmentCache.FileIdentity) {
         touchIdentity(for: file)
-        evictIfNeeded()
+        evictIfNeeded(keeping: directory(for: file))
     }
 
     /// 移除某文件的全部缓存
@@ -75,7 +75,20 @@ actor FingerprintDiskCache {
 
     // MARK: - LRU（目录粒度：页/章需成组保留，按 _identity.json 访问时间整目录淘汰）
 
-    private func evictIfNeeded() {
+    /// 淘汰检查节流：统计分区占用要遍历所有缓存文件（数千次 stat），原先每写一页/一章就做一次，
+    /// 会让缓存读写这个 actor 长时间排队（缓存越大打开/翻页越慢）。改为最多 10s 检查一次。
+    private var lastEvictCheck = Date.distantPast
+    private static let evictCheckInterval: TimeInterval = 10
+    /// 元数据条目不可裁（页名列表/宽高比/身份：丢了就得重新整包解析）
+    private static let protectedNames: Set<String> = ["_identity.json", "pages.json", "ratios.json"]
+
+    /// - Parameter active: 正在读写的目录（本次写入所属文件）；不整体删除，避免把
+    ///   「刚缓存完正在读的这本」连页名列表一起清空 → 下次打开又走完整归档解析
+    private func evictIfNeeded(keeping active: URL) {
+        let now = Date()
+        guard now.timeIntervalSince(lastEvictCheck) >= Self.evictCheckInterval else { return }
+        lastEvictCheck = now
+
         let limit = manager.limitBytes(for: partition)
         let dir = manager.url(for: partition)
         guard let subs = try? FileManager.default.contentsOfDirectory(
@@ -92,11 +105,40 @@ actor FingerprintDiskCache {
             total += manager.size(of: sub)
         }
         guard total > limit else { return }
-        for unit in units.sorted(by: { $0.mtime < $1.mtime }) {
+        // 1) 先淘汰其它文件（最久未访问优先），活跃目录不动
+        for unit in units.sorted(by: { $0.mtime < $1.mtime })
+        where unit.url.standardizedFileURL != active.standardizedFileURL {
             guard total > limit else { break }
             let size = manager.size(of: unit.url)
             try? FileManager.default.removeItem(at: unit.url)
             total -= size
+        }
+        // 2) 只有活跃目录、且它自身就超配额（单本漫画缓存 > 分区上限）：裁掉其中最旧的条目，
+        //    保留元数据。否则整目录被删 = 页名列表丢失，下次打开必然重新解析归档（缓存形同失效）
+        if total > limit {
+            trimOldestEntries(in: active, total: total, limit: limit)
+        }
+    }
+
+    /// 删除目录内最旧的普通条目（页/章），保留元数据
+    private func trimOldestEntries(in dir: URL, total: Int64, limit: Int64) {
+        var remaining = total
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]
+        ) else { return }
+        let candidates = files
+            .filter { !Self.protectedNames.contains($0.lastPathComponent) }
+            .compactMap { url -> (url: URL, size: Int64, mtime: Date)? in
+                guard let values = try? url.resourceValues(
+                    forKeys: [.fileSizeKey, .contentModificationDateKey]
+                ), let size = values.fileSize else { return nil }
+                return (url, Int64(size), values.contentModificationDate ?? .distantPast)
+            }
+            .sorted { $0.mtime < $1.mtime }
+        for file in candidates {
+            guard remaining > limit else { break }
+            try? FileManager.default.removeItem(at: file.url)
+            remaining -= file.size
         }
     }
 

@@ -95,6 +95,8 @@ final class ComicReaderViewModel: ObservableObject {
     private var lastForward = true
     /// 进入阅读器前的系统亮度（-1 = 未记录；退出时恢复，与小说阅读器一致）
     private var systemBrightness: CGFloat = -1
+    /// 打开请求时刻（诊断用：进入阅读 / 首屏就绪耗时）
+    private var openStartedAt: CFAbsoluteTime = 0
 
     init(connection: Connection, entry: FileEntry) {
         self.connection = connection
@@ -121,6 +123,7 @@ final class ComicReaderViewModel: ObservableObject {
 
     func load() {
         guard loadTask == nil else { return }
+        openStartedAt = CFAbsoluteTimeGetCurrent()
         AppLogger.shared.log(
             "打开漫画: name=\(entry.name) ext=\(entry.ext) size=\(entry.size) path=\(entry.path) conn=\(connectionID)",
             module: "comic-reader"
@@ -270,9 +273,26 @@ final class ComicReaderViewModel: ObservableObject {
         isRestoring = true
         state = .ready
         AppLogger.shared.log(
-            "finishOpen: pageCount=\(source.pageCount) 恢复页码=\(restored) stale=\(saved.stale)",
+            String(
+                format: "进入阅读: 打开耗时=%.0fms pageCount=%d 恢复页码=%d stale=%@",
+                (CFAbsoluteTimeGetCurrent() - openStartedAt) * 1000,
+                source.pageCount, restored, saved.stale ? "true" : "false"
+            ),
             module: "comic-reader"
         )
+
+        // 首屏页立即加载 + 预加载窗口（先于封面提取：封面读第 1 页会占网络/带宽，
+        // 远程源上与首屏页抢资源 → 首屏更慢；「正在阅读」封面晚几百毫秒不影响）
+        await loadPage(restored)
+        AppLogger.shared.log(
+            String(
+                format: "首屏就绪: 距打开 %.0fms 第%d页%@",
+                (CFAbsoluteTimeGetCurrent() - openStartedAt) * 1000,
+                restored + 1, images[restored] == nil ? "（未就绪）" : ""
+            ),
+            module: "comic-reader"
+        )
+        for p in preloadTargets(around: restored) { schedulePage(p) }
 
         // 封面缩略图缓存（「正在阅读」封面，异步不阻塞）
         let coverConnectionID = connectionID
@@ -291,10 +311,6 @@ final class ComicReaderViewModel: ObservableObject {
                 }
             }
         }
-
-        // 首屏页立即加载 + 预加载窗口
-        await loadPage(restored)
-        for p in preloadTargets(around: restored) { schedulePage(p) }
     }
 
     // MARK: - 页面加载（内存 LRU + in-flight 去重，最多并发 3）
@@ -485,6 +501,10 @@ final class ComicReaderViewModel: ObservableObject {
     /// 条漫模式：页面滚入可见区时按需加载（`loadPage` 自带 in-flight 去重，重复触发无害）。
     func ensureLoaded(_ index: Int) {
         guard state == .ready else { return }
+        // 恢复定位窗口内忽略「远离目标页」的加载：进入阅读器时 LazyVStack 先按顶部（第 1 页起）
+        // 布局并触发 onAppear，这些页并不在视野内，却会占满 3 个解压并发名额、抢走首屏页的带宽
+        // → 打开后首屏要等它们跑完（表现为「打开总要加载一会儿」）。定位落定后正常加载。
+        if isRestoring, abs(index - page) > 4 { return }
         Task { await loadPage(index) }
     }
 
