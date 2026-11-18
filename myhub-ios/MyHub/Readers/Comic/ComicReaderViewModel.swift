@@ -425,7 +425,10 @@ final class ComicReaderViewModel: ObservableObject {
     /// 内存 LRU：仅保留当前 ±6，防大图集撑爆内存
     private func evictIfNeeded(around index: Int) {
         guard images.count > 12 else { return }
-        let keep = Set((index - 6)...(index + 6))
+        var keep = Set((index - 6)...(index + 6))
+        // 阅读定位页必留：跳页后预加载/邻居页可能更晚完成解码，不能让定位页被挤出
+        // （挤出后目标页会立刻退回「加载中」占位）
+        keep.formUnion((page - 2)...(page + 2))
         images = images.filter { keep.contains($0.key) }
     }
 

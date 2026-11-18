@@ -13,8 +13,8 @@ struct ComicReaderView: View {
 
     @StateObject private var viewModel: ComicReaderViewModel
     @State private var controlsVisible = false
-    /// 条漫模式程序滚动目标（ScrollViewReader 消费）
-    @State private var scrollIntent: Int?
+    /// 条漫模式程序滚动意图（ScrollViewReader 消费）：目标页 + 对齐锚点
+    @State private var scrollIntent: WebtoonScrollIntent?
     /// 左滑退出的跟手位移（屏幕左边缘右滑时内容整体右移，松手超过阈值关闭阅读器）
     @State private var edgeDragOffset: CGFloat = 0
 
@@ -239,7 +239,7 @@ struct ComicReaderView: View {
             .coordinateSpace(name: "webtoon")
             .onPreferenceChange(WebtoonVisibleKey.self) { values in
                 // 最接近屏幕中点的页视为当前页；恢复定位中 / 程序滚动期间不回写（防止覆盖恢复页）
-                guard !viewModel.isRestoring, scrollIntent == nil, !values.isEmpty else { return }
+                guard scrollIntent == nil, !viewModel.isRestoring, !values.isEmpty else { return }
                 let mid = UIScreen.main.bounds.height / 2
                 if let best = values.min(by: { abs($0.value.midY - mid) < abs($1.value.midY - mid) }) {
                     // 页内偏移：页面被屏顶切割的分数位置（恢复定位精确到页内，而非只到页顶）
@@ -253,9 +253,14 @@ struct ComicReaderView: View {
             .onAppear { scrollToCurrent(reader, animated: false) }
             .onChange(of: viewModel.page) { target in
                 // 底栏跳转（slider）等程序滚动：仅响应显式 intent
-                guard scrollIntent == target else { return }
-                withAnimation(.appQuick) { reader.scrollTo(target, anchor: .top) }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { scrollIntent = nil }
+                guard let intent = scrollIntent, intent.page == target else { return }
+                runProgrammaticScroll(reader, intent: intent, animated: false)
+            }
+            // 页宽高比逐个补齐会让懒加载页高变化、整段内容位移：定位窗口内重新钉住目标页，
+            // 否则视口被推离目标页落到未解码页上（表现为「跳过去闪一下 → 立刻变加载中」）
+            .onChange(of: viewModel.pageRatios) { _ in
+                guard let intent = scrollIntent else { return }
+                reader.scrollTo(intent.page, anchor: intent.anchor)
             }
         }
     }
@@ -263,28 +268,36 @@ struct ComicReaderView: View {
     /// 程序滚动到当前页（首次进入恢复 / 切入条漫）
     private func scrollToCurrent(_ reader: ScrollViewProxy, animated: Bool) {
         let target = viewModel.page
-        let anchor = webtoonRestoreAnchor(for: target)
-        scrollIntent = target
         AppLogger.shared.log(
             "条漫恢复定位: 目标第\(target + 1)页 页内偏移=\(String(format: "%.2f", viewModel.pageOffset))",
             module: "comic-reader"
         )
-        // LazyVStack 懒加载、图片解码前页高未知，初始 contentSize 不足时单次 scrollTo 会失效停在顶部。
-        // 随布局/解码推进分阶段重试，直至目标页进入实例化范围定位到位（恢复为无动画瞬时重试，不跳动）。
-        let delays: [TimeInterval] = [0, 0.1, 0.3, 0.6, 1.0]
+        let intent = WebtoonScrollIntent(page: target, anchor: webtoonRestoreAnchor(for: target))
+        scrollIntent = intent
+        runProgrammaticScroll(reader, intent: intent, animated: animated)
+    }
+
+    /// 分阶段重试 scrollTo（恢复定位 / 底栏跳页共用）：LazyVStack 懒加载、页高未知时
+    /// 单次 scrollTo 会落错位置甚至停在顶部，随布局推进反复重试把目标页钉在锚点上。
+    private func runProgrammaticScroll(
+        _ reader: ScrollViewProxy, intent: WebtoonScrollIntent, animated: Bool
+    ) {
+        let target = intent.page
+        let delays: [TimeInterval] = [0, 0.1, 0.2, 0.3, 0.45, 0.6, 0.9, 1.2]
         for delay in delays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard scrollIntent == target else { return }
+                guard scrollIntent?.id == intent.id else { return }
                 if animated {
-                    withAnimation(.appQuick) { reader.scrollTo(target, anchor: anchor) }
+                    withAnimation(.appQuick) { reader.scrollTo(target, anchor: intent.anchor) }
                 } else {
-                    reader.scrollTo(target, anchor: anchor)
+                    reader.scrollTo(target, anchor: intent.anchor)
                 }
             }
         }
         // 覆盖最后一次重试后：结束程序滚动 + 结束恢复期（交还可见页回写）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-            if scrollIntent == target { scrollIntent = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard scrollIntent?.id == intent.id else { return }
+            scrollIntent = nil
             viewModel.endWebtoonRestore()
             // 恢复结束后再确认最终停留页（验证 scrollTo 是否生效）
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -649,8 +662,14 @@ struct ComicReaderView: View {
 
     /// 底栏 slider 跳转：条漫模式走程序滚动，翻页模式直接定位
     private func jumpToPage(_ target: Int) {
-        if viewModel.mode == .webtoon {
-            scrollIntent = target
+        // 条漫：目标页页码变化才需要程序滚动（onChange 消费 intent）
+        if viewModel.mode == .webtoon, target != viewModel.page {
+            // 跳页定位到目标页页顶：清掉旧页内偏移，抑制可见页回写并分阶段重试钉住目标页。
+            // 否则懒加载页高逐个补齐时内容整体位移，视口会被推离目标页落到未解码页上
+            // （表现为「跳过去闪一下画面 → 立刻又变加载中」，需要手动滑动才恢复）
+            viewModel.resetPageOffset()
+            viewModel.beginWebtoonRestore()
+            scrollIntent = WebtoonScrollIntent(page: target, anchor: .top)
         }
         viewModel.goToPage(target)
     }
@@ -711,6 +730,10 @@ private struct ComicImagePage: View {
     /// 已知页宽高比（高/宽）：条漫占位用真实高度，恢复定位不被解码膨胀顶偏
     var aspectRatio: CGFloat? = nil
 
+    /// 未知页占位比例（高/宽）兜底：按宽度折算高度。原固定 420pt 与真实页高
+    /// （宽×比例，手机约 550+）相差几百点，跳页后页面陆续解码会让内容整体位移、定位漂移
+    static let estimatedRatio: CGFloat = 1.45
+
     var body: some View {
         if let image = images[index] {
             Image(uiImage: image)
@@ -718,6 +741,7 @@ private struct ComicImagePage: View {
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: fitWidth ? nil : .infinity)
         } else {
+            let ratio = max(aspectRatio ?? Self.estimatedRatio, 0.2)
             ZStack {
                 Color(white: 0.08)
                 VStack(spacing: 8) {
@@ -729,9 +753,8 @@ private struct ComicImagePage: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: fitWidth && aspectRatio == nil ? 420 : nil)
-            // 已知宽高比：占位高度=宽×比（≈解码后真实高度），定位精准
-            .aspectRatio(fitWidth ? aspectRatio.map { 1 / $0 } : nil, contentMode: .fit)
+            // 占位高度=宽×比例（≈解码后真实高度），加载前后页高一致，定位不漂移
+            .aspectRatio(fitWidth ? 1 / ratio : nil, contentMode: .fit)
         }
     }
 }
@@ -819,6 +842,14 @@ private struct ZoomableScrollView<Content: View>: UIViewRepresentable {
 }
 
 // MARK: - 条漫可见页偏好键
+
+/// 条漫程序滚动意图：目标页 + 对齐锚点（恢复定位按页内偏移换算，跳页固定 `.top`）
+/// `id` 区分同一目标页的多次跳转，避免上一轮的延时重试提前结束新一轮定位
+private struct WebtoonScrollIntent: Equatable {
+    let id = UUID()
+    let page: Int
+    let anchor: UnitPoint
+}
 
 private struct WebtoonVisibleKey: PreferenceKey {
     static var defaultValue: [Int: CGRect] = [:]
