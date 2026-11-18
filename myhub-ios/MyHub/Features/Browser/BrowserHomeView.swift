@@ -840,8 +840,11 @@ private struct TabThumbnailCard: View {
         }
         .background(AppColors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        // 关闭键对**所有**卡片开放（含当前标签）：旧实现用 `if !isActive` 把当前标签的关闭键藏了，
+        // 于是「关掉当前页」只能先切到别的标签再关，多一步且不直观。
+        // 当前标签的位置由「当前」角标（左上）+ 主色描边标识，与右上角的关闭键不冲突。
         .overlay(alignment: .topTrailing) {
-            if !isActive { closeButton.padding(6) }
+            closeButton.padding(6)
         }
         .overlay(alignment: .topLeading) {
             if isActive { currentBadge.padding(6) }
@@ -933,7 +936,8 @@ private struct TabThumbnailCard: View {
             .foregroundStyle(AppColors.textSecondary)
     }
 
-    /// 关闭键：收进缩略图右上角（半透明白底小圆），当前标签不显示，避免误关
+    /// 关闭键：收进缩略图右上角（半透明白底小圆）。当前标签同样显示——关掉它由
+    /// `BrowserSessionStore.closeTab` 自动切到相邻标签，无需先手动切换。
     private var closeButton: some View {
         Button(action: onClose) {
             Image(systemName: "xmark")

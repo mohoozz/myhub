@@ -68,6 +68,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         config.mediaTypesRequiringUserActionForPlayback = .audio
         // 无痕：非持久化数据存储，关闭即失忆
         config.websiteDataStore = isIncognito ? .nonPersistent() : .default()
+        // 顶部 Safe Area：见 `ignoreViewportFitCoverScript` 的说明
+        config.userContentController.addUserScript(Self.ignoreViewportFitCoverScript)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.allowsBackForwardNavigationGestures = true
         webView.customUserAgent = Self.userAgentString()
@@ -81,6 +83,55 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     /// `webView` 是否已真正创建：`webView` 是 lazy，判断存在性时不能直接读它（会触发创建）
     private var isWebViewCreated = false
+
+    /// 注入脚本：去掉页面声明的 `viewport-fit=cover`。
+    ///
+    /// `viewport-fit=cover` 的语义是「布局视口铺满整块屏幕，安全区由页面用
+    /// `env(safe-area-inset-*)` 自己补」。本 App 的网页层在沉浸态下本来就铺满整屏（F1），
+    /// 但它不是 Safari 那种会向 WebKit 交代 obscured inset 的宿主，WebKit 拿到的是
+    /// 「全屏视口 + 安全区取值为 0」，于是：
+    /// - 没声明 cover 的站点（绝大多数）走 WebKit 的自动分支——布局视口被收进安全区，顶部正常；
+    /// - 声明了 cover 的站点（x.com 的 viewport 就是
+    ///   `width=device-width,initial-scale=1,...,viewport-fit=cover`）拿到全屏视口，
+    ///   而它自身 CSS 里并没有用 `env(safe-area-inset-top)` 补高度，顶部栏就正好压在
+    ///   状态栏 / 灵动岛上——这就是「只有 x.com 会重合」的原因。
+    /// 去掉 cover 后这类站点回落到与普通网页相同的「自动收进安全区」分支，表现一致。
+    /// `.atDocumentStart` + MutationObserver：文档开始阶段 `<head>` 往往还没解析到 viewport 这一行，
+    /// 等它出现立刻改写（改完即停止观察），避免首屏先按全屏排版再跳一下。
+    private static let ignoreViewportFitCoverScript = WKUserScript(
+        source: #"""
+        (function () {
+          'use strict';
+          function strip(meta) {
+            var content = meta.getAttribute('content');
+            if (!content || !/viewport-fit\s*=\s*cover/i.test(content)) { return false; }
+            meta.setAttribute('content', content.replace(/[,;]?\s*viewport-fit\s*=\s*cover/gi, ''));
+            return true;
+          }
+          function sweep() {
+            var metas = document.querySelectorAll('meta[name="viewport"]');
+            var changed = false;
+            for (var i = 0; i < metas.length; i++) {
+              if (strip(metas[i])) { changed = true; }
+            }
+            return changed;
+          }
+          sweep();
+          var root = document.head || document.documentElement;
+          if (!root || !window.MutationObserver) { return; }
+          var observer = new MutationObserver(function () {
+            if (sweep()) { observer.disconnect(); }
+          });
+          observer.observe(root, { childList: true, subtree: true });
+          window.addEventListener('DOMContentLoaded', function () {
+            sweep();
+            observer.disconnect();
+          }, { once: true });
+        })();
+        """#,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true
+    )
 
     /// 是否为「会话恢复但尚未加载」的占位标签：不联网、不建 WebView、不挂载视图。
     /// 由激活/可见时调用的 `loadPendingURLIfNeeded()` 置为 `false`。
@@ -161,6 +212,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// App 启动不自动联网，等标签真正显示时由 `loadPendingURLIfNeeded()` 补加载
     private var pendingLoadURL: URL?
 
+    /// 最近一次**主动发起**导航的地址（`load` / 恢复补加载 / 历史回放）。
+    ///
+    /// 首次导航失败（`didFailProvisionalNavigation`）时 WebKit 从未提交过任何页面：
+    /// - `webView.url` 会被重置为 `nil`（无已提交页面），KVO 若照单全收就会把用户输入的地址抹掉；
+    /// - `webView.reload()` 此时属于「无页面可刷」，是空操作。
+    /// 故重试必须用这里记住的地址重新发起请求。
+    private var requestedURL: URL?
+
     /// - Parameter autoload: 是否立即加载 `url`。
     ///   会话恢复必须传 `false`：`RootView` 用 ZStack 保活所有页签、启动即构建 `BrowserHomeView`，
     ///   若在此直接 load，会把上次开过的**全部**网页在启动瞬间一起联网、渲染并（允许自动播放时）出声，
@@ -199,6 +258,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             usesRestoredHistory = true
         }
         self.startedFromStartPage = startedFromStartPage
+        self.requestedURL = url
 
         if let url {
             if autoload {
@@ -227,6 +287,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         // 用户主动导航优先于会话恢复的延迟加载，避免之后又被旧 URL 覆盖
         pendingLoadURL = nil
         isPendingRestore = false
+        requestedURL = url   // 供失败后的「重试」重新发起同一请求
         currentURL = url   // 立即更新：隐藏起始页、刷新地址栏
         webView.load(URLRequest(url: url))
     }
@@ -239,6 +300,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         pendingLoadURL = nil
         isPendingRestore = false   // 先置位：视图据此外挂载 WebView
         clearError()
+        requestedURL = url
         webView.load(URLRequest(url: url))
     }
 
@@ -258,9 +320,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     func reload() {
-        clearError()
         // 刷新同样收起操作栏为胶囊（TODO 399）：计数器自增，保证连续刷新每次都能触发
         reloadTick += 1
+        // 错误页「重试」必须用用户想打开的那个地址重新发起导航：
+        // 首次导航失败时 WebKit 没有提交过条目，`webView.reload()` 是空操作，
+        // 而 `webView.url` 已被重置（新标签为 nil / 老标签退回上一页）。
+        // 旧实现只清错误 + reload，于是错误页消失、地址栏变空、用户输入过的网址丢失。
+        if hasError, let url = requestedURL ?? currentURL {
+            load(url)
+            return
+        }
+        clearError()
         webView.reload()
     }
 
@@ -459,6 +529,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         clearError()
         pendingLoadURL = nil
         isPendingRestore = false
+        requestedURL = url
         currentURL = url
         webView.load(URLRequest(url: url))
     }
@@ -480,7 +551,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             },
             webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
                 let value = webView.url
-                Task { @MainActor [weak self] in self?.currentURL = value }
+                Task { @MainActor [weak self] in
+                    // 首次导航失败后 WebKit 会把 `url` 重置为 nil（该次导航从未提交，没有「当前页」）。
+                    // 这个 nil 只说明「没有已提交的页面」，**不代表**用户回到了起始页：
+                    // 若照单全收，地址栏会退化为占位文案、`isShowingStartPage` 误命中，
+                    // 用户刚输入的网址也随之丢失（错误页点「重试」就直接回到空白起始页）。
+                    // 地址置空只允许由 `showStartPage()` 显式完成。
+                    guard let value else { return }
+                    // 已提交的页面才是「重试」该回到的地方：重定向 / 页内跳转后
+                    // 用户真正在看的地址会与最初输入的地址不同
+                    self?.requestedURL = value
+                    self?.currentURL = value
+                }
             },
             webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
                 let value = webView.isLoading

@@ -60,11 +60,24 @@ final class BrowserSessionStore: ObservableObject {
 
     func closeTab(_ id: UUID) {
         guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let closing = tabs[idx]
+        // 同模式（普通 / 无痕）的标签：`tabs` 里两种模式混存，回退目标只能从这里挑。
+        // 否则「关掉当前标签」可能把另一模式里被 `visibleTabs` 过滤掉的标签设为激活，
+        // 界面表现为网格里没有一张卡是「当前」，背后却已经换成了看不见的页面。
+        let siblings = tabs.filter { $0.isIncognito == closing.isIncognito }
+        let siblingIndex = siblings.firstIndex(where: { $0.id == id })
+
         tabs.remove(at: idx)
 
         if activeTabID == id {
-            // 优先切换到相邻标签（右侧，否则左侧，否则最后剩余）
-            let fallback = tabs.indices.contains(idx) ? tabs[idx] : tabs.last
+            // 优先切换到相邻标签（右侧 → 左侧 → 最后剩余）
+            let remaining = siblings.filter { $0.id != id }
+            var fallback: BrowserTab?
+            if let siblingIndex, remaining.indices.contains(siblingIndex) {
+                fallback = remaining[siblingIndex]
+            } else {
+                fallback = remaining.last
+            }
             activeTabID = fallback?.id
         }
 
