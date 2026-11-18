@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>移动 / 复制 · 目标目录选择器 改版原型</title>
+<style>
+:root{
+  --primary:#2563EB;--page-bg:#FFF;--card:#FFF;--tp:#1A1A2E;--ts:#6B7280;
+  --sep:#E5E7EB;--hl:#EEF4FB;--border:#EDF0F3;--chip:#F3F4F6;--red:#FF3B30;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);
+  padding:32px 24px 72px;-webkit-user-select:none;user-select:none}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:8px;line-height:1.8;max-width:1100px}
+.subtitle code,.footnote code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.tipbar{display:inline-flex;align-items:center;gap:8px;background:#DBEAFE;color:#1D4ED8;font-size:12px;
+  font-weight:600;padding:7px 13px;border-radius:9px;margin:14px 0 26px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:320px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}
+.tag.before{background:#FEF3C7;color:#92400E}
+.tag.safe{background:#D1FAE5;color:#047857}
+.desc{font-size:12px;color:var(--ts);line-height:1.75;min-height:126px}
+.desc b{color:var(--tp)}
+.pros{color:#047857}.cons{color:#B45309}
+
+/* ---------- 手机壳 ---------- */
+.phone{width:320px;height:660px;background:var(--page-bg);border:8px solid #111827;border-radius:40px;
+  overflow:hidden;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18)}
+.statusbar{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;
+  font-size:11px;font-weight:600;position:relative;z-index:1}
+
+/* 背景：路径源页面（示意，非重点） */
+.backdrop{position:absolute;top:28px;left:0;right:0;bottom:0;padding:8px 12px;opacity:.9}
+.backdrop .fakebar{height:44px;border-radius:10px;background:#fff;border:.5px solid var(--sep);margin-bottom:8px}
+.backdrop .fakegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.backdrop .fcard{height:74px;border-radius:10px;background:#fff;border:1px solid var(--border)}
+
+/* 模态遮罩 + 弹层 */
+.dim{position:absolute;inset:0;background:rgba(17,24,39,.32);z-index:5}
+.sheet{position:absolute;left:0;right:0;top:54px;bottom:0;background:var(--page-bg);border-radius:16px 16px 0 0;
+  z-index:10;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -6px 24px rgba(17,24,39,.16)}
+.grabber{width:36px;height:5px;border-radius:3px;background:#D1D5DB;margin:7px auto 0;flex:none}
+.navbar{height:44px;flex:none;display:flex;align-items:center;gap:6px;padding:0 12px;position:relative}
+.navbar .l{font-size:14px;color:var(--primary);flex:none}
+.navbar .t{flex:1;text-align:center;font-size:16px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  position:absolute;left:50%;transform:translateX(-50%);max-width:150px}
+.navbar .r{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--primary)}
+.navbar .r .t2{font-size:13px;font-weight:600}
+.icbtn{width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,.1);display:flex;
+  align-items:center;justify-content:center;font-size:14px;color:var(--primary)}
+
+/* 连接源胶囊 */
+.connwrap{flex:none;display:flex;padding:2px 14px 8px}
+.connchip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;
+  color:var(--primary);background:var(--hl);border-radius:999px;padding:5px 11px}
+.connchip .cv{font-size:9px;color:var(--primary);opacity:.7}
+
+/* 顶部路径区 */
+.pathline{flex:none;display:flex;align-items:center;gap:6px;padding:0 14px 8px;font-size:12.5px;color:var(--ts)}
+.pathline .bk{font-size:15px;font-weight:700;color:var(--primary);padding-right:2px}
+.pathline .p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumbs{flex:none;display:flex;align-items:center;gap:5px;padding:0 14px 10px;overflow:hidden;white-space:nowrap}
+.crumbs .c{font-size:12.5px;color:var(--primary);background:var(--chip);border-radius:7px;padding:3px 8px;cursor:pointer}
+.crumbs .c.last{color:var(--tp);background:var(--hl);font-weight:600}
+.crumbs .s{font-size:10px;color:#C3C8D0}
+.dirhead{flex:none;padding:2px 16px 12px}
+.dirhead .dn{font-size:17px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dirhead .dp{font-size:11.5px;color:var(--ts);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.secrow{flex:none;font-size:11px;font-weight:600;color:var(--ts);letter-spacing:.3px;padding:2px 16px 6px}
+
+/* ---------- 目录行 ---------- */
+.list{flex:1;overflow-y:auto;overflow-x:hidden;min-height:0}
+.list::-webkit-scrollbar{width:0}
+.row{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;position:relative;background:var(--card)}
+.row::after{content:"";position:absolute;left:72px;right:0;bottom:0;border-bottom:.5px solid var(--sep)}
+.row:last-child::after{display:none}
+.row:active{background:#F7FAFF}
+.row .ic{width:44px;height:44px;border-radius:10px;background:var(--hl);color:var(--primary);
+  display:flex;align-items:center;justify-content:center;font-size:20px;flex:none}
+.row.up .ic{background:var(--chip);color:var(--ts);font-size:17px}
+.row .meta{flex:1;min-width:0}
+.row .nm{font-size:16px;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .sb{font-size:11.5px;color:var(--ts);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .ch{font-size:11px;color:#C3C8D0;flex:none}
+/* 现状：矮行、无图标底 */
+.row.sm{height:44px;padding:0 16px;gap:10px}
+.row.sm::after{left:0}
+.row.sm .fic{font-size:16px;color:var(--primary);flex:none;width:20px;text-align:center}
+.row.sm .nm{font-size:14px;font-weight:400}
+.row.sm .ch{font-size:11px;color:var(--ts)}
+/* 卡片分组（方案 C） */
+.cards{flex:1;overflow-y:auto;min-height:0;padding:0 14px 14px}
+.cardgroup{background:var(--card);border-radius:14px;border:1px solid var(--border);overflow:hidden}
+.cardgroup .row{padding:11px 12px}
+.cardgroup .row::after{left:64px}
+.cardgroup .row .ic{width:40px;height:40px;border-radius:9px}
+.cardgroup .row .nm{font-size:15px}
+.row.upcard{background:var(--card);border-radius:14px;border:1px solid var(--border);margin-bottom:12px}
+.row.upcard::after{display:none}
+.row.upcard .ic{width:40px;height:40px;border-radius:9px}
+
+/* 底部确认条 */
+.bottombar{flex:none;background:var(--card);border-top:.5px solid var(--sep);padding:10px 14px 16px}
+.primarybtn{height:46px;border-radius:13px;background:var(--primary);color:#fff;font-size:15px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;gap:7px;box-shadow:0 4px 12px rgba(37,99,235,.25)}
+.primarybtn .sub{font-size:11px;font-weight:500;opacity:.8;max-width:130px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+/* 底部操作栏：取消 + 主按钮（方案 B 改版） */
+.bottombar.bar{display:flex;align-items:center;gap:10px}
+.bottombar.bar .primarybtn{flex:1}
+.cancelbtn{height:46px;flex:none;padding:0 20px;border-radius:13px;background:var(--chip);color:var(--tp);
+  font-size:15px;font-weight:500;display:flex;align-items:center;justify-content:center}
+/* ---- B 变体：毛玻璃悬浮操作栏（对齐多选操作栏 selectionBar 观感） ---- */
+/* 14pt 圆角 + ultraThinMaterial + .5pt 描边 + 阴影，浮在列表之上 */
+.bottombar.float{position:absolute;left:12px;right:12px;bottom:14px;z-index:12;
+  background:transparent;border-top:none;padding:0}
+.floatbar{display:flex;align-items:center;gap:2px;padding:7px 6px;border-radius:14px;
+  background:rgba(255,255,255,.70);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);
+  border:.5px solid rgba(17,24,39,.1);box-shadow:0 8px 24px rgba(17,24,39,.14)}
+.floatbar .cell{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;padding:4px 2px;border-radius:10px;color:var(--primary);cursor:pointer}
+.floatbar .cell:active{background:rgba(37,99,235,.08)}
+.floatbar .cell .ic{height:20px;display:flex;align-items:center}
+.floatbar .cell .lb{font-size:10.5px;font-weight:500;line-height:1.1;white-space:nowrap}
+.floatbar .cell.sec{color:var(--ts)}
+/* 主键胶囊型：两侧窄键 + 中间通栏主按钮 */
+.floatbar.pillbar{gap:6px;padding:8px}
+.floatbar.pillbar .cell.side{flex:none;padding:0 8px;min-width:46px}
+.floatbar.pillbar .cell.side .lb{font-size:10px}
+.floatbar.pillbar .cell.main{flex:1;flex-direction:row;gap:6px;height:42px;border-radius:11px;
+  background:var(--primary);color:#fff;box-shadow:0 4px 12px rgba(37,99,235,.32)}
+.floatbar.pillbar .cell.main .lb{font-size:14px;font-weight:600}
+.list.pb{padding-bottom:96px}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  color:var(--ts);font-size:12.5px}
+
+/* 标注 */
+.annot{position:absolute;z-index:30;font-size:10px;font-weight:600;background:#1D4ED8;color:#fff;
+  border-radius:8px;padding:3px 7px;box-shadow:0 3px 8px rgba(29,78,216,.3);white-space:nowrap;pointer-events:none}
+.annot.g{background:#047857}
+.annot.y{background:#B45309}
+.legend{margin-top:10px;font-size:11.5px;color:var(--ts);line-height:1.85;background:#fff;
+  border:1px solid var(--sep);border-radius:10px;padding:8px 11px}
+
+/* 对照表 */
+table{border-collapse:collapse;margin-top:44px;font-size:13px;background:#fff;border-radius:12px;
+  overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--sep);vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts);white-space:nowrap}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:22px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1000px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>移动 / 复制 · 目标目录选择器改版</h1>
+<p class="subtitle">
+  需求②：现有弹层「列表行太矮、排列紧凑、无返回上一级入口」。目标是<b>行高与路径源列表对齐</b>
+  （路径源行 ≈ 80pt：52pt 缩略图 + 上下 14pt），并在首行加 <code>..</code>（上一级）行。
+  下面各方案（含 B 的两个底部操作栏版本）都可直接点击目录名 / <code>..</code> 行走目录，先体验再选。
+</p>
+<div class="tipbar">💡 原型可交互：点文件夹进入、点「上一级」回退、点面包屑跳层级</div>
+
+<div class="boards" id="boards"></div>
+
+<table>
+  <tr>
+    <th>方案</th><th>行高</th><th>上一级</th><th>取消 / 确认位置</th><th>改动量</th><th>主要取舍</th>
+  </tr>
+  <tr>
+    <td>现状</td><td>44pt</td><td>仅顶部 ‹ 按钮</td><td>取消在左上，确认在右上「选择此处」</td><td>—</td>
+    <td>行距紧、图标小，长目录名易截断</td>
+  </tr>
+  <tr>
+    <td>A 统一行高</td><td>72pt</td><td>首行「上一级」</td><td>取消左上，确认在右上「选择此处」</td><td>小</td>
+    <td>只调列表，风险最低；工具栏仍偏拥挤</td>
+  </tr>
+  <tr>
+    <td><b>B 面包屑 + 底部操作栏</b></td><td>72pt</td><td>首行「上一级」+ 面包屑跳级</td><td><b>取消 + 确认同在底部操作栏</b></td><td>中</td>
+    <td>路径最清晰，操作集中在拇指区；额外占一条底部栏</td>
+  </tr>
+  <tr>
+    <td>B 变体（毛玻璃三键）</td><td>72pt</td><td>首行「上一级」+ 面包屑跳级</td><td>悬浮毛玻璃栏：取消 / 新建 / 确认</td><td>中</td>
+    <td>与多选栏同款；确认键权重不够突出</td>
+  </tr>
+  <tr>
+    <td>B 变体 2（主键胶囊）</td><td>72pt</td><td>首行「上一级」+ 面包屑跳级</td><td>毛玻璃栏 + 通栏蓝色胶囊</td><td>中</td>
+    <td>观感统一且主操作最突出；「新建」文字压缩</td>
+  </tr>
+  <tr>
+    <td>C 卡片分组 + 标题区</td><td>64pt</td><td>卡片外「上一级」卡片</td><td>取消左上，确认在底部通栏</td><td>中大</td>
+    <td>层次感最好；与路径源列表观感差异较大</td>
+  </tr>
+</table>
+
+<div class="footnote">
+  <b>共同规则（建议）：</b><br>
+  ① 行高与路径源列表对齐：图标 44pt（路径源 52pt）+ 上下各 14pt 内边距 = 72pt；名称 16pt 半粗、副标题 11.5pt 灰字（「文件夹」/「上一级」）。<br>
+  ② 分隔线左端缩进 72pt（图标右侧），与 iOS 列表视觉一致，不再通栏切一刀。<br>
+  ③ <code>..</code> 行仅在非根目录出现；根目录不显示（无可回退层级）。<br>
+  ④ <code>..</code> 行副标题直接写「回到 /视频」，让用户知道回哪去，而不是只有两个点。<br>
+  ⑤ 空目录不再是一行干巴巴的「无子文件夹」：<code>..</code> 行仍在，空态文案放列表下方。<br>
+  ⑥ 新建文件夹后自动进入/停留在当前目录并刷新（保持现有行为）。<br>
+  <b>推荐方案 B：</b>行高与路径源一致 + 首行「上一级」（手指可达区，单手握持也能回退）+ 底部操作栏把「取消 / 移动到此」都放到拇指区，
+  导航栏只留标题与「新建文件夹」；若希望把所有操作集中到底部，可选 B 变体 2（毛玻璃悬浮栏 + 主键胶囊）——
+  外壳与浏览页多选操作栏 <code>selectionBar</code> 完全同款：14pt 圆角、<code>.ultraThinMaterial</code>、0.5pt 描边、黑 12% 阴影、
+  通栏 <code>padding(.horizontal, 12)</code>，栏高 44pt（7pt 上下内边距 + 20pt 图标 + 10.5pt 文字）。
+</div>
+
+<script>
+const TREE = {
+  '/': ['视频','备份','照片','文档'],
+  '/视频': ['电影','剧集','素材'],
+  '/视频/电影': ['2024','经典老片','临时'],
+  '/视频/剧集': ['S01','S02'],
+  '/视频/素材': ['片头','配乐'],
+  '/备份': ['手机相册'],
+  '/照片': ['2023','2024'],
+  '/文档': []
+};
+const ROOT_NAME = '我的NAS';
+const parentOf = p => p === '/' ? '/' : (p.slice(0, p.lastIndexOf('/')) || '/');
+const nameOf = p => p === '/' ? ROOT_NAME : p.split('/').pop();
+const dirsOf = p => TREE[p] || [];
+
+const state = [
+  { path: '/视频/电影' },   // A
+  { path: '/视频/电影' },   // B
+  { path: '/视频/电影' },   // C
+  { path: '/视频/电影' },   // 现状
+  { path: '/视频/电影' },   // B 变体
+  { path: '/视频/电影' }    // B 变体 2
+];
+
+function statusBar () {
+  return '<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>';
+}
+
+function backdrop () {
+  let cards = '';
+  for (let i = 0; i < 6; i++) cards += '<div class="fcard"></div>';
+  return '<div class="backdrop"><div class="fakebar"></div><div class="fakegrid">' + cards + '</div></div>';
+}
+
+function navBar (title, rightHTML, leftHTML) {
+  const left = leftHTML === undefined ? '<span class="l">取消</span>' : leftHTML;
+  return '<div class="navbar">' + left + '<span class="t">' + title + '</span>' +
+         '<span class="r">' + rightHTML + '</span></div>';
+}
+
+function connChip () {
+  return '<div class="connwrap"><span class="connchip">🖴 ' + ROOT_NAME + '<span class="cv">▲▼</span></span></div>';
+}
+
+function upRow (i, cls) {
+  const p = state[i].path;
+  return '<div class="row up ' + (cls || '') + '" onclick="go(' + i + ',\'..\')">' +
+    '<div class="ic">↑</div>' +
+    '<div class="meta"><div class="nm">上一级</div>' +
+    '<div class="sb">回到 ' + (parentOf(p) === '/' ? ROOT_NAME : nameOf(parentOf(p))) + '</div></div>' +
+    '<div class="ch">›</div></div>';
+}
+
+function folderRow (i, name, cls) {
+  return '<div class="row ' + (cls || '') + '" onclick="go(' + i + ',\'' + name + '\')">' +
+    '<div class="ic">📁</div>' +
+    '<div class="meta"><div class="nm">' + name + '</div><div class="sb">文件夹</div></div>' +
+    '<div class="ch">›</div></div>';
+}
+
+function dirRows (i, cls) {
+  const p = state[i].path;
+  let html = p === '/' ? '' : upRow(i, cls);
+  const dirs = dirsOf(p);
+  if (dirs.length === 0) {
+    html += '<div class="empty" style="padding:28px 0">📂<div>此目录下没有子文件夹</div>' +
+            '<div style="font-size:11px;color:#9CA3AF">仍可点击下方按钮选择当前目录</div></div>';
+  } else {
+    dirs.forEach(d => { html += folderRow(i, d, cls); });
+  }
+  return html;
+}
+
+function pathSegments (p) {
+  const segs = [{ label: '根目录', path: '/' }];
+  let acc = '';
+  p.split('/').filter(Boolean).forEach(s => { acc += '/' + s; segs.push({ label: s, path: acc }); });
+  return segs;
+}
+
+function crumbs (i) {
+  return '<div class="crumbs">' + pathSegments(state[i].path).map((s, idx, arr) => {
+    const isLast = idx === arr.length - 1;
+    const sep = idx === 0 ? '' : '<span class="s">›</span>';
+    return sep + '<span class="c ' + (isLast ? 'last' : '') + '" onclick="jump(' + i + ',\'' + s.path + '\')">' +
+           s.label + '</span>';
+  }).join('') + '</div>';
+}
+
+function bottomBar (i, title) {
+  return '<div class="bottombar"><div class="primarybtn">' + title +
+    '<span class="sub">· ' + (state[i].path === '/' ? ROOT_NAME : state[i].path) + '</span></div></div>';
+}
+
+/* 底部操作栏：取消 + 主按钮（取消从导航栏挪到下面） */
+function actionBar (i) {
+  return '<div class="bottombar bar">' +
+    '<div class="cancelbtn">取消</div>' +
+    '<div class="primarybtn">移动到此<span class="sub">· ' +
+      (state[i].path === '/' ? ROOT_NAME : state[i].path) + '</span></div></div>';
+}
+
+/* 线性图标（模拟 SF Symbols 观感） */
+const FOLDER_D = 'M1.8 5.2A2.2 2.2 0 0 1 4 3h5.1c.6 0 1.2.3 1.6.8L12 5.4h10a2.2 2.2 0 0 1 2.2 2.2v9.2' +
+  'A2.2 2.2 0 0 1 22 19H4a2.2 2.2 0 0 1-2.2-2.2z';
+const ICON = {
+  x: '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" ' +
+     'stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  folderPlus: '<svg viewBox="0 0 26 22" width="20" height="17" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="' + FOLDER_D + '"/>' +
+    '<path d="M13 9.4v5.2M10.4 12h5.2"/></svg>',
+  move: '<svg viewBox="0 0 26 22" width="20" height="17" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="' + FOLDER_D + '"/>' +
+    '<path d="M9.6 12h7.2M13.6 8.6l3.2 3.4-3.2 3.4"/></svg>'
+};
+
+/* 毛玻璃悬浮操作栏：even = 三键等分（完全对齐多选栏），pill = 两侧小键 + 主键胶囊 */
+function floatBar (kind) {
+  const w = '<div class="bottombar float"><div class="floatbar ' + (kind === 'pill' ? 'pillbar' : '') + '">';
+  if (kind === 'pill') {
+    return w +
+      '<div class="cell side sec"><span class="ic">' + ICON.x + '</span><span class="lb">取消</span></div>' +
+      '<div class="cell side"><span class="ic">' + ICON.folderPlus + '</span><span class="lb">新建</span></div>' +
+      '<div class="cell main">' + ICON.move + '<span class="lb">移动到此</span></div>' +
+      '</div></div>';
+  }
+  return w +
+    '<div class="cell sec"><span class="ic">' + ICON.x + '</span><span class="lb">取消</span></div>' +
+    '<div class="cell"><span class="ic">' + ICON.folderPlus + '</span><span class="lb">新建文件夹</span></div>' +
+    '<div class="cell"><span class="ic">' + ICON.move + '</span><span class="lb">移动到此</span></div>' +
+    '</div></div>';
+}
+
+function sheetHTML (i, nav, pathArea, listHTML, bottomHTML, annots) {
+  return statusBar() + backdrop() + '<div class="dim"></div>' +
+    '<div class="sheet"><div class="grabber"></div>' + nav + connChip() + pathArea + listHTML + bottomHTML +
+    (annots || '') + '</div>';
+}
+
+/* ---- 方案 A：统一行高 + 首行上一级（保留工具栏「选择此处」） ---- */
+function renderA () {
+  const i = 0;
+  const nav = navBar('移动到', '<span class="icbtn">📁</span><span class="t2">选择此处</span>');
+  const path = '<div class="pathline"><span class="bk" onclick="go(0,\'..\')">‹</span>' +
+    '<span class="p">' + (state[i].path === '/' ? '根目录' : state[i].path) + '</span></div>';
+  return sheetHTML(i, nav, path,
+    '<div class="list">' + dirRows(i) + '</div>', '', '');
+}
+
+/* ---- 方案 B：面包屑 + 底部操作栏（推荐） ---- */
+function renderB () {
+  const i = 1;
+  const nav = navBar('移动到', '<span class="icbtn">📁</span>', '');
+  return sheetHTML(i, nav, crumbs(i),
+    '<div class="list">' + dirRows(i) + '</div>', actionBar(i), '');
+}
+
+/* ---- 方案 B 变体：毛玻璃三键栏（取消 / 新建文件夹 / 移动到此） ---- */
+function renderB2 () {
+  const i = 4;
+  const nav = navBar('移动到', '', '');
+  return sheetHTML(i, nav, crumbs(i),
+    '<div class="list pb">' + dirRows(i) + '</div>', floatBar('even'), '');
+}
+
+/* ---- 方案 B 变体 2：毛玻璃栏 + 主键胶囊 ---- */
+function renderB3 () {
+  const i = 5;
+  const nav = navBar('移动到', '', '');
+  return sheetHTML(i, nav, crumbs(i),
+    '<div class="list pb">' + dirRows(i) + '</div>', floatBar('pill'), '');
+}
+
+/* ---- 方案 C：标题区 + 卡片分组 + 底部主按钮 ---- */
+function renderC () {
+  const i = 2;
+  const nav = navBar('移动到', '<span class="icbtn">📁</span>');
+  const p = state[i].path;
+  const head = '<div class="dirhead"><div class="dn">' + nameOf(p) + '</div>' +
+    '<div class="dp">' + (p === '/' ? ROOT_NAME : p) + '</div></div>' +
+    '<div class="secrow">子文件夹 · ' + dirsOf(p).length + '</div>';
+  let up = p === '/' ? '' : upRow(i, 'upcard');
+  let inner = '';
+  const dirs = dirsOf(p);
+  if (dirs.length === 0) {
+    inner = '<div class="empty" style="padding:30px 0">📂<div>此目录下没有子文件夹</div></div>';
+  } else {
+    dirs.forEach(d => { inner += folderRow(i, d); });
+  }
+  const body = '<div class="cards">' + up + '<div class="cardgroup">' + inner + '</div></div>';
+  return sheetHTML(i, nav, head, body, bottomBar(i, '移动到此'), '');
+}
+
+/* ---- 现状：矮行、无上一级 ---- */
+function renderBefore () {
+  const i = 3;
+  const nav = navBar('移动到', '<span class="icbtn">📁</span><span class="t2">选择此处</span>');
+  const path = '<div class="pathline"><span class="bk" onclick="go(3,\'..\')">‹</span>' +
+    '<span class="p">' + state[i].path + '</span></div>';
+  let rows = '';
+  dirsOf(state[i].path).forEach(d => {
+    rows += '<div class="row sm" onclick="go(3,\'' + d + '\')">' +
+      '<span class="fic">📁</span><span class="nm">' + d + '</span><span class="ch">›</span></div>';
+  });
+  return sheetHTML(i, nav, path, '<div class="list">' + rows + '</div>', '', '');
+}
+
+const BOARDS = [
+  {
+    title: '现状', tag: 'Before', tagCls: 'before', render: renderBefore,
+    notes: ['行高约 44pt、图标 20pt，长目录名易截断', '无「上一级」行，只能点顶部 ‹ 逐级退'],
+    desc: '<b>当前实现</b>：<code>List</code> 默认行高（约 44pt），图标 20pt，行距紧凑；' +
+      '只有顶部 ‹ 能返回，回到根目录后 ‹ 消失；确认按钮挤在导航栏右上（图标 + 文字）。<br>' +
+      '<span class="cons">问题：长目录名截断、返回路径不直观、主操作不显眼。</span>'
+  },
+  {
+    title: '方案 A · 统一行高 + 上一级行', tag: '最小改动', tagCls: 'safe', render: renderA,
+    notes: ['行高 72pt（路径源 80pt）：图标 44pt + 上下 14pt', '首行固定「上一级」，副标题回显父目录名'],
+    desc: '行高 72pt、图标 44pt（对齐路径源 52pt 观感），分隔线右侧缩进；列表首行固定「上一级」。' +
+      '顶部路径行与工具栏「选择此处」保持不变。<br>' +
+      '<span class="pros">优点：只重写列表，逻辑/入口零变更。</span><br>' +
+      '<span class="cons">缺点：导航栏右侧仍是图标 + 文字，窄屏偏挤。</span>'
+  },
+  {
+    title: '方案 B · 面包屑 + 底部操作栏', tag: '推荐', tagCls: 'rec', render: renderB,
+    notes: ['取消从导航栏挪到底部，与主按钮同属一条操作栏', '主按钮带路径回显，拇指可达；导航栏只剩「新建文件夹」'],
+    desc: '在 A 的基础上：顶部改为可点击面包屑（任意层级直达）；<b>导航栏只留标题 +「新建文件夹」</b>，' +
+      '底部改为操作栏 <b>[取消] [移动到此 · 当前路径]</b>。<br>' +
+      '<span class="pros">优点：路径一目了然；取消/确认集中在底部拇指区，左右手都顺手；导航栏不再拥挤。</span><br>' +
+      '<span class="cons">缺点：多一条底部栏（列表可视区减少约 60pt），且「取消」不再在习惯的左上角。</span>'
+  },
+  {
+    title: 'B 变体 · 毛玻璃三键栏', tag: '更彻底', render: renderB2,
+    notes: ['悬浮胶囊：14pt 圆角 + 毛玻璃 + 描边 + 投影（同多选操作栏）', '图标在上、caption2 文字在下，三键等分；导航栏只剩标题'],
+    desc: '把操作全部下沉为底部<b>悬浮毛玻璃栏</b>，样式对齐浏览页多选态的 <code>selectionBar</code>：' +
+      '14pt 圆角 + <code>.ultraThinMaterial</code> + 0.5pt 描边 + 阴影，' +
+      '三键等分、图标在上文字在下，<b>[取消] [新建文件夹] [移动到此]</b>。<br>' +
+      '<span class="pros">优点：与多选操作栏观感统一；浮在列表上不切一刀，列表可滚到栏后；拇指全覆盖。</span><br>' +
+      '<span class="cons">缺点：确认键与其它键同样权重，主操作不够突出；长路径回显没地方放。</span>'
+  },
+  {
+    title: 'B 变体 2 · 毛玻璃栏 + 主键胶囊', tag: '推荐折中', tagCls: 'rec', render: renderB3,
+    notes: ['两侧窄键：取消 / 新建（图标 + 10pt 文字）', '中间通栏蓝色胶囊「移动到此」，主操作权重最高'],
+    desc: '同一个悬浮毛玻璃壳，但把「移动到此」做成<b>栏内通栏蓝色胶囊</b>（42pt 高，白字 14pt），' +
+      '左右各留一个窄键「取消」「新建」。<br>' +
+      '<span class="pros">优点：既有多选栏的统一观感，又保住主操作的第一优先级；三键不打架。</span><br>' +
+      '<span class="cons">缺点：「新建」只能写两字（靠 + 图标补语义）；主按钮内不再回显路径。</span>'
+  },
+  {
+    title: '方案 C · 标题区 + 卡片分组', tag: '层次感', render: renderC,
+    notes: ['当前目录名大标题 + 完整路径小字', '「上一级」独立卡片 + inset 分组，行高 64pt'],
+    desc: '顶部显示「当前目录名」大标题 + 完整路径小字；「上一级」做成独立卡片，子文件夹用 inset 卡片分组，' +
+      '行高 64pt；底部同样为主按钮。<br>' +
+      '<span class="pros">优点：信息层级最清楚，暗色/系统设置观感统一。</span><br>' +
+      '<span class="cons">缺点：与路径源列表（通栏、无卡片）观感差异较大，改动量最大。</span>'
+  }
+];
+
+document.getElementById('boards').innerHTML = BOARDS.map((b, idx) => {
+  const notes = (b.notes || []).map(n => '<div>· ' + n + '</div>').join('');
+  return '<div class="board"><h2>' + b.title +
+    (b.tag ? '<span class="tag ' + (b.tagCls || '') + '">' + b.tag + '</span>' : '') +
+    '</h2><div class="desc">' + b.desc + '</div><div class="phone" id="p' + idx + '"></div>' +
+    (notes ? '<div class="legend">' + notes + '</div>' : '') + '</div>';
+}).join('');
+
+/* 注：A/B/C 共用 state[0..2]，现状用 state[3] */
+function rerender () {
+  BOARDS.forEach((b, idx) => {
+    const el = document.getElementById('p' + idx);
+    if (el) el.innerHTML = b.render();
+  });
+}
+
+function go (i, target) {
+  const p = state[i].path;
+  state[i].path = target === '..' ? parentOf(p) : (p === '/' ? '/' + target : p + '/' + target);
+  rerender();
+}
+
+function jump (i, target) {
+  state[i].path = target;
+  rerender();
+}
+
+rerender();
+</script>
+</body>
+</html>

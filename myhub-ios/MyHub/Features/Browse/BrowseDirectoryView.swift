@@ -1034,9 +1034,10 @@ struct BrowseDirectoryView: View {
     private func contextMenuItems(for entry: FileEntry) -> [PopupMenuItem] {
         let type = viewModel.isComicEpub(entry) ? .comic : MediaType.detect(ext: entry.ext)
         var items: [PopupMenuItem] = [
-            // 多选：置顶显示（与右上角「…」→「选择」一致，进入多选，不预选）
+            // 多选：置顶显示。从长按进入时默认勾选按住的那一项（右上角「…」→「选择」仍从空选集开始，
+            // 那里没有具体条目可预选）
             PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
-                viewModel.selection = []
+                viewModel.selection = [entry.path]
             },
             PopupMenuItem(title: entry.isDir ? "进入" : "打开", systemImage: "arrow.right.circle") {
                 tap(entry)
