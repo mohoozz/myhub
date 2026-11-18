@@ -721,16 +721,39 @@ struct BrowserWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UIView {
+        // 两层结构，职责分离（不要再合并成一层）：
+        // - `container`：静止不动的宿主，只负责铺满区域 + 挂手势，整个手势生命周期内坐标与
+        //   命中区域都不变；
+        // - `moving`：唯一被侧滑位移/动画作用的视图，SwiftUI 完全不碰它。
+        //
+        // 旧实现把手势挂在会 `transform` 平移的同一个视图上：手势的坐标空间与边缘命中区
+        // 跟着视图一起移动，触摸很快被判为越界，手势随即 `.cancelled` → 位移立刻回弹，
+        // 读起来就是「滑动时画面不跟手，松手后才动一下」。
         let container = UIView()
-        container.backgroundColor = .white
+        // 宿主必须透明：底色由位移层提供，否则侧滑露出的是这层白底，
+        // 下层的起始页预览（`BrowserView.showsStartPagePreview`）会被整块遮住
+        container.backgroundColor = .clear
+
+        let moving = UIView()
+        moving.backgroundColor = .white
+        moving.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(moving)
+        NSLayoutConstraint.activate([
+            moving.topAnchor.constraint(equalTo: container.topAnchor),
+            moving.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            moving.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            moving.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        ])
+        context.coordinator.movingView = moving
+
         let webView = tab.webView
         webView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(webView)
+        moving.addSubview(webView)
         NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: container.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+            webView.topAnchor.constraint(equalTo: moving.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: moving.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: moving.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: moving.trailingAnchor)
         ])
 
         // 下拉刷新：页面滚动到顶部继续下拉即重新加载（原生 UIRefreshControl，自带下拉/转圈动画）
@@ -744,9 +767,9 @@ struct BrowserWebView: UIViewRepresentable {
         webView.scrollView.refreshControl = refresh
         tab.refreshControl = refresh
 
-        // 左边缘滑动：默认交给系统 backForward 手势做页面间回退；
-        // 「下一步回退即起始页」与重启恢复的标签（见 updateUIView）改用本手势——
-        // 由它自己做跟手位移 + 松手完成/回弹的过渡（Safari 侧滑返回，TODO 421）
+        // 左边缘滑动返回：全部回退场景都由本手势承担（系统 backForward 手势已关闭，见 `updateUIView`），
+        // 由它自己做跟手位移 + 松手完成/回弹的过渡（Safari 侧滑返回，TODO 421）。
+        // 挂在静止的 `container` 上，不是被移动的 `moving`——这是跟手能否成立的前提
         let edge = UIScreenEdgePanGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleEdgeSwipe(_:))
@@ -755,6 +778,11 @@ struct BrowserWebView: UIViewRepresentable {
         edge.delegate = context.coordinator
         container.addGestureRecognizer(edge)
         context.coordinator.edgeGesture = edge
+
+        // 让页面主滚动视图等侧滑手势先失败再开始滚动：从边缘水平起手时页面不跟着上下滚，
+        // 也不会出现两条手势互相抢触摸、双双取消（旧实现里「侧滑还在上下滑」的直接原因）。
+        // 非边缘处的滚动不受影响——侧滑手势在那里会立刻失败。
+        webView.scrollView.panGestureRecognizer.require(toFail: edge)
 
         // 点击页面：展开操作栏（不拦截链接/表单交互）
         let tap = UITapGestureRecognizer(
@@ -779,20 +807,23 @@ struct BrowserWebView: UIViewRepresentable {
         tab.webView.allowsBackForwardNavigationGestures = false
         context.coordinator.edgeGesture?.isEnabled = !tab.isShowingStartPage
 
-        // 位移 / 透明度兜底（TODO 421）：侧滑把容器挪动过之后，若因标签切换、媒体可见性等
-        // 打断了收尾动画（completion 不再回调），容器会卡在偏移或半透明态。
+        // 位移兜底（TODO 421）：侧滑把位移层挪动过之后，若因标签切换、媒体可见性等
+        // 打断了收尾动画（completion 不再回调），位移层会卡在偏移态。
         // 手势进行中与收尾动画进行中都不能动它，其余时机一律归位。
         let gesture = context.coordinator.edgeGesture
         let gestureActive = gesture?.state == .began || gesture?.state == .changed
-        if !gestureActive, !context.coordinator.isCompletingBack {
-            if container.transform != .identity { container.transform = .identity }
-            if container.alpha != 1 { container.alpha = 1 }
+        if !gestureActive, !context.coordinator.isCompletingBack,
+           let moving = context.coordinator.movingView {
+            if moving.transform != .identity { moving.transform = .identity }
+            if moving.alpha != 1 { moving.alpha = 1 }
         }
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: BrowserWebView
         weak var edgeGesture: UIScreenEdgePanGestureRecognizer?
+        /// 侧滑位移层：手势只移动它，绝不移动挂手势的宿主（见 `makeUIView` 的两层结构）
+        weak var movingView: UIView?
         /// 侧滑返回的收尾动画（回弹 / 「滑出 → 滑入」）是否仍在进行。
         /// 是 `updateUIView` 归位兜底的唯一豁免依据：动画进行中若被兜底把 `transform` 归零，
         /// 就会退化成「一帧瞬移」，回弹的阻尼与滑入的位移全部失效。
@@ -811,9 +842,10 @@ struct BrowserWebView: UIViewRepresentable {
         /// 读起来就是「滑一下、猝不及防地跳转」。现在 `.changed` 阶段整块网页容器跟着手指右移，
         /// 下层（起始页预览 / 页面底色）逐帧露出；松手按位移比例 + 速度决定完成还是回弹。
         @objc func handleEdgeSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
-            guard let container = gesture.view else { return }
+            // `gesture.view` 是静止的宿主，只用来取尺寸与坐标空间；被移动的是 `movingView`
+            guard let container = gesture.view, let moving = movingView else { return }
             let width = max(container.bounds.width, 1)
-            // 位移换算基准取 **window**（退化为父视图）：容器本身正被 `transform` 挪动，
+            // 位移换算基准取 **window**（退化为父视图）：位移层正被 `transform` 挪动，
             // 以它为坐标空间会让 translation 反过来被自身位移缩放，形成跟手距离衰减 / 抖动
             // （与 `MiniPlayer` 下滑收起、播放页手势同一处坑）；window 也没有任何祖先变换，
             // 位移与手指在屏幕上的移动严格 1:1。
@@ -825,32 +857,32 @@ struct BrowserWebView: UIViewRepresentable {
                 // 靠代号一致性检查让它空转），并把位移 / 透明度归零，避免残值叠加
                 swipeGeneration &+= 1
                 isCompletingBack = false
-                container.layer.removeAllAnimations()
-                container.transform = .identity
-                container.alpha = 1
+                moving.layer.removeAllAnimations()
+                moving.transform = .identity
+                moving.alpha = 1
             case .changed:
                 // 夹在 [0, width]：只允许向右滑出，且最多移出一屏（回拖到负值时归零，
                 // 避免松手前出现「反向也跟手」）
                 let dx = min(max(gesture.translation(in: space).x, 0), width)
-                container.transform = CGAffineTransform(translationX: dx, y: 0)
+                moving.transform = CGAffineTransform(translationX: dx, y: 0)
             case .ended:
                 let dx = gesture.translation(in: space).x
                 let velocity = gesture.velocity(in: space).x
                 let progress = min(max(dx / width, 0), 1)
                 // 位移过 32% 或带明显右甩速度即完成，否则回弹（比例与阈值对齐系统侧滑返回的手感）
                 if progress > 0.32 || velocity > 700 {
-                    completeBack(on: container)
+                    completeBack(on: moving)
                 } else {
-                    springBack(container)
+                    springBack(moving)
                 }
             default:
                 // .cancelled / .failed（如页面被其它手势抢占）：一律回弹，不能半途换页
-                springBack(container)
+                springBack(moving)
             }
         }
 
         /// 未过阈值：带阻尼弹回原位（`beginFromCurrentState` 保证从当前手势位移处接着动，不跳帧）
-        private func springBack(_ container: UIView) {
+        private func springBack(_ moving: UIView) {
             guard !isCompletingBack else { return }
             isCompletingBack = true
             let generation = swipeGeneration
@@ -861,7 +893,7 @@ struct BrowserWebView: UIViewRepresentable {
                 initialSpringVelocity: 0,
                 options: [.allowUserInteraction, .beginFromCurrentState]
             ) {
-                container.transform = .identity
+                moving.transform = .identity
             } completion: { [weak self] _ in
                 // 代号不符说明手势已重新起手，新一轮自己管自己的状态
                 guard let self, generation == self.swipeGeneration else { return }
@@ -877,49 +909,55 @@ struct BrowserWebView: UIViewRepresentable {
         /// 2. 收尾时一边淡出当前页、一边 `goBack()` 后立刻滑入，而 WebKit 换页要几帧到几百毫秒——
         ///    滑进来的还是旧页面/白底，中途被替换，读起来就是「闪一下」。
         ///
-        /// 现在收尾只做纯位移（不淡出，避免露出底色再淡回来），且容器在屏外**等新页面就绪**
+        /// 现在收尾只做纯位移（不淡出，避免露出底色再淡回来），且位移层在屏外**等新页面就绪**
         /// （`slideInWhenPageReady`）才滑入：
         /// - **回到起始页**：下层常驻起始页预览（`BrowserView.showsStartPagePreview`），
-        ///   容器移出屏幕后直接归位即可无缝接手；
+        ///   位移层留在屏外，等起始页插入后的那次 SwiftUI 更新由 `updateUIView` 兜底归位；
         /// - **页面间回退**：等 `isLoading` 落下来再滑入，入场帧里已经是上一页。
-        private func completeBack(on container: UIView) {
+        private func completeBack(on moving: UIView) {
             guard !isCompletingBack else { return }
             isCompletingBack = true
 
-            let width = max(container.bounds.width, 1)
+            let width = max(moving.bounds.width, 1)
             let generation = swipeGeneration
-            container.layer.removeAllAnimations()
+            moving.layer.removeAllAnimations()
 
             UIView.animate(
                 withDuration: 0.18,
                 delay: 0,
                 options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
             ) {
-                container.transform = CGAffineTransform(translationX: width, y: 0)
+                moving.transform = CGAffineTransform(translationX: width, y: 0)
             } completion: { [weak self] _ in
                 guard let self, generation == self.swipeGeneration else { return }
                 self.parent.tab.goBack()
 
-                // 起始页由下层常驻预览无缝接手：容器此刻完全在屏外，直接归位
-                // （若在这里留到 SwiftUI 更新时再归位，起始页尚未插入就会先露出底色一帧）
+                // 起始页分支：**不要**在这里把位移层挪回屏内。`goBack()` 只是切了标签的状态，
+                // 起始页那一层要等 SwiftUI 下一次提交才插入；此刻归位会先露出旧网页一帧（闪屏）。
+                // 保持屏外 + 结束收尾标记，让 `updateUIView` 的兜底在「起始页已插入」的那次更新里归位。
                 if self.parent.tab.isShowingStartPage {
-                    container.transform = .identity
-                    container.alpha = 1
+                    moving.alpha = 1
                     self.isCompletingBack = false
+                    // 保底归位：正常路径是「起始页插入后的那次 SwiftUI 更新」由 `updateUIView` 兜底归位；
+                    // 这里只防「此后没有任何状态变化、`updateUIView` 不再被调用」时位移层卡在屏外
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak moving] in
+                        guard let moving, generation == self.swipeGeneration else { return }
+                        moving.transform = .identity
+                    }
                     return
                 }
 
-                self.slideInWhenPageReady(on: container, width: width, generation: generation, attempt: 0)
+                self.slideInWhenPageReady(on: moving, width: width, generation: generation, attempt: 0)
             }
         }
 
         /// 等回退后的页面真正就绪（`isLoading` 落下，最多约 0.6s）再从左侧滑入。
         ///
         /// 回退是异步导航：`goBack()` 返回时 WebKit 往往还没换完页。若此刻就滑入，
-        /// 动画播的是旧页面，换页发生在众目睽睽之下（闪屏）。这里让容器先在屏外等着，
+        /// 动画播的是旧页面，换页发生在众目睽睽之下（闪屏）。这里让位移层先在屏外等着，
         /// 就绪后从左侧 30% 处弹入，与离场方向构成一次连贯的左右推进。
         private func slideInWhenPageReady(
-            on container: UIView,
+            on moving: UIView,
             width: CGFloat,
             generation: Int,
             attempt: Int
@@ -931,12 +969,12 @@ struct BrowserWebView: UIViewRepresentable {
             let delay: TimeInterval = attempt == 0 ? 0.06 : 0.03
             if (attempt == 0 || tab.isLoading), attempt < 20 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    self?.slideInWhenPageReady(on: container, width: width, generation: generation, attempt: attempt + 1)
+                    self?.slideInWhenPageReady(on: moving, width: width, generation: generation, attempt: attempt + 1)
                 }
                 return
             }
 
-            container.transform = CGAffineTransform(translationX: -width * 0.3, y: 0)
+            moving.transform = CGAffineTransform(translationX: -width * 0.3, y: 0)
             UIView.animate(
                 withDuration: 0.26,
                 delay: 0,
@@ -944,8 +982,8 @@ struct BrowserWebView: UIViewRepresentable {
                 initialSpringVelocity: 0,
                 options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
             ) {
-                container.transform = .identity
-                container.alpha = 1
+                moving.transform = .identity
+                moving.alpha = 1
             } completion: { [weak self] _ in
                 guard let self, generation == self.swipeGeneration else { return }
                 self.isCompletingBack = false
@@ -969,7 +1007,20 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-            true
+            // 只让「点击页面」与其它手势共存（点链接 / 表单需要它不抢触摸）；
+            // 边缘侧滑必须独占：旧实现无条件返回 `true`，导致侧滑途中 scrollView 的 pan 照样生效，
+            // 页面一边右移一边上下滚，两条手势还互相抢触摸、互相取消（跟手就此断掉）
+            g is UITapGestureRecognizer || other is UITapGestureRecognizer
+        }
+
+        /// 方向分流：只有「横向起手」才认侧滑，纵向起手直接放弃，把手势让回页面滚动
+        /// （页面滚动与侧滑的先后关系靠 `require(toFail:)` 约束，见 `makeUIView`）。
+        /// 没有这层判定时，从左边缘竖直滑动也会被侧滑吃掉，表现为「想滚动却触发了返回」。
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard let pan = g as? UIPanGestureRecognizer else { return true }
+            guard g === edgeGesture else { return true }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.x) > abs(velocity.y)
         }
     }
 }
