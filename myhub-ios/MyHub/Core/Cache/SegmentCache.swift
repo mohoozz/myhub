@@ -3,7 +3,7 @@ import Foundation
 
 /// 视频/音频边下边播分片磁盘缓存（IOS-203 / IOS-605，参考 nPlayer 缓存架构）。
 /// - 分片 1MB；命中直接返回，未命中由上层（CachedRangeReader）拉取并写盘；
-/// - LRU 淘汰 + 总容量上限（AppSettings.Cache.totalLimitMB）+ 单文件上限（总额 1/4）；
+/// - LRU 淘汰 + 分区配额（`CacheManager.limitBytes(for: .mediaSegments)`）+ 单文件上限（配额 1/4）；
 /// - 缓存键含文件指纹（fileSize + modTime）：文件被替换则键变、旧分片经 LRU 自然淘汰；
 /// - 断点续播复用：重进同一文件命中已持久化分片，无需重新下载。
 actor SegmentCache {
@@ -150,10 +150,12 @@ actor SegmentCache {
 
     // MARK: - LRU / 容量
 
+    /// 本分区配额（= 总预算的 1/2）：不再独占总预算，避免媒体分片写满后把漫画/小说/封面缓存挤掉
     private var totalLimitBytes: Int64 {
-        Int64(max(256, AppSettings.Cache.totalLimitMB)) * 1024 * 1024
+        CacheManager.shared.limitBytes(for: .mediaSegments)
     }
 
+    /// 单文件上限（配额 1/4）
     private var fileLimitBytes: Int64 { totalLimitBytes / 4 }
 
     /// 单文件上限：距当前播放位置最远的分片优先淘汰（预读向前，回退方向分片重新拉取即可）。
