@@ -218,6 +218,10 @@ final class AVPlayerEngine: PlaybackEngine {
         }
         stallObserver = nil
         player?.pause()
+        // 先取消悬挂的 seek：片尾附近的零容差 seek 可能永远等不到完成（短时长片源尤其明显），
+        // 带着它直接 replaceCurrentItem(nil) 会让 AVPlayer 长时间卡在内部（主线程被占住、
+        // 下一次起播黑屏加载），必须先显式取消
+        player?.currentItem?.cancelPendingSeeks()
         player?.replaceCurrentItem(with: nil)
         player = nil
         playerItem = nil
@@ -230,13 +234,19 @@ final class AVPlayerEngine: PlaybackEngine {
         didReachEnd = false
     }
 
-    /// 精准 seek（容差为零，保证历史进度恢复不偏移）
+    /// 精准 seek（容差为零，保证历史进度恢复不偏移）。
+    /// 例外：片尾 0.5s 内改用「就近关键帧」容差——结尾处往往没有与目标时间完全对齐的样本，
+    /// 零容差 seek 会一直等不到完成，表现为位置停在旧处、界面一直显示播放中，
+    /// 且这次悬挂的 seek 会拖累下一次起播（黑屏加载、必须杀 App 重开）。
     func seek(to seconds: TimeInterval) {
-        let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+        let clamped = max(0, seconds)
+        let time = CMTime(seconds: clamped, preferredTimescale: 600)
         // 从结尾往回拖：解除「已播完」锁定，否则后续 buffering/paused 事件会被丢弃、状态卡死
-        if seconds < currentTime - 0.5 { didReachEnd = false }
-        lastReportedTime = seconds
-        player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        if clamped < currentTime - 0.5 { didReachEnd = false }
+        let nearEnd = duration > 0 && clamped >= duration - 0.5
+        let tolerance: CMTime = nearEnd ? .positiveInfinity : .zero
+        lastReportedTime = clamped
+        player?.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance)
     }
 
     func setRate(_ rate: Float) {
