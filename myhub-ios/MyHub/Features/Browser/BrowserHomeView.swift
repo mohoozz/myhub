@@ -195,8 +195,11 @@ struct BrowserHomeView: View {
                         isActive: tab.id == session.activeTabID,
                         onCollapseToolbar: collapseToolbar,
                         onURLChange: { url in
-                            // 打开新界面（导航到网页）→ 胶囊；回退到起始页 → 展开地址栏
-                            toolbarMini = (url != nil)
+                            // 只有「回到起始页」需要展开成地址栏（否则用户无处输入网址，
+                            // 退出钮也会停在半隐态）；`url != nil` 一律不动 `toolbarMini`：
+                            // 刷新 / 回退 / 前进都会让 URL 变化，但那是操作栏的操作，不该顺手把
+                            // 操作栏收成胶囊——收起只应由「滑动页面」触发（`scrollTick`）。
+                            if url == nil { toolbarMini = false }
                             // 地址已随页面变化，编辑态若残留会继续编辑上一页 URL（如提交后又被重定向，TODO 407）
                             addressEditing = false
                         }
@@ -261,7 +264,8 @@ struct BrowserHomeView: View {
         withAnimation(Self.chromeMorph) { toolbarMini = false }
     }
 
-    /// 收起为底部小胶囊（滑动页面 / 刷新页面触发）。
+    /// 收起为底部小胶囊（**仅**滑动页面触发）。
+    /// 刷新 / 回退 / 前进等操作栏内的操作不收起：点完按钮操作栏就缩掉，会让连续操作失去落点。
     /// 编辑态下不收起：操作栏正在充当输入框，此时收成小胶囊会让键盘悬在空处（TODO 407）。
     private func collapseToolbar() {
         guard !toolbarMini, !addressEditing else { return }
@@ -351,17 +355,17 @@ struct BrowserHomeView: View {
 }
 
 /// 单个标签的内容容器（TODO 399）：以 `@ObservedObject` 持有标签，使标签的状态变化
-/// （`scrollTick` / `reloadTick` / `currentURL`）能驱动本视图 body 重算，从而让 `onChange` 即时触发。
+/// （`scrollTick` / `currentURL`）能驱动本视图 body 重算，从而让 `onChange` 即时触发。
 ///
 /// 此前这几个 `onChange` 挂在 `BrowserHomeView` 的 body 里，而父视图并未观察 `BrowserTab`
 /// （`tab` 只是 `ForEach` 的循环变量），`onChange` 比较的旧值只在父 body 重算时才刷新，导致：
-/// ①展开操作栏后滑动 / 刷新页面不会收起（父 body 不重算，差异永远比较不出来）；
+/// ①展开操作栏后滑动页面不会收起（父 body 不重算，差异永远比较不出来）；
 /// ②点击胶囊展开时父 body 重算，此刻才「迟到」地比较出之前滚动产生的差异，操作栏刚展开又被改回收起态
 /// （表现为第一次点击有按压动画但没展开，需要点第二次）。
 private struct BrowserTabContent: View {
     @ObservedObject var tab: BrowserTab
     let isActive: Bool
-    /// 收起操作栏为胶囊（滑动页面 / 刷新页面）
+    /// 收起操作栏为胶囊（仅滑动页面触发；刷新 / 回退 / 前进等操作栏操作不触发）
     let onCollapseToolbar: () -> Void
     /// 当前页面地址变化（nil 表示回到起始页）
     let onURLChange: (URL?) -> Void
@@ -371,10 +375,10 @@ private struct BrowserTabContent: View {
             .opacity(isActive ? 1 : 0)
             .allowsHitTesting(isActive)
             .accessibilityHidden(!isActive)
-            // 滑动页面即收为胶囊（任意方向；起始页除外，只有点击胶囊才恢复地址栏）
+            // **唯一**的收起入口：滑动页面（任意方向；起始页除外，只有点击胶囊才恢复地址栏）。
+            // 刷新 / 回退 / 前进这类操作栏操作一律不收起——用户点完按钮操作栏就缩成胶囊
+            // 会让下一步操作失去落点（下拉刷新本身就在滚动，已由本入口触发）
             .onChange(of: tab.scrollTick) { _ in collapseIfNeeded() }
-            // 刷新页面（工具栏刷新键 / 下拉刷新 / 错误页重试）同样收为胶囊
-            .onChange(of: tab.reloadTick) { _ in collapseIfNeeded() }
             .onChange(of: tab.currentURL) { url in
                 guard isActive else { return }
                 onURLChange(url)

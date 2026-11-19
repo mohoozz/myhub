@@ -169,10 +169,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// `suppressScrollCollapseForCurrentGesture()` 置位，下一次手指重新按下开始拖动时解除
     private var suppressesScrollCollapse = false
 
-    /// 刷新计数：主动刷新（工具栏刷新键 / 下拉刷新 / 错误页重试）自增，
-    /// 与 `scrollTick` 一样用于把底部操作栏收起为胶囊（TODO 399）
-    @Published var reloadTick: Int = 0
-
     /// 起始页回退标记：从起始页导航进入过页面后为 `true`，
     /// 使「回退」按钮在 webView 历史为空时仍可返回到起始页（Safari 行为）
     @Published private(set) var startedFromStartPage = false
@@ -320,8 +316,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     func reload() {
-        // 刷新同样收起操作栏为胶囊（TODO 399）：计数器自增，保证连续刷新每次都能触发
-        reloadTick += 1
+        // 刷新是操作栏上的操作，**不**收起操作栏（只有滑动页面才收起，见 `scrollTick`）。
         // 错误页「重试」必须用用户想打开的那个地址重新发起导航：
         // 首次导航失败时 WebKit 没有提交过条目，`webView.reload()` 是空操作，
         // 而 `webView.url` 已被重置（新标签为 nil / 老标签退回上一页）。
