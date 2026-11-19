@@ -52,6 +52,9 @@ Item {
 
     readonly property real maxZoom: 4
     readonly property bool zoomed: zoom > 1.001
+
+    /// 双页不缩放，按 2 倍冗余解：HiDPI 屏上不糊，又不至于解出原始大图
+    readonly property int spreadDecodeTier: 2
     /// 底栏胶囊高度；图片铺满整窗，胶囊浮在上面（沉浸式）
     readonly property int capsuleHeight: 56
 
@@ -87,7 +90,25 @@ Item {
         }
     }
 
-    readonly property bool hasPage: Comic.pageUrl.length > 0 && pageImage.status === Image.Ready
+    /// 「这一页有内容可画」：不看 `Image.Ready`，否则缩放换解码尺寸时
+    /// （status 回到 Loading）整张图会闪一下消失
+    readonly property bool hasPage: Comic.pageUrl.length > 0 && pageImage.status !== Image.Error
+
+    /// 这一屏是不是「本卷最后一屏」。
+    /// 只能由视图判定：双页最后一屏的 `pageIndex` 停在倒数第二页、条漫还要看滚没滚到底。
+    /// 判完上报给 C++（落 finished 进度 + 查下一卷），往回翻会自动撤销推进
+    readonly property bool atBookEnd: {
+        if (!Comic.opened || Comic.pageCount <= 0 || shelfOpen)
+            return false;
+        if (stripMode)
+            return strip.height > 0 && strip.atYEnd && Comic.pageIndex >= Comic.pageCount - 1;
+        if (doubleMode)
+            return Comic.pageUrlAt(spreadStart).length > 0
+                   && spreadStart + 1 >= Comic.pageCount - 1;
+        return hasPage && Comic.pageIndex >= Comic.pageCount - 1;
+    }
+
+    onAtBookEndChanged: Comic.setAtBookEnd(atBookEnd)
 
     function clampPan() {
         const limitX = width * (zoom - 1) / 2;
@@ -266,6 +287,11 @@ Item {
 
                 anchors.fill: parent
                 source: singleView.visible ? Comic.pageUrl : ""
+                // 不放大时按窗宽解码：8000px 的整页扫描图整张进内存要几百 MB，
+                // 而 1x 显示根本用不到那些像素。放大时才解原始尺寸（-1 = 不缩放），
+                // 既保证放大后清晰，又把「常态内存」压到一屏大小
+                sourceSize.width: root.zoomed ? -1 : Math.round(width)
+                sourceSize.height: root.zoomed ? -1 : Math.round(height)
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 // 每页 URL 都不同（页码 + 指纹进文件名），开着缓存只会白占内存
@@ -301,6 +327,8 @@ Item {
 
                 width: parent.width / 2
                 height: parent.height
+                sourceSize.width: Math.round(width * root.spreadDecodeTier)
+                sourceSize.height: Math.round(height * root.spreadDecodeTier)
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 cache: false
@@ -322,6 +350,8 @@ Item {
                     id: spreadMate
 
                     anchors.fill: parent
+                    sourceSize.width: Math.round(width * root.spreadDecodeTier)
+                    sourceSize.height: Math.round(height * root.spreadDecodeTier)
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
                     cache: false
@@ -394,6 +424,16 @@ Item {
                         : ""
             }
 
+            // 离线缺口：条漫里每页都是一个 delegate，得在缺口处就地说明，
+            // 否则看起来就是「图片很大，还没加载出来」
+            Text {
+                anchors.centerIn: parent
+                visible: Comic.offline && image.source.toString().length === 0
+                text: qsTr("第 %1 页未缓存").arg(stripPage.index + 1)
+                color: AppTheme.colors.textSecondary
+                font.pixelSize: AppTheme.fontSizeSmall
+            }
+
             Component.onCompleted: Comic.ensurePage(stripPage.index)
         }
 
@@ -418,6 +458,16 @@ Item {
         height: 26
         running: visible
         visible: Comic.pageLoading && !root.hasPage && !root.stripMode
+    }
+
+    // 离线缺口：这一页没缓存、源又够不着 —— 不转圈（等不来），只说明白
+    Text {
+        anchors.centerIn: parent
+        anchors.verticalCenterOffset: 44
+        visible: Comic.offline && !root.hasPage && !root.stripMode
+        text: Comic.statusText.length > 0 ? Comic.statusText : qsTr("离线 · 已缓存的页可以照看")
+        color: AppTheme.colors.textSecondary
+        font.pixelSize: AppTheme.fontSizeSmall
     }
 
     // 远程 rar 必须整包落地（没有尾部署引），这段等待可能几十秒：
@@ -843,7 +893,10 @@ Item {
                 visible: Comic.mode === root.modeDouble
 
                 Text {
-                    text: qsTr("双页方向")
+                    text: Comic.direction < 0
+                          ? qsTr("双页方向 · 自动（%1）").arg(Comic.autoDirection === 1
+                                                            ? qsTr("右→左") : qsTr("左→右"))
+                          : qsTr("双页方向")
                     color: Qt.rgba(1, 1, 1, 0.56)
                     font.pixelSize: AppTheme.fontSizeSmall
                 }
@@ -852,15 +905,21 @@ Item {
                     spacing: AppTheme.spacingSm
 
                     Pill {
-                        text: qsTr("从右向左")
-                        checked: Comic.rightToLeft
-                        onClicked: Comic.rightToLeft = true
+                        text: qsTr("自动")
+                        checked: Comic.direction < 0
+                        onClicked: Comic.direction = -1
                     }
 
                     Pill {
-                        text: qsTr("从左向右")
-                        checked: !Comic.rightToLeft
-                        onClicked: Comic.rightToLeft = false
+                        text: qsTr("左→右")
+                        checked: Comic.direction === 0
+                        onClicked: Comic.direction = 0
+                    }
+
+                    Pill {
+                        text: qsTr("右→左")
+                        checked: Comic.direction === 1
+                        onClicked: Comic.direction = 1
                     }
                 }
             }
@@ -1087,6 +1146,7 @@ Item {
         anchors.bottom: bottomBar.top
         anchors.bottomMargin: AppTheme.spacingSm
         visible: root.chromeVisible && !track.dragging && Comic.pageCount > 0
+                 && !nextBanner.visible
         text: qsTr("第 %1 / %2 页 · %3%").arg(Comic.pageIndex + 1).arg(Comic.pageCount)
               .arg(Math.round(Comic.percent * 100))
         color: Qt.rgba(1, 1, 1, 0.66)
@@ -1118,6 +1178,65 @@ Item {
             text: (bubble.targetPage + 1) + " / " + Comic.pageCount
             color: "#FFFFFF"
             font.pixelSize: AppTheme.fontSizeSmall
+        }
+    }
+
+    // ---------------- 翻完推荐「下一卷」（§4.6）----------------
+
+    // 与小说阅读器、视频播放器同一条纪律：**只给候选，不自动换书，也不倒计时**。
+    // 读到底浮在胶囊上方；往回翻 / 点叉 / 换书都会撤掉。声明在缩略图面板之前，
+    // 目录展开时自然被盖住。
+    GlassPanel {
+        id: nextBanner
+
+        readonly property var suggestion: Comic.nextSuggestion || ({})
+        readonly property bool hasSuggestion: suggestion.path !== undefined
+                                              && ("" + suggestion.path).length > 0
+
+        visible: hasSuggestion && root.chromeVisible
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: bottomBar.top
+        anchors.bottomMargin: AppTheme.spacingLg
+        width: Math.min(460, root.width - 2 * AppTheme.spacingXl)
+        height: 64
+        radius: AppTheme.radiusCard
+        color: Qt.rgba(0.04, 0.05, 0.06, 0.86)
+        border.color: Qt.rgba(1, 1, 1, 0.12)
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: AppTheme.spacingMd
+            anchors.right: openNextButton.left
+            anchors.rightMargin: AppTheme.spacingMd
+            anchors.verticalCenter: parent.verticalCenter
+            text: qsTr("看完了 · 下一卷：%1").arg(nextBanner.suggestion.name || "")
+            color: Qt.rgba(1, 1, 1, 0.86)
+            font.pixelSize: AppTheme.fontSizeBody
+            elide: Text.ElideMiddle
+        }
+
+        ReaderButton {
+            id: openNextButton
+
+            anchors.right: dismissNextButton.left
+            anchors.rightMargin: AppTheme.spacingXs
+            anchors.verticalCenter: parent.verticalCenter
+            label: qsTr("打开")
+            fg: AppTheme.colors.primary
+            hoverFill: Qt.rgba(1, 1, 1, 0.14)
+            onClicked: Comic.openNextSuggestion()
+        }
+
+        ReaderButton {
+            id: dismissNextButton
+
+            anchors.right: parent.right
+            anchors.rightMargin: AppTheme.spacingSm
+            anchors.verticalCenter: parent.verticalCenter
+            icon: "x"
+            fg: "#FFFFFF"
+            hoverFill: Qt.rgba(1, 1, 1, 0.14)
+            onClicked: Comic.dismissNextSuggestion()
         }
     }
 

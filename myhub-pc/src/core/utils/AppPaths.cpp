@@ -1,5 +1,7 @@
 #include "AppPaths.h"
 
+#include "../cache/CachePartition.h"
+
 #include <QDir>
 #include <QStandardPaths>
 
@@ -75,10 +77,11 @@ void AppPaths::initializeAll()
     ensureDir(logDir());
     ensureDir(backupDir());
 
-    // 缓存分区（需求文档 §5.5）
-    for (const auto *p : {"mediaSegments", "comicPages", "thumbnails", "novelChapters",
-                          "novelIndexes", "directoryListings"}) {
-        ensureDir(cachePartition(QLatin1String(p)));
+    // 缓存分区（需求文档 §5.5）：只建**真在用的**文件分区。
+    // 小说章节与索引落在 sqlite（novelChapter / novelIndex），不占文件缓存，
+    // 以前按文档名建的两个目录从来没被写入过
+    for (const CachePartition &partition : CachePartitions::all()) {
+        ensureDir(cachePartition(partition.dir));
     }
 }
 

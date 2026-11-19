@@ -71,6 +71,8 @@ QString AppLogger::moduleTag(Module m)
         return QStringLiteral("database");
     case Storage:
         return QStringLiteral("storage");
+    case Cache:
+        return QStringLiteral("cache");
     }
     return QStringLiteral("app");
 }

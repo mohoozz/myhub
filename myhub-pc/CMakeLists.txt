@@ -91,12 +91,15 @@ qt_add_executable(MyHub
     src/main.cpp
     # 窗口图标资源（main.cpp 里的 :/icons/app.png）
     resources/icons.qrc
+    # 内置正文字体（:/fonts/serif/…，启动时由 BundledFonts 注册）
+    resources/fonts.qrc
 
     src/app/AppState.h                      src/app/AppState.cpp
     src/app/AppRouter.h                     src/app/AppRouter.cpp
     src/app/WindowController.h              src/app/WindowController.cpp
     src/app/ThemeController.h               src/app/ThemeController.cpp
     src/app/SettingsBridge.h                src/app/SettingsBridge.cpp
+    src/app/CacheBridge.h                   src/app/CacheBridge.cpp
     src/app/PlayerBridge.h                  src/app/PlayerBridge.cpp
     src/app/MediaSession.h                  src/app/MediaSession.cpp
     src/app/FileBridge.h                    src/app/FileBridge.cpp
@@ -123,8 +126,12 @@ qt_add_executable(MyHub
     src/features/reading/ReadingHomeModel.cpp
     src/features/reading/NovelBridge.h
     src/features/reading/NovelBridge.cpp
+    src/features/reading/NovelPager.h
+    src/features/reading/NovelPager.cpp
     src/features/reading/ComicBridge.h
     src/features/reading/ComicBridge.cpp
+    src/features/reading/BundledFonts.h
+    src/features/reading/BundledFonts.cpp
     src/features/reading/PlainTextBridge.h
     src/features/reading/PlainTextBridge.cpp
     src/features/favorites/FavoriteListModel.h

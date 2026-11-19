@@ -76,6 +76,8 @@ qt_add_qml_module(MyHub
         qml/settings/ConnectionListView.qml
         qml/settings/ConnectionFormView.qml
         qml/settings/TrashSection.qml
+        qml/settings/CacheSection.qml
+        qml/settings/ReaderSection.qml
 
         qml/player/PlayerView.qml
         qml/player/PlayerStage.qml

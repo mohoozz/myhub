@@ -194,15 +194,15 @@
 ### 1.4 本地存储与凭据（PC-002）
 
 - [x] `AppDatabase`（sqlite3 C API，不用 Qt SQL）：版本化迁移器建表（`v1_initial`、`v2_reading_fingerprint`、`v3_novel_chapter_cache`）
-  - [x] 10 张表与 iOS 同构：connection / favorite / readingProgress / novelIndex / bookmark / browserHistory / browserShortcut / downloadTask / feedItem（预留）/ novelChapter（v3 新增，iOS 无对应表）
+  - [x] 12 张表与 iOS 同构：connection / favorite / readingProgress / novelIndex / bookmark / browserHistory / browserShortcut / downloadTask / feedItem（预留）+ PC 侧新增的 novelChapter（v3）/ comicPages（v4）/ epubMeta（v5），iOS 无对应表
   - [x] 唯一约束 / 外键级联 / 常用索引与 iOS 完全一致（单测 `tst_e2e_browse` 验证）
   - [x] `ready()` 信号：依赖数据库的 Store 必须等待后再装载（避免冷启动空列表）
 - [x] `CredentialStore`：Windows Credential Manager，key 约定 `conn.<id>`
   - [ ] macOS Keychain 实现（`.mm`，跨平台时补）
 - [x] `AppSettings`：偏好封装，**键名与 iOS 对齐**（见需求文档 §5.4），含桌面新增键
 - [x] 数据与缓存目录管理（`%APPDATA%\MyHub` / `%LOCALAPPDATA%\MyHub\Cache`），设置中可「打开所在文件夹」
-- [x] 缓存分区目录创建（6 分区）
-  - [ ] `CacheManager`：分区配额 + 占用统计 + LRU 清理（M5）
+- [x] 缓存分区目录创建（按 `CachePartitions` 建 5 个**文件**分区；小说章节/索引落在 sqlite，不占文件缓存）
+  - [x] `CacheManager`：分区配额 + 占用统计 + LRU 清理（`CachePartitions` 定义 + `CacheStore` 执行 + `CacheCleaner` 调度）
 - [x] **数据库定期自动备份**到 `backup/`（每日一份，保留 7 份，用 SQLite 在线备份 API）
 - [ ] `ConfigTransfer`：配置导入/导出 JSON 快照（连接源 + 全部偏好，不含明文密码；按挂载点 upsert，返回新增/更新计数）
   - [ ] **与 iOS 导出文件互导兼容**（formatVersion 兼容，缺失字段不覆盖）
@@ -696,21 +696,67 @@
 - [x] epub 接入阅读器：`NovelBridge` 按 `.epub` 分流到 `EpubBook`，目录 / 按章加载 / 上一章下一章 / 目录抽屉全部可用
   - [x] **epub 进度锚点是「章号 + 段落下标」**（zip 条目之间没有连续字节坐标，硬凑全局偏移会随条目顺序失效）
   - [x] 浏览页双击 epub 直接进小说阅读器（此前只被「纯文本」分支兜住，会落到预览菜单）
-- [ ] **epub 图集型（漫画）判定** → 提示并一键转交漫画阅读器
-- [ ] 排版：**`QTextLayout` 行级分页**（`createLine()` 按行边界切页不截断行，对应 iOS CoreText `CTLine` 方案）+ 标题放大加粗 + 插图等比嵌入；滚动模式为同分页结果的连续页块 + **页内行映射**（`QTextLine::textStart()/textLength()`）供精确锚点
+- [x] **epub 图集型（漫画）判定 → 自动转交漫画阅读器**：`EpubBook` 在交付前统计 spine 里
+      `image/*`（media-type 缺失或写成 octet-stream 时按扩展名补判）的条数，≥2 条且占 spine ≥80% 即判为图集；
+      `NovelBridge` 拿到 `imageOnly` 后延后一拍 `teardown()`（当场拆会析构正在回调的 `EpubBook`）再
+      `ComicBridge::open(connectionId, path, title)`，图集不进小说目录快照、不留空段落章节缓存。
+      `ComicBridge` 的扩展名闸门放行 `.epub`（浏览页徽标/排序仍按小说，只有这条转交路会用到）
+  - [x] 页序按 OPF 的 spine：`EpubBook` 交付 `imageEntries`（spine 顺序），`ComicBook::setPageOrder()`
+        按名单重排（名单外的封面/广告页丢掉；一个都对不上时退回条目名排序，不开成空书），
+        `ComicBridge::probeEpubCollection()` 在打开前读 container + OPF 拿页序，页名清单只在页序
+        一致时才拿来秒开
+- [x] 排版：**章名放大加粗 + 全章只出现一次**；行级分页已落地（见下）
+  - [x] 章名段识别（只认第 0 段，宁严勿宽：认错等于凭空藏掉一段正文）：
+        空白/标点归一化后与目录章名比对，或互为截短（正文「第一章」vs 目录「第一章 起风了」）
+  - [x] `NovelPager` 摘掉章名段不折行，为它在**本章第一个文字页**顶部预留两行（`titlePage` / `titleReserve`）；
+        章名段查页仍落该页（锚点停在章首不会被当成「没参与排版」）
+  - [x] QML：翻页模式的「标题带」字号按预留高度现算（不超过正文 1.42 倍），两行封顶 + elide；
+        章名页上页眉**只透明不隐藏**（`visible: false` 会让 `pageBody` 变高 → 推视口 → 重排）
+  - [x] 滚动模式委托按 `titleParagraph` 隐藏该段（高度 0，**下标空间不动**），章名交给列表抬头（Bold 1.38 倍）
+  - [x] **`QTextLayout` 行级分页**（`src/features/reading/NovelPager`）：`createLine()` 只负责**折行**，
+        **切页由行高累加**，页边界只能落在行边界上（不会把半个字切到下一页）；QML 只画不算 ——
+        「固定行高 + `NoWrap`」的单块 `Text`，量到的行与画出来的行是同一批，没有第二次测量
+  - [x] 首行缩进两个全角空格**在折行之前**加进文本（缩进参与行宽测量）；翻页模式不叠段间距，
+        行距仍由 `fontSize x lineSpacing` 决定，`pageLineHeight` 直接交给 QML 当行高
+  - [x] 插图整页显示：插图段落各占一页，图后文字另起一页；等比铺满正文区，窄图不放大
+  - [x] 视口/字号/行距/字体变化整章重排（10 万字约 34ms），**页码按「当前页首行」重新定位**而不是原地不动
   - [x] 当前实现走**段落虚拟化**（一段一个 `Text`，ListView 回收），字号/行距调整只重建可见的十几个 item
-  - [ ] 翻页模式（依赖上面的行级分页）落地后可切到「页内行映射」锚点
+  - [x] 插图等比嵌入（`Item` 委托 + `Image.PreserveAspectFit`）：缩到栏宽、窄图不放大；尺寸未知按一行高占位，
+        列表不会因为图异步加载而抖一下；`lineHeight` 只作用于文字，不套在图上（套上去会把图裁掉）
+  - [x] 点图放大：正文插图铺满窗口查看，**滚轮缩放（1×–4×，锁住视口中心）+ 拖动平移 + 单击/Esc/关闭按钮退出**；
+        缩放比例与操作提示落在底部，换章自动收起（`NovelReaderView` 的 `imageViewer`，纯 QML）
+  - [ ] 触屏双指缩放（`PinchHandler`）：桌面端滚轮已够用，等触屏设备验证后再接
+  - [x] **翻页模式**：设置面板「排版 · 滚动/翻页」（`reader.pageMode`），页眉是章节名、页脚是 `当前页 / 总页数`；
+        ←/→/↑/↓/PgUp/PgDn/空格翻页（跨章自动换），点正文右侧 60% 往后、左侧 40% 往前，点插图直接进查看层
+  - [x] 翻页模式锚点：**页码不进持久化**，进度存 `{章, 段, 段内偏移}`；恢复时 `pageOfPosition()` 一步定位；
+       往回翻跨章由 `m_pendingPageEnd` 落地到「上一章最后一页」（章节是异步加载的）
+  - [x] **页内精确到行**：`NovelPager` 的行表本来就记了每行的 `(段, 行首偏移)`，所以段内偏移是免费的 ——
+       行内换算成「原文坐标」（扣掉 2 字缩进），页首行 ↔ `pageOfPosition()` 双向自洽；
+       进度 payload 加 `charOffset` 键（`progress` 是 QVariantMap，老记录读不到就是 0，**不需要迁移**）。
+       长段落跨 3 页也能落回原来那一页，而不是这一段的第一页
 - [x] 章节 ±1 预加载（LRU）：`NovelBridge::prefetchAdjacent` 在当前章上屏后串行预取 +1 再 -1，
       缓存留 4 章按「距当前章最远」淘汰；命中即同步上屏（txt 带行表、epub 带段落），
       切章/关闭/换书整体作废在途预取 —— 预取永远只写缓存，不许覆盖可见章
 - [x] 阅读器设置面板：字号 / 行距 / 主题（跟随系统·日间·夜间·护眼）/ **亮度（窗口蒙层）**；实时生效并持久化（键名与 iOS 对齐）
-  - [ ] 翻页·滚动模式切换（当前只有滚动）
-  - [ ] 衬线字体（思源宋体，未内置回退系统宋体）
+  - [x] 翻页·滚动模式切换：两段式开关，滚动模式走 ListView 段落虚拟化，翻页模式走 `NovelPager` 分页
+  - [x] 字体：黑体（`Microsoft YaHei UI` 系）/ 宋体（`Source Han Serif SC → Noto Serif CJK SC →
+        Songti SC → STSong → SimSun → serif`）两段式开关（`reader.fontStyle`）。
+        **字体族只有一份来源**（`NovelBridge::fontFamilies`），QML 画正文与 C++ 折行都从这里取 ——
+        链尾交给系统兜底；设置面板的分段标签自己就用那种字体
+  - [x] 内置开源字体（思源宋体子集）以消除跨平台字形差异
+        - 产物：`resources/fonts/serif/SourceHanSerifCN-Subset.otf`（6.7 MB，U+4E00–9FFF 全量 + 标点 + 假名 + 全角），
+          随 `resources/fonts.qrc` 打进程序；`OFL.txt` 同目录（OFL 要求与字体一同分发）
+        - 启动时 `BundledFonts::initialize()` 注册 qrc 字体，`familiesForStyle` 把注册到的族名**插到链首** ——
+          系统里有 SimSun 还是 Songti SC 都不影响，字形由这一个文件决定
+        - 投递目录 `<dataDir>/fonts/{serif,sans}`：用户自己丢 .otf 进去重启即生效，不必重新打包
+        - 重新生成：`scripts/subset-font.ps1`（下载 + pyftsubset 子集化 + 落许可证，平时不用跑）
+        - 仍未覆盖：竖排标点/异体字（`locl`）+ 备选字重（Bold 未内置，加粗走 Qt 的伪粗体）
 - [x] 目录抽屉（当前章高亮跳转）
 - [x] 底栏：全书百分比进度条 / 上一章 / 下一章
-  - [x] 滚动节流 1s + **切章/退出强制上报**（`commitPendingPosition`）；页码待分页后接入
+  - [x] 滚动节流 1s + **切章/退出强制上报**（`commitPendingPosition`）；翻页模式按「本页首行」立即上报
 - [x] **进度恢复：排版无关锚点一步定位**
-  - [x] 锚点结构：**全局字节偏移** → 章（二分）+ 段落序（行表换算）；段内字符偏移不还原（一段即一两行）
+  - [x] 锚点结构：**全局字节偏移** → 章（二分）+ 段落序（行表换算）；翻页模式再带**段内字符偏移**
+        （`progress.charOffset`，老记录读不到就是 0，无需迁移）—— 长段落跨三页也能落回原来那一页
   - [x] epub 用**章号 + 段落下标**（`progress.chapter` / `progress.paragraph`）：zip 条目没有连续字节坐标
   - [x] **禁止「先跳章节再定位偏移」两步时序**：`applyChapter` 直接带上锚点段落，`positionViewAtIndex(anchor, Beginning)` 一步到位
   - [x] 兼容 iOS 旧版纯字节偏移锚点（进度就是 `offset` 字节）
@@ -723,14 +769,20 @@
   - [x] 损坏自愈：解压失败 / JSON 坏 / 版本不认识 / 偏移不递增 → 一律当未命中重读，不抛不崩
   - [x] 维护：`open()` 时 `dropStale` + 按 `updatedAt` 修剪到 400 行（≈4MB）
   - [x] 桥接接入：内存预取 → 落盘缓存 → Range 的顺序；txt 命中时保留续读锚点（不能用章首顶替）
-  - [ ] 插图/元数据快照（等漫画与图集型 epub 那条线）
+  - [x] 元数据快照（v5 `epubMeta` + `EpubMetaStore`）：书名 / 章名 / 条目路径 / 层级 / 指纹，
+        在 `EpubBook::load` 成功时写回；删文件、改名、移动时同步清理
+  - [x] 插图快照（`NovelImageStore` + `CacheDirs::NovelImages` 分区）：`EpubBook` 把 `<img>` / SVG `<image>`
+        在正文里换成**占位段落**（`imageParagraph`，下标空间不变），`NovelBridge` 取出字节落快照
+        （书 key + 指纹 + 条目哈希三层命名，`CacheStore` 按分区配额 + LRU 清理），QML 直接吃本地文件
+  - [ ] 插图快照不接文件操作（删/改名/移动后靠 LRU 收走，与漫画页缓存同；要精确回收得给分区加索引）
   - [x] 真正离线打开：`stat` 失败时用「无指纹 + 已有索引 + 已缓存章节」进阅读器（`openOffline`）
     - [x] 只在「可用性」类错误降级（离线 / 超时 / 5xx / 文件被移走）；路径写错、鉴权失败、协议不支持照旧报错，不拿缓存藏问题
     - [x] 续读章没缓存时退到最近的缓存章（偏一章 vs 一片空白）
     - [x] 离线缺章走 `statusText` 提示而**不走 `fail()`** —— 错误页会整块顶掉阅读器，连翻回缓存章都做不到
     - [x] 离线不写进度到空章（`close()` 补空章守卫，`TxtChapterText()` 的 `start` 是 0，写下去等于把进度清零）
     - [x] 离线读到的新章不落盘（指纹未知的行以后永远对不上号）
-    - [ ] epub 离线仍不支持：目录在 OPF 里，stat 失败时连章数都答不上来 —— 宁可报错也不开空壳
+    - [x] epub 离线打开（`openEpubOffline`）：目录来自元数据快照、指纹一并恢复，正文只放已缓存章；
+          没有快照或一章正文都没缓存时照旧报错（不开没有目录的空壳）
 - [x] **`Esc` 退出阅读器**（替代 iOS 左滑退出）；`←/→`、`PgUp/PgDn` 翻页；`Ctrl+←/→` 切章；`Ctrl+D` 目录；`Ctrl+±` 字号
 - [x] 「下一本」推荐（底部提示条，无倒计时，需点击）
   - [x] 触发点放在 QML：只有滚动视图知道「这屏是不是最后一屏」，C++ 按字节/段落猜末尾会在短章、插图、字号变化上误判
@@ -759,23 +811,29 @@
 - [x] rar/cbr 走 libarchive（本地直读 / 远程流式落地临时文件带下载进度）
       （`ArchiveReader` 统一「列条目 / 读条目」走 libarchive（整包在手时），远程 zip 仍走
        `RangeZipReader` 只读目标条目；页序与过滤两路共用 `PageOrder`，页序天然一致；远程 rar 由
-       `ArchiveFetcher` 按 4 MiB 分块顺序落地到 `cache/comic-packs/<key>-<指纹>.pack`，
+       `ArchiveFetcher` 按 4 MiB 分块顺序落地到 `cache/comicPages/packs/<key>-<指纹>.pack`，
        先写 `.part` 再 rename，进度经
        `Comic.downloadProgress` 驱动阅读器进度条；同指纹包重启直接命中、指纹变了清旧包；
        `aboutToQuit` + 每条失败路径清 `.part`。测试：`tst_archivereader` 9 例（含分块下载与断网不留半包）、
        `tst_comicbook` rar 2 例、`tst_comicbridge` cbr 1 例，用 `tests/RarTestBuilder.h` 现场搓 RAR4 归档）
 - [ ] `ComicDetector`：① 扩展名优先（cbz/cbr）② 内容嗅探（图片占比 ≥90% 且自然序列）③ **epub 图集目录层预判并缓存**（列目录即显示漫画徽标）④ 右键手动「以漫画阅读打开」⑤ 目录级「漫画库」标记
   - [x] ① 扩展名（`MediaType::isComicArchive`：cbz/zip/cbr/rar）与 ④ 右键「以漫画阅读器打开」
-  - [ ] 非漫画文件报「不是漫画文件」
+  - [x] 非漫画文件报「不是漫画文件」：扩展名先挡（明确支持 cbz/zip/cbr/rar），
+        压缩包里没有图片页由 `ComicBook` 报同一句话；测试 `tst_comicbridge` 两例覆盖
 - [x] 阅读模式：单页 / 双页（RTL·LTR 切换持久化，默认日漫 RTL）/ 条漫（纵向连续滚动）
-      （`reader.comic.mode` / `reader.comic.rtl` 落 `AppSettings`；`D` 键循环三模式，与 ⋯ 菜单同源；
-       双页按整屏走 2 页、`Row.layoutDirection` 表达 RTL；条漫 `ListView` 滚动即页码）
+      （`reader.comic.mode` / `reader.comic.direction` 落 `AppSettings`；`D` 键循环三模式，与 ⋯ 菜单同源；
+      双页按整屏走 2 页、`Row.layoutDirection` 表达 RTL；条漫 `ListView` 滚动即页码）
 - [x] 缩放：`Ctrl+滚轮` 1x~4x、双击放大/还原、拖拽平移；1x 时让位翻页
       （放大后单击不再翻页、只收放上下栏；平移量按「放大后多出来的那一半」夹紧）
-- [ ] 预加载 ±3 页（正向前向优先/反向后向优先，最多并发 3）；内存 LRU 保留 ±6 页；**大图下采样防爆内存**
-      （现状：`ComicBook::readPage` 单槽位串行泵队列 —— `ensurePage()` 申请、`pageUrlAt()` 只查盘、
-       `trackPage()` 只记进度；条漫 delegate 逐页申请、单页/双页只备当前屏；条漫按 `sourceSize.width`
-       下采样；LRU 与 ±3 页策略未做）
+- [x] 预加载 ±3 页（正向前向优先/反向后向优先，最多并发 3）；**大图下采样防爆内存**
+      （`ComicBook::readPage` 改成「每请求一份回调、可并发在途」；`ComicBridge` 维护当前页两侧各 3 页的
+       优先级队列 + 在途上限 3，当前页占一个名额且永远插队；翻页方向那一侧先排，反向兜底；
+       命中磁盘页缓存直接上屏，预取顺带捡到当前页时省掉一次重复解压；滚动换屏时旧队列整体作废。
+       下采样：单页 1x 时按窗宽解码、放大后才解原始尺寸；双页 2x；条漫按窗宽；缩略图按格宽。
+       **内存里不再留解码位图**：QML 每页 `cache:false` + 盘上页缓存 + 下采样已够，
+       自建位图 LRU 得配 image provider 才有意义，暂不做。
+       测试：`tst_comicbook::deliversConcurrentPageRequests`（三页同时在途各自到达 + 取消后不回调）、
+       `tst_comicbridge::prefetchesNeighborPages`（窗口内 1/2/3 自动解、窗口外 6 不解、翻页后窗口跟到 4））
 - [x] **进度记录 + 恢复：直接恢复到上次页码**（首次构建即定位，不从第一页开始）；条漫恢复页码显示；文件指纹校验
 - [ ] **弱网点击漫画：先展示 UI 进入加载界面**（解析转圈 / 远程 rar 下载百分比进度条）+ **点击防抖去重**
       （加载界面与远程 rar 整包下载百分比已做；点击防抖去重未做）
@@ -783,20 +841,35 @@
   - [x] **拖动中只改本地值、松手才跳页**，拖动时气泡跟随（出界夹紧）
   - [x] 顶栏**裸显示**（不铺面板，只压一层很淡的顶部渐变）+ 胶囊上方细字「第 x / N 页 · y%」
   - [x] 顶栏 ⋯ 菜单（模式切换 / 双页方向 / 亮度滑块 + 跟随系统）
-  - [ ] 下方快捷 chip：缩略图 / 下一本（亮度已并入 ⋯ 菜单）
+  - [ ] 下方快捷 chip：缩略图 / 下一本（亮度已并入 ⋯ 菜单；「下一本」已由读到底提示条覆盖，chip 暂不做）
   - [x] **底栏毛玻璃样式与小说阅读器统一**（`GlassPanel` 胶囊 + 统一描边）
 - [x] **缩略图面板**：缩略图网格点击跳页，按需小尺寸解码 + LRU，**不占用阅读解压并发**
       （`T` / 底栏「目录」按钮开合；网格按 `ensurePage` 串行队列出图、`sourceSize` 下采样；
        展开时按整行对齐到当前页、当前页高亮；面板内方向键移动 + Enter 跳页 + Esc 收起；
-       手势与滚轮在面板打开时让位。LRU 与 ±3 页策略仍未做）
+       手势与滚轮在面板打开时让位。±3 页预取已由 `prefetchAround` 统一负责）
 - [x] 亮度面板（与小说共用 `reader.brightness`，退出恢复）
       （⋯ 菜单内 `C.Slider` 0.2~1.0 + 「恢复跟随系统」写 `-1`；蒙层 `(1-b)×0.6` 叠在内容之上、不吃事件）
-- [ ] 翻完推荐下一本（底部提示条，**无倒计时**，需点击；按该目录排序偏好查找）
-- [ ] `ComicPageCache`：解压页按「指纹 + 页名」落盘 + 页名清单持久化；**缓存优先源秒开 + 后台归档补齐**；远程 rar 整包落缓存分区复用；离线源
-      （现状：解压页已按「连接源 + 路径 + 指纹 + 页码」落盘并优先命中，文件变了自动清旧页；
-       远程 rar 整包已落 `cache/comic-packs` 并按指纹复用；页名清单与离线源未做）
-- [ ] 打开全链路日志埋点（`comic-reader` 模块）
-      （已有「打开漫画：书名（N 页）」、页缓存写入失败、解页失败三条；翻页/预取耗时与缓存命中未打）
+- [x] 翻完推荐下一本（底部提示条，**无倒计时**，需点击；按该目录排序偏好查找）
+  - [x] 触发点放在 QML：双页最后一屏的 `pageIndex` 停在倒数第二页、条漫还要看滚没滚到底，只有视图知道
+  - [x] 读到底先落 `finished` 进度（**双页最后一屏也要算读完**），百分比恒定 100%；往回翻撤条并复位「已收起」
+  - [x] `DirectorySort::nextComic`：**按是不是漫画包归类**（cbz/zip/cbr/rar 互推，同目录的封面图/视频跳过）
+  - [x] `finished` 置位后不被后续 `commitProgress` 降级（预取捡到当前页也会写进度）
+  - [x] 换书/关书撤条 + 作废在途目录列举；点「打开」保留那一卷自己的续读点
+- [x] `ComicPageCache`：解压页按「指纹 + 页名」落盘 + 页名清单持久化；**缓存优先源秒开 + 后台归档补齐**；远程 rar 整包落缓存分区复用；离线源
+      （解压页按「连接源 + 路径 + 指纹 + 页码」落盘并优先命中，文件变了自动清旧页；
+       远程 rar 整包落 `cache/comicPages/packs` 并按指纹复用（页文件在分区根、整包在 `packs/` 子目录，
+       清扫互不误伤）。
+       **页名清单**：v4 `comicPages` 表（`ComicPageStore`，一行一本书 + 指纹），打开成功即写回；
+       命中则 `showPageList` 先把页数/页序/续读页上屏，归档在后台补 **并核对页序**
+       （重新打包过就按 `pageName` 把人放回同一张图），不一致时更新清单。
+       **离线源**：`stat` 失败且错误属于「够不着」时 `openOffline` 进降级阅读 —— 指纹从清单行恢复
+       （页缓存键因此仍对得上），远程 rar 若整包在盘直接开整本，其余只放已缓存页、
+       缺页给「离线 · 第 N 页未缓存」而不转圈；离线不写进度、不盖「已读完」、不查下一卷。
+       测试：`tst_comicpagestore`（10 例：往返/覆盖/指纹失配/2 秒容差/`find` 不看指纹/坏 payload/
+       空清单/改名/子树删除）、`tst_comicbridge`（`storesPageListOnOpen`、`opensOfflineFromPageCache`））
+- [x] 打开全链路日志埋点（`comic-reader` 模块）
+      （打开「书名（N 页）」、页缓存命中 / 写入失败、解页失败、预取完成（字节数 + 耗时）、
+       预取失败（不打断阅读）；命中率汇总未做）
 - [x] 退出时清理远程临时文件（正常路径与异常路径均覆盖）
       （`ComicBridge` 构造时接 `aboutToQuit → cleanPackTemps()`，扫 `comic-packs` 删所有 `*.part`；
        下载中途失败由 `ArchiveFetcher` 自己删半包；`teardown()` 递增 `m_packSerial` 让在途回调作废）
@@ -896,12 +969,28 @@
 > 📐 原型：[`prototype/07-settings.html`](prototype/07-settings.html)（设置双栏、连接源表单、缓存分区、回收站、安全与数据、关于与日志）
 
 - [x] 连接源设置（增删改查 + 测试 + 绿/红点 + 内外网提示 + 内网地址配置）—— 已落地（`qml/settings/ConnectionListView.qml` / `ConnectionFormView.qml`，见 §2），此处为重复条目
-- [ ] 阅读器偏好：字号 / 行距 / 主题 / 翻页模式 / 漫画方向（含自动）/ 漫画默认模式 / 衬线字体 / 亮度
-      （漫画三模式、方向、亮度已在阅读器内可改并落键 `reader.comic.mode` / `reader.comic.rtl` /
-       `reader.brightness`，设置页的表单入口未做）
-- [x] 播放器偏好（已落地：默认纯音频 / 解码偏好 / 字幕字号 / 快进步长 / 音量步进；待补：默认倍速、预读窗口、字幕延迟、**音量联动系统开关**、**最小化自动悬浮小窗**、全屏启动偏好）
-- [ ] 显示设置：**文件名行数（1~5，六处生效且即时生效）** / 默认视图 / 单击或双击打开 / 主题模式
-- [ ] 缓存与存储：6 分区占用查看 + 单项与全部清理 + 总容量上限 + **内容缓存本地化开关** + 回收站保留天数（1~90）+ 下载目录设置 + 打开数据/缓存目录
+- [x] 阅读器偏好：字号 / 行距 / 主题 / 漫画方向 / 漫画默认模式 / 亮度（`qml/settings/ReaderSection.qml`）
+      - 控件直接绑 `Novel.*` / `Comic.*` 的落键属性，不另存镜像；预览区纸色/墨色与 `NovelReaderView` 同源，
+        改字号/行距/主题当场可见
+      - 亮度是「这块屏幕」的偏好：小说与漫画共用 `reader.brightness`，`-1` 是「跟随系统/不压蒙层」的哨兵值，
+        滑块范围按阅读器实际可调区间取 0.2~1.0
+      - 跨入口同步在 C++ 侧完成（`NovelBridge` / `ComicBridge` 监听 `AppSettings::settingChanged`）：
+        阅读器里拖亮度、设置页里换模式，两边立刻一致，不用等重启
+      - 已做：**正文字体（黑体 / 宋体）**、**排版方式（滚动 / 翻页）**、**漫画方向（自动/左到右/右到左）**，
+        与阅读器内设置面板同一份偏好
+      - [x] **方向自动判定**：`core/comic/ComicDirection` 按书名（+首尾页名）猜 ——
+        显式写法（右→左 / RTL）> 假名 > 巻·話·同人·(C99) > 条漫·webtoon·第N话；
+        判不出返回 `Unknown`（不猜，沿用默认右→左），宁可不猜也不把整本读反
+      - 偏好从布尔变成三态 `reader.comic.direction`（-1 自动 / 0 / 1）：老布尔键 `reader.comic.rtl` 读到即迁移成手动值；
+        用户在阅读器或设置页点一下就是手动值，以后不再被自动覆盖
+- [x] 播放器偏好（已落地：默认纯音频 / 解码偏好 / 字幕字号 / 快进步长 / 音量步进 / **最小化自动悬浮小窗**；待补：默认倍速、预读窗口、字幕延迟、**音量联动系统开关**、全屏启动偏好）
+- [x] 显示设置：**文件名行数（1~5，即时生效）** / 默认视图 / 单击或双击打开 / 主题模式
+      （生效处 6 个：浏览网格/列表、收藏网格/列表、阅读网格/列表，全部跟随 `browse.fileNameLines`；
+       收藏页此前固定两行、列表固定 52 px，阅读列表此前固定单行 76 px，本次一并改为内容自适应；
+       回收站与传输条目按紧凑单行设计，不参与）
+- [x] 缓存与存储：分区占用查看 + 单项与全部清理 + 总容量上限 + **内容缓存本地化开关** + 打开数据/缓存目录
+      （`qml/settings/CacheSection.qml` + `src/app/CacheBridge.h`：扫盘/清空全在后台线程，清空二次确认且尊重保护前缀；
+       回收站保留天数在回收站页；**下载目录设置**未做——当前转存直接落到内容源所在目录，还没有「统一下载目录」的概念）
 - [ ] 安全：应用锁（Windows Hello / macOS Touch ID，回退本地 PIN；最小化/锁屏后上锁，返回需验证；**开关需先验证身份**）
 - [ ] 数据：配置导出 / 导入（JSON 快照不含明文密码，**与 iOS 互导兼容**）
 - [ ] 关于：版本 / 开源许可 / 存储用量 / **日志查看·导出·清空·打开日志文件夹** / **检查更新** / 应用图标
@@ -911,17 +1000,48 @@
 
 ## 11. 内容缓存本地化与离线（PC-605）
 
-- [ ] 视频/音频分片缓存本地化（复用 §4.2 SegmentCache）：命中分片零网络直出
-  - [ ] 文件指纹存缓存索引 + 反查；stat 失败（无网络）以缓存身份起播；离线模式未命中快速失败
-- [ ] 漫画解压页缓存本地化（指纹 + 页名落盘、页名清单持久化、离线源打开）
+- [x] 视频/音频分片缓存本地化（复用 §4.2 SegmentCache）：命中分片零网络直出
+  - [x] 文件指纹存缓存索引 + 反查（`SegmentCache::writeMeta` / `findCachedIdentity`）；
+    stat 失败或适配器不可用时 `PlaybackStreamService::prepareOffline` 凭缓存身份起播，
+    只接受「分片已完整」的文件；离线模式未命中由 `CachedRangeReader::setOfflineMode` 直接失败、不打源
+    （测试：`tst_streamcache` 的 `readerOfflineMissFailsWithoutSourceCall` /
+    `readerOfflineServesCompleteCacheWithoutSource`、缓存身份反查）
+- [x] 漫画解压页缓存本地化（指纹 + 页名落盘、页名清单持久化、离线源打开）
+  - [x] 页名清单持久化（v4 `comicPages` + `ComicPageStore`）：命中即秒开，归档后台补齐并核对页序
+  - [x] 离线打开（cbz/zip 只放已缓存的页；cbr 整包在盘则整本可读），缺页给明确提示、不写进度
 - [x] 小说章节缓存本地化（`NovelChapterCache` + v3 `novelChapter` 表：txt 整张行表含字节偏移、epub 段落；指纹校验 + 损坏自愈 + 400 行修剪）
-  - [ ] epub 插图与元数据快照（离线重建需连带图片，等漫画/图集型 epub 那条线一起做）
-  - [x] 离线打开（txt）：`open()` 在 `stat` 失败时用缓存身份进阅读器，缺章只提示、不进错误页；epub 需等上面的元数据快照
-- [ ] 封面缩略图缓存本地化（稳定哈希键，跨启动有效；命中刷新访问时间）
-- [ ] 目录列表缓存本地化
-- [ ] **统一容量上限 + 分区配额 + 文件/目录粒度 LRU + 跨分区全局兜底淘汰**（启动预热触发一次）
-- [ ] 设置页 6 分区查看/清理，受「内容缓存本地化」开关约束
+  - [x] epub 元数据快照（v5 `epubMeta` + `EpubMetaStore`）：书名 / 章名 / 条目路径 / 层级 / 指纹
+  - [x] epub 插图快照（`NovelImageStore` 落到 `novelImages` 分区，正文插图不必再解 zip；离线读过的插图照常显示）
+  - [x] 离线打开：txt 用缓存索引、epub 用目录快照；缺章只提示、不进错误页
+  - [x] 缓存生命周期接进文件操作：`FileOperations` 的删除 / 改名 / 移动三处，除进度、收藏、漫画页、
+        epub 快照外，同步调 `NovelIndexStore::removeSubtree|renamePath` 与新增的
+        `NovelChapterCache::removeSubtree|renamePath`（覆盖式移动先清目标行再改写，避开
+        `(connectionID, filePath, chapterIndex)` 唯一键冲突）
+- [x] 封面缩略图缓存本地化（稳定哈希键，跨启动有效；命中经 `CacheStore::touch` 刷新 mtime）
+- [x] 目录列表缓存本地化（`DirectoryCache` JSON 落盘；命中刷新 mtime —— 此前只写了注释、没实现，
+      导致 LRU 会把常看的目录当旧数据清掉）
+- [x] **统一容量上限 + 分区配额 + 文件粒度 LRU + 跨分区全局兜底淘汰**（启动预热触发一次）
+      （`CachePartitions` 一张表定义分区与配额 `max(下限, T/分母)`，`T` 取设置 `cache.totalLimitMB`；
+       `CacheStore` 一次扫盘同时出统计与淘汰：先按分区配额压、再按全局上限兜底，两次都压到 **90%** 留余量，
+       免得上限附近来回抖动；淘汰依据 **mtime**（atime 在 Windows 默认不实时落盘、Linux 常被挂载选项关掉），
+       `.part` 半截文件优先；`selfManaged` 分区（音视频分片按播放点淘汰）只统计不代删；
+       未登记的一级目录仍进全局兜底，老版本留下的 `stream`/`comic`/`comic-packs` 不会成为清不掉的死角；
+       `CacheCleaner` 把扫描丢进线程池 + 节流 60s 合并请求（正在跑则合并成一次补跑），
+       播放中的分片目录与下载中的 `.part` 走「保护前缀」；`AppState::continueBoot` 触发一次启动预热。
+       顺手对齐目录名：`stream`→`mediaSegments`、`comic`+`comic-packs`→`comicPages`（整包在 `packs/` 子目录），
+       并删掉 `AppPaths` 里 4 个永远为空的占位目录。
+       测试：`tst_cachestore` 15 例（配额换算三支、递归统计、分区淘汰、全局兜底、自管分区、未登记目录、
+       保护前缀、`.part` 优先、`touch` 救回、根目录缺失、单项/全部清空、改上限即时生效））
+- [x] 设置页分区查看/清理（5 个文件分区）：`CacheSection.qml` + `CacheBridge`（QML 单例 `Cache`）
+      - 占用统计与清空都丢线程池；`CacheStore::purge()` 不看配额、删完收掉空子目录；
+        正在播放的分片 / 正在下载的 `.part` 走 `CacheCleaner` 的保护前缀，点「清理」不会删掉正在看的内容
+      - 总容量上限滑杆直接写 `cache.totalLimitMB`；`CacheCleaner` 监听该信号换配额并安排收口（拖滑块不反复扫盘）
+      - 「内容缓存本地化」关闭后：目录列表不再落盘、漫画不再预取相邻页；当前页/分片仍按需写入以保证可用
+      - 测试：`tst_cachestore` 新增 3 例（单项清空、全部清空含保护与空目录、改上限即时生效）
 - [ ] **已完整缓存内容支持无网络播放/阅读**；缺失内容明确提示「离线且未缓存」，点击先展示 UI 不阻塞
+  - [x] 视频 / 音频（分片缓存身份反查）、漫画（页名清单 + 页缓存）、txt（索引 + 章节缓存）、
+        epub（目录快照 + 章节缓存）四条链路都有离线降级
+  - [ ] 缺失内容的统一文案与点击行为（各页目前各写各的：漫画「该页未缓存」、小说「本章未缓存」）
 
 ---
 
@@ -978,7 +1098,14 @@
 ### 14.1 打开方式与阅读器分发
 
 - [x] txt 默认用**纯文本阅读器**打开，右键可改「以小说阅读器打开」
-- [ ] epub 按**图集判定**分发：图集 → 漫画阅读器，普通 → 小说阅读器；可手动覆盖
+- [x] epub 按**图集判定**分发：图集 → 漫画阅读器（`EpubBook::imageOnly` → `NovelBridge::handOffToComic`），
+      普通 → 小说阅读器
+  - [x] 手动覆盖（漫画方向）：浏览页右键「以漫画阅读器打开」对 `.epub` 也生效；
+        文字书 epub 走这条路会直接报「这本 epub 是文字书，不是图集（请用小说阅读器打开）」
+  - [ ] 手动覆盖（小说方向）**故意不做**：图集 epub 没有正文可读，硬回小说阅读器只有空白页；
+        「以小说阅读器打开」对图集 epub 仍按自动判定转交漫画阅读器
+  - [ ] 读完图集 epub 后的「下一本」建议仍只从 cbz/zip 里挑（浏览页把 epub 归小说），
+        图集 epub 之间不会互相推荐
 - [x] 漫画文件（zip/cbz/rar/cbr）默认漫画阅读器，**打开不得崩溃**
       （zip/cbz 走 Range 只读条目；rar/cbr 走 libarchive，本地直读、远程先整包落地再开，
        均不崩溃；非漫画文件报错文案见 `ComicDetector` 一条）
@@ -998,15 +1125,17 @@
 
 ### 14.3 列表与卡片视觉
 
-- [ ] 列表行高 +1/4；**行间无分割线**
-- [ ] 网格卡片标题**居中**
-- [ ] 视频时长放在**标题下方**（不遮封面、不换行）；**不显示修改时间**
-- [ ] 类型图标与目录图标**去白底、放大**（网格与列表均调整）
-- [ ] **目录不显示子项数**（并移除对应的额外列举请求）
-- [ ] **文件名行数设置六处生效**（浏览网格/列表、收藏网格/列表、阅读网格/列表）且即时生效
-- [ ] 选中高亮为「浮起抬升」（内缩圆角 + 放大 + 软阴影 + 细描边），**不得贴边直角色块**
+- [x] 列表行高 +1/4；**行间无分割线**（`FileListRow` 45 = 36×1.25；`ReadingListRow` 基准 76，多行时随内容长高）
+- [x] 网格卡片标题**居中**（`FileGridCell` / `ReadingGridCell` 均 `AlignHCenter`）
+- [x] 视频时长放在**标题下方**（不遮封面、不换行）；**不显示修改时间**（`modTime` 只用于封面指纹校验，不上屏）
+- [x] 类型图标与目录图标**去白底、放大**（`FileTypeIcon` 明确不加背景容器，`iconRatio` 0.9/0.82）
+- [x] **目录不显示子项数**（并移除对应的额外列举请求）
+- [x] **文件名行数设置六处生效**（浏览网格/列表、收藏网格/列表、阅读网格/列表）且即时生效
+      （阅读列表补 `nameLines` 换行 + 内容自适应行高；阅读网格不再夹到 3 行）
+- [x] 选中高亮为「浮起抬升」（内缩圆角 + 放大 + 软阴影 + 细描边），**不得贴边直角色块**
+      （统一 `CellPressHighlight`：`inset` + 1.012 放大 + 两层软阴影 + 1pt 主色描边，填充 8%）
 - [ ] hover 高亮由统一修饰器渲染（各页面不得各写一套）
-- [ ] **多选态下进度环/播放动画与勾选标记并列可见**
+- [x] **多选态下进度环/播放动画与勾选标记并列可见**（`SelectionTick` 右上角；漫画徽标在多选时让位，进度环不动）
 
 ### 14.4 菜单与弹窗
 
@@ -1098,12 +1227,15 @@
 - [x] **ZIP64 支持**
 - [x] **RAR / CBR 支持**（rar 无尾部署引 → 本地整包直读；远程先落地缓存包并显示下载百分比）
 - [x] 缓存优先源秒开 + 后台补齐
-      （页级缓存已命中优先；「后台归档补齐」随整包缓存一起做）
+      （页级缓存命中优先；**页名清单命中就先把页数/页序/续读页上屏**，归档在后台补齐并核对页序）
+- [x] 离线源：够不着时用页名清单 + 页缓存进降级阅读，缺页明确提示
 - [x] 控制层：顶栏裸显示 + 底部毛玻璃胶囊 + ⋯ 菜单（模式 / 双页方向 / 亮度）
-      （底栏「目录」按钮 + `T` 开合缩略图面板已做；「下一本」chip 未做）
+      （底栏「目录」按钮 + `T` 开合缩略图面板已做；「下一本」由读到底提示条覆盖）
 - [x] 缩略图面板：网格按需小尺寸解码、点击跳页、按整行对齐到当前页
+- [x] 翻页预取：两侧各 3 页、并发 3、翻页方向优先；单页/双页/条漫按需下采样解码
 - [x] 进度轨**拖动中只改本地值、松手才跳页**，气泡跟随
 - [x] 底栏毛玻璃样式与小说阅读器统一
+- [x] 翻完推荐下一卷：读到底浮出提示条（无倒计时），按目录排序偏好找下一卷、点才换
 
 ### 14.13 浏览器
 
@@ -1139,8 +1271,13 @@
 
 ### 14.16 设置生效
 
-- [ ] 文件名行数、显示设置、播放器偏好、阅读器偏好等**改动即时生效**，不得需重启或切主题才刷新
-- [ ] 「最小化自动悬浮小窗」开关运行期修改即时生效（含兜底拒绝自动触发）
+- [x] 文件名行数、显示设置、播放器偏好、阅读器偏好等**改动即时生效**，不得需重启或切主题才刷新
+      （文件名行数：浏览/收藏/阅读共 6 处绑定 `browse.fileNameLines`；
+       阅读器偏好：设置页与阅读器写同一组 `reader.*` 键，`NovelBridge` / `ComicBridge` 监听
+       `AppSettings::settingChanged` 后走各自 setter 同步，见 `ReaderSection.qml`）
+- [x] 「最小化自动悬浮小窗」开关运行期修改即时生效（含兜底拒绝自动触发）
+      （`WindowController::minimizeToFloating` 直读 `player.minimizeToFloating`，`Main.qml` 在
+       `onVisibilityChanged` 时判定；播放器空闲 / 已是小窗时拒绝自动变身）
 
 ### 14.17 iOS 专有（不适用，验收时确认已有桌面等价物）
 

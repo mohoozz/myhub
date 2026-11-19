@@ -1,0 +1,12 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <!--
+      内置正文宋体：思源宋体（Source Han Serif CN）子集，OFL-1.1。
+      同目录的 OFL.txt 是许可证原文，必须与字体一起分发。
+      重新生成见 scripts/subset-font.ps1。
+    -->
+    <qresource prefix="/">
+        <file>fonts/serif/SourceHanSerifCN-Subset.otf</file>
+        <file>fonts/serif/OFL.txt</file>
+    </qresource>
+</RCC>

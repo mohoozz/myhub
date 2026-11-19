@@ -57,6 +57,11 @@ private slots:
     void nextBookStopsAtLastBook();
     void nextBookRequiresCurrentToBeBook();
     void nextBookFollowsDirectoryPreference();
+
+    void picksNextComicAcrossArchives();
+    void nextComicSkipsNonComics();
+    void nextComicStopsAtLastComic();
+    void nextComicRequiresCurrentToBeComic();
 };
 
 void TestDirectorySort::keepsDirectoriesFirst()
@@ -238,6 +243,57 @@ void TestDirectorySort::nextBookFollowsDirectoryPreference()
     const FileEntry next = DirectorySort::nextBook(list, QStringLiteral("/media/中.epub"),
                                                    QStringLiteral("time"), false);
     QCOMPARE(next.name, QStringLiteral("旧.txt"));
+}
+
+void TestDirectorySort::picksNextComicAcrossArchives()
+{
+    // cbz 只是改了名的 zip、cbr 只是 rar：同一话的两种打包算同类
+    FileEntryList list{makeFile(QStringLiteral("第1话.cbz")), makeFile(QStringLiteral("第2话.cbr")),
+                       makeFile(QStringLiteral("第3话.zip"))};
+
+    QCOMPARE(DirectorySort::nextComic(list, QStringLiteral("/media/第1话.cbz"),
+                                      QStringLiteral("name"), true)
+                 .name,
+             QStringLiteral("第2话.cbr"));
+    QCOMPARE(DirectorySort::nextComic(list, QStringLiteral("/media/第2话.cbr"),
+                                      QStringLiteral("name"), true)
+                 .name,
+             QStringLiteral("第3话.zip"));
+}
+
+void TestDirectorySort::nextComicSkipsNonComics()
+{
+    FileEntryList list{makeFile(QStringLiteral("上卷.cbz")), makeDir(QStringLiteral("拆开的图")),
+                       makeFile(QStringLiteral("封面.jpg")), makeFile(QStringLiteral("真人版.mp4")),
+                       makeFile(QStringLiteral("下卷.cbr"))};
+
+    const FileEntry next = DirectorySort::nextComic(list, QStringLiteral("/media/上卷.cbz"),
+                                                    QStringLiteral("name"), true);
+    QCOMPARE(next.name, QStringLiteral("下卷.cbr"));
+}
+
+void TestDirectorySort::nextComicStopsAtLastComic()
+{
+    // 末卷之后即使还有封面图也不回绕
+    FileEntryList list{makeFile(QStringLiteral("第1话.cbz")), makeFile(QStringLiteral("第2话.cbz")),
+                       makeFile(QStringLiteral("封面.jpg"))};
+
+    QVERIFY(!DirectorySort::nextComic(list, QStringLiteral("/media/第2话.cbz"),
+                                      QStringLiteral("name"), true)
+                 .isValid());
+}
+
+void TestDirectorySort::nextComicRequiresCurrentToBeComic()
+{
+    // 漫画目录里点开的封面大图 / 视频：它不是「一卷漫画」
+    FileEntryList list{makeFile(QStringLiteral("封面.jpg")), makeFile(QStringLiteral("第1话.cbz"))};
+
+    QVERIFY(!DirectorySort::nextComic(list, QStringLiteral("/media/封面.jpg"),
+                                      QStringLiteral("name"), true)
+                 .isValid());
+    QVERIFY(!DirectorySort::nextComic(list, QStringLiteral("/media/ghost.cbz"),
+                                      QStringLiteral("name"), true)
+                 .isValid());
 }
 
 QTEST_APPLESS_MAIN(TestDirectorySort)

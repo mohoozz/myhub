@@ -17,6 +17,9 @@
 #include "core/database/AppDatabase.h"
 #include "core/files/FileOperations.h"
 #include "core/files/TrashStore.h"
+#include "core/novel/EpubMetaStore.h"
+#include "core/novel/NovelChapterCache.h"
+#include "core/novel/NovelIndexStore.h"
 #include "core/preferences/AppSettings.h"
 #include "core/storage/LocalAdapter.h"
 #include "core/storage/StoragePath.h"
@@ -38,6 +41,7 @@ private slots:
     void purgesEntryWithMeta();
     void purgesEntryWithoutMeta();
     void purgeAllRemovesEveryEntry();
+    void trashingDirectoryDropsNovelCaches();
     void cleanupTestCase();
 
 private:
@@ -46,6 +50,8 @@ private:
     void writeFile(const QString &rel, const QByteArray &content = QByteArrayLiteral("x"));
     /// 直接把条目塞进回收站（复用真实删除路径，保证 meta 与布局一致）
     void trashEntry(const QString &rel, const QByteArray &content = QByteArrayLiteral("x"));
+    /// 塞齐某路径的三份小说缓存（索引 + 章节正文 + epub 目录快照）
+    void seedNovelCaches(const QString &path);
 
     QTemporaryDir m_root;
     std::unique_ptr<LocalAdapter> m_adapter;
@@ -71,6 +77,11 @@ void TestTrash::init()
 {
     QDir(rootPath()).removeRecursively();
     QVERIFY(QDir().mkpath(rootPath()));
+    // 单例数据库跨用例复用：小说缓存表由本文件的用例写入，必须先清干净
+    auto &db = AppDatabase::instance();
+    QVERIFY(db.execute(QStringLiteral("DELETE FROM novelIndex")));
+    QVERIFY(db.execute(QStringLiteral("DELETE FROM novelChapter")));
+    QVERIFY(db.execute(QStringLiteral("DELETE FROM epubMeta")));
 }
 
 void TestTrash::cleanupTestCase()
@@ -251,6 +262,64 @@ void TestTrash::purgeAllRemovesEveryEntry()
     const QStringList leftovers = QDir(absolute(QStringLiteral("/.trash")))
                                       .entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
     QVERIFY2(leftovers.isEmpty(), qPrintable(leftovers.join(QStringLiteral(","))));
+}
+
+void TestTrash::seedNovelCaches(const QString &path)
+{
+    NovelIndex index;
+    index.encoding = TextCodec::Utf8;
+    index.fileSize = 1024;
+    index.modTime = 1700000000000LL;
+    NovelChapter chapter;
+    chapter.title = QStringLiteral("第一章");
+    chapter.startOffset = 0;
+    index.chapters.append(chapter);
+    QVERIFY(NovelIndexStore::save(QStringLiteral("c-test"), path, index));
+
+    QVERIFY(NovelChapterCache::saveEpub(QStringLiteral("c-test"), path,
+                                        {index.fileSize, index.modTime}, 0,
+                                        {QStringLiteral("正文")}));
+
+    EpubMeta meta;
+    meta.title = QStringLiteral("缓存测试");
+    meta.fileSize = index.fileSize;
+    meta.modTime = index.modTime;
+    EpubChapterRef ref;
+    ref.title = QStringLiteral("第一章");
+    ref.href = QStringLiteral("ch1.xhtml");
+    meta.chapters.append(ref);
+    QVERIFY(EpubMetaStore::save(QStringLiteral("c-test"), path, meta));
+}
+
+void TestTrash::trashingDirectoryDropsNovelCaches()
+{
+    writeFile(QStringLiteral("/书架/卷/书.txt"));
+    writeFile(QStringLiteral("/书架/卷/子/二.txt"));
+    writeFile(QStringLiteral("/书架/卷宗/别的.txt"));
+    seedNovelCaches(QStringLiteral("/书架/卷/书.txt"));
+    seedNovelCaches(QStringLiteral("/书架/卷/子/二.txt"));
+    seedNovelCaches(QStringLiteral("/书架/卷宗/别的.txt"));
+
+    auto &ops = FileOperations::instance();
+    QSignalSpy removedSpy(&ops, &FileOperations::removed);
+    ops.removeToTrash(m_adapter.get(), QStringLiteral("c-test"), {QStringLiteral("/书架/卷")});
+    QTRY_COMPARE_WITH_TIMEOUT(removedSpy.count(), 1, 5000);
+
+    // 删目录连子孙缓存一起清：留着只会白占配额（离线列表里也没有这本书了）
+    NovelIndex index;
+    QVERIFY(!NovelIndexStore::find(QStringLiteral("c-test"), QStringLiteral("/书架/卷/书.txt"),
+                                   &index));
+    QVERIFY(!NovelIndexStore::find(QStringLiteral("c-test"), QStringLiteral("/书架/卷/子/二.txt"),
+                                   &index));
+    QVERIFY(NovelChapterCache::cachedChapters(QStringLiteral("c-test"),
+                                              QStringLiteral("/书架/卷/书.txt"))
+                .isEmpty());
+    QCOMPARE(NovelIndexStore::count(), 1);
+    QCOMPARE(NovelChapterCache::count(), 1);
+
+    // 「卷宗」只是名字以「卷」开头，不属于被删的子树
+    QVERIFY(NovelIndexStore::find(QStringLiteral("c-test"), QStringLiteral("/书架/卷宗/别的.txt"),
+                                  &index));
 }
 
 QTEST_MAIN(TestTrash)

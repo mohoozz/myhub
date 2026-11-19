@@ -1,10 +1,11 @@
 // 章节解码产物落盘单测（§5 `NovelChapterCache`、§13「小说章节缓存本地化」）
 //
-// 覆盖三层：
+// 覆盖四层：
 //   1. 往返：txt 行表（含字节偏移）与 epub 段落存进去能原样取回来；
 //   2. 指纹：文件变了（size 或 modTime 任一不符）即未命中，绝不给旧正文；
 //      但「不知道指纹」（离线）时必须放行 —— 那是这条缓存存在的意义；
-//   3. 自愈：payload 被写坏 / 版本不认识 / 偏移不递增，一律当未命中，不抛不崩。
+//   3. 自愈：payload 被写坏 / 版本不认识 / 偏移不递增，一律当未命中，不抛不崩；
+//   4. 生命周期：改名 / 移动跟着路径走（含覆盖式移动撞唯一键）、删目录只清子树。
 //
 // 数据库用临时目录里的真实 sqlite 文件，走与生产完全相同的迁移路径。
 
@@ -84,6 +85,9 @@ private slots:
     void dropStaleOnlyTouchesThatBook();
     void trimKeepsMostRecentRows();
     void removeClearsWholeBook();
+    void renamesWholeSubtree();
+    void renameOverwritesTargetRows();
+    void removeSubtreeOnlyDropsThatTree();
 
 private:
     /// 直接往表里塞一个坏 payload（模拟磁盘损坏 / 旧版本残留）
@@ -103,7 +107,7 @@ void TestNovelChapterCache::initTestCase()
     QVERIFY(m_dir.isValid());
     QVERIFY(AppDatabase::instance().open(m_dir.filePath(QStringLiteral("myhub.sqlite"))));
     // 迁移到最新版本时 novelChapter 表必须已经建好，否则后面的读写全无意义
-    QCOMPARE(AppDatabase::instance().schemaVersion(), 3);
+    QCOMPARE(AppDatabase::instance().schemaVersion(), 5);
 }
 
 void TestNovelChapterCache::cleanupTestCase()
@@ -310,6 +314,82 @@ void TestNovelChapterCache::removeClearsWholeBook()
 
     QStringList restored;
     QVERIFY(NovelChapterCache::loadEpub(kConnectionId, otherPath, kFingerprint, 0, &restored));
+}
+
+void TestNovelChapterCache::renamesWholeSubtree()
+{
+    const QString oldDir = QStringLiteral("/书架/旧");
+    const QString newDir = QStringLiteral("/书架/新");
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, oldDir + QStringLiteral("/a.txt"),
+                                        kFingerprint, 0, {QStringLiteral("a0")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, oldDir + QStringLiteral("/a.txt"),
+                                        kFingerprint, 1, {QStringLiteral("a1")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, oldDir + QStringLiteral("/子/b.txt"),
+                                        kFingerprint, 0, {QStringLiteral("b0")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, QStringLiteral("/书架/别/c.txt"),
+                                        kFingerprint, 0, {QStringLiteral("c0")}));
+
+    // 目录整体改名：缓存跟着走，改名后打开仍能命中（不必重读文件）
+    QCOMPARE(NovelChapterCache::renamePath(kConnectionId, oldDir, newDir), 3);
+
+    QStringList restored;
+    QVERIFY(NovelChapterCache::loadEpub(kConnectionId, newDir + QStringLiteral("/a.txt"),
+                                        kFingerprint, 1, &restored));
+    QCOMPARE(restored, QStringList{QStringLiteral("a1")});
+    QVERIFY(NovelChapterCache::loadEpub(kConnectionId, newDir + QStringLiteral("/子/b.txt"),
+                                        kFingerprint, 0, &restored));
+    QCOMPARE(restored, QStringList{QStringLiteral("b0")});
+
+    // 旧路径上不再留行；兄弟目录「别」只是前缀相同，不能被一起改走
+    QVERIFY(!NovelChapterCache::loadEpub(kConnectionId, oldDir + QStringLiteral("/a.txt"),
+                                         kFingerprint, 0, &restored));
+    QVERIFY(NovelChapterCache::loadEpub(kConnectionId, QStringLiteral("/书架/别/c.txt"),
+                                        kFingerprint, 0, &restored));
+}
+
+void TestNovelChapterCache::renameOverwritesTargetRows()
+{
+    const QString source = QStringLiteral("/书架/新.txt");
+    const QString target = QStringLiteral("/归档/新.txt");
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, source, kFingerprint, 0,
+                                        {QStringLiteral("移动过来的正文")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, target, kFingerprint, 0,
+                                        {QStringLiteral("被覆盖那本的旧正文")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, target, kFingerprint, 5,
+                                        {QStringLiteral("被覆盖那本的第五章")}));
+
+    // 覆盖式移动：目标已有同书缓存行，硬 UPDATE 会撞唯一键 —— 必须先让位再改写
+    QCOMPARE(NovelChapterCache::renamePath(kConnectionId, source, target), 1);
+
+    QStringList restored;
+    QVERIFY(NovelChapterCache::loadEpub(kConnectionId, target, kFingerprint, 0, &restored));
+    QCOMPARE(restored, QStringList{QStringLiteral("移动过来的正文")});
+    // 覆盖前那本书的行已清掉，不会与新文件的行混在一起
+    QVERIFY(!NovelChapterCache::loadEpub(kConnectionId, target, kFingerprint, 5, &restored));
+    QCOMPARE(NovelChapterCache::count(), 1);
+}
+
+void TestNovelChapterCache::removeSubtreeOnlyDropsThatTree()
+{
+    const QString dir = QStringLiteral("/书架/卷");
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, dir + QStringLiteral("/a.txt"), kFingerprint,
+                                        0, {QStringLiteral("a0")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, dir + QStringLiteral("/a.txt"), kFingerprint,
+                                        1, {QStringLiteral("a1")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, dir + QStringLiteral("/子/b.txt"),
+                                        kFingerprint, 0, {QStringLiteral("b0")}));
+    QVERIFY(NovelChapterCache::saveEpub(kConnectionId, QStringLiteral("/书架/卷宗/c.txt"),
+                                        kFingerprint, 0, {QStringLiteral("c0")}));
+    QCOMPARE(NovelChapterCache::count(), 4);
+
+    // 删目录要连子孙一起清，否则删书之后缓存永远留着、白占配额
+    QCOMPARE(NovelChapterCache::removeSubtree(kConnectionId, dir), 3);
+    QCOMPARE(NovelChapterCache::count(), 1);
+
+    // 「卷宗」只是名字以「卷」开头，不是它的子项
+    QStringList restored;
+    QVERIFY(NovelChapterCache::loadEpub(kConnectionId, QStringLiteral("/书架/卷宗/c.txt"),
+                                        kFingerprint, 0, &restored));
 }
 
 QTEST_GUILESS_MAIN(TestNovelChapterCache)

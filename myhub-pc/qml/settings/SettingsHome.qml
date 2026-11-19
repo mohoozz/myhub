@@ -248,14 +248,12 @@ Item {
             }
         }
 
-        // ---- 2/3/4 占位 ----
-        EmptyState {
+        // ---- 2. 阅读器 ----
+        ReaderSection {
             anchors.fill: parent
             visible: root.currentSection === 2
-            iconName: "book"
-            title: qsTr("阅读器设置")
-            description: qsTr("字号、行距、主题、翻页模式等将在 M3 里程碑实现。")
         }
+
         // ---- 3. 播放器设置 ----
         C.ScrollView {
             anchors.fill: parent
@@ -489,12 +487,11 @@ Item {
                 }
             }
         }
-        EmptyState {
+        // ---- 4. 缓存与存储 ----
+        CacheSection {
             anchors.fill: parent
+            active: root.currentSection === 4
             visible: root.currentSection === 4
-            iconName: "hard-drive"
-            title: qsTr("缓存与存储")
-            description: qsTr("分区占用统计与清理将在 M5 里程碑实现。")
         }
 
         // ---- 5. 回收站 ----

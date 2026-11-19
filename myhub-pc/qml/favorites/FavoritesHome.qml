@@ -152,7 +152,8 @@ Item {
             readonly property real coverHeight: (cellWidth - AppTheme.spacingSm * 2) * 0.72
 
             cellWidth: Math.floor(width / Math.max(2, Math.floor(width / 150)))
-            cellHeight: coverHeight + 76
+            // 与浏览页同一条公式：文件名行数改了，格子跟着长高（§14.3 即时生效）
+            cellHeight: coverHeight + 46 + AppSettings.fileNameLines * 16
 
             delegate: Item {
                 id: gridCell
@@ -219,7 +220,7 @@ Item {
                         font.pixelSize: AppTheme.fontSizeSmall
                         color: AppTheme.colors.textPrimary
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        maximumLineCount: 2
+                        maximumLineCount: AppSettings.fileNameLines
                         elide: Text.ElideRight
                         lineHeight: 1.2
                     }
@@ -286,7 +287,8 @@ Item {
                 required property string createdAtText
 
                 width: listView.width
-                height: 52
+                // 文件名多行时整行长高：固定 52 会把第二行裁掉
+                height: Math.max(52, nameText.implicitHeight + AppTheme.spacingMd * 2)
 
                 CellPressHighlight {
                     anchors.fill: parent
@@ -318,6 +320,7 @@ Item {
                     }
 
                     Text {
+                        id: nameText
                         anchors.left: rowCover.right
                         anchors.leftMargin: AppTheme.spacingMd
                         anchors.right: rowMeta.left
@@ -327,8 +330,10 @@ Item {
                         font.family: AppTheme.fontFamily
                         font.pixelSize: AppTheme.fontSizeBody
                         color: AppTheme.colors.textPrimary
+                        wrapMode: AppSettings.fileNameLines > 1
+                            ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap
                         elide: Text.ElideRight
-                        maximumLineCount: 1
+                        maximumLineCount: AppSettings.fileNameLines
                     }
 
                     Row {

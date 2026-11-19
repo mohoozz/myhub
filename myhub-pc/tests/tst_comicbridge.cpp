@@ -6,6 +6,7 @@
 
 #include "RarTestBuilder.h"
 
+#include "core/comic/ComicPageStore.h"
 #include "core/database/AppDatabase.h"
 #include "core/history/ProgressRepository.h"
 #include "core/preferences/AppSettings.h"
@@ -125,6 +126,62 @@ QByteArray pngOf(const QColor &color, int size = 24)
 
 const QString kComicPath = QStringLiteral("/漫画/第一卷.cbz");
 const QString kNotComicPath = QStringLiteral("/漫画/不是漫画.zip");
+const QString kImageEpubPath = QStringLiteral("/漫画/图集.epub");
+const QString kTextEpubPath = QStringLiteral("/漫画/文字书.epub");
+
+const QByteArray kContainerXml = QByteArrayLiteral(
+    "<?xml version='1.0' encoding='utf-8'?>"
+    "<container version='1.0' xmlns='urn:oasis:names:tc:opendocument:xmlns:container'>"
+    "<rootfiles><rootfile full-path='OEBPS/content.opf' "
+    "media-type='application/oebps-package+xml'/></rootfiles></container>");
+
+/// 图集 epub：spine 顺序刻意与条目名相反（002 → 001 → 003），
+/// 若漫画侧还按条目名排序，打开后第一页就会是 001
+QByteArray imageEpub()
+{
+    const QByteArray opf = QByteArrayLiteral(
+        "<?xml version='1.0' encoding='utf-8'?>"
+        "<package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"
+        "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+        "<dc:title>图集</dc:title></metadata>"
+        "<manifest>"
+        "<item id='p1' href='pages/001.png' media-type='image/png'/>"
+        "<item id='p2' href='pages/002.png' media-type='image/png'/>"
+        "<item id='p3' href='pages/003.png' media-type='image/png'/>"
+        "</manifest>"
+        "<spine><itemref idref='p2'/><itemref idref='p1'/><itemref idref='p3'/></spine>"
+        "</package>");
+    return buildZip({
+        {QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip")},
+        {QStringLiteral("META-INF/container.xml"), kContainerXml},
+        {QStringLiteral("OEBPS/content.opf"), opf},
+        {QStringLiteral("OEBPS/pages/001.png"), pngOf(Qt::red)},
+        {QStringLiteral("OEBPS/pages/002.png"), pngOf(Qt::green)},
+        {QStringLiteral("OEBPS/pages/003.png"), pngOf(Qt::blue)},
+    });
+}
+
+/// 文字书 epub：手动「以漫画阅读器打开」用错了地方的情形
+QByteArray textEpub()
+{
+    const QByteArray opf =
+        QByteArrayLiteral("<?xml version='1.0' encoding='utf-8'?>"
+                          "<package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"
+                          "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+                          "<dc:title>文字书</dc:title></metadata>"
+                          "<manifest>"
+                          "<item id='c1' href='text/ch1.xhtml' media-type='application/xhtml+xml'/>"
+                          "</manifest>"
+                          "<spine><itemref idref='c1'/></spine>"
+                          "</package>");
+    return buildZip({
+        {QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip")},
+        {QStringLiteral("META-INF/container.xml"), kContainerXml},
+        {QStringLiteral("OEBPS/content.opf"), opf},
+        {QStringLiteral("OEBPS/text/ch1.xhtml"),
+         QByteArrayLiteral("<html><body><p>正文</p></body></html>")},
+    });
+}
 
 } // namespace
 
@@ -144,9 +201,17 @@ private slots:
     void exposesPagesOnDemand();
     void tracksScrollPositionWithoutDecoding();
     void remembersDisplayPreferences();
+    void detectsDirectionFromTitleAndKeepsManualChoice();
     void rejectsArchiveWithoutImages();
+    void rejectsNonComicExtension();
     void invalidatesPagesWhenFileChanges();
     void opensLocalCbrAndShowsPage();
+    void prefetchesNeighborPages();
+    void suggestsNextComicWhenFinished();
+    void storesPageListOnOpen();
+    void opensOfflineFromPageCache();
+    void opensImageEpubInSpineOrder();
+    void rejectsTextEpubAsComic();
 
 private:
     void writeComic(const QByteArray &bytes);
@@ -174,6 +239,16 @@ void TestComicBridge::initTestCase()
                          {QStringLiteral("p/2.png"), pngOf(Qt::green)},
                          {QStringLiteral("p/10.png"), pngOf(Qt::blue)}}));
 
+    QFile imageBook(m_root.filePath(QStringLiteral("漫画/图集.epub")));
+    QVERIFY(imageBook.open(QIODevice::WriteOnly));
+    QVERIFY(imageBook.write(imageEpub()) > 0);
+    imageBook.close();
+
+    QFile textBook(m_root.filePath(QStringLiteral("漫画/文字书.epub")));
+    QVERIFY(textBook.open(QIODevice::WriteOnly));
+    QVERIFY(textBook.write(textEpub()) > 0);
+    textBook.close();
+
     QFile notComic(m_root.filePath(QStringLiteral("漫画/不是漫画.zip")));
     QVERIFY(notComic.open(QIODevice::WriteOnly));
     notComic.write(buildZip({{QStringLiteral("readme.txt"), QByteArrayLiteral("hello")}}));
@@ -191,6 +266,7 @@ void TestComicBridge::init()
 {
     ComicBridge::instance()->close();
     QVERIFY(AppDatabase::instance().execute(QStringLiteral("DELETE FROM readingProgress")));
+    QVERIFY(AppDatabase::instance().execute(QStringLiteral("DELETE FROM comicPages")));
 }
 
 void TestComicBridge::cleanupTestCase()
@@ -375,7 +451,10 @@ void TestComicBridge::remembersDisplayPreferences()
 
     // 落盘的键名是契约：模式/方向是本阅读器的，亮度与小说**共用**同一个键
     QCOMPARE(AppSettings::instance().value(QStringLiteral("reader.comic.mode")).toInt(), 2);
-    QCOMPARE(AppSettings::instance().value(QStringLiteral("reader.comic.rtl")).toBool(), false);
+    // 方向换成三态键：点一下就写成手动值（0 左到右 / 1 右到左），不再动老的布尔键
+    QCOMPARE(comic.direction(), 0);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("reader.comic.direction")).toInt(), 0);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("reader.comic.rtl")).isValid(), false);
     QCOMPARE(AppSettings::instance().value(QStringLiteral("reader.brightness")).toDouble(), 0.4);
 
     // 越界夹紧，不写脏值进配置
@@ -390,6 +469,54 @@ void TestComicBridge::remembersDisplayPreferences()
     QVERIFY(comic.rightToLeft());
 }
 
+void TestComicBridge::detectsDirectionFromTitleAndKeepsManualChoice()
+{
+    ComicBridge &comic = *ComicBridge::instance();
+
+    // 自动（默认）：日文书名判成右到左，界面拿到 autoDirection 才能显示「自动（右→左）」
+    comic.setDirection(-1);
+    comic.open(m_connectionId, kComicPath, QStringLiteral("進撃の巨人 第1巻"));
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 8000);
+    QVERIFY(comic.opened());
+    QCOMPARE(comic.direction(), -1);
+    QCOMPARE(comic.autoDirection(), 1);
+    QVERIFY(comic.rightToLeft());
+
+    // 中文条漫：同一本书换个标题就翻成左到右（判定跟着书走，不是全局一次）
+    comic.open(m_connectionId, kComicPath, QStringLiteral("某条漫 第12话"));
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 8000);
+    QVERIFY(comic.opened());
+    QCOMPARE(comic.autoDirection(), 0);
+    QVERIFY(!comic.rightToLeft());
+
+    // 判不出来：回到默认（右到左），不继承上一本的结论
+    comic.open(m_connectionId, kComicPath, QStringLiteral("第一卷"));
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 8000);
+    QVERIFY(comic.opened());
+    QVERIFY(comic.rightToLeft());
+
+    // 手动定过之后，自动判定只用于显示，不再改生效方向
+    comic.setDirection(0);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("reader.comic.direction")).toInt(), 0);
+    comic.open(m_connectionId, kComicPath, QStringLiteral("進撃の巨人 第1巻"));
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 8000);
+    QVERIFY(comic.opened());
+    QCOMPARE(comic.autoDirection(), 1);
+    QVERIFY(!comic.rightToLeft());
+
+    // 老版本只存过布尔键：读到时当成手动值迁移过来（已选过的方向不该被重新猜）
+    comic.setDirection(1);
+    QCOMPARE(comic.direction(), 1);
+    AppSettings::instance().remove(QStringLiteral("reader.comic.direction"));
+    AppSettings::instance().setValue(QStringLiteral("reader.comic.rtl"), false);
+    QTRY_COMPARE(comic.direction(), 0);
+    QVERIFY(!comic.rightToLeft());
+
+    // 复原：回到自动，且清掉老键，别把状态漏给其它用例
+    comic.setDirection(-1);
+    AppSettings::instance().remove(QStringLiteral("reader.comic.rtl"));
+}
+
 void TestComicBridge::rejectsArchiveWithoutImages()
 {
     ComicBridge &comic = *ComicBridge::instance();
@@ -399,6 +526,21 @@ void TestComicBridge::rejectsArchiveWithoutImages()
     QVERIFY(!comic.opened());
     QCOMPARE(comic.pageCount(), 0);
     QVERIFY2(comic.errorText().contains(QStringLiteral("不是漫画")), qPrintable(comic.errorText()));
+}
+
+void TestComicBridge::rejectsNonComicExtension()
+{
+    // 「以漫画阅读器打开」被用在 txt/mp4 上：扩展名这道闸要直说支持什么，
+    // 不能走到 zip 解析再报「不是压缩包」；也不该留下一直转的加载态
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, QStringLiteral("/漫画/说明.txt"), QString());
+
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.errorText().isEmpty(), 5000);
+    QVERIFY(!comic.opened());
+    QVERIFY(!comic.loading());
+    QCOMPARE(comic.pageCount(), 0);
+    QVERIFY2(comic.errorText().contains(QStringLiteral("不是漫画文件")),
+             qPrintable(comic.errorText()));
 }
 
 void TestComicBridge::invalidatesPagesWhenFileChanges()
@@ -454,6 +596,220 @@ void TestComicBridge::opensLocalCbrAndShowsPage()
     const QImage shown(local);
     QVERIFY2(!shown.isNull(), "缓存的页必须是真图片");
     QCOMPARE(shown.size(), QSize(24, 24));
+}
+
+void TestComicBridge::prefetchesNeighborPages()
+{
+    // 预取窗口：打开后当前页两侧各 3 页自己解，不用 QML 逐个 ensurePage；
+    // 但窗口之外的页不许提前解 —— 厚本从第一页一路解到最后一页会把弱网压死
+    rartest::RarBuilder rar;
+    for (int i = 1; i <= 7; ++i) {
+        rar.add(QStringLiteral("p/%1.png").arg(i),
+                pngOf(QColor::fromHsv((i * 40) % 360, 200, 200)));
+    }
+
+    const QString relative = QStringLiteral("漫画/预取.cbr");
+    QFile file(m_root.filePath(relative));
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(rar.build());
+    file.close();
+
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, QStringLiteral("/漫画/预取.cbr"), QString());
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 5000);
+    QVERIFY2(comic.errorText().isEmpty(), qPrintable(comic.errorText()));
+    QCOMPARE(comic.pageCount(), 7);
+
+    // 第 0 页的两侧 1 / 2 / 3：没人 ensurePage 过，得靠预取自己解出来
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrlAt(1).isEmpty() && !comic.pageUrlAt(2).isEmpty()
+                                 && !comic.pageUrlAt(3).isEmpty(),
+                             5000);
+    QVERIFY2(comic.pageUrlAt(6).isEmpty(), "预取越界了：窗口外的页不该提前解");
+
+    // 往后翻一页：窗口跟着走，4 号页成了新的「后一页」
+    comic.nextPage();
+    QTRY_COMPARE_WITH_TIMEOUT(comic.pageIndex(), 1, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrlAt(4).isEmpty(), 5000);
+}
+
+void TestComicBridge::suggestsNextComicWhenFinished()
+{
+    // 同目录按名排序：第1话.cbz → 第2话.cbz（夹着的封面图不该被推上来）
+    QVERIFY(QDir(m_root.path()).mkpath(QStringLiteral("漫画/连载")));
+    const auto writeArchive = [this](const QString &name) {
+        QFile file(m_root.filePath(QStringLiteral("漫画/连载/%1").arg(name)));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(buildZip({{QStringLiteral("p/1.png"), pngOf(Qt::yellow)}}));
+        file.close();
+    };
+    writeArchive(QStringLiteral("第1话.cbz"));
+    writeArchive(QStringLiteral("第2话.cbz"));
+    QFile cover(m_root.filePath(QStringLiteral("漫画/连载/封面.jpg")));
+    QVERIFY(cover.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    cover.write(pngOf(Qt::white));
+    cover.close();
+
+    const QString firstPath = QStringLiteral("/漫画/连载/第1话.cbz");
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, firstPath, QString());
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 5000);
+    QVERIFY2(comic.errorText().isEmpty(), qPrintable(comic.errorText()));
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrl().isEmpty(), 5000);
+
+    // 没翻到底之前不该有候选
+    QVERIFY(comic.nextSuggestion().isEmpty());
+
+    comic.setAtBookEnd(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.nextSuggestion().isEmpty(), 5000);
+    QCOMPARE(comic.nextSuggestion().value(QStringLiteral("name")).toString(),
+             QStringLiteral("第2话.cbz"));
+    QCOMPARE(comic.nextSuggestion().value(QStringLiteral("path")).toString(),
+             QStringLiteral("/漫画/连载/第2话.cbz"));
+    QCOMPARE(comic.nextSuggestion().value(QStringLiteral("connectionId")).toString(),
+             m_connectionId);
+
+    // 读到底 = 已读完：进度落 finished，百分比恒定 100%
+    // （双页最后一屏的 pageIndex 停在倒数第二页，靠页码算会漏成 99%）
+    ProgressRecord record;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ProgressRepository::instance().find(m_connectionId, firstPath, &record), 5000);
+    QVERIFY(record.finished);
+    QCOMPARE(record.percent, 1.0);
+    QCOMPARE(comic.percent(), 1.0);
+
+    // 往回翻：提示条撤销，且「已收起」复位（下次读到底还能再推一次）
+    comic.setAtBookEnd(false);
+    QVERIFY(comic.nextSuggestion().isEmpty());
+
+    // 点叉收起之后，本次读到底不再重复弹
+    comic.setAtBookEnd(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.nextSuggestion().isEmpty(), 5000);
+    comic.dismissNextSuggestion();
+    QVERIFY(comic.nextSuggestion().isEmpty());
+
+    // 离开末尾再回来：重新可以推荐
+    comic.setAtBookEnd(false);
+    comic.setAtBookEnd(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.nextSuggestion().isEmpty(), 5000);
+
+    // 点「打开」真的换到下一卷
+    comic.openNextSuggestion();
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() && !comic.loading(), 8000);
+    QCOMPARE(comic.title(), QStringLiteral("第2话.cbz"));
+    QVERIFY2(comic.nextSuggestion().isEmpty(), "换书之后旧候选必须撤掉");
+}
+
+void TestComicBridge::storesPageListOnOpen()
+{
+    // 别依赖别的用例留下的文件内容：自己写一本页数已知的
+    writeComic(buildZip({{QStringLiteral("p/1.png"), pngOf(Qt::red)},
+                         {QStringLiteral("p/2.png"), pngOf(Qt::green)},
+                         {QStringLiteral("p/10.png"), pngOf(Qt::blue)}}));
+
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, kComicPath, QString());
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrl().isEmpty(), 5000);
+
+    // 页名清单必须落库：下次打开靠它秒开、离线靠它进降级阅读
+    const QFileInfo file(m_root.filePath(QStringLiteral("漫画/第一卷.cbz")));
+    ComicPageList stored;
+    QVERIFY(ComicPageStore::find(m_connectionId, kComicPath, &stored));
+    QCOMPARE(stored.pages,
+             (QStringList{QStringLiteral("p/1.png"), QStringLiteral("p/2.png"),
+                          QStringLiteral("p/10.png")}));
+    QVERIFY(ComicPageStore::load(m_connectionId, kComicPath, file.size(),
+                                 file.lastModified().toMSecsSinceEpoch(), &stored));
+
+    // 文件换了（大小/时间变了）：指纹失配，清单必须作废，否则会按旧页序乱翻
+    QVERIFY(AppDatabase::instance().execute(
+        QStringLiteral("UPDATE comicPages SET fileSize = fileSize + 1")));
+    QVERIFY(!ComicPageStore::load(m_connectionId, kComicPath, file.size(),
+                                  file.lastModified().toMSecsSinceEpoch(), &stored));
+}
+
+void TestComicBridge::opensImageEpubInSpineOrder()
+{
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, kImageEpubPath, QString());
+
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 8000);
+    QVERIFY2(comic.errorText().isEmpty(), qPrintable(comic.errorText()));
+
+    // 页序取自 OPF 的 spine（002 → 001 → 003），不是条目名排序（001 打头）
+    QCOMPARE(comic.pageCount(), 3);
+    QCOMPARE(comic.pageName(), QStringLiteral("OEBPS/pages/002.png"));
+
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrl().isEmpty(), 5000);
+    const QImage shown(QUrl(comic.pageUrl()).toLocalFile());
+    QVERIFY(!shown.isNull());
+    QCOMPARE(shown.pixelColor(1, 1), QColor(Qt::green)); // 002 页是绿色
+
+    comic.nextPage();
+    QTRY_COMPARE_WITH_TIMEOUT(comic.pageIndex(), 1, 5000);
+    QCOMPARE(comic.pageName(), QStringLiteral("OEBPS/pages/001.png"));
+}
+
+void TestComicBridge::rejectsTextEpubAsComic()
+{
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, kTextEpubPath, QString());
+
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.errorText().isEmpty(), 8000);
+    QVERIFY(!comic.opened());
+    // 说清楚该换哪个阅读器，而不是「压缩包里没有图片」
+    QVERIFY2(comic.errorText().contains(QStringLiteral("不是图集")), qPrintable(comic.errorText()));
+}
+
+void TestComicBridge::opensOfflineFromPageCache()
+{
+    // 9 页：预取窗口（±3）只覆盖前 4 页，第 9 页注定没缓存，用它验证「缺口」表现
+    QList<QPair<QString, QByteArray>> files;
+    for (int i = 1; i <= 9; ++i) {
+        files.append({QStringLiteral("p/%1.png").arg(i), pngOf(QColor::fromHsv(i * 30, 200, 200))});
+    }
+    writeComic(buildZip(files));
+
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, kComicPath, QString());
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrl().isEmpty(), 5000);
+    const QString firstPage = comic.pageUrl();
+    comic.close();
+    QVERIFY(!comic.offline());
+
+    // 源够不着了（文件被移走 / 盘掉线）：页名清单 + 页缓存还在，应当进降级阅读
+    const QString real = m_root.filePath(QStringLiteral("漫画/第一卷.cbz"));
+    QVERIFY(QFile::rename(real, real + QStringLiteral(".moved")));
+
+    comic.open(m_connectionId, kComicPath, QString());
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 5000);
+    QVERIFY2(comic.errorText().isEmpty(), qPrintable(comic.errorText()));
+    QVERIFY(comic.offline());
+
+    // 页数来自清单：能翻、能看读过的页
+    QCOMPARE(comic.pageCount(), 9);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrl().isEmpty(), 5000);
+    QCOMPARE(comic.pageUrl(), firstPage);
+
+    // 没缓存的页给一句明确的话，而不是一直转圈
+    comic.goToPage(8);
+    QTRY_COMPARE_WITH_TIMEOUT(comic.pageIndex(), 8, 2000);
+    QVERIFY(comic.pageUrl().isEmpty());
+    QVERIFY2(!comic.pageLoading(), "离线时不该停在 loading 态");
+    QVERIFY2(comic.statusText().contains(QStringLiteral("离线")), qPrintable(comic.statusText()));
+    // 翻不到的内容不许写进度：续读点还该停在打开时那一页
+    ProgressRecord record;
+    QVERIFY(ProgressRepository::instance().find(m_connectionId, kComicPath, &record));
+    QCOMPARE(record.progress.value(QStringLiteral("page")).toInt(), 0);
+
+    // 读到底也别盖章「已读完」：离线只看得到恰好缓存的页，未必是全书结尾
+    comic.setAtBookEnd(true);
+    QVERIFY(ProgressRepository::instance().find(m_connectionId, kComicPath, &record));
+    QVERIFY2(!record.finished, "离线翻到末尾不等于读完全书");
+    QVERIFY(comic.nextSuggestion().isEmpty());
+
+    QVERIFY(QFile::rename(real + QStringLiteral(".moved"), real));
 }
 
 QTEST_MAIN(TestComicBridge)

@@ -75,8 +75,12 @@ myhub_add_test(tst_chapterrules)
 myhub_add_test(tst_txtindexer)
 myhub_add_test(tst_rangezip)
 myhub_add_test(tst_comicbook)
+myhub_add_test(tst_comicdirection)
+myhub_add_test(tst_comicpagestore)
+myhub_add_test(tst_cachestore)
 myhub_add_test(tst_archivereader)
 myhub_add_test(tst_epubbook)
+myhub_add_test(tst_epubmetastore)
 myhub_add_test(tst_novelchaptercache)
 
 # epub 接入阅读器：NovelBridge 同样在 features/ 下（带 QML_ELEMENT，需 Qt6::Qml），
@@ -85,10 +89,19 @@ qt_add_executable(tst_novelbridge
     tst_novelbridge.cpp
     ${CMAKE_SOURCE_DIR}/src/features/reading/NovelBridge.h
     ${CMAKE_SOURCE_DIR}/src/features/reading/NovelBridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/reading/NovelPager.h
+    ${CMAKE_SOURCE_DIR}/src/features/reading/NovelPager.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/reading/BundledFonts.h
+    ${CMAKE_SOURCE_DIR}/src/features/reading/BundledFonts.cpp
+    # 内置字体打进测试目标：验证「qrc 里的字体真的能注册、族名真的排到链首」
+    ${CMAKE_SOURCE_DIR}/resources/fonts.qrc
     ${CMAKE_SOURCE_DIR}/src/features/cover/CoverService.h
     ${CMAKE_SOURCE_DIR}/src/features/cover/CoverService.cpp
     ${CMAKE_SOURCE_DIR}/src/features/connections/ConnectionStore.h
     ${CMAKE_SOURCE_DIR}/src/features/connections/ConnectionStore.cpp
+    # 图集 epub 要整本转交漫画阅读器，NovelBridge 因此直接依赖 ComicBridge
+    ${CMAKE_SOURCE_DIR}/src/features/reading/ComicBridge.h
+    ${CMAKE_SOURCE_DIR}/src/features/reading/ComicBridge.cpp
 )
 target_include_directories(tst_novelbridge PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
@@ -98,6 +111,18 @@ target_include_directories(tst_novelbridge PRIVATE
 target_link_libraries(tst_novelbridge PRIVATE myhub_core Qt6::Test Qt6::Qml Qt6::Gui)
 set_target_properties(tst_novelbridge PROPERTIES WIN32_EXECUTABLE FALSE)
 myhub_register_test(tst_novelbridge)
+
+# 行级分页（§5.1）：纯排版计算，只要 Qt Gui 的字体与 QTextLayout，
+# 不碰存储层，所以不链 myhub_core。
+qt_add_executable(tst_novelpager
+    tst_novelpager.cpp
+    ${CMAKE_SOURCE_DIR}/src/features/reading/NovelPager.h
+    ${CMAKE_SOURCE_DIR}/src/features/reading/NovelPager.cpp
+)
+target_include_directories(tst_novelpager PRIVATE "${CMAKE_SOURCE_DIR}/src/features/reading")
+target_link_libraries(tst_novelpager PRIVATE Qt6::Test Qt6::Gui)
+set_target_properties(tst_novelpager PROPERTIES WIN32_EXECUTABLE FALSE)
+myhub_register_test(tst_novelpager)
 
 # 漫画阅读器桥接（§6 PC-207）：与小说桥接同一套理由 —— 源文件编在 MyHub 目标里，
 # 测试自带；ComicBridge 带 QML_SINGLETON，额外链接 Qt6::Qml。

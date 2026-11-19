@@ -3,6 +3,8 @@
 #include "core/files/DirectorySort.h"
 #include "core/history/ProgressRepository.h"
 #include "core/novel/EpubBook.h"
+#include "core/novel/EpubMetaStore.h"
+#include "core/novel/NovelImageStore.h"
 #include "core/novel/NovelIndexStore.h"
 #include "core/novel/TxtIndexer.h"
 #include "core/preferences/AppSettings.h"
@@ -11,11 +13,18 @@
 #include "core/stream/AdapterRangeSource.h"
 #include "core/utils/AppLogger.h"
 #include "features/connections/ConnectionStore.h"
+#include "features/reading/BundledFonts.h"
+#include "features/reading/ComicBridge.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QSet>
+#include <QTimer>
+#include <QUrl>
 
 #include <utility>
 
@@ -25,13 +34,57 @@ namespace {
 // 排版偏好键名与 iOS `AppSettings.Reader` 一致，配置互导时无需重新映射
 constexpr auto kFontSizeKey = "reader.fontSize";
 constexpr auto kLineSpacingKey = "reader.lineSpacing";
+constexpr auto kFontStyleKey = "reader.fontStyle";
 constexpr auto kThemeKey = "reader.theme";
 constexpr auto kBrightnessKey = "reader.brightness";
+constexpr auto kPageModeKey = "reader.pageMode";
 
 constexpr int kMinFontSize = 12;
 constexpr int kMaxFontSize = 32;
 constexpr double kMinLineSpacing = 1.2;
 constexpr double kMaxLineSpacing = 2.4;
+
+/**
+ * 正文字体回退链：从「最想用的」排到「几乎一定有的」。
+ *
+ * 不内置字体文件（思源宋体一套几十 MB，多数平台本来就有宋体/明体），
+ * 命中链尾的 `serif` / `sans-serif` 由 Qt 交给系统兜底，不会出现方块字。
+ * 这一串同时喂给 QML（`font.family`）与分页器（`QFont::setFamilies`）——
+ * 两处必须完全一致，否则量出来的行宽与画出来的不是同一份。
+ */
+const QStringList &sansFamilies()
+{
+    static const QStringList families{
+        QStringLiteral("Microsoft YaHei UI"), QStringLiteral("Microsoft YaHei"),
+        QStringLiteral("PingFang SC"), QStringLiteral("Noto Sans CJK SC"),
+        QStringLiteral("sans-serif")};
+    return families;
+}
+
+const QStringList &serifFamilies()
+{
+    static const QStringList families{QStringLiteral("Source Han Serif SC"),
+                                      QStringLiteral("Noto Serif CJK SC"),
+                                      QStringLiteral("Songti SC"),
+                                      QStringLiteral("STSong"),
+                                      QStringLiteral("SimSun"),
+                                      QStringLiteral("serif")};
+    return families;
+}
+
+QStringList familiesForStyle(int style)
+{
+    QStringList families = style == 1 ? serifFamilies() : sansFamilies();
+    // 内置字体排最前：跨平台字形一致靠它，系统字体只做兜底
+    const QStringList bundled =
+        style == 1 ? BundledFonts::serifFamilies() : BundledFonts::sansFamilies();
+    // 倒着 prepend 才能保持注册顺序（qrc 里排在前面的字体仍然排最前）
+    for (const QString &family : QStringList(bundled.crbegin(), bundled.crend())) {
+        families.removeAll(family);
+        families.prepend(family);
+    }
+    return families;
+}
 
 /// 滚动上报节流：SQLite 写入 + 首页刷新都不该跟着滚动条跑
 constexpr qint64 kReportIntervalMs = 1000;
@@ -45,25 +98,44 @@ QString displayName(const QString &path, const QString &fallback)
     return name.isEmpty() ? path : name;
 }
 
-/**
- * 这个错误是「文件暂时够不着」还是「用户得去改配置」？
- *
- * 前者可以用缓存顶一阵（离线、超时、5xx、文件被移走），后者顶了只会把真正的
- * 问题藏起来：路径写错、协议不支持、鉴权失败时，进阅读器看到的是一片空目录，
- * 用户反而更不知道该去改哪里。
- */
-bool isAvailabilityFailure(const StorageError &error)
+/// 只看扩展名：epub 与 txt 是两条完全不同的数据路径，判断点必须一致
+bool isEpubPath(const QString &path)
 {
-    switch (error.kind()) {
-    case StorageError::Cancelled:
-    case StorageError::InvalidConfig:
-    case StorageError::InvalidPath:
-    case StorageError::UnsupportedProtocol:
-    case StorageError::AuthenticationFailed:
+    return path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive);
+}
+
+/**
+ * 首段是不是就是章名（只判第 0 段）。
+ *
+ * epub 的 `<h1>` 会被解成第 0 段，和页眉里的目录章名重复：认出来就交给「标题带」画，
+ * 正文里摘掉。判定宁严勿宽 —— 认错等于凭空藏掉一段正文，认不出最多是维持原样。
+ */
+bool looksLikeChapterHeading(const QString &paragraph, const QString &title)
+{
+    if (paragraph.isEmpty() || title.isEmpty())
         return false;
-    default:
+
+    // 空白与标点不参与比较：「第一章 起风了」与「第一章·起风了」是同一个章名
+    static const QRegularExpression noise(
+        QStringLiteral("[\\s\\u3000·•、,，.。:：;；!！?？\"'“”‘’()（）\\[\\]【】—–_]+"));
+    auto normalize = [](const QString &raw) {
+        QString text = raw;
+        text.remove(noise);
+        return text;
+    };
+
+    const QString body = normalize(paragraph);
+    const QString name = normalize(title);
+    if (body.isEmpty() || name.isEmpty() || body.size() > 40)
+        return false; // 长段落不可能是章名
+    if (body == name)
         return true;
-    }
+    // 一边是另一边的截短（正文写「第一章」，目录写「第一章 起风了」）：短的那边别太短
+    if (name.startsWith(body) && body.size() * 2 >= name.size())
+        return true;
+    if (body.startsWith(name) && name.size() * 2 >= body.size())
+        return true;
+    return false;
 }
 
 /// 缓存章里离 `chapter` 最近的那个（离线打开时续读章恰好没缓存）
@@ -100,6 +172,24 @@ NovelBridge::NovelBridge(QObject *parent)
     : QObject(parent)
 {
     loadPreferences();
+    // 先把排版参数交给分页器：视口要等 QML 布局完才推上来，但字体/字号/行距已知
+    m_pager.setTypography(m_fontFamilies, m_fontSize, m_lineSpacing);
+
+    // 设置页与阅读器共用同一组 `reader.*` 键：任一端改动，另一端立即跟上（§14.16）。
+    // 走 setter 而不是直接赋值：钳位、相等即返回、发信号都复用同一套逻辑；
+    // 自己写键时值已经先行赋值，setter 会静默返回，不会打转。
+    connect(&AppSettings::instance(), &AppSettings::settingChanged, this,
+            [this](const QString &key) {
+                if (!key.startsWith(QLatin1String("reader."))) {
+                    return;
+                }
+                AppSettings &settings = AppSettings::instance();
+                setFontSize(settings.value(kFontSizeKey, 17).toInt());
+                setLineSpacing(settings.value(kLineSpacingKey, 1.6).toDouble());
+                setFontStyle(settings.value(kFontStyleKey, 0).toInt());
+                setTheme(settings.value(kThemeKey, 0).toInt());
+                setBrightness(settings.value(kBrightnessKey, -1.0).toDouble());
+            });
 }
 
 NovelBridge::~NovelBridge() = default;
@@ -166,17 +256,19 @@ void NovelBridge::open(QString connectionId, QString path, const QString &title)
         m_source = m_sourceOwner.get();
 
         // epub 走独立数据路径：目录在 OPF 里，没有字节索引可言
-        if (m_path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive)) {
+        if (isEpubPath(m_path)) {
             openEpub();
             return;
         }
 
         // 续读起点：锚点是**全局字节偏移**，落在哪一章由索引自己算
         qint64 resumeByte = 0;
+        int resumeOffset = 0;
         ProgressRecord record;
         if (ProgressRepository::instance().find(m_connectionId, m_path, &record)
             && !record.finished) {
             resumeByte = record.progress.value(QStringLiteral("offset")).toLongLong();
+            resumeOffset = record.progress.value(QStringLiteral("charOffset"), 0).toInt();
         }
         m_lastReportedByte = resumeByte;
 
@@ -187,7 +279,7 @@ void NovelBridge::open(QString connectionId, QString path, const QString &title)
             m_opened = true;
             emit openedChanged();
             emit bookChanged();
-            loadChapter(m_index.chapterAt(resumeByte), resumeByte);
+            loadChapter(m_index.chapterAt(resumeByte), resumeByte, resumeOffset);
             return;
         }
 
@@ -198,13 +290,13 @@ void NovelBridge::open(QString connectionId, QString path, const QString &title)
 
 bool NovelBridge::openOffline(StorageAdapter *adapter, const StorageError &cause)
 {
-    if (!adapter || !isAvailabilityFailure(cause)) {
+    if (!adapter || !cause.isAvailabilityFailure()) {
         return false;
     }
-    // epub 的目录藏在 OPF 里：stat 都失败了，连「有几章」都答不上来，
-    // 打开只会是一个没有目录的空壳。这条线等「epub 元数据快照」落地再补
-    if (m_path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive)) {
-        return false;
+    // epub 的目录不在正文里：得先 stat 到长度、再按 Range 读 zip 条目表才能拿到章数。
+    // 快照就是为这一刻存的 —— 目录 + 章名照常还原，正文只放已缓存的那几章
+    if (isEpubPath(m_path)) {
+        return openEpubOffline();
     }
 
     NovelIndex cached;
@@ -226,9 +318,11 @@ bool NovelBridge::openOffline(StorageAdapter *adapter, const StorageError &cause
     m_source = m_sourceOwner.get();
 
     qint64 resumeByte = 0;
+    int resumeOffset = 0;
     ProgressRecord record;
     if (ProgressRepository::instance().find(m_connectionId, m_path, &record) && !record.finished) {
         resumeByte = record.progress.value(QStringLiteral("offset")).toLongLong();
+        resumeOffset = record.progress.value(QStringLiteral("charOffset"), 0).toInt();
     }
     m_lastReportedByte = resumeByte;
 
@@ -249,13 +343,14 @@ bool NovelBridge::openOffline(StorageAdapter *adapter, const StorageError &cause
                     .arg(m_path));
         chapter = fallback;
         anchor = m_index.chapterStart(fallback);
+        resumeOffset = 0; // 换章了，原来的段内偏移不再指向任何东西
     }
     MH_INFO(NovelIndex,
             QStringLiteral("离线打开：%1（%2 章，已缓存 %3 章）")
                 .arg(m_path)
                 .arg(m_index.count())
                 .arg(cachedChapters.size()));
-    loadChapter(chapter, anchor);
+    loadChapter(chapter, anchor, resumeOffset);
     return true;
 }
 
@@ -271,6 +366,102 @@ void NovelBridge::showOfflineGap(int chapter)
     setStatus(QStringLiteral("离线 · 本章未缓存"));
     setPercent(m_index.percentAt(m_index.chapterStart(index)));
     emit chapterChanged();
+}
+
+bool NovelBridge::openEpubOffline()
+{
+    EpubMeta meta;
+    if (!EpubMetaStore::find(m_connectionId, m_path, &meta) || !meta.isValid()) {
+        return false; // 一次都没成功打开过：连章数都不知道，别开一个没有目录的空壳
+    }
+    const QList<int> cachedChapters = NovelChapterCache::cachedChapters(m_connectionId, m_path);
+    if (cachedChapters.isEmpty()) {
+        return false;
+    }
+
+    m_offline = true;
+    emit offlineChanged();
+
+    // 指纹从快照恢复：章节缓存按它取、封面缓存按它校验 —— 恢复后与在线时同一口径。
+    // 离线 stat 不到文件，但这两项是「上次打开那一刻」的真实值
+    m_fileSize = meta.fileSize;
+    m_modTime = meta.modTime;
+    if (!meta.title.isEmpty()) {
+        m_title = meta.title;
+    }
+    m_epubChapterCount = static_cast<int>(meta.chapters.size());
+    m_epubTitles.clear();
+    m_epubTitles.reserve(m_epubChapterCount);
+    for (const EpubChapterRef &chapter : std::as_const(meta.chapters)) {
+        m_epubTitles.append(chapter.title);
+    }
+
+    int chapter = 0;
+    int paragraph = -1;
+    int resumeOffset = 0;
+    ProgressRecord record;
+    if (ProgressRepository::instance().find(m_connectionId, m_path, &record) && !record.finished) {
+        chapter = qBound(0, record.progress.value(QStringLiteral("chapter")).toInt(),
+                         m_epubChapterCount - 1);
+        paragraph = record.progress.value(QStringLiteral("paragraph"), -1).toInt();
+        resumeOffset = record.progress.value(QStringLiteral("charOffset"), 0).toInt();
+    }
+    if (!cachedChapters.contains(chapter)) {
+        chapter = nearestCached(cachedChapters, chapter);
+        paragraph = -1;
+        resumeOffset = 0; // 换了章，原来的段内偏移不再指向任何东西
+    }
+
+    rebuildChapters();
+    m_opened = true;
+    emit openedChanged();
+    emit bookChanged();
+    MH_INFO(NovelIndex,
+            QStringLiteral("离线打开 epub：%1（%2 章，已缓存 %3 章）")
+                .arg(m_path)
+                .arg(m_epubChapterCount)
+                .arg(cachedChapters.size()));
+    loadEpubChapter(chapter, paragraph, resumeOffset);
+    return true;
+}
+
+void NovelBridge::showEpubOfflineGap(int chapter)
+{
+    const int index = qBound(0, chapter, qMax(0, m_epubChapterCount - 1));
+    m_chapter = TxtChapterText();
+    m_paragraphs.clear();
+    m_anchorParagraph = -1;
+    m_chapterIndex = index;
+    m_chapterTitle = m_epubTitles.value(index);
+    // 同 txt：不写进度，续读点留在真正读到过的地方
+    setStatus(QStringLiteral("离线 · 本章未缓存"));
+    setPercent(epubPercent(index, -1));
+    emit chapterChanged();
+}
+
+void NovelBridge::handOffToComic()
+{
+    const QString connectionId = m_connectionId;
+    const QString path = m_path;
+    const QString title = m_title;
+    MH_INFO(NovelIndex, QStringLiteral("epub 是图集（整页图片），转交漫画阅读器：%1").arg(path));
+
+    // 一拍之后再拆现场：这段栈还压在 `EpubBook` 的读回调里，当场 teardown 等于
+    // 析构正在执行的对象。延后到事件循环下一轮，回调已经全部返回
+    QTimer::singleShot(0, this, [this, connectionId, path, title]() {
+        // 用户在这一轮里已经关掉（或换了一本）：别再自作主张弹出漫画阅读器
+        if (m_path != path || m_connectionId != connectionId) {
+            return;
+        }
+        teardown();
+        m_opened = false;
+        // teardown 只清值不发信号，而 `NovelReaderView` 的 visible 绑着 loading / errorText；
+        // 少了这一下，覆盖层会停在「准备打开…」那一帧不下来
+        emit loadingChanged();
+        emit openedChanged();
+        emit bookChanged();
+        ComicBridge::instance()->open(connectionId, path, title);
+    });
 }
 
 void NovelBridge::startIndexing()
@@ -324,13 +515,16 @@ void NovelBridge::openEpub()
     // 续读锚点是「章号 + 段落下标」：见头文件里为什么 epub 不能沿用字节偏移
     int resumeChapter = 0;
     int resumeParagraph = -1;
+    int resumeOffset = 0;
     ProgressRecord record;
     if (ProgressRepository::instance().find(m_connectionId, m_path, &record) && !record.finished) {
         resumeChapter = record.progress.value(QStringLiteral("chapter")).toInt();
         resumeParagraph = record.progress.value(QStringLiteral("paragraph"), -1).toInt();
+        resumeOffset = record.progress.value(QStringLiteral("charOffset"), 0).toInt();
     }
 
-    m_epub->load([this, resumeChapter, resumeParagraph](EpubMetadata metadata, StorageError error) {
+    m_epub->load([this, resumeChapter, resumeParagraph, resumeOffset](EpubMetadata metadata,
+                                                                      StorageError error) {
         // teardown() 会析构 EpubBook，回调随 m_alive 一起失效；这里只是兜底
         if (!m_epub) {
             return;
@@ -341,6 +535,15 @@ void NovelBridge::openEpub()
         }
         if (metadata.chapters.isEmpty()) {
             fail(QStringLiteral("epub 里没有可读的章节"));
+            return;
+        }
+        // 整本都是整页图片（漫画打包成的 epub）：这里只能解出空段落，
+        // 交给漫画阅读器按页看才是正解
+        if (metadata.imageOnly) {
+            if (!metadata.title.isEmpty()) {
+                m_title = metadata.title;
+            }
+            handOffToComic();
             return;
         }
 
@@ -355,6 +558,17 @@ void NovelBridge::openEpub()
             m_epubTitles.append(chapter.title);
         }
 
+        // 目录快照：下次源够不着时靠它还原章数与章名（正文另有章节缓存）
+        EpubMeta snapshot;
+        snapshot.title = metadata.title;
+        snapshot.author = metadata.author;
+        snapshot.language = metadata.language;
+        snapshot.coverHref = m_epub ? m_epub->coverHref() : QString();
+        snapshot.chapters = metadata.chapters;
+        snapshot.fileSize = m_fileSize;
+        snapshot.modTime = m_modTime;
+        EpubMetaStore::save(m_connectionId, m_path, snapshot);
+
         rebuildChapters();
         m_opened = true;
         emit openedChanged();
@@ -362,13 +576,13 @@ void NovelBridge::openEpub()
         setStatus(QString());
 
         const int chapter = qBound(0, resumeChapter, m_epubChapterCount - 1);
-        loadEpubChapter(chapter, resumeParagraph);
+        loadEpubChapter(chapter, resumeParagraph, resumeOffset);
     });
 }
 
-void NovelBridge::loadEpubChapter(int chapter, int anchorParagraph)
+void NovelBridge::loadEpubChapter(int chapter, int anchorParagraph, int anchorOffset)
 {
-    if (!m_epub || m_epubChapterCount <= 0) {
+    if (!epubMode() || m_epubChapterCount <= 0) {
         return;
     }
     if (chapter < 0 || chapter >= m_epubChapterCount) {
@@ -382,7 +596,7 @@ void NovelBridge::loadEpubChapter(int chapter, int anchorParagraph)
         ++m_loadSerial;
         invalidatePrefetch();
         stopLoading();
-        applyEpubChapter(chapter, it->paragraphs, anchorParagraph);
+        applyEpubChapter(chapter, it->paragraphs, anchorParagraph, anchorOffset);
         return;
     }
 
@@ -393,7 +607,14 @@ void NovelBridge::loadEpubChapter(int chapter, int anchorParagraph)
         ++m_loadSerial;
         invalidatePrefetch();
         stopLoading();
-        applyEpubChapter(chapter, cachedParagraphs, anchorParagraph);
+        applyEpubChapter(chapter, cachedParagraphs, anchorParagraph, anchorOffset);
+        return;
+    }
+
+    // 离线打开时没有 EpubBook（zip 根本没打开），只能停在「未缓存」上：
+    // 不能走 fail()，否则整块阅读器被错误页盖住，缓存的章也翻不回去
+    if (!m_epub) {
+        showEpubOfflineGap(chapter);
         return;
     }
 
@@ -403,41 +624,184 @@ void NovelBridge::loadEpubChapter(int chapter, int anchorParagraph)
     emit loadingChanged();
 
     // EpubBook 内部用递增序列号丢弃过期结果，连点「下一章」不会被旧章节覆盖
-    m_epub->readChapter(
-        chapter,
-        [this, chapter, anchorParagraph, loadSerial](QStringList paragraphs, StorageError error) {
-            if (loadSerial != m_loadSerial) {
-                return; // 已被更新的切章顶掉，loading 由新加载自己管
-            }
-            m_loading = false;
-            emit loadingChanged();
-            if (!error.isNull()) {
-                fail(error.message().isEmpty() ? QStringLiteral("章节读取失败") : error.message());
-                return;
-            }
-            cacheEpubChapter(chapter, paragraphs);
-            applyEpubChapter(chapter, paragraphs, anchorParagraph);
-        });
+    m_epub->readChapter(chapter,
+                        [this, chapter, anchorParagraph, anchorOffset,
+                         loadSerial](QStringList paragraphs, StorageError error) {
+                            if (loadSerial != m_loadSerial) {
+                                return; // 已被更新的切章顶掉，loading 由新加载自己管
+                            }
+                            m_loading = false;
+                            emit loadingChanged();
+                            if (!error.isNull()) {
+                                fail(error.message().isEmpty() ? QStringLiteral("章节读取失败")
+                                                               : error.message());
+                                return;
+                            }
+                            cacheEpubChapter(chapter, paragraphs);
+                            applyEpubChapter(chapter, paragraphs, anchorParagraph, anchorOffset);
+                        });
 }
 
-void NovelBridge::applyEpubChapter(int chapter, const QStringList &paragraphs, int anchorParagraph)
+void NovelBridge::applyEpubChapter(int chapter, const QStringList &paragraphs, int anchorParagraph,
+                                   int anchorOffset)
 {
     // epub 没有字节行表，清掉 txt 的残留（reportParagraph 靠它判断走哪条路径）
     m_chapter = TxtChapterText();
     m_chapterIndex = chapter;
     m_chapterTitle = m_epubTitles.value(chapter);
-    m_paragraphs = paragraphs;
+    // 插图占一格：换成空段落 + 一张待取的图，下标空间与进度锚点都不动
+    resetImages(paragraphs);
+    // <h1> 章名会被解成第 0 段，与页眉重复：标出来，交给标题带画
+    m_titleParagraph = !m_paragraphs.isEmpty()
+            && looksLikeChapterHeading(m_paragraphs.constFirst(), m_chapterTitle)
+        ? 0
+        : -1;
     m_anchorParagraph = paragraphs.isEmpty()
         ? -1
         : qBound(-1, anchorParagraph, static_cast<int>(paragraphs.size()) - 1);
-    // 封面页 / 纯图片页会解出空白：不是错误，只是这一章没有文字
-    setStatus(paragraphs.isEmpty() ? QStringLiteral("本章没有可显示的文字") : QString());
+    // 段内偏移只在「续读」那一次有意义，其余切章一律按段首；
+    // 空段落没有字符，偏移必然是 0
+    m_anchorOffset = m_anchorParagraph >= 0 ? qMax(0, anchorOffset) : 0;
+    // 封面页 / 纯图片页会解出空白：不是错误，只是这一章没有文字。
+    // 离线时状态栏要一直挂着「只看缓存」，否则用户会以为整本都能读
+    // 「只有图没有字」的章（扉页、插页）不算「没有可显示的文字」：
+    // 插图段落已经在 m_images 里排上队了
+    if (m_offline) {
+        setStatus(QStringLiteral("离线 · 仅显示已缓存的章节"));
+    } else if (paragraphs.isEmpty()) {
+        setStatus(QStringLiteral("本章没有可显示的文字"));
+    } else {
+        setStatus(QString());
+    }
 
-    saveEpubProgress(chapter, m_anchorParagraph);
+    saveEpubProgress(chapter, m_anchorParagraph, false, m_anchorOffset);
     setPercent(epubPercent(chapter, m_anchorParagraph));
+    // 先分页再发 chapterChanged：QML 收到信号时读到的已经是新章的页数与当前页
+    syncPageToAnchor();
     emit chapterChanged();
+    ++m_imageRevision;
+    emit imageRevisionChanged();
 
     prefetchAdjacent(chapter);
+}
+
+void NovelBridge::resetImages(const QStringList &paragraphs)
+{
+    clearImages();
+    m_paragraphs.clear();
+    m_paragraphs.reserve(paragraphs.size());
+
+    QStringList pending;
+    for (int i = 0; i < paragraphs.size(); ++i) {
+        const QString &paragraph = paragraphs.at(i);
+        if (!EpubBook::isImageParagraph(paragraph)) {
+            m_paragraphs.append(paragraph);
+            continue;
+        }
+
+        // 占位段落本身不显示文字：QML 认出 isImageParagraph(index) 就换成图
+        m_paragraphs.append(QString());
+        const QString entry = EpubBook::imageEntryOf(paragraph);
+        if (entry.isEmpty()) {
+            continue;
+        }
+
+        ChapterImage image;
+        image.entry = entry;
+        adoptImageSnapshot(entry, &image.url, &image.size);
+        // 没快照也先记下来：QML 据此显示「加载中」而不是一片空白
+        m_images.insert(i, image);
+        if (image.url.isEmpty() && !pending.contains(entry)) {
+            pending.append(entry);
+        }
+    }
+
+    if (!pending.isEmpty() && m_epub) {
+        m_imageQueue.append(pending);
+        pumpImageQueue();
+    }
+}
+
+void NovelBridge::pumpImageQueue()
+{
+    // 串行：一次一张。zip 的 Range 读并发打散反而更慢，还会顶掉章节请求的优先级
+    if (!m_epub || m_imageQueue.isEmpty()) {
+        return;
+    }
+    const QString entry = m_imageQueue.takeFirst();
+    const quint64 serial = m_imageSerial;
+    m_epub->readResource(entry, [this, serial, entry](QByteArray bytes, StorageError error) {
+        if (serial != m_imageSerial) {
+            // 已换章 / 换书：这张丢掉，但队列属于新章，接着取
+            pumpImageQueue();
+            return;
+        }
+        if (error.isNull() && !bytes.isEmpty()) {
+            const QString file = imageSnapshotPath(entry);
+            if (NovelImageStore::save(file, bytes)) {
+                const QString url = QUrl::fromLocalFile(file).toString();
+                const QSize size = QImageReader(file).size();
+                // 同一条目可能被多处引用（同一张图重复出现），全部换上
+                for (auto &image : m_images) {
+                    if (image.entry != entry) {
+                        continue;
+                    }
+                    image.url = url;
+                    image.size = size;
+                }
+                ++m_imageRevision;
+                emit imageRevisionChanged();
+            }
+        } else {
+            MH_WARN(NovelIndex, QStringLiteral("插图取不到：%1").arg(entry));
+        }
+        pumpImageQueue();
+    });
+}
+
+QString NovelBridge::imageSnapshotPath(const QString &entry) const
+{
+    return NovelImageStore::pathFor(m_connectionId, m_path, m_fileSize, m_modTime, entry);
+}
+
+bool NovelBridge::adoptImageSnapshot(const QString &entry, QString *url, QSize *size) const
+{
+    const QString file = imageSnapshotPath(entry);
+    if (!QFileInfo::exists(file)) {
+        return false;
+    }
+    // 命中即刷新 mtime：LRU 按 mtime 淘汰，常看的书不该先被清掉
+    NovelImageStore::touch(file);
+    if (url != nullptr) {
+        *url = QUrl::fromLocalFile(file).toString();
+    }
+    if (size != nullptr) {
+        *size = QImageReader(file).size();
+    }
+    return true;
+}
+
+void NovelBridge::clearImages()
+{
+    // 换章即作废在途取图：旧章的结果不该写进新章的下标表
+    ++m_imageSerial;
+    m_images.clear();
+    m_imageQueue.clear();
+}
+
+bool NovelBridge::isImageParagraph(int paragraph) const
+{
+    return m_images.contains(paragraph);
+}
+
+QString NovelBridge::imageUrl(int paragraph) const
+{
+    return m_images.value(paragraph).url;
+}
+
+QSize NovelBridge::imageSize(int paragraph) const
+{
+    return m_images.value(paragraph).size;
 }
 
 double NovelBridge::epubPercent(int chapter, int paragraph) const
@@ -453,7 +817,7 @@ double NovelBridge::epubPercent(int chapter, int paragraph) const
     return qBound(0.0, total / static_cast<double>(m_epubChapterCount), 1.0);
 }
 
-void NovelBridge::saveEpubProgress(int chapter, int paragraph, bool finished)
+void NovelBridge::saveEpubProgress(int chapter, int paragraph, bool finished, int charOffset)
 {
     if (m_connectionId.isEmpty() || m_path.isEmpty() || chapter < 0) {
         return;
@@ -466,6 +830,8 @@ void NovelBridge::saveEpubProgress(int chapter, int paragraph, bool finished)
     record.progress.insert(QStringLiteral("chapter"), chapter);
     record.progress.insert(QStringLiteral("paragraph"), paragraph);
     record.progress.insert(QStringLiteral("chapterTitle"), m_epubTitles.value(chapter));
+    // 段内偏移是「段落锚点」的细化：老记录没有这个键，读到 0 即按段首
+    record.progress.insert(QStringLiteral("charOffset"), qMax(0, charOffset));
     // 含预取邻章：预取会替「当前章」写位置，不能把刚读到底的 finished 冲掉
     record.finished = finished || m_finishedBook;
     record.percent = record.finished ? 1.0 : epubPercent(chapter, paragraph);
@@ -524,7 +890,7 @@ void NovelBridge::prevChapter()
     goToChapter(m_chapterIndex - 1);
 }
 
-void NovelBridge::loadChapter(int chapter, qint64 anchorByte)
+void NovelBridge::loadChapter(int chapter, qint64 anchorByte, int anchorOffset)
 {
     if (epubMode() || !m_source || !m_index.isValid()) {
         return;
@@ -540,7 +906,7 @@ void NovelBridge::loadChapter(int chapter, qint64 anchorByte)
         ++m_loadSerial;
         invalidatePrefetch();
         stopLoading();
-        applyChapter(it->text, m_index.chapterStart(chapter));
+        applyChapter(it->text, m_index.chapterStart(chapter), anchorOffset);
         return;
     }
 
@@ -551,7 +917,8 @@ void NovelBridge::loadChapter(int chapter, qint64 anchorByte)
         ++m_loadSerial;
         invalidatePrefetch();
         stopLoading();
-        applyChapter(cachedText, anchorByte > 0 ? anchorByte : m_index.chapterStart(chapter));
+        applyChapter(cachedText, anchorByte > 0 ? anchorByte : m_index.chapterStart(chapter),
+                     anchorOffset);
         return;
     }
 
@@ -560,38 +927,46 @@ void NovelBridge::loadChapter(int chapter, qint64 anchorByte)
     m_loading = true;
     emit loadingChanged();
 
-    TxtChapterLoader::load(
-        m_source, m_index, chapter,
-        [this, chapter, anchorByte, loadSerial](TxtChapterText text, StorageError error) {
-            if (loadSerial != m_loadSerial) {
-                return; // 已被更新的切章顶掉
-            }
-            m_loading = false;
-            emit loadingChanged();
-            if (!error.isNull()) {
-                if (m_offline) {
-                    // 离线时「读不到」是常态而非故障：进错误页会让整块阅读器下屏，
-                    // 连翻回已缓存的章都做不到
-                    showOfflineGap(chapter);
-                    return;
-                }
-                fail(error.message().isEmpty() ? QStringLiteral("章节读取失败") : error.message());
-                return;
-            }
-            cacheTxtChapter(chapter, text);
-            applyChapter(text, anchorByte);
-        });
+    TxtChapterLoader::load(m_source, m_index, chapter,
+                           [this, chapter, anchorByte, anchorOffset,
+                            loadSerial](TxtChapterText text, StorageError error) {
+                               if (loadSerial != m_loadSerial) {
+                                   return; // 已被更新的切章顶掉
+                               }
+                               m_loading = false;
+                               emit loadingChanged();
+                               if (!error.isNull()) {
+                                   if (m_offline) {
+                                       // 离线时「读不到」是常态而非故障：进错误页会让整块阅读器下屏，
+                                       // 连翻回已缓存的章都做不到
+                                       showOfflineGap(chapter);
+                                       return;
+                                   }
+                                   fail(error.message().isEmpty() ? QStringLiteral("章节读取失败")
+                                                                  : error.message());
+                                   return;
+                               }
+                               cacheTxtChapter(chapter, text);
+                               applyChapter(text, anchorByte, anchorOffset);
+                           });
 }
 
-void NovelBridge::applyChapter(const TxtChapterText &text, qint64 anchorByte)
+void NovelBridge::applyChapter(const TxtChapterText &text, qint64 anchorByte, int anchorOffset)
 {
     m_chapter = text;
     m_chapterIndex = m_index.chapterAt(text.start);
     m_chapterTitle = text.title;
     m_paragraphs = text.paragraphs();
+    // txt 的章名行本来就被 firstBodyLine 摘掉了，这里多数情况认不出来（正常）
+    m_titleParagraph = !m_paragraphs.isEmpty()
+            && looksLikeChapterHeading(m_paragraphs.constFirst(), m_chapterTitle)
+        ? 0
+        : -1;
 
     // 锚点换算成段落下标：QML 只认段落序号，换算的权威在行表里
     m_anchorParagraph = anchorByte > 0 ? text.paragraphAtByte(anchorByte) : -1;
+    // 字节锚点只到段落，段内偏移得单独带：长段落跨页时靠它落回原行
+    m_anchorOffset = m_anchorParagraph >= 0 ? qMax(0, anchorOffset) : 0;
 
     // 落库位置用锚点而不是章首：从目录跳回来时章首已经存过一次，
     // 再拿章首覆盖会把「读到第几段」洗掉一截
@@ -608,8 +983,9 @@ void NovelBridge::applyChapter(const TxtChapterText &text, qint64 anchorByte)
         setStatus(QString());
     }
 
-    saveProgress(anchor);
+    saveProgress(anchor, false, m_anchorOffset);
     setPercent(m_index.percentAt(anchor));
+    syncPageToAnchor();
     emit chapterChanged();
 
     prefetchAdjacent(m_chapterIndex);
@@ -669,15 +1045,17 @@ void NovelBridge::pumpPrefetch()
         const quint64 serial = ++m_prefetchSerial;
 
         if (epubMode()) {
-            if (!m_epub) {
-                return;
-            }
             // 落盘缓存优先：翻回读过的章连一次 zip 条目读都不用发
             QStringList cachedParagraphs;
             if (NovelChapterCache::loadEpub(m_connectionId, m_path, fingerprint(), chapter,
                                             &cachedParagraphs)) {
                 rememberChapter(chapter, true, cachedParagraphs, TxtChapterText());
                 continue;
+            }
+            // 离线（没有 EpubBook）：缓存里没有的章再也取不到，预取到此为止，
+            // 但上面那步落盘命中的邻章仍然要装进内存 —— 否则翻过去还要再查一次
+            if (!m_epub) {
+                return;
             }
             m_epub->readChapter(
                 chapter, [this, chapter, serial](QStringList paragraphs, StorageError error) {
@@ -756,6 +1134,12 @@ void NovelBridge::trimCache()
 
 void NovelBridge::reportParagraph(int index)
 {
+    // 滚动模式只知道「哪一段」，段内偏移按段首算
+    reportPosition(index, 0);
+}
+
+void NovelBridge::reportPosition(int index, int charOffset)
+{
     if (!m_opened) {
         return;
     }
@@ -764,6 +1148,7 @@ void NovelBridge::reportParagraph(int index)
         return;
     }
 
+    const int offset = qMax(0, charOffset);
     if (epubMode()) {
         if (m_chapterIndex < 0 || index < 0) {
             return;
@@ -779,6 +1164,21 @@ void NovelBridge::reportParagraph(int index)
             return;
         }
         m_pendingByte = byte;
+    }
+    m_pendingOffset = offset;
+
+    // 锚点立刻跟上（不等节流）：重排要按当前读到的这一行重新定位
+    m_anchorParagraph = index;
+    m_anchorOffset = offset;
+
+    // 翻页模式下锚点还会被别处改（拖进度条、跳目录）：页码要跟着锚点走，
+    // 否则界面停在旧页而 percent 已经变了。放在节流之前 —— 翻页是连点，不能被 1s 卡住
+    if (m_pageMode) {
+        const int page = m_pager.pageOfPosition(index, offset);
+        if (page >= 0 && page != m_pageIndex) {
+            m_pageIndex = page;
+            emit pageChanged();
+        }
     }
 
     // 滚动事件一秒几十次，跟着它写库会把首页刷新拖成幻灯片
@@ -796,6 +1196,7 @@ void NovelBridge::commitPendingPosition()
         m_pendingByte = -1;
         m_pendingChapter = -1;
         m_pendingParagraph = -1;
+        m_pendingOffset = 0;
         return;
     }
 
@@ -805,10 +1206,12 @@ void NovelBridge::commitPendingPosition()
         }
         const int chapter = m_pendingChapter;
         const int paragraph = m_pendingParagraph;
+        const int offset = m_pendingOffset;
         m_pendingChapter = -1;
         m_pendingParagraph = -1;
+        m_pendingOffset = 0;
         // 只发 percentChanged：发 chapterChanged 会让 QML 重建段落 model，把列表弹回顶部
-        saveEpubProgress(chapter, paragraph);
+        saveEpubProgress(chapter, paragraph, false, offset);
         setPercent(epubPercent(chapter, paragraph));
         m_reportClock.start();
         return;
@@ -818,13 +1221,15 @@ void NovelBridge::commitPendingPosition()
         return;
     }
     const qint64 byte = m_pendingByte;
+    const int offset = m_pendingOffset;
     m_pendingByte = -1;
-    saveProgress(byte);
+    m_pendingOffset = 0;
+    saveProgress(byte, false, offset);
     setPercent(m_index.percentAt(byte));
     m_reportClock.start();
 }
 
-void NovelBridge::saveProgress(qint64 byteOffset, bool finished)
+void NovelBridge::saveProgress(qint64 byteOffset, bool finished, int charOffset)
 {
     if (m_connectionId.isEmpty() || m_path.isEmpty() || byteOffset < 0) {
         return;
@@ -838,6 +1243,8 @@ void NovelBridge::saveProgress(qint64 byteOffset, bool finished)
     record.progress.insert(QStringLiteral("chapter"), m_index.chapterAt(byteOffset));
     record.progress.insert(QStringLiteral("chapterTitle"),
                            m_index.chapterTitle(m_index.chapterAt(byteOffset)));
+    // 字节锚点是段落粒度，段内偏移单独记：长段落跨页时靠它落回原行
+    record.progress.insert(QStringLiteral("charOffset"), qMax(0, charOffset));
     // 读过完就是既成事实：之后任何位置写入（节流上报、往回翻）都不许把它洗回未读完
     record.finished = finished || m_finishedBook;
     // finished 与 percent 必须自洽：否则首页会出现「已读完 · 37%」
@@ -891,14 +1298,27 @@ void NovelBridge::teardown()
     m_epubChapterCount = 0;
     m_epubTitles.clear();
     m_chapterIndex = -1;
+    m_titleParagraph = -1;
     m_anchorParagraph = -1;
+    m_anchorOffset = 0;
     m_percent = 0.0;
     m_pendingByte = -1;
     m_pendingChapter = -1;
     m_pendingParagraph = -1;
+    m_pendingOffset = 0;
     m_fileSize = 0;
     m_modTime = 0;
     m_paragraphs.clear();
+    // 插图属于这本书：条目名 / 快照 URL 一并丢弃，在途取图靠序列号作废
+    clearImages();
+    ++m_imageRevision;
+    emit imageRevisionChanged();
+    // 分页结果属于这本书：正文清空后重排只剩一页空页，页码也归零
+    m_pager.setText(QStringList(), QSet<int>());
+    m_pager.relayout();
+    m_pageIndex = 0;
+    m_pendingPageEnd = false;
+    notifyPagination();
     m_chapterTitle.clear();
     // 必须发信号，不能只清成员：QML 的 visible 绑定看着 errorText，
     // 不发 notify 它就一直停在「有错误」的那一帧，关掉阅读器后整块覆盖层不下屏
@@ -989,7 +1409,8 @@ void NovelBridge::markFinished()
         }
         const int chapter = m_epubChapterCount - 1;
         const int paragraph = m_chapterIndex == chapter ? qMax(0, m_paragraphs.size() - 1) : 0;
-        saveEpubProgress(chapter, paragraph, true);
+        // 读到最后一段的最后：偏移没有意义，按段首记（重开时落在该段所在页）
+        saveEpubProgress(chapter, paragraph, true, 0);
         setPercent(1.0);
         return;
     }
@@ -1001,7 +1422,7 @@ void NovelBridge::markFinished()
     if (byte < 0) {
         byte = m_index.chapterStart(m_index.count() - 1);
     }
-    saveProgress(byte, true);
+    saveProgress(byte, true, 0);
     setPercent(1.0);
 }
 
@@ -1091,6 +1512,171 @@ void NovelBridge::dismissNextSuggestion()
     clearNextSuggestion();
 }
 
+// ---------------------------------------------------------------- 翻页模式
+
+void NovelBridge::setPageViewport(int width, int height)
+{
+    m_pageWidth = width;
+    m_pageHeight = height;
+    // 字体以本对象的偏好为准：QML 画正文与这里折行用的是同一串族名
+    m_pager.setTypography(m_fontFamilies, m_fontSize, m_lineSpacing);
+    m_pager.setViewport(width, height);
+    repaginate();
+}
+
+void NovelBridge::repaginate()
+{
+    // 重排会改页数（字号、行距、字体、窗口宽度都会），所以按「当前页首行」重新定位：
+    // 页码不是身份，段落 + 段内偏移才是
+    // 还没排过版（刚开书、视口刚推上来）时旧页码里没有位置信息，只能信锚点 ——
+    // 否则续读的段内偏移会在第一次布局时被抹成段首
+    const bool firstLayout = m_pager.pageCount() == 0;
+    int anchorParagraph = -1;
+    int anchorOffset = 0;
+    if (firstLayout) {
+        anchorParagraph = m_anchorParagraph;
+        anchorOffset = m_anchorOffset;
+    } else {
+        m_pager.positionOfPage(m_pageIndex, &anchorParagraph, &anchorOffset);
+    }
+
+    m_pager.setTitleParagraph(m_titleParagraph);
+    m_pager.setText(m_paragraphs, QSet<int>(m_images.keyBegin(), m_images.keyEnd()));
+    m_pager.relayout();
+
+    int page = m_pageIndex;
+    if (anchorParagraph >= 0) {
+        const int at = m_pager.pageOfPosition(anchorParagraph, anchorOffset);
+        if (at >= 0) {
+            page = at;
+        }
+    }
+    page = m_pager.pageCount() > 0 ? qBound(0, page, m_pager.pageCount() - 1) : 0;
+
+    const bool moved = page != m_pageIndex;
+    m_pageIndex = page;
+    notifyPagination();
+    if (moved) {
+        emit pageChanged();
+    }
+}
+
+void NovelBridge::syncPageToAnchor()
+{
+    m_pager.setTitleParagraph(m_titleParagraph);
+    m_pager.setText(m_paragraphs, QSet<int>(m_images.keyBegin(), m_images.keyEnd()));
+    m_pager.relayout();
+
+    int page = 0;
+    if (m_pendingPageEnd && m_pager.pageCount() > 0) {
+        // 往回翻跨章：新章落地后落在最后一页，而不是被锚点拉回章首
+        page = m_pager.pageCount() - 1;
+    } else if (m_anchorParagraph >= 0) {
+        // 段落 + 段内偏移：长段落跨页时才能落回读到的行，而不是这一段的第一页
+        const int at = m_pager.pageOfPosition(m_anchorParagraph, m_anchorOffset);
+        if (at >= 0) {
+            page = at;
+        }
+    }
+    m_pendingPageEnd = false;
+
+    const bool moved = page != m_pageIndex;
+    m_pageIndex = page;
+    notifyPagination();
+    if (moved) {
+        emit pageChanged();
+    }
+}
+
+void NovelBridge::notifyPagination()
+{
+    ++m_paginationRevision;
+    emit paginationChanged();
+}
+
+void NovelBridge::setPageMode(bool pageMode)
+{
+    if (pageMode == m_pageMode) {
+        return;
+    }
+    m_pageMode = pageMode;
+    storePreference(kPageModeKey, m_pageMode);
+    emit pageModeChanged();
+}
+
+void NovelBridge::setPageIndex(int index)
+{
+    const int count = m_pager.pageCount();
+    const int clamped = count > 0 ? qBound(0, index, count - 1) : 0;
+    if (clamped == m_pageIndex) {
+        return;
+    }
+    m_pageIndex = clamped;
+    emit pageChanged();
+
+    // 翻页就是阅读位置：进度按「本页首行」上报；页码本身不进持久化
+    int paragraph = -1;
+    int offset = 0;
+    m_pager.positionOfPage(m_pageIndex, &paragraph, &offset);
+    if (paragraph >= 0) {
+        reportPosition(paragraph, offset);
+    }
+}
+
+QStringList NovelBridge::pageLines(int page) const
+{
+    return m_pager.linesOf(page);
+}
+
+int NovelBridge::pageImageParagraph(int page) const
+{
+    return m_pager.imageParagraphOf(page);
+}
+
+int NovelBridge::pageForParagraph(int paragraph) const
+{
+    return m_pager.pageOfParagraph(paragraph);
+}
+
+int NovelBridge::pageForPosition(int paragraph, int charOffset) const
+{
+    return m_pager.pageOfPosition(paragraph, charOffset);
+}
+
+bool NovelBridge::nextPage()
+{
+    if (!m_opened) {
+        return false;
+    }
+    if (m_pageIndex + 1 < m_pager.pageCount()) {
+        setPageIndex(m_pageIndex + 1);
+        return true;
+    }
+    if (m_chapterIndex + 1 < chapterCount()) {
+        nextChapter();
+        return true;
+    }
+    return false;
+}
+
+bool NovelBridge::prevPage()
+{
+    if (!m_opened) {
+        return false;
+    }
+    if (m_pageIndex > 0) {
+        setPageIndex(m_pageIndex - 1);
+        return true;
+    }
+    if (m_chapterIndex > 0) {
+        // 章节异步加载：记号留下，等新章落地时落到最后一页
+        m_pendingPageEnd = true;
+        prevChapter();
+        return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------- 排版偏好
 
 void NovelBridge::loadPreferences()
@@ -1099,8 +1685,11 @@ void NovelBridge::loadPreferences()
     m_fontSize = qBound(kMinFontSize, settings.value(kFontSizeKey, 17).toInt(), kMaxFontSize);
     m_lineSpacing =
         qBound(kMinLineSpacing, settings.value(kLineSpacingKey, 1.6).toDouble(), kMaxLineSpacing);
+    m_fontStyle = qBound(0, settings.value(kFontStyleKey, 0).toInt(), 1);
+    m_fontFamilies = familiesForStyle(m_fontStyle);
     m_theme = qBound(0, settings.value(kThemeKey, 0).toInt(), 3);
     m_brightness = settings.value(kBrightnessKey, -1.0).toDouble();
+    m_pageMode = settings.value(kPageModeKey, false).toBool();
 }
 
 void NovelBridge::storePreference(const QString &key, const QVariant &value)
@@ -1117,6 +1706,9 @@ void NovelBridge::setFontSize(int px)
     m_fontSize = clamped;
     storePreference(kFontSizeKey, m_fontSize);
     emit fontSizeChanged();
+    // 字变了行数就变：整章重排（页码按当前页首行重新定位）
+    m_pager.setTypography(m_fontFamilies, m_fontSize, m_lineSpacing);
+    repaginate();
 }
 
 void NovelBridge::setLineSpacing(double spacing)
@@ -1128,6 +1720,23 @@ void NovelBridge::setLineSpacing(double spacing)
     m_lineSpacing = clamped;
     storePreference(kLineSpacingKey, m_lineSpacing);
     emit lineSpacingChanged();
+    m_pager.setTypography(m_fontFamilies, m_fontSize, m_lineSpacing);
+    repaginate();
+}
+
+void NovelBridge::setFontStyle(int style)
+{
+    const int clamped = qBound(0, style, 1);
+    if (clamped == m_fontStyle) {
+        return;
+    }
+    m_fontStyle = clamped;
+    m_fontFamilies = familiesForStyle(m_fontStyle);
+    storePreference(kFontStyleKey, m_fontStyle);
+    emit fontChanged();
+    // 换字体等于换字宽：行数与页数都会变，和改字号同一条路（整章重排 + 按首行重新定位）
+    m_pager.setTypography(m_fontFamilies, m_fontSize, m_lineSpacing);
+    repaginate();
 }
 
 void NovelBridge::setTheme(int theme)

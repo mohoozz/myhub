@@ -75,9 +75,10 @@ public:
     /// 在资源管理器 / 访达中显示（PC-601）
     Q_INVOKABLE void revealInFileManager(const QString &localPath);
 
-    /// 打开数据目录 / 日志目录（设置页）
+    /// 打开数据目录 / 日志目录 / 缓存目录（设置页）
     Q_INVOKABLE void openDataFolder();
     Q_INVOKABLE void openLogFolder();
+    Q_INVOKABLE void openCacheFolder();
 
 signals:
     void sidebarCollapsedChanged();

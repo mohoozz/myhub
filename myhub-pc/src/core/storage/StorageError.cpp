@@ -27,6 +27,24 @@ bool StorageError::isRouteRecoverable() const
     }
 }
 
+bool StorageError::isAvailabilityFailure() const
+{
+    // 「文件暂时够不着」与「用户得去改配置」要分开：前者可以用缓存顶一阵
+    // （离线、超时、5xx、文件被移走），后者顶了只会把真正的问题藏起来 ——
+    // 路径写错、协议不支持、鉴权失败时进阅读器看到的是一片空白或空目录，
+    // 用户反而更不知道该去改哪里
+    switch (m_kind) {
+    case Cancelled:
+    case InvalidConfig:
+    case InvalidPath:
+    case UnsupportedProtocol:
+    case AuthenticationFailed:
+        return false;
+    default:
+        return true;
+    }
+}
+
 bool StorageError::isTransient() const
 {
     if (m_kind == Offline || m_kind == InvalidResponse)

@@ -3,6 +3,7 @@
 #include "features/connections/ConnectionStore.h"
 #include "features/favorites/FavoritesBridge.h"
 
+#include "core/cache/CacheCleaner.h"
 #include "core/database/AppDatabase.h"
 #include "core/preferences/AppSettings.h"
 #include "core/utils/AppLogger.h"
@@ -121,6 +122,10 @@ void AppState::continueBoot()
     // 探测为异步，不阻塞可交互状态
     setPhase(Ready);
     MH_INFO(Lifecycle, QStringLiteral("app ready"));
+
+    // 5) 缓存容量预热：上次异常退出 / 设置改小留下的超额缓存在这里收口。
+    // 内部起后台任务，首屏已经画完了，这条不占启动时间
+    CacheCleaner::instance().initialize();
 }
 
 QString AppState::crashReport() const

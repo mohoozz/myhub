@@ -19,6 +19,9 @@
 
 #include "core/database/AppDatabase.h"
 #include "core/files/FileOperations.h"
+#include "core/novel/EpubMetaStore.h"
+#include "core/novel/NovelChapterCache.h"
+#include "core/novel/NovelIndexStore.h"
 #include "core/preferences/AppSettings.h"
 #include "core/storage/LocalAdapter.h"
 #include "core/storage/StoragePath.h"
@@ -58,6 +61,7 @@ private slots:
     void copiesDirectoryRecursively();
     void movesAcrossSourcesStreaming();
     void movesReadingProgressAlong();
+    void movesNovelCachesAlong();
     void rejectsMoveIntoItself();
     void skipsMoveIntoSameDirectory();
     void cancelBeforeStartLeavesNoTrace();
@@ -75,6 +79,8 @@ private:
     QByteArray readAt(const QString &root, const QString &rel) const;
     void waitIdle();
     void insertProgress(const QString &id, const QString &path);
+    /// 给同一路径塞齐「索引 + 章节正文 + epub 目录快照」三份小说缓存
+    void insertNovelCaches(const QString &path);
 
     QTemporaryDir m_src;
     QTemporaryDir m_dst;
@@ -108,6 +114,12 @@ void TestMoveCopy::init()
     QDir(m_dst.path()).removeRecursively();
     QVERIFY(QDir().mkpath(m_src.path()));
     QVERIFY(QDir().mkpath(m_dst.path()));
+    // 单例数据库跨用例 / 跨运行复用：小说缓存表必须先清空，否则「改名」一例会
+    // 撞上上一轮留在目标路径上的行（覆盖式移动本来就该覆盖，但断言会失真）
+    auto &db = AppDatabase::instance();
+    QVERIFY(db.execute(QStringLiteral("DELETE FROM novelIndex")));
+    QVERIFY(db.execute(QStringLiteral("DELETE FROM novelChapter")));
+    QVERIFY(db.execute(QStringLiteral("DELETE FROM epubMeta")));
     ++m_counter;
 }
 
@@ -176,6 +188,33 @@ void TestMoveCopy::insertProgress(const QString &id, const QString &path)
                        {id, QStringLiteral("c-src"), path, QStringLiteral("video"),
                         StoragePath::baseName(path), QStringLiteral("{}"), 0.4, 0,
                         QDateTime::currentSecsSinceEpoch()}));
+}
+
+void TestMoveCopy::insertNovelCaches(const QString &path)
+{
+    NovelIndex index;
+    index.encoding = TextCodec::Utf8;
+    index.fileSize = 2048;
+    index.modTime = 1700000000000LL;
+    NovelChapter chapter;
+    chapter.title = QStringLiteral("第一章 起点");
+    chapter.startOffset = 0;
+    index.chapters.append(chapter);
+    QVERIFY(NovelIndexStore::save(QStringLiteral("c-src"), path, index));
+
+    QVERIFY(NovelChapterCache::saveEpub(QStringLiteral("c-src"), path,
+                                        {index.fileSize, index.modTime}, 0,
+                                        {QStringLiteral("雨停了，他把伞收起来。")}));
+
+    EpubMeta meta;
+    meta.title = QStringLiteral("缓存测试");
+    meta.fileSize = index.fileSize;
+    meta.modTime = index.modTime;
+    EpubChapterRef ref;
+    ref.title = QStringLiteral("第一章 起点");
+    ref.href = QStringLiteral("OEBPS/ch1.xhtml");
+    meta.chapters.append(ref);
+    QVERIFY(EpubMetaStore::save(QStringLiteral("c-src"), path, meta));
 }
 
 // ---------------- 管道本身 ----------------
@@ -382,6 +421,60 @@ void TestMoveCopy::movesReadingProgressAlong()
     QCOMPARE(rows.size(), 1);
     QCOMPARE(rows.first().value(QStringLiteral("filePath")).toString(),
              QStringLiteral("/归档/ep1.mkv"));
+}
+
+void TestMoveCopy::movesNovelCachesAlong()
+{
+    auto &ops = FileOperations::instance();
+    const QString source = QStringLiteral("/书架/旧.txt");
+    const QString target = QStringLiteral("/归档/旧.txt");
+    writeAt(m_src.path(), source, QByteArrayLiteral("第一章 起点\n雨停了，他把伞收起来。"));
+    QVERIFY(QDir().mkpath(m_src.path() + QStringLiteral("/归档")));
+    insertNovelCaches(source);
+
+    // 目标路径上先摆一本「被覆盖的旧书」的缓存：移动后这两行必须让位给新书，
+    // 而不是撞唯一键静默失败、新旧两行并存
+    NovelIndex stale;
+    stale.encoding = TextCodec::Utf8;
+    stale.fileSize = 999;
+    stale.modTime = 1;
+    NovelChapter staleChapter;
+    staleChapter.title = QStringLiteral("被覆盖的旧章");
+    stale.chapters.append(staleChapter);
+    QVERIFY(NovelIndexStore::save(QStringLiteral("c-src"), target, stale));
+    QVERIFY(NovelChapterCache::saveEpub(QStringLiteral("c-src"), target, {999, 1}, 0,
+                                        {QStringLiteral("旧正文")}));
+    EpubMeta staleMeta;
+    staleMeta.title = QStringLiteral("被覆盖的旧书");
+    staleMeta.fileSize = 999;
+    staleMeta.modTime = 1;
+    EpubChapterRef staleRef;
+    staleRef.title = QStringLiteral("旧章");
+    staleRef.href = QStringLiteral("old.xhtml");
+    staleMeta.chapters.append(staleRef);
+    QVERIFY(EpubMetaStore::save(QStringLiteral("c-src"), target, staleMeta));
+
+    QSignalSpy failed(&ops, &FileOperations::failed);
+    ops.moveOrCopy(request(false, {source}, QStringLiteral("/归档")));
+    waitIdle();
+    QCOMPARE(failed.count(), 0);
+
+    // 三份缓存都得跟着路径走：否则移动后第一次打开要重扫全书，
+    // 离线时更是连目录都读不出来（索引/章节/快照全查旧路径）
+    NovelIndex index;
+    QVERIFY(NovelIndexStore::find(QStringLiteral("c-src"), target, &index));
+    // 目标路径上原来那本书的索引已被让位，不会出现「新旧两行并存」
+    QCOMPARE(index.chapters.first().title, QStringLiteral("第一章 起点"));
+    QVERIFY(!NovelIndexStore::find(QStringLiteral("c-src"), source, &index));
+
+    QStringList paragraphs;
+    QVERIFY(NovelChapterCache::loadEpub(QStringLiteral("c-src"), target, {2048, 1700000000000LL}, 0,
+                                        &paragraphs));
+    QCOMPARE(paragraphs, QStringList{QStringLiteral("雨停了，他把伞收起来。")});
+
+    EpubMeta meta;
+    QVERIFY(EpubMetaStore::find(QStringLiteral("c-src"), target, &meta));
+    QCOMPARE(meta.title, QStringLiteral("缓存测试"));
 }
 
 void TestMoveCopy::cancelBeforeStartLeavesNoTrace()

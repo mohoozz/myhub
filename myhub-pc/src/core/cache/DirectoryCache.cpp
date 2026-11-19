@@ -1,4 +1,8 @@
 #include "DirectoryCache.h"
+
+#include "CacheCleaner.h"
+#include "CachePartition.h"
+#include "../preferences/AppSettings.h"
 #include "../utils/AppLogger.h"
 #include "../utils/AppPaths.h"
 
@@ -15,8 +19,11 @@
 namespace myhub {
 
 namespace {
-constexpr auto kPartition = "directoryListings";
+QString partitionDir()
+{
+    return CachePartitions::path(QString::fromLatin1(CacheDirs::DirectoryListings));
 }
+} // namespace
 
 struct DirectoryCache::Private
 {
@@ -27,7 +34,7 @@ DirectoryCache::DirectoryCache(QObject *parent)
     : QObject(parent)
     , d(new Private)
 {
-    AppPaths::ensureDir(AppPaths::cachePartition(QLatin1String(kPartition)));
+    AppPaths::ensureDir(partitionDir());
 }
 
 DirectoryCache::~DirectoryCache()
@@ -47,8 +54,7 @@ QString DirectoryCache::cacheFilePath(const QString &connectionId, const QString
     const QByteArray key = (connectionId + QLatin1Char('|') + path).toUtf8();
     const QString name =
         QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha1).toHex());
-    return AppPaths::cachePartition(QLatin1String(kPartition)) + QLatin1Char('/') + name
-        + QStringLiteral(".json");
+    return partitionDir() + QLatin1Char('/') + name + QStringLiteral(".json");
 }
 
 bool DirectoryCache::load(const QString &connectionId, const QString &path,
@@ -86,7 +92,9 @@ bool DirectoryCache::load(const QString &connectionId, const QString &path,
         entries.append(e);
     }
 
-    // 命中访问时刷新 mtime，供 LRU 淘汰参考
+    // 命中访问时刷新 mtime，供 LRU 淘汰参考（此前只写了这句注释，实际没刷新，
+    // 于是 `CacheStore` 按 mtime 淘汰时会把常看的目录当旧数据清掉）
+    f.setFileTime(QDateTime::currentDateTime(), QFileDevice::FileModificationTime);
     f.close();
     *out = entries;
     return true;
@@ -95,6 +103,14 @@ bool DirectoryCache::load(const QString &connectionId, const QString &path,
 void DirectoryCache::store(const QString &connectionId, const QString &path,
                            const FileEntryList &entries, bool verifiedEmpty)
 {
+    // 「内容缓存本地化」关闭：目录列表只是加速副本，不写也不影响正确性
+    if (!AppSettings::instance().contentCachingEnabled()) {
+        MH_DEBUG(Storage,
+                 QStringLiteral("content caching disabled, skip listing cache %1%2")
+                     .arg(connectionId, path));
+        return;
+    }
+
     // 关键纪律：异常响应不得写入「空目录」缓存（PC-708 目录列举严格校验）
     if (entries.isEmpty() && !verifiedEmpty) {
         MH_WARN(Storage,
@@ -129,6 +145,9 @@ void DirectoryCache::store(const QString &connectionId, const QString &path,
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return;
     f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    f.close();
+    // 列表缓存条目小、数量多：交给统一清理按配额收口，别让它无限堆积
+    CacheCleaner::instance().requestCleanup();
 }
 
 void DirectoryCache::invalidate(const QString &connectionId, const QString &path)
@@ -141,7 +160,7 @@ void DirectoryCache::invalidateConnection(const QString &connectionId)
 {
     // 哈希键不可逆，无法按连接精确定位；遍历读取头部字段匹配
     QMutexLocker lock(&d->mutex);
-    QDir dir(AppPaths::cachePartition(QLatin1String(kPartition)));
+    QDir dir(partitionDir());
     for (const QFileInfo &fi : dir.entryInfoList({QStringLiteral("*.json")}, QDir::Files)) {
         QFile f(fi.absoluteFilePath());
         if (!f.open(QIODevice::ReadOnly))
@@ -158,7 +177,7 @@ void DirectoryCache::invalidateConnection(const QString &connectionId)
 void DirectoryCache::clearAll()
 {
     QMutexLocker lock(&d->mutex);
-    QDir dir(AppPaths::cachePartition(QLatin1String(kPartition)));
+    QDir dir(partitionDir());
     for (const QFileInfo &fi : dir.entryInfoList({QStringLiteral("*.json")}, QDir::Files))
         QFile::remove(fi.absoluteFilePath());
 }
@@ -167,7 +186,7 @@ qint64 DirectoryCache::totalBytes() const
 {
     QMutexLocker lock(&d->mutex);
     qint64 total = 0;
-    QDir dir(AppPaths::cachePartition(QLatin1String(kPartition)));
+    QDir dir(partitionDir());
     for (const QFileInfo &fi : dir.entryInfoList({QStringLiteral("*.json")}, QDir::Files))
         total += fi.size();
     return total;

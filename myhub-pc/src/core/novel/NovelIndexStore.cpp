@@ -190,6 +190,12 @@ int NovelIndexStore::renamePath(const QString &connectionId, const QString &oldP
         } else {
             continue;
         }
+        // 覆盖式移动：目标路径可能已有被覆盖那本书的索引行。先清掉再改路径 ——
+        // 直接 UPDATE 会撞 `(connectionID, filePath)` 唯一键，改成静默失败，
+        // 结果新旧两行同时存在，按旧路径仍能查到一份早已不属于它的索引
+        db.execute(QStringLiteral("DELETE FROM novelIndex WHERE connectionID = ? AND "
+                                  "filePath = ?"),
+                   {connectionId, target});
         if (db.execute(QStringLiteral("UPDATE novelIndex SET filePath = ? "
                                       "WHERE connectionID = ? AND filePath = ?"),
                        {target, connectionId, rowPath})) {

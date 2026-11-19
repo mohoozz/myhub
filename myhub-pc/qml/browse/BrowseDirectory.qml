@@ -998,13 +998,14 @@ Item {
                 return false
             return info.mediaKind === "novel" || info.name.toLowerCase().endsWith(".txt")
         }
-        /// 右键目标能用漫画阅读器打开：cbz / zip（§6 PC-207）
+        /// 右键目标能用漫画阅读器打开：cbz / zip（§6 PC-207），以及 epub ——
+        /// epub 默认按图集判定分流，这里是**手动覆盖**的入口（判定错了还能自己选）
         readonly property bool targetCanOpenAsComic: {
             dirModel.revision
             const info = dirModel.get(targetIndex)
             if (!info || Object.keys(info).length === 0 || info.isDir)
                 return false
-            return info.mediaKind === "comic"
+            return info.mediaKind === "comic" || info.name.toLowerCase().endsWith(".epub")
         }
         /// 右键目标是否已收藏（PC-107）
         readonly property bool targetIsFavorite: {

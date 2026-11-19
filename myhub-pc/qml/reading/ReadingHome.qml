@@ -113,7 +113,8 @@ Item {
             model: readingModel
             cacheBuffer: 400
 
-            readonly property int nameLines: Math.min(AppSettings.fileNameLines, 3)
+            // 不再夹到 3：§14.3 要求文件名行数 1~5 在六处一律生效（卡片高度会跟着长）
+            readonly property int nameLines: AppSettings.fileNameLines
             readonly property real coverHeight: (cellWidth - AppTheme.spacingSm * 2) / 1.3
 
             cellWidth: Math.floor(width / Math.max(2, Math.floor(width / 150)))
@@ -194,6 +195,7 @@ Item {
                 required property real fileModSecs
 
                 width: listView.width
+                nameLines: AppSettings.fileNameLines
                 entryTitle: listRow.title
                 entryMediaKind: listRow.mediaKind
                 entryKindText: listRow.kindText

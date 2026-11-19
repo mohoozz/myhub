@@ -21,6 +21,24 @@ QString attrOf(const QXmlStreamReader &xml, const char *name)
     return xml.attributes().value(QLatin1String(name)).toString();
 }
 
+/// 这一条 spine 指向的到底是不是一张整页图（图集 epub 的判据，见 `imageOnly`）
+bool isImageDocument(const QString &href, const QString &mediaType)
+{
+    if (mediaType.startsWith(QLatin1String("image/"), Qt::CaseInsensitive)) {
+        return true;
+    }
+    // 有些自制包不写 media-type（或写成 octet-stream），退回看扩展名
+    static const QStringList kImageSuffixes = {QStringLiteral("jpg"),  QStringLiteral("jpeg"),
+                                               QStringLiteral("png"),  QStringLiteral("gif"),
+                                               QStringLiteral("webp"), QStringLiteral("bmp"),
+                                               QStringLiteral("avif")};
+    const int dot = href.lastIndexOf(QLatin1Char('.'));
+    if (dot < 0) {
+        return false;
+    }
+    return kImageSuffixes.contains(href.mid(dot + 1).toLower());
+}
+
 /// XML 声明的 encoding / meta charset：epub 里绝大多数是 UTF-8，但老书会用 GBK
 QString declaredEncodingName(const QByteArray &raw)
 {
@@ -126,15 +144,18 @@ EpubBook::~EpubBook()
     m_loadCallback = nullptr;
     m_chapterCallback = nullptr;
     m_coverCallback = nullptr;
+    m_resourceCallbacks.clear();
 }
 
 void EpubBook::cancel()
 {
     ++m_serial;
     ++m_coverSerial;
+    ++m_resourceSerial;
     m_loadCallback = nullptr;
     m_chapterCallback = nullptr;
     m_coverCallback = nullptr;
+    m_resourceCallbacks.clear();
     if (m_zip) {
         m_zip->cancel();
     }
@@ -149,6 +170,10 @@ void EpubBook::load(LoadCallback cb)
     m_entries.clear();
     m_chapters.clear();
     m_manifestHref.clear();
+    m_manifestType.clear();
+    m_imagePages = 0;
+    m_spineCount = 0;
+    m_imageEntries.clear();
     m_tocTitles.clear();
     m_spine.clear();
     m_navHref.clear();
@@ -258,6 +283,7 @@ void EpubBook::readPackage(const QString &opfPath)
             {
                 QString href;
                 QString properties;
+                QString type;
             };
             QHash<QString, Item> manifest;
             QString ncxId;
@@ -296,7 +322,7 @@ void EpubBook::readPackage(const QString &opfPath)
                         const QString href = resolveHref(m_opfDir, attrOf(xml, "href"));
                         const QString properties = attrOf(xml, "properties");
                         if (!id.isEmpty() && !href.isEmpty()) {
-                            manifest.insert(id, Item{href, properties});
+                            manifest.insert(id, Item{href, properties, attrOf(xml, "media-type")});
                             const QStringList props = properties.split(QLatin1Char(' '));
                             if (props.contains(QLatin1String("nav"))) {
                                 m_navHref = href;
@@ -326,6 +352,7 @@ void EpubBook::readPackage(const QString &opfPath)
 
             for (const auto &[id, item] : std::as_const(manifest).asKeyValueRange()) {
                 m_manifestHref.insert(id, item.href);
+                m_manifestType.insert(id, item.type);
             }
             if (!ncxId.isEmpty()) {
                 m_ncxHref = m_manifestHref.value(ncxId);
@@ -481,6 +508,13 @@ void EpubBook::buildChapters()
     }
 }
 
+bool EpubBook::imageOnly() const
+{
+    // 至少 2 张整页图（只有一张封面/题图不算图集），且要占 spine 的 80% 以上：
+    // 普通小说的 spine 清一色是 xhtml，插图都在 manifest 里，不会被算进来
+    return m_imagePages >= 2 && m_imagePages * 5 >= m_spineCount * 4;
+}
+
 void EpubBook::readChapter(int index, ChapterCallback cb)
 {
     Q_ASSERT(cb);
@@ -507,9 +541,11 @@ void EpubBook::readChapter(int index, ChapterCallback cb)
         return;
     }
 
+    // `<img src>` 相对章节文件本身写，不是相对 OPF：传错基准会把插图全丢
+    const QString baseDir = href.left(href.lastIndexOf(QLatin1Char('/')) + 1);
     const auto alive = m_alive;
     m_zip->readEntry(m_entries.at(entryIndex),
-                     [this, alive, serial](QByteArray data, StorageError error) {
+                     [this, alive, serial, baseDir](QByteArray data, StorageError error) {
                          if (!*alive || serial != m_serial) {
                              return;
                          }
@@ -517,7 +553,8 @@ void EpubBook::readChapter(int index, ChapterCallback cb)
                              finishChapter({}, error);
                              return;
                          }
-                         finishChapter(htmlToParagraphs(decodeMarkup(data)), StorageError());
+                         finishChapter(htmlToParagraphs(decodeMarkup(data), baseDir),
+                                       StorageError());
                      });
 }
 
@@ -563,6 +600,49 @@ void EpubBook::readCover(CoverCallback cb)
     });
 }
 
+void EpubBook::readResource(const QString &entry, CoverCallback cb)
+{
+    Q_ASSERT(cb);
+    const quint64 id = ++m_resourceSerial;
+    if (cb) {
+        m_resourceCallbacks.insert(id, cb);
+    }
+
+    if (!m_zip) {
+        finishResource(id, {},
+                       StorageError(StorageError::InvalidPath, QStringLiteral("尚未打开 epub")));
+        return;
+    }
+    const int entryIndex = RangeZipReader::indexOf(m_entries, entry);
+    if (entryIndex < 0) {
+        finishResource(
+            id, {},
+            StorageError(StorageError::NotFound, QStringLiteral("epub 里缺少插图：%1").arg(entry)));
+        return;
+    }
+    const ZipEntry &zipEntry = m_entries.at(entryIndex);
+    if (zipEntry.uncompressedSize > kMaxImageBytes) {
+        finishResource(
+            id, {},
+            StorageError(StorageError::InvalidResponse,
+                         QStringLiteral("插图过大：%1 字节").arg(zipEntry.uncompressedSize)));
+        return;
+    }
+
+    const auto alive = m_alive;
+    m_zip->readEntry(zipEntry, [this, alive, id](QByteArray data, StorageError error) {
+        if (!*alive) {
+            return;
+        }
+        finishResource(id, std::move(data), error);
+    });
+}
+
+bool EpubBook::hasEntry(const QString &entry) const
+{
+    return !entry.isEmpty() && RangeZipReader::indexOf(m_entries, entry) >= 0;
+}
+
 void EpubBook::finishLoad(const StorageError &error)
 {
     LoadCallback callback = std::move(m_loadCallback);
@@ -570,11 +650,30 @@ void EpubBook::finishLoad(const StorageError &error)
     if (!callback) {
         return;
     }
+    // 图集判定要在交付前算好：上层的两条路（小说阅读器 / 漫画阅读器）靠它分流。
+    // 顺手把页序记下来：图集 epub 的页序在 spine 里，压缩包内条目名排序靠不住
+    m_spineCount = static_cast<int>(m_spine.size());
+    m_imagePages = 0;
+    m_imageEntries.clear();
+    for (const QString &idref : std::as_const(m_spine)) {
+        const QString href = m_manifestHref.value(idref);
+        if (!isImageDocument(href, m_manifestType.value(idref))) {
+            continue;
+        }
+        ++m_imagePages;
+        if (!href.isEmpty() && !m_imageEntries.contains(href)) {
+            m_imageEntries.append(href);
+        }
+    }
+
     EpubMetadata metadata;
     metadata.title = m_title;
     metadata.author = m_author;
     metadata.language = m_language;
     metadata.chapters = m_chapters;
+    metadata.imagePages = m_imagePages;
+    metadata.imageOnly = imageOnly();
+    metadata.imageEntries = m_imageEntries;
     callback(std::move(metadata), error);
 }
 
@@ -584,6 +683,14 @@ void EpubBook::finishChapter(QStringList paragraphs, const StorageError &error)
     m_chapterCallback = nullptr;
     if (callback) {
         callback(std::move(paragraphs), error);
+    }
+}
+
+void EpubBook::finishResource(quint64 id, QByteArray bytes, const StorageError &error)
+{
+    CoverCallback callback = m_resourceCallbacks.take(id);
+    if (callback) {
+        callback(std::move(bytes), error);
     }
 }
 
@@ -627,7 +734,24 @@ QString EpubBook::resolveHref(const QString &baseDir, const QString &href)
     return parts.join(QLatin1Char('/'));
 }
 
-QStringList EpubBook::htmlToParagraphs(const QString &xhtml)
+QString EpubBook::imageParagraph(const QString &entry)
+{
+    // 前缀里的 0x01 是「这条不是正文」的暗号：XHTML 解码后的正文不会带控制字符
+    return QStringLiteral("\u0001img\u0001") + entry;
+}
+
+bool EpubBook::isImageParagraph(const QString &paragraph)
+{
+    return paragraph.startsWith(QStringLiteral("\u0001img\u0001"));
+}
+
+QString EpubBook::imageEntryOf(const QString &paragraph)
+{
+    static const QString marker = QStringLiteral("\u0001img\u0001");
+    return paragraph.startsWith(marker) ? paragraph.mid(marker.size()) : QString();
+}
+
+QStringList EpubBook::htmlToParagraphs(const QString &xhtml, const QString &baseDir)
 {
     QString text = xhtml;
 
@@ -643,6 +767,39 @@ QStringList EpubBook::htmlToParagraphs(const QString &xhtml)
         QStringLiteral("<(head|script|style)\\b[^>]*>.*?</\\1\\s*>"),
         QRegularExpression::DotMatchesEverythingOption | QRegularExpression::CaseInsensitiveOption);
     text.remove(headLike);
+
+    // 插图：`<img src>` 与 SVG 的 `<image xlink:href>` 换成一条插图占位段落。
+    // 必须在去标签之前 —— 标签一去，图就再也找不回来了
+    {
+        static const QRegularExpression imageTag(QStringLiteral("<\\s*(?:img|image)\\b([^>]*)>"),
+                                                 QRegularExpression::CaseInsensitiveOption);
+        // 属性名要求前面有空白：`data-src` 里的 `src` 不算
+        static const QRegularExpression srcAttr(
+            QStringLiteral("\\s(?:src|xlink:href|href)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')"),
+            QRegularExpression::CaseInsensitiveOption);
+
+        QString rebuilt;
+        int last = 0;
+        QRegularExpressionMatchIterator it = imageTag.globalMatch(text);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch match = it.next();
+            rebuilt += text.mid(last, match.capturedStart() - last);
+            last = match.capturedEnd();
+
+            const QRegularExpressionMatch attr = srcAttr.match(match.captured(1));
+            if (!attr.hasMatch()) {
+                continue;
+            }
+            const QString src = !attr.captured(1).isEmpty() ? attr.captured(1) : attr.captured(2);
+            const QString entry = resolveHref(baseDir, src);
+            if (entry.isEmpty()) {
+                continue; // 外链 / data: / 空 src：不是 zip 条目，直接丢掉
+            }
+            rebuilt += QLatin1Char('\n') + imageParagraph(entry) + QLatin1Char('\n');
+        }
+        rebuilt += text.mid(last);
+        text = rebuilt;
+    }
 
     // 块级标签断段：开标签和闭标签都换成换行，避免段尾黏到下一段
     static const QRegularExpression blockOpen(

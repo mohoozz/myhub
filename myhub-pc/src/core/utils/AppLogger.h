@@ -35,6 +35,7 @@ public:
         Browser,
         Database,
         Storage,
+        Cache,
     };
     Q_ENUM(Module)
 

@@ -175,6 +175,73 @@ QByteArray epub3()
     });
 }
 
+/// 图集 epub：spine 直接指向整页图片（漫画打包成 epub 的常见形态）
+const QByteArray kImageOpf = QByteArrayLiteral(
+    "<?xml version='1.0' encoding='utf-8'?>"
+    "<package xmlns='http://www.idpf.org/2007/opf' version='3.0' unique-identifier='uid'>"
+    "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+    "<dc:title>图集之书</dc:title><dc:language>zh-CN</dc:language></metadata>"
+    "<manifest>"
+    "<item id='p1' href='pages/001.jpg' media-type='image/jpeg'/>"
+    "<item id='p2' href='pages/002.jpg' media-type='image/jpeg'/>"
+    "<item id='p3' href='pages/003.jpg' media-type='image/jpeg'/>"
+    "<item id='x1' href='pages/no-type.jpg'/>"
+    "<item id='x2' href='pages/wrong-type.jpg' media-type='application/octet-stream'/>"
+    "<item id='x3' href='pages/extra.xhtml' media-type='application/xhtml+xml'/>"
+    "</manifest>"
+    "<spine><itemref idref='p1'/><itemref idref='p2'/><itemref idref='p3'/>"
+    "<itemref idref='x1'/><itemref idref='x2'/><itemref idref='x3'/></spine>"
+    "</package>");
+
+QByteArray imageEpub()
+{
+    return buildZip({
+        {QStringLiteral("mimetype"), QByteArray("application/epub+zip")},
+        {QStringLiteral("META-INF/container.xml"), kContainerXml},
+        {QStringLiteral("OEBPS/content.opf"), kImageOpf},
+        {QStringLiteral("OEBPS/pages/001.jpg"), QByteArray("fake-jpeg")},
+        {QStringLiteral("OEBPS/pages/002.jpg"), QByteArray("fake-jpeg")},
+        {QStringLiteral("OEBPS/pages/003.jpg"), QByteArray("fake-jpeg")},
+        {QStringLiteral("OEBPS/pages/no-type.jpg"), QByteArray("fake-jpeg")},
+        {QStringLiteral("OEBPS/pages/wrong-type.jpg"), QByteArray("fake-jpeg")},
+        {QStringLiteral("OEBPS/pages/extra.xhtml"),
+         QByteArray("<html><body><p>x</p></body></html>")},
+    });
+}
+
+/// 带插图的普通小说：正文里 `<img>` 与 SVG `<image>` 各一张，路径相对章节文件
+const QByteArray kIllustratedOpf = QByteArrayLiteral(
+    "<?xml version='1.0' encoding='utf-8'?>"
+    "<package xmlns='http://www.idpf.org/2007/opf' version='3.0' unique-identifier='uid'>"
+    "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+    "<dc:title>插图之书</dc:title><dc:language>zh-CN</dc:language></metadata>"
+    "<manifest>"
+    "<item id='ch1' href='text/ch1.xhtml' media-type='application/xhtml+xml'/>"
+    "</manifest>"
+    "<spine><itemref idref='ch1'/></spine>"
+    "</package>");
+
+const QByteArray kIllustratedChapter =
+    QByteArrayLiteral("<?xml version='1.0' encoding='utf-8'?>"
+                      "<html xmlns='http://www.w3.org/1999/xhtml'><body>"
+                      "<p>before</p>"
+                      "<p><img src='img/pic.png' alt='插图'/></p>"
+                      "<svg xmlns:xlink='http://www.w3.org/1999/xlink'>"
+                      "<image xlink:href='img/pic.png' width='100' height='100'/></svg>"
+                      "<p>after</p>"
+                      "</body></html>");
+
+QByteArray illustratedEpub()
+{
+    return buildZip({
+        {QStringLiteral("mimetype"), QByteArray("application/epub+zip")},
+        {QStringLiteral("META-INF/container.xml"), kContainerXml},
+        {QStringLiteral("OEBPS/content.opf"), kIllustratedOpf},
+        {QStringLiteral("OEBPS/text/ch1.xhtml"), kIllustratedChapter},
+        {QStringLiteral("OEBPS/text/img/pic.png"), QByteArray("png-bytes")},
+    });
+}
+
 EpubMetadata loadOf(EpubBook &book, StorageError *error = nullptr)
 {
     EpubMetadata metadata;
@@ -203,9 +270,13 @@ private slots:
     void rejectsBrokenPackage();
     void parsesEpub3CoverImage();
     void parsesEpub2CoverMeta();
+    void detectsImageOnlyCollection();
+    void keepsTextNovelOutOfImageCollection();
     void reportsMissingCover();
     void resolveHrefHandlesDotsAndEncoding();
     void htmlToParagraphsStripsMarkup();
+    void keepsIllustrationsInParagraphFlow();
+    void readsArbitraryEntries();
 };
 
 void TestEpubBook::loadsEpub3NavToc()
@@ -458,6 +529,126 @@ void TestEpubBook::htmlToParagraphsStripsMarkup()
     const QStringList expected{QStringLiteral("一段文字中文"), QStringLiteral("二段"),
                                QStringLiteral("三段")};
     QCOMPARE(paragraphs, expected);
+}
+
+void TestEpubBook::detectsImageOnlyCollection()
+{
+    MemoryRangeSource source(imageEpub());
+    EpubBook book(&source);
+
+    StorageError error;
+    const EpubMetadata metadata = loadOf(book, &error);
+    QVERIFY2(error.isNull(), qPrintable(error.message()));
+
+    // spine 六条里五条是图：其中两条的 media-type 一个没写、一个写成
+    // octet-stream，都要靠扩展名补判；只有第六条是真 xhtml。
+    // 5/6 ≈ 83%，过 80% 门槛 → 判为图集
+    QCOMPARE(metadata.imagePages, 5);
+    QVERIFY(metadata.imageOnly);
+    QVERIFY(book.imageOnly());
+    QCOMPARE(book.imagePageCount(), 5);
+    // 图集的「章节」就是那几页图，交给漫画阅读器时页数才不至于为 0
+    QCOMPARE(metadata.chapters.size(), 6);
+    // 页序按 spine，不按文件名：漫画阅读器直接拿它当页名清单
+    const QStringList expectedPages{
+        QStringLiteral("OEBPS/pages/001.jpg"), QStringLiteral("OEBPS/pages/002.jpg"),
+        QStringLiteral("OEBPS/pages/003.jpg"), QStringLiteral("OEBPS/pages/no-type.jpg"),
+        QStringLiteral("OEBPS/pages/wrong-type.jpg")};
+    QCOMPARE(metadata.imageEntries, expectedPages);
+    QCOMPARE(book.imageEntries(), expectedPages);
+}
+
+void TestEpubBook::keepsTextNovelOutOfImageCollection()
+{
+    // 正常小说：封面/插图都是 image/*，但它们不在 spine 里 —— 不能误判成图集
+    MemoryRangeSource source(epub3());
+    EpubBook book(&source);
+
+    const EpubMetadata metadata = loadOf(book);
+    QCOMPARE(metadata.imagePages, 0);
+    QVERIFY(!metadata.imageOnly);
+    QVERIFY(!book.imageOnly());
+
+    // 图文混排也不许误判：spine 十条里两条是整页图（20%），仍按小说读
+    const QByteArray mixedOpf = QByteArrayLiteral(
+        "<?xml version='1.0' encoding='utf-8'?>"
+        "<package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"
+        "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+        "<dc:title>图文混排</dc:title></metadata>"
+        "<manifest>"
+        "<item id='p1' href='pages/p1.jpg' media-type='image/jpeg'/>"
+        "<item id='p2' href='pages/p2.jpg' media-type='image/jpeg'/>"
+        "<item id='c1' href='text/ch1.xhtml' media-type='application/xhtml+xml'/>"
+        "</manifest>"
+        "<spine><itemref idref='p1'/><itemref idref='p2'/><itemref idref='c1'/></spine>"
+        "</package>");
+    MemoryRangeSource mixed(buildZip({
+        {QStringLiteral("META-INF/container.xml"), kContainerXml},
+        {QStringLiteral("OEBPS/content.opf"), mixedOpf},
+        {QStringLiteral("OEBPS/text/ch1.xhtml"), kChapter1},
+    }));
+    EpubBook mixedBook(&mixed);
+    const EpubMetadata mixedMeta = loadOf(mixedBook);
+    QCOMPARE(mixedMeta.imagePages, 2);
+    QVERIFY(!mixedMeta.imageOnly);
+}
+
+void TestEpubBook::keepsIllustrationsInParagraphFlow()
+{
+    MemoryRangeSource source(illustratedEpub());
+    EpubBook book(&source);
+    StorageError error;
+    loadOf(book, &error);
+    QVERIFY2(error.isNull(), qPrintable(error.message()));
+
+    QStringList paragraphs;
+    book.readChapter(0, [&paragraphs](QStringList list, StorageError) { paragraphs = list; });
+
+    // 插图占一格：前后两段文字之间夹着两条插图占位（img 与 SVG image 各一条）
+    QCOMPARE(paragraphs.size(), 4);
+    QCOMPARE(paragraphs.at(0), QStringLiteral("before"));
+    QVERIFY(EpubBook::isImageParagraph(paragraphs.at(1)));
+    QVERIFY(EpubBook::isImageParagraph(paragraphs.at(2)));
+    QCOMPARE(paragraphs.at(3), QStringLiteral("after"));
+
+    // 相对章节文件（OEBPS/text/）解析，而不是相对 OPF
+    QCOMPARE(EpubBook::imageEntryOf(paragraphs.at(1)), QStringLiteral("OEBPS/text/img/pic.png"));
+    QCOMPARE(EpubBook::imageEntryOf(paragraphs.at(2)), QStringLiteral("OEBPS/text/img/pic.png"));
+    // 普通段落不会被误判
+    QCOMPARE(EpubBook::imageEntryOf(paragraphs.at(0)), QString());
+
+    // 空 src / 外链不该变成插图段落
+    const QStringList external = EpubBook::htmlToParagraphs(
+        QStringLiteral("<html><body><img src='https://x/y.png'/>"
+                       "<img src='data:image/png;base64,AA'/><p>text</p></body></html>"),
+        QStringLiteral("OEBPS/text/"));
+    QCOMPARE(external, QStringList{QStringLiteral("text")});
+}
+
+void TestEpubBook::readsArbitraryEntries()
+{
+    MemoryRangeSource source(illustratedEpub());
+    EpubBook book(&source);
+    loadOf(book);
+
+    QByteArray bytes;
+    StorageError error = StorageError(StorageError::Underlying, QStringLiteral("未回调"));
+    book.readResource(QStringLiteral("OEBPS/text/img/pic.png"),
+                      [&bytes, &error](QByteArray data, StorageError readError) {
+                          bytes = data;
+                          error = readError;
+                      });
+    QVERIFY(error.isNull());
+    QCOMPARE(bytes, QByteArray("png-bytes"));
+
+    QVERIFY(book.hasEntry(QStringLiteral("OEBPS/text/img/pic.png")));
+    QVERIFY(!book.hasEntry(QStringLiteral("OEBPS/text/img/missing.png")));
+
+    // 缺图：报错但不崩（章节里的 href 常指向打包时漏掉的图）
+    StorageError missing = StorageError(StorageError::Underlying, QStringLiteral("未回调"));
+    book.readResource(QStringLiteral("OEBPS/text/img/missing.png"),
+                      [&missing](QByteArray, StorageError readError) { missing = readError; });
+    QVERIFY(!missing.isNull());
 }
 
 QTEST_MAIN(TestEpubBook)

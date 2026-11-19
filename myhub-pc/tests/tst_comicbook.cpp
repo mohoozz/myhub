@@ -174,6 +174,60 @@ private:
     QVector<Item> m_items;
 };
 
+/// 延迟 RangeSource：请求先攒着，由用例决定什么时候放行。
+/// 用来验证「多页同时在途」——同步源一回调就把状态推到底，看不到并发。
+class DeferredRangeSource : public RangeSource
+{
+public:
+    explicit DeferredRangeSource(QByteArray data, QObject *parent = nullptr)
+        : RangeSource(parent)
+        , m_data(std::move(data))
+    {}
+
+    qint64 size() const override { return m_data.size(); }
+
+    void readRange(qint64 start, qint64 length, Callback cb) override
+    {
+        Request request;
+        request.start = start;
+        request.length = length;
+        request.callback = std::move(cb);
+        m_queue.append(request);
+    }
+
+    /// 放行全部在途请求。解一页要两跳（先读本地文件头、再读数据），
+    /// 所以一轮放行之后还会冒出新的请求，循环几轮直到清空。
+    void flushAll()
+    {
+        for (int round = 0; round < 8 && !m_queue.isEmpty(); ++round) {
+            const QVector<Request> batch = m_queue;
+            m_queue.clear();
+            for (const Request &request : batch) {
+                if (request.start < 0 || request.length <= 0 || request.start >= m_data.size()) {
+                    request.callback(
+                        QByteArray(),
+                        StorageError(StorageError::InvalidPath, QStringLiteral("区间非法")));
+                    continue;
+                }
+                request.callback(
+                    m_data.mid(static_cast<int>(request.start), static_cast<int>(request.length)),
+                    StorageError());
+            }
+        }
+    }
+
+private:
+    struct Request
+    {
+        qint64 start = 0;
+        qint64 length = 0;
+        Callback callback;
+    };
+
+    QByteArray m_data;
+    QVector<Request> m_queue;
+};
+
 /// 一页「图片」的占位字节（内容不重要，只要求能原样往返）
 QByteArray pageBytes(int size)
 {
@@ -202,6 +256,9 @@ private slots:
     void recognizesComicPathByExtension();
     void opensLocalRarAndReadsPage();
     void rarPageOrderMatchesZip();
+    void deliversConcurrentPageRequests();
+    void appliesExplicitPageOrder();
+    void fallsBackToNaturalOrderWhenNamesDoNotMatch();
 };
 
 void TestComicBook::listsPagesInNaturalOrder()
@@ -438,6 +495,112 @@ void TestComicBook::rarPageOrderMatchesZip()
         zipPages.append(zipBook.pageName(i));
     }
     QCOMPARE(rarPages, zipPages);
+}
+
+void TestComicBook::deliversConcurrentPageRequests()
+{
+    const QByteArray p0 = pageBytes(1000);
+    const QByteArray p1 = pageBytes(2000);
+    const QByteArray p2 = pageBytes(3000);
+    ZipBuilder zip;
+    zip.add(QStringLiteral("c/1.png"), p0);
+    zip.add(QStringLiteral("c/2.png"), p1);
+    zip.add(QStringLiteral("c/3.png"), p2);
+
+    DeferredRangeSource source(zip.build());
+    ComicBook book(&source);
+
+    bool opened = false;
+    book.open([&opened](QStringList, StorageError) { opened = true; });
+    QVERIFY2(!opened, "源还没放行，列页不该已经完成");
+    source.flushAll();
+    QVERIFY(opened);
+    QCOMPARE(book.pageCount(), 3);
+
+    // 桥接层的预取就是这么用的：几页一起要。单槽位实现下后一次请求会把
+    // 前一次的回调顶掉，只有最后一页能收到回调 —— 这正是要防的回归
+    QByteArray got0;
+    QByteArray got1;
+    QByteArray got2;
+    bool done0 = false;
+    bool done1 = false;
+    bool done2 = false;
+    book.readPage(0, [&got0, &done0](QByteArray bytes, StorageError) {
+        got0 = std::move(bytes);
+        done0 = true;
+    });
+    book.readPage(1, [&got1, &done1](QByteArray bytes, StorageError) {
+        got1 = std::move(bytes);
+        done1 = true;
+    });
+    book.readPage(2, [&got2, &done2](QByteArray bytes, StorageError) {
+        got2 = std::move(bytes);
+        done2 = true;
+    });
+    QVERIFY(!done0);
+    QVERIFY(!done1);
+    QVERIFY(!done2);
+
+    source.flushAll();
+    QVERIFY2(done0 && done1 && done2, "并发解页的回调被互相顶掉了");
+    QCOMPARE(got0, p0);
+    QCOMPARE(got1, p1);
+    QCOMPARE(got2, p2);
+
+    // 关书：在途请求一律作废，迟到的结果不许再回调
+    bool stale = false;
+    book.readPage(0, [&stale](QByteArray, StorageError) { stale = true; });
+    book.cancel();
+    source.flushAll();
+    QVERIFY2(!stale, "取消之后仍回调了旧请求");
+}
+
+void TestComicBook::appliesExplicitPageOrder()
+{
+    ZipBuilder zip;
+    zip.add(QStringLiteral("c/1.png"), pageBytes(32));
+    zip.add(QStringLiteral("c/2.png"), pageBytes(32));
+    zip.add(QStringLiteral("c/10.png"), pageBytes(32));
+    zip.add(QStringLiteral("c/cover.png"), pageBytes(16)); // 封面不在 spine 里
+
+    MemoryRangeSource source(zip.build());
+    ComicBook book(&source);
+    // 条目名排序会给出 1 → 2 → 10；spine 要求 10 → 1 → 2。
+    // 第一条故意写错大小写：自制包的 href 与条目名常只差大小写，得能对上
+    book.setPageOrder(
+        {QStringLiteral("C/10.PNG"), QStringLiteral("c/1.png"), QStringLiteral("c/2.png")});
+
+    QStringList pages;
+    StorageError error = StorageError(StorageError::Underlying, QStringLiteral("未回调"));
+    book.open([&pages, &error](QStringList names, StorageError openError) {
+        pages = names;
+        error = openError;
+    });
+
+    QVERIFY(error.isNull());
+    const QStringList expected{QStringLiteral("c/10.png"), QStringLiteral("c/1.png"),
+                               QStringLiteral("c/2.png")};
+    QCOMPARE(pages, expected);
+    // 名单外的封面图丢掉：否则会作为末页混进正文
+    QCOMPARE(book.pageCount(), 3);
+}
+
+void TestComicBook::fallsBackToNaturalOrderWhenNamesDoNotMatch()
+{
+    ZipBuilder zip;
+    zip.add(QStringLiteral("c/2.png"), pageBytes(32));
+    zip.add(QStringLiteral("c/1.png"), pageBytes(32));
+
+    MemoryRangeSource source(zip.build());
+    ComicBook book(&source);
+    book.setPageOrder({QStringLiteral("Text/ch1.xhtml")});
+
+    QStringList pages;
+    book.open([&pages](QStringList names, StorageError) { pages = names; });
+
+    // 一个都对不上时宁可退回自然排序，也不能开成空书
+    const QStringList expected{QStringLiteral("c/1.png"), QStringLiteral("c/2.png")};
+    QCOMPARE(pages, expected);
 }
 
 QTEST_GUILESS_MAIN(TestComicBook)

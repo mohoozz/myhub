@@ -28,6 +28,9 @@ add_library(myhub_core STATIC
     credentials/CredentialStore.h      credentials/CredentialStore.cpp
 
     cache/DirectoryCache.h             cache/DirectoryCache.cpp
+    cache/CachePartition.h             cache/CachePartition.cpp
+    cache/CacheStore.h                 cache/CacheStore.cpp
+    cache/CacheCleaner.h               cache/CacheCleaner.cpp
 
     files/TrashStore.h                 files/TrashStore.cpp
     files/FileOperations.h             files/FileOperations.cpp
@@ -46,9 +49,13 @@ add_library(myhub_core STATIC
     novel/TxtIndexer.h                 novel/TxtIndexer.cpp
     novel/TxtChapterLoader.h           novel/TxtChapterLoader.cpp
     novel/EpubBook.h                   novel/EpubBook.cpp
+    novel/EpubMetaStore.h              novel/EpubMetaStore.cpp
     novel/NovelChapterCache.h          novel/NovelChapterCache.cpp
+    novel/NovelImageStore.h            novel/NovelImageStore.cpp
 
     comic/ComicBook.h                  comic/ComicBook.cpp
+    comic/ComicPageStore.h             comic/ComicPageStore.cpp
+    comic/ComicDirection.h             comic/ComicDirection.cpp
 
     cover/EmbeddedCoverExtractor.h     cover/EmbeddedCoverExtractor.cpp
 

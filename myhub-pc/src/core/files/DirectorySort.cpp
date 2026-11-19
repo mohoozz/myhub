@@ -17,6 +17,12 @@ bool isBookPath(const QString &path)
     return ext == QLatin1String("txt") || ext == QLatin1String("epub");
 }
 
+/// 「漫画」的判定：cbz/cbr 只是 zip/rar 的别名，同一话两种打包算同类
+bool isComicPath(const QString &path)
+{
+    return MediaType::isComicArchive(StoragePath::extension(path));
+}
+
 /**
  * 「下一个」的公共骨架：排序 → 定位当前项 → 只往后扫第一个匹配项。
  *
@@ -93,6 +99,13 @@ FileEntry DirectorySort::nextBook(const FileEntryList &entries, const QString &c
 {
     return nextMatching(entries, currentPath, sortKey, ascending,
                         [](const FileEntry &entry) { return isBookPath(entry.path); });
+}
+
+FileEntry DirectorySort::nextComic(const FileEntryList &entries, const QString &currentPath,
+                                   const QString &sortKey, bool ascending)
+{
+    return nextMatching(entries, currentPath, sortKey, ascending,
+                        [](const FileEntry &entry) { return isComicPath(entry.path); });
 }
 
 } // namespace myhub

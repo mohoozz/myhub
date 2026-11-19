@@ -3,12 +3,14 @@
 #include "core/novel/NovelChapterCache.h"
 #include "core/novel/NovelIndex.h"
 #include "core/novel/TxtChapterLoader.h"
+#include "features/reading/NovelPager.h"
 
 #include <QElapsedTimer>
 #include <QHash>
 #include <QList>
 #include <QObject>
 #include <QQmlEngine>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -45,7 +47,8 @@ struct FileEntry;
  *   3. 一章都没识别出来 → 「整本单章」兜底，阅读器永远只处理一种情况。
  *
  * epub 打开流程：`EpubBook::load()` 读 container → OPF → NAV/NCX 拿目录，
- * 目录直接就是章节列表，没有「建索引」这一步，也不需要缓存。
+ * 目录直接就是章节列表，没有「建索引」这一步；目录本身另存一份快照
+ * （`EpubMetaStore`），供「文件够不着」时还原章数与章名。
  */
 class NovelBridge : public QObject
 {
@@ -71,6 +74,13 @@ class NovelBridge : public QObject
     /// 文件当前不可用（离线 / 源不可达），阅读器只在已缓存的章节之间工作
     Q_PROPERTY(bool offline READ offline NOTIFY offlineChanged)
     /**
+     * 插图落地计数：每取到一张就 +1。
+     *
+     * 段落 model 不因插图变化而重建（那会把列表滚回顶部），所以 QML 侧必须显式
+     * 依赖这个值，插图写完时富文本才会重算。
+     */
+    Q_PROPERTY(int imageRevision READ imageRevision NOTIFY imageRevisionChanged)
+    /**
      * 读完本书后推荐的「同目录下一本」（§4.6 的阅读侧对应）。
      *
      * 空 map = 没有候选（末本 / 目录里没有书 / 目录读不到）。
@@ -78,9 +88,40 @@ class NovelBridge : public QObject
      */
     Q_PROPERTY(QVariantMap nextSuggestion READ nextSuggestion NOTIFY nextSuggestionChanged)
 
+    // ---- 翻页模式（§5.1）：行级分页在 NovelPager，这里只管「第几页」与重排时机 ----
+    /// 滚动 / 翻页。翻页模式下页码**不进持久化**，进度仍按段落下标存
+    Q_PROPERTY(bool pageMode READ pageMode WRITE setPageMode NOTIFY pageModeChanged)
+    Q_PROPERTY(int pageIndex READ pageIndex WRITE setPageIndex NOTIFY pageChanged)
+    Q_PROPERTY(int pageCount READ pageCount NOTIFY paginationChanged)
+    /// 单行行距（px）：QML 按固定行高画，才能与 C++ 分出的行数严丝合缝
+    Q_PROPERTY(int pageLineHeight READ pageLineHeight NOTIFY paginationChanged)
+    /// 每次重排自增：页内容不是属性，QML 只能靠它建立依赖，否则页数不变时会画着旧内容
+    Q_PROPERTY(int paginationRevision READ paginationRevision NOTIFY paginationChanged)
+    /**
+     * 章名段落下标（-1 = 这一章没有单独成段的章名）。
+     *
+     * epub 的 `<h1>` 会落成第 0 段，与页眉里的章名重复：这里把它标出来，
+     * 滚动模式跳过这一项、翻页模式交给「标题带」画 —— 章名全章只出现一次。
+     */
+    Q_PROPERTY(int titleParagraph READ titleParagraph NOTIFY chapterChanged)
+    /// 标题带落在哪一页（-1 = 没有标题带）
+    Q_PROPERTY(int titlePage READ titlePage NOTIFY paginationChanged)
+    /// 标题带高度（px）：这一页顶部预留这么多，正文从它下面开始
+    Q_PROPERTY(int titleReserve READ titleReserve NOTIFY paginationChanged)
+
     // ---- 排版偏好（落 AppSettings，键名与 iOS 对齐）----
     Q_PROPERTY(int fontSize READ fontSize WRITE setFontSize NOTIFY fontSizeChanged)
     Q_PROPERTY(double lineSpacing READ lineSpacing WRITE setLineSpacing NOTIFY lineSpacingChanged)
+    /**
+     * 正文字体族列表（逗号分隔）：QML 直接塞给 `font.family`，同一串也原样交给分页器。
+     *
+     * 只能有一个来源 —— 分页测行宽用的字体必须与 QML 画正文的字体一致，
+     * 否则量出来一行能放 30 字、屏幕上只放得下 28 字，页尾就会溢出。
+     * 所以字体偏好住在桥接层，QML 与 C++ 都从这里取值。
+     */
+    Q_PROPERTY(QString fontFamilies READ fontFamilies NOTIFY fontChanged)
+    /// 0=黑体（无衬线，界面默认） 1=宋体（衬线，长文更耐读）
+    Q_PROPERTY(int fontStyle READ fontStyle WRITE setFontStyle NOTIFY fontChanged)
     /// 0=跟随系统 1=日间 2=夜间 3=护眼
     Q_PROPERTY(int theme READ theme WRITE setTheme NOTIFY themeChanged)
     Q_PROPERTY(double brightness READ brightness WRITE setBrightness NOTIFY brightnessChanged)
@@ -109,6 +150,53 @@ public:
 
     /// 滚动时上报「当前可见的首段落下标」：txt 换算成字节偏移、epub 记章号+段落（1s 节流）
     Q_INVOKABLE void reportParagraph(int index);
+    /**
+     * 上报「段落 + 段内字符偏移」（偏移以**原始文案**为准，不含首行缩进）。
+     *
+     * 翻页模式用它把锚点钉到行：长段落横跨几页时，只记段落下标会让读者
+     * 下次打开被拉回这一段的第一页。锚点仍以段落为主键，偏移只是它的细化。
+     */
+    Q_INVOKABLE void reportPosition(int paragraph, int charOffset);
+
+    // ---- 正文插图（epub）----
+    /// 这一段是不是插图：正文里插图占一格，段落文本是空串
+    Q_INVOKABLE bool isImageParagraph(int paragraph) const;
+    /// 插图快照的本地 URL；空串 = 还没取到（或离线且没缓存过）
+    Q_INVOKABLE QString imageUrl(int paragraph) const;
+    /// 插图原始像素尺寸；0x0 = 还不知道（QML 用它算等比高度，避免先按 0 高再跳一下）
+    Q_INVOKABLE QSize imageSize(int paragraph) const;
+    int imageRevision() const { return m_imageRevision; }
+
+    // ---- 翻页模式 ----
+    /**
+     * 告知正文可视区尺寸与字体族列表并重排（QML 布局稳定后调用，只在翻页模式下有意义）。
+     *
+     * 字体必须由 QML 传：`AppTheme.fontFamily` 是一串候选族名，C++ 里再硬编码一份
+     * 迟早与 QML 不一致，那时候量出来的行宽就是假的。
+     */
+    Q_INVOKABLE void setPageViewport(int width, int height);
+    /// 第 page 页的文本行（QML 用 `\n` 串起来画成一块固定行高的 Text）
+    Q_INVOKABLE QStringList pageLines(int page) const;
+    /// 第 page 页若是整页插图，返回段落下标；-1 = 文字页
+    Q_INVOKABLE int pageImageParagraph(int page) const;
+    /// 段落 → 页码（-1 = 没有这一页）：恢复进度时一步定位
+    Q_INVOKABLE int pageForParagraph(int paragraph) const;
+    /// 段落 + 段内偏移 → 页码（-1 = 没有这一页）：恢复进度时一步定位
+    Q_INVOKABLE int pageForPosition(int paragraph, int charOffset) const;
+    /// 翻页；跨章时自动换章（返回 false 表示已经到头/到顶）
+    Q_INVOKABLE bool nextPage();
+    Q_INVOKABLE bool prevPage();
+
+    bool pageMode() const { return m_pageMode; }
+    void setPageMode(bool pageMode);
+    int pageIndex() const { return m_pageIndex; }
+    void setPageIndex(int index);
+    int pageCount() const { return m_pager.pageCount(); }
+    int pageLineHeight() const { return m_pager.lineHeight(); }
+    int paginationRevision() const { return m_paginationRevision; }
+    int titleParagraph() const { return m_titleParagraph; }
+    int titlePage() const { return m_pager.titlePage(); }
+    int titleReserve() const { return m_pager.titleReserve(); }
 
     /**
      * 「是否已翻到全书最后」（末章末尾）。
@@ -140,6 +228,8 @@ public:
     QVariantList chapters() const { return m_chapters; }
     double percent() const { return m_percent; }
     int anchorParagraph() const { return m_anchorParagraph; }
+    /// 锚点的段内字符偏移（原始文案坐标）；0 = 段首
+    int anchorOffset() const { return m_anchorOffset; }
     QString statusText() const { return m_statusText; }
     QString errorText() const { return m_errorText; }
     bool offline() const { return m_offline; }
@@ -149,6 +239,9 @@ public:
     void setFontSize(int px);
     double lineSpacing() const { return m_lineSpacing; }
     void setLineSpacing(double spacing);
+    QString fontFamilies() const { return m_fontFamilies.join(QStringLiteral(", ")); }
+    int fontStyle() const { return m_fontStyle; }
+    void setFontStyle(int style);
     int theme() const { return m_theme; }
     void setTheme(int theme);
     double brightness() const { return m_brightness; }
@@ -165,19 +258,32 @@ signals:
     void statusChanged();
     void errorTextChanged();
     void offlineChanged();
+    /// 插图落地：QML 靠它重算参考文献里的 `<img>`
+    void imageRevisionChanged();
     /// 下一本候选变化；空 map 表示没有可推荐的下一本
     void nextSuggestionChanged();
     void fontSizeChanged();
     void lineSpacingChanged();
+    /// 字体族变了：QML 要重算正文宽度，分页要重排
+    void fontChanged();
     void themeChanged();
     void brightnessChanged();
+    void pageModeChanged();
+    void pageChanged();
+    /// 重排完成：页数、行距、每页内容全部换了一批，QML 必须重新取内容
+    void paginationChanged();
 
 private:
     explicit NovelBridge(QObject *parent = nullptr);
     ~NovelBridge() override;
 
-    /// 当前这本是不是 epub（只有打开成功的 epub 才会让 m_epub 非空）
-    bool epubMode() const { return m_epub != nullptr; }
+    /**
+     * 当前这本是不是 epub。
+     *
+     * 离线打开时没有 `EpubBook`（打不开 zip 才降级的），但 `m_epubChapterCount`
+     * 已经从目录快照恢复 —— 两条 epub 分支（在线 / 离线）都要走 epub 的加载与进度逻辑。
+     */
+    bool epubMode() const { return m_epub != nullptr || m_epubChapterCount > 0; }
 
     void teardown();
     void fail(const QString &message);
@@ -192,16 +298,46 @@ private:
     void showOfflineGap(int chapter);
     void rebuildChapters();
     void startIndexing();
-    /// txt：按索引区间取一章
-    void loadChapter(int chapter, qint64 anchorByte);
-    void applyChapter(const TxtChapterText &text, qint64 anchorByte);
-    void saveProgress(qint64 byteOffset, bool finished = false);
+    /// txt：按索引区间取一章（`anchorOffset` = 锚点在该段内的字符偏移）
+    void loadChapter(int chapter, qint64 anchorByte, int anchorOffset = 0);
+    void applyChapter(const TxtChapterText &text, qint64 anchorByte, int anchorOffset = 0);
+    void saveProgress(qint64 byteOffset, bool finished = false, int charOffset = 0);
 
     // ---- epub 分支（与 txt 的字节锚点并存，互不干扰）----
     void openEpub();
-    void loadEpubChapter(int chapter, int anchorParagraph);
-    void applyEpubChapter(int chapter, const QStringList &paragraphs, int anchorParagraph);
-    void saveEpubProgress(int chapter, int paragraph, bool finished = false);
+    /**
+     * 离线打开 epub：目录来自 `EpubMetaStore` 快照，正文只放已缓存的章节。
+     *
+     * 没有快照、或一章正文都没缓存时返回 false（调用方照常报错）——
+     * 打开一个没有目录的空壳比直说「离线且未缓存」更糟。
+     */
+    bool openEpubOffline();
+    /// 离线 epub 缺章：停在空章上提示，不写进度（不篡改续读点）
+    void showEpubOfflineGap(int chapter);
+    void loadEpubChapter(int chapter, int anchorParagraph, int anchorOffset = 0);
+    /**
+     * 判定为图集（整本都是整页图片）：整本转交漫画阅读器。
+     *
+     * 小说阅读器对它只能解出空段落，目录也毫无意义；延迟一拍再拆现场 ——
+     * 这个调用栈还在 `EpubBook` 的读回调里，当场析构它会踩到它自己的栈帧。
+     */
+    void handOffToComic();
+    void applyEpubChapter(int chapter, const QStringList &paragraphs, int anchorParagraph,
+                          int anchorOffset = 0);
+    /**
+     * 把章节里的插图占位段落换成「本地快照 URL + 待取队列」。
+     *
+     * 段落总数与下标空间**不变**（插图占一格、文本置空），进度锚点与滚动上报照旧。
+     * 已在盘上的快照直接可用，其余的排进队列由 `pumpImageQueue()` 串行抽出来落盘。
+     */
+    void resetImages(const QStringList &paragraphs);
+    /// 串行取图：一次一张，避免把 zip 的 Range 读打散
+    void pumpImageQueue();
+    QString imageSnapshotPath(const QString &entry) const;
+    /// 快照已在盘上：填 URL 与像素尺寸（顺带 touch 刷新 LRU 的 mtime）
+    bool adoptImageSnapshot(const QString &entry, QString *url, QSize *size) const;
+    void clearImages();
+    void saveEpubProgress(int chapter, int paragraph, bool finished = false, int charOffset = 0);
     /// 给进度记录带上当前文件指纹（未知记 -1）：首页用来校验封面缓存是否过期
     void applyFingerprint(ProgressRecord *record) const;
     /// 章号 + 段落下标 → 0..1；只用于进度条与首页百分比，不参与定位
@@ -232,6 +368,14 @@ private:
     void loadPreferences();
     void storePreference(const QString &key, const QVariant &value);
 
+    // ---- 翻页模式 ----
+    /// 排版参数/视口变化后重排：按「当前页首段」重新定位，不让页码原地乱跳
+    void repaginate();
+    /// 换章后把页码对到进度锚点（-1 = 章首）
+    void syncPageToAnchor();
+    /// 重排结束：revision 自增 + 通知（QML 的页内容绑定都挂在 revision 上）
+    void notifyPagination();
+
     // ---- 读完推荐（§4.6）----
     /// 把本书标记为已读完：percent 归 1，进度按 `finished` 落库（仅在线可用时）
     void markFinished();
@@ -259,6 +403,19 @@ private:
     TxtChapterText m_chapter; ///< 当前章（上报进度时要用它的行表）
     QVariantList m_chapters;
 
+    /// 当前章的一张插图：条目名 + 快照 URL（空 = 还没取到）+ 原始像素尺寸
+    struct ChapterImage
+    {
+        QString entry;
+        QString url;
+        QSize size;
+    };
+    /// 段落下标 → 插图（只有插图段落才有条目）
+    QHash<int, ChapterImage> m_images;
+    QStringList m_imageQueue;  ///< 本章待取的条目名（串行泵）
+    quint64 m_imageSerial = 0; ///< 换章 / 关闭即作废在途取图
+    int m_imageRevision = 0;
+
     /// 预取缓存的一章：txt 留行表（命中后能直接换算锚点），epub 只有段落
     struct CachedChapter
     {
@@ -276,11 +433,16 @@ private:
     QStringList m_epubTitles;
 
     int m_chapterIndex = -1;
+    /// 章名段（只认第 0 段，且要长得像章名）：-1 = 没有
+    int m_titleParagraph = -1;
     int m_anchorParagraph = -1;
+    /// 锚点的段内字符偏移：长段落跨页时用它落回原行（页码从不持久化，靠它重算）
+    int m_anchorOffset = 0;
     double m_percent = 0.0;
     qint64 m_pendingByte = -1;   ///< 节流：等待落库的最新滚动位置
     int m_pendingChapter = -1;   ///< epub 节流：等待落库的章号
     int m_pendingParagraph = -1; ///< epub 节流：等待落库的段落下标
+    int m_pendingOffset = 0;     ///< 节流：等待落库的段内偏移
     qint64 m_lastReportedByte = -1;
     qint64 m_pendingModTime = 0;
     qint64 m_fileSize = 0; ///< 打开时 stat 到的文件长度（章节缓存的指纹）
@@ -305,8 +467,22 @@ private:
 
     int m_fontSize = 17;
     double m_lineSpacing = 1.6;
+    /// 正文字体族（含回退链）：QML 画正文与 C++ 折行都只认这一份
+    QStringList m_fontFamilies;
+    int m_fontStyle = 0; ///< 0=黑体 1=宋体
     int m_theme = 0;
     double m_brightness = -1.0; ///< 负值 = 跟随系统亮度
+
+    /// 行级分页（§5.1）。页码只活在内存里：换字号/换窗口宽度就整章重排
+    NovelPager m_pager;
+    bool m_pageMode = false;
+    int m_pageIndex = 0;
+    int m_paginationRevision = 0;
+    /// QML 推上来的正文可视区（setFontSize 之类改排版时用它重排）
+    int m_pageWidth = 0;
+    int m_pageHeight = 0;
+    /// 往回翻跨章：章节是异步加载的，页码得等新章落地后再挪到末尾
+    bool m_pendingPageEnd = false;
 };
 
 } // namespace myhub

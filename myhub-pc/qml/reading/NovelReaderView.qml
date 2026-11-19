@@ -43,9 +43,15 @@ Item {
      * 短章、插图、字号变化都会误判。恢复定位期间 contentY 会瞬时跳到末尾，必须排除。
      */
     readonly property bool atBookEnd: Novel.opened && !restoring && Novel.chapterCount > 0
-        && Novel.chapterIndex >= Novel.chapterCount - 1 && list.contentHeight > 0
+        && Novel.chapterIndex >= Novel.chapterCount - 1 && (Novel.pageMode ? pageAtEnd : listAtEnd)
+
+    /// 滚动模式：当前这屏是不是最后一屏
+    readonly property bool listAtEnd: list.contentHeight > 0
         && (list.contentHeight <= list.height + 2
             || list.contentY + list.height >= list.contentHeight - 2)
+
+    /// 翻页模式：最后一页。页数由 C++ 分页给出，这里只比对，不再自己量高度
+    readonly property bool pageAtEnd: Novel.pageCount > 0 && Novel.pageIndex >= Novel.pageCount - 1
 
     onAtBookEndChanged: Novel.setAtBookEnd(atBookEnd)
 
@@ -57,8 +63,35 @@ Item {
     Connections {
         target: Novel
         function onChapterChanged() {
-            if (Novel.opened)
+            // 换章了：查看层里那张图属于上一章，直接收起
+            imageViewer.close()
+            if (Novel.pageMode)
+                viewportTimer.restart() // 新章的分页已经由 C++ 做好，核对一次视口即可
+            else if (Novel.opened)
                 root.scheduleAnchor()
+        }
+
+        function onFontChanged() {
+            // 换字体等于换行宽：滚动模式下每段高度都变了，重新锚回当前段；
+            // 翻页模式由 C++ 那边按当前页首行重排，这里不用管
+            if (!Novel.pageMode)
+                root.scheduleAnchor()
+        }
+
+        function onPageModeChanged() {
+            if (Novel.pageMode) {
+                // 从滚动切过来要接着读：把当前屏首段报上去，页码落到那一段所在的页
+                const anchor = list.indexAt(1, list.contentY)
+                if (anchor >= 0) {
+                    Novel.reportParagraph(anchor)
+                    Novel.pageIndex = Novel.pageForParagraph(anchor)
+                }
+                // 页视图刚可见，尺寸还没结算：等一拍再推视口
+                viewportTimer.restart()
+            } else {
+                // 切回滚动：按翻页时上报的锚点定位（scheduleAnchor 会等布局稳定再落）
+                root.scheduleAnchor()
+            }
         }
     }
 
@@ -75,7 +108,8 @@ Item {
     }
 
     function applyAnchor() {
-        if (!Novel.opened)
+        // 翻页模式的落点由 C++ 按锚点算出页码，ListView 不参与
+        if (!Novel.opened || Novel.pageMode)
             return
         if (pendingAnchor > 0 && pendingAnchor < list.count)
             list.positionViewAtIndex(pendingAnchor, ListView.Beginning)
@@ -84,15 +118,23 @@ Item {
     }
 
     function pushProgress() {
-        if (!Novel.opened || restoring)
+        // 翻页模式的进度由「翻到第几页」直接上报（见 NovelBridge::setPageIndex）
+        if (!Novel.opened || restoring || Novel.pageMode)
             return
         const first = list.indexAt(1, Math.max(0, list.contentY + 2))
         if (first >= 0)
             Novel.reportParagraph(first)
     }
 
-    /// 翻页：滚动模式下一屏一屏走（翻页模式待 QTextLayout 分页落地后接入）
+    /// 翻页：滚动模式下一屏一屏走，翻页模式交给 C++ 分页（跨章也在那边发生）
     function pageBy(direction) {
+        if (Novel.pageMode) {
+            if (direction > 0)
+                Novel.nextPage()
+            else
+                Novel.prevPage()
+            return
+        }
         const maxY = Math.max(0, list.contentHeight - list.height)
         list.contentY = Math.max(0, Math.min(maxY, list.contentY + direction * list.height * 0.9))
         pushProgress()
@@ -116,10 +158,20 @@ Item {
         onTriggered: root.applyAnchor()
     }
 
+    // 顶/底栏收起时正文可视区会连着变几帧：等尺寸稳定再推给 C++ 重排，
+    // 否则每帧都要拿整章去折一次行
+    Timer {
+        id: viewportTimer
+        interval: 180
+        onTriggered: pageView.pushViewport()
+    }
+
     // ---------------- 快捷键（§5.1）----------------
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) {
-            if (settingsPanel.opened)
+            if (imageViewer.opened)
+                imageViewer.close()
+            else if (settingsPanel.opened)
                 settingsPanel.opened = false
             else if (drawer.opened)
                 drawer.opened = false
@@ -146,6 +198,21 @@ Item {
                 event.accepted = true
             }
             return
+        }
+        if (Novel.pageMode) {
+            // 翻页模式：正文没有可滚的东西，上下键也当翻页
+            if (event.key === Qt.Key_Left || event.key === Qt.Key_PageUp
+                    || event.key === Qt.Key_Up) {
+                root.pageBy(-1)
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Right || event.key === Qt.Key_PageDown
+                    || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
+                root.pageBy(1)
+                event.accepted = true
+                return
+            }
         }
         if (event.key === Qt.Key_Left || event.key === Qt.Key_PageUp) {
             root.pageBy(-1)
@@ -184,7 +251,7 @@ Item {
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         wrapMode: Text.Wrap
-        font.family: AppTheme.fontFamily
+        font.family: Novel.fontFamilies
         font.pixelSize: AppTheme.fontSizeSmall
     }
 
@@ -197,6 +264,8 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         width: root.columnWidth
         clip: true
+        // 翻页模式由 pageView 接手：两边同时画会出现两份正文叠在一起
+        visible: !Novel.pageMode
 
         model: Novel.paragraphs
         // 段距用「字号的固定倍数」而不是行高的倍数：行距调大时段与段之间不该跟着膨胀
@@ -223,9 +292,12 @@ Item {
                     text: Novel.chapterTitle
                     color: root.ink
                     wrapMode: Text.Wrap
-                    font.family: AppTheme.fontFamily
-                    font.pixelSize: Math.round(Novel.fontSize * 1.32)
-                    font.weight: Font.DemiBold
+                    font.family: Novel.fontFamilies
+                    // 章名是这一页的「标题」：比正文大一号再加粗，滚到章首一眼能看出来
+                    font.pixelSize: Math.round(Novel.fontSize * 1.38)
+                    font.weight: Font.Bold
+                    lineHeight: 1.25
+                    lineHeightMode: Text.ProportionalHeight
                 }
 
                 Rectangle {
@@ -263,21 +335,91 @@ Item {
             }
         }
 
-        delegate: Text {
+        delegate: Item {
             id: paragraph
 
             required property string modelData
+            required property int index
+
+            /// 插图段落：正文里插图占一格，段落文本是空串
+            readonly property bool isImage: Novel.isImageParagraph(index)
+            /// 插图快照 URL：空 = 还没取到（或离线且没缓存过）
+            readonly property string imageSource: paragraph.currentImageUrl()
+            /// 等比缩到栏宽后的尺寸；原图更窄就不放大（放大只会糊）
+            readonly property size imageExtent: paragraph.currentExtent()
+            readonly property bool showImage: paragraph.imageSource.length > 0
+            readonly property real imageHeight: Math.max(paragraph.imageExtent.height, Math.round(
+                                                             Novel.fontSize * 1.6))
+
+            /// 章名段：epub 的 <h1> 会落成第 0 段，抬头已经写着章名，正文里不再重复
+            readonly property bool isChapterTitle: paragraph.index === Novel.titleParagraph
 
             width: list.width
-            text: paragraph.modelData
-            color: root.ink
-            wrapMode: Text.Wrap
-            textFormat: Text.PlainText
-            font.family: AppTheme.fontFamily
-            font.pixelSize: Novel.fontSize
-            // 行距按字号倍数缩放：字号与行距是两个独立偏好，互不牵连
-            lineHeight: Novel.lineSpacing
-            lineHeightMode: Text.ProportionalHeight
+            height: paragraph.isChapterTitle ? 0
+                  : (paragraph.showImage ? paragraph.imageHeight : textItem.implicitHeight)
+            visible: !paragraph.isChapterTitle
+
+            function currentImageUrl() {
+                if (!paragraph.isImage)
+                    return ""
+                // 建立依赖：插图落地后 revision 自增，这里的绑定才会重算
+                // （段落 model 不变，不依赖它的话图永远停在「加载中」）
+                void Novel.imageRevision
+                return Novel.imageUrl(paragraph.index)
+            }
+
+            function currentExtent() {
+                if (!paragraph.isImage)
+                    return Qt.size(0, 0)
+                void Novel.imageRevision
+                const natural = Novel.imageSize(paragraph.index)
+                if (natural.width <= 0 || natural.height <= 0)
+                    return Qt.size(0, 0)
+                const scale = Math.min(1, list.width / natural.width)
+                return Qt.size(Math.round(natural.width * scale), Math.round(natural.height * scale))
+            }
+
+            Text {
+                id: textItem
+
+                // 插图有字节时由 Image 顶替；没有就留一行占位，别让列表凭空短一截
+                visible: !paragraph.showImage
+                width: parent.width
+                text: paragraph.isImage ? (Novel.offline ? qsTr("［插图未缓存］") : qsTr("［插图加载中…］")) : paragraph.modelData
+                color: root.ink
+                opacity: paragraph.isImage ? 0.6 : 1
+                horizontalAlignment: paragraph.isImage ? Text.AlignHCenter : Text.AlignLeft
+                wrapMode: Text.Wrap
+                // 与分页器共用同一串族名：换宋体时两边的行宽必须一起变
+                font.family: Novel.fontFamilies
+                font.pixelSize: Novel.fontSize
+                // 行距按字号倍数缩放：字号与行距是两个独立偏好，互不牵连
+                lineHeight: Novel.lineSpacing
+                lineHeightMode: Text.ProportionalHeight
+            }
+
+            Image {
+                id: paragraphImage
+
+                visible: paragraph.showImage
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: paragraph.imageExtent.width
+                height: paragraph.imageHeight
+                source: paragraph.showImage ? paragraph.imageSource : ""
+                // 插图可能不小：异步解码，别让滚动卡住
+                asynchronous: true
+                fillMode: Image.PreserveAspectFit
+                cache: true
+
+                // 能点的东西要给出手型：不然用户不知道图可以放大
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+
+                TapHandler {
+                    onTapped: imageViewer.show(paragraph.index)
+                }
+            }
         }
 
         onContentYChanged: {
@@ -286,6 +428,192 @@ Item {
         }
         onMovementEnded: root.pushProgress()
         onCountChanged: if (root.restoring) Qt.callLater(root.applyAnchor)
+    }
+
+    // ---------------- 正文（翻页模式，§5.1）----------------
+    // 页内容由 NovelPager 逐行切好：行由 C++ 断开（NoWrap），行距由它给出（FixedHeight），
+    // 所以「量到的行」与「画出来的行」是同一批，不需要 QML 再猜高度
+    Item {
+        id: pageView
+
+        anchors.top: topBar.bottom
+        anchors.bottom: bottomBar.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: root.columnWidth
+        visible: Novel.pageMode && Novel.opened
+        clip: true
+
+        /// 本页若是整页插图，值是该插图段落；-1 = 文字页
+        readonly property int imageParagraph: {
+            void Novel.paginationRevision // 重排（换章/改字号/改窗口宽度）后必须重取
+            return Novel.pageImageParagraph(Novel.pageIndex)
+        }
+        readonly property bool isImagePage: imageParagraph >= 0
+        /// 本章第一个文字页：章名带只出现在这一页（C++ 已为它预留两行高）
+        readonly property bool onTitlePage: Novel.titlePage >= 0 && Novel.pageIndex === Novel.titlePage
+                                             && !isImagePage
+        readonly property string imageSource: {
+            void Novel.imageRevision
+            return isImagePage ? Novel.imageUrl(imageParagraph) : ""
+        }
+        /// 整页插图：等比铺满正文区，窄图不放大
+        readonly property size imageExtent: {
+            void Novel.imageRevision
+            if (!isImagePage)
+                return Qt.size(0, 0)
+            const natural = Novel.imageSize(imageParagraph)
+            if (natural.width <= 0 || natural.height <= 0 || pageBody.width <= 0)
+                return Qt.size(0, 0)
+            const scale = Math.min(1, Math.min(pageBody.width / natural.width,
+                                               pageBody.height / natural.height))
+            return Qt.size(Math.round(natural.width * scale),
+                           Math.round(natural.height * scale))
+        }
+        readonly property var pageLines: {
+            void Novel.paginationRevision
+            return Novel.pageLines(Novel.pageIndex)
+        }
+
+        /// 正文可视区只有这里知道：推给 C++ 才能按真实宽度折行
+        function pushViewport() {
+            if (!Novel.pageMode || !Novel.opened || pageBody.width <= 0 || pageBody.height <= 0)
+                return
+            // 字体不用传：分页器与正文用同一份 `Novel.fontFamilies`
+            Novel.setPageViewport(Math.round(pageBody.width), Math.round(pageBody.height))
+        }
+
+        onVisibleChanged: if (visible) viewportTimer.restart()
+
+        // 章节标题当书眉：放在排版区外面占固定一行，翻页时页码才不会被标题挤动
+        Text {
+            id: pageHeading
+
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            text: Novel.chapterTitle
+            elide: Text.ElideRight
+            wrapMode: Text.NoWrap
+            color: root.inkSoft
+            // 章名页上正文里已经有放大加粗的章名：书眉让位（只透明，不隐藏，
+            // 否则 pageBody 的高度会跟着变，视口一变就要重排）
+            opacity: pageView.onTitlePage ? 0 : 1
+            font.family: Novel.fontFamilies
+            font.pixelSize: AppTheme.fontSizeSmall
+        }
+
+        Item {
+            id: pageBody
+
+            anchors.top: pageHeading.bottom
+            anchors.topMargin: AppTheme.spacingLg
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: pageFooter.top
+            anchors.bottomMargin: AppTheme.spacingMd
+
+            onWidthChanged: viewportTimer.restart()
+            onHeightChanged: viewportTimer.restart()
+
+            /// 章名带：本章第一个文字页的顶部，高度就是分页器预留的那两行。
+            /// 字号按余量现算（不超过正文的 1.42 倍），保证两行一定塞得进这条带子
+            Item {
+                id: titleBand
+
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: pageView.onTitlePage ? Novel.titleReserve : 0
+                visible: height > 0
+
+                Text {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Math.round(Novel.fontSize * 0.3)
+                    text: Novel.chapterTitle
+                    color: root.ink
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                    font.family: Novel.fontFamilies
+                    font.pixelSize: Math.max(AppTheme.fontSizeSmall,
+                                             Math.min(Math.round(Novel.fontSize * 1.42),
+                                                      Math.floor(titleBand.height / 2 / 1.15)))
+                    font.weight: Font.Bold
+                    lineHeight: 1.15
+                    lineHeightMode: Text.ProportionalHeight
+                }
+            }
+
+            Text {
+                anchors.top: parent.top
+                anchors.topMargin: titleBand.height
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                visible: !pageView.isImagePage
+                text: pageView.pageLines.join("\n")
+                color: root.ink
+                // 行已经由 C++ 断好，这里再折一次就会和页高对不上
+                wrapMode: Text.NoWrap
+                lineHeightMode: Text.FixedHeight
+                lineHeight: Novel.pageLineHeight
+                // 分页器就是按这一串族名折的行：两边一致，页高才对得上
+                font.family: Novel.fontFamilies
+                font.pixelSize: Novel.fontSize
+                clip: true
+            }
+
+            Image {
+                anchors.centerIn: parent
+                visible: pageView.isImagePage && pageView.imageSource.length > 0
+                width: pageView.imageExtent.width
+                height: pageView.imageExtent.height
+                source: pageView.imageSource
+                asynchronous: true
+                fillMode: Image.PreserveAspectFit
+                cache: true
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
+
+            Text {
+                anchors.centerIn: parent
+                visible: pageView.isImagePage && pageView.imageSource.length === 0
+                text: Novel.offline ? qsTr("［插图未缓存］") : qsTr("［插图加载中…］")
+                color: root.inkSoft
+                font.family: Novel.fontFamilies
+                font.pixelSize: AppTheme.fontSizeBody
+            }
+
+            TapHandler {
+                onTapped: function(eventPoint) {
+                    if (pageView.isImagePage) {
+                        imageViewer.show(pageView.imageParagraph)
+                        return
+                    }
+                    // 桌面端不必去够键盘：右侧 60% 往后翻，左侧 40% 往前
+                    if (eventPoint.position.x > pageBody.width * 0.4)
+                        Novel.nextPage()
+                    else
+                        Novel.prevPage()
+                }
+            }
+        }
+
+        Text {
+            id: pageFooter
+
+            anchors.bottom: parent.bottom
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: (Novel.pageIndex + 1) + " / " + Math.max(1, Novel.pageCount)
+            color: root.inkSoft
+            font.family: Novel.fontFamilies
+            font.pixelSize: AppTheme.fontSizeSmall
+        }
     }
 
     // ---------------- 顶栏 ----------------
@@ -637,7 +965,7 @@ Item {
         id: settingsPanel
 
         property bool opened: false
-        readonly property int sheetHeight: 232
+        readonly property int sheetHeight: 328
 
         anchors.fill: parent
         z: 50
@@ -683,6 +1011,66 @@ Item {
                 anchors.margins: AppTheme.spacingXl
                 spacing: AppTheme.spacingMd
 
+                // ---- 排版模式 ----
+                Item {
+                    width: parent.width
+                    height: 36
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("排版")
+                        color: root.inkSoft
+                        font.family: AppTheme.fontFamily
+                        font.pixelSize: AppTheme.fontSizeBody
+                    }
+
+                    // 滚动 / 翻页两段式：选中的那段用正文色填充
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 132
+                        height: 32
+                        radius: height / 2
+                        color: root.hoverFill
+
+                        Row {
+                            anchors.fill: parent
+                            anchors.margins: 3
+
+                            Repeater {
+                                model: [QT_TR_NOOP("滚动"), QT_TR_NOOP("翻页")]
+
+                                delegate: Rectangle {
+                                    id: modeCell
+
+                                    required property int index
+                                    required property string modelData
+
+                                    readonly property bool active: Novel.pageMode === (index === 1)
+
+                                    width: 63
+                                    height: parent.height
+                                    radius: height / 2
+                                    color: active ? root.ink : "transparent"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modeCell.modelData
+                                        color: modeCell.active ? root.sheetFill : root.inkSoft
+                                        font.family: AppTheme.fontFamily
+                                        font.pixelSize: AppTheme.fontSizeSmall
+                                    }
+
+                                    TapHandler {
+                                        onTapped: Novel.pageMode = modeCell.index === 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // ---- 字号 ----
                 Item {
                     width: parent.width
@@ -726,6 +1114,68 @@ Item {
                             hoverFill: root.hoverFill
                             enabled: Novel.fontSize < 32
                             onClicked: Novel.fontSize = Novel.fontSize + 1
+                        }
+                    }
+                }
+
+                // ---- 字体 ----
+                Item {
+                    width: parent.width
+                    height: 36
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("字体")
+                        color: root.inkSoft
+                        font.family: AppTheme.fontFamily
+                        font.pixelSize: AppTheme.fontSizeBody
+                    }
+
+                    // 黑体 / 宋体：只换正文与页内文字，界面文案不动
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 132
+                        height: 32
+                        radius: height / 2
+                        color: root.hoverFill
+
+                        Row {
+                            anchors.fill: parent
+                            anchors.margins: 3
+
+                            Repeater {
+                                model: [QT_TR_NOOP("黑体"), QT_TR_NOOP("宋体")]
+
+                                delegate: Rectangle {
+                                    id: styleCell
+
+                                    required property int index
+                                    required property string modelData
+
+                                    readonly property bool active: Novel.fontStyle === index
+
+                                    width: 63
+                                    height: parent.height
+                                    radius: height / 2
+                                    color: active ? root.ink : "transparent"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        // 标签自己就用那种字体：没点之前先看得出差别
+                                        text: styleCell.modelData
+                                        color: styleCell.active ? root.sheetFill : root.inkSoft
+                                        font.family: styleCell.index === 1
+                                                     ? Novel.fontFamilies : AppTheme.fontFamily
+                                        font.pixelSize: AppTheme.fontSizeSmall
+                                    }
+
+                                    TapHandler {
+                                        onTapped: Novel.fontStyle = styleCell.index
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -863,6 +1313,147 @@ Item {
         }
     }
 
+    // ---------------- 插图查看（点图放大）----------------
+    // 正文里插图只有栏宽那么大，细看不够；这里给一层铺满窗口的查看层：
+    // 滚轮缩放、拖动平移、单击 / Esc / 右上角关闭
+    Item {
+        id: imageViewer
+
+        anchors.fill: parent
+        z: 80
+        visible: opacity > 0
+        opacity: opened ? 1 : 0
+
+        property bool opened: false
+        property url sourceUrl
+        property size naturalSize
+        /// 1 = 刚好铺满可视区；上限 4 倍，再往上只有马赛克
+        property real zoom: 1
+
+        readonly property real maxZoom: 4
+        readonly property int zoomPercent: Math.round(zoom * 100)
+        readonly property size displaySize: extentAt(zoom)
+        /// 「铺满可视区」相对原图的比例：小图保持 1:1，放大只会糊
+        readonly property real fitScale: (naturalSize.width > 0 && naturalSize.height > 0)
+            ? Math.min(1, Math.min((width - 2 * AppTheme.spacingXl) / naturalSize.width,
+                                   (height - 2 * AppTheme.spacingXl) / naturalSize.height))
+            : 1
+
+        Behavior on opacity {
+            NumberAnimation { duration: Motion.normal }
+        }
+
+        function extentAt(level) {
+            const scale = fitScale * level
+            return Qt.size(Math.round(naturalSize.width * scale),
+                           Math.round(naturalSize.height * scale))
+        }
+
+        function show(index) {
+            const url = Novel.imageUrl(index)
+            const size = Novel.imageSize(index)
+            // 占位段落没有字节：点了不弹空黑屏，安静地什么都不做
+            if (String(url).length === 0 || size.width <= 0 || size.height <= 0)
+                return
+            sourceUrl = url
+            naturalSize = size
+            zoom = 1
+            opened = true
+        }
+
+        function close() {
+            opened = false
+        }
+
+        function zoomBy(step) {
+            const next = Math.max(1, Math.min(maxZoom, Math.round((zoom + step) * 100) / 100))
+            if (next === zoom)
+                return
+            // 先按旧尺寸记下视口中心对着的内容位置，缩放后把同一处拉回中心，
+            // 否则每放大一次画面都往左上角跑
+            const before = extentAt(zoom)
+            const after = extentAt(next)
+            const oldW = Math.max(panner.width, before.width)
+            const oldH = Math.max(panner.height, before.height)
+            const newW = Math.max(panner.width, after.width)
+            const newH = Math.max(panner.height, after.height)
+            const cx = (panner.contentX + panner.width / 2) / Math.max(1, oldW)
+            const cy = (panner.contentY + panner.height / 2) / Math.max(1, oldH)
+            zoom = next
+            panner.contentX = Math.max(0, Math.min(newW - panner.width, cx * newW - panner.width / 2))
+            panner.contentY = Math.max(0,
+                                       Math.min(newH - panner.height, cy * newH - panner.height / 2))
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#000000"
+            opacity: 0.92
+        }
+
+        Flickable {
+            id: panner
+
+            anchors.fill: parent
+            contentWidth: Math.max(width, imageViewer.displaySize.width)
+            contentHeight: Math.max(height, imageViewer.displaySize.height)
+            // 只有放大到超出可视区才需要平移；1:1 时拖着不该动
+            interactive: contentWidth > width + 1 || contentHeight > height + 1
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+
+            Image {
+                x: (panner.contentWidth - width) / 2
+                y: (panner.contentHeight - height) / 2
+                width: imageViewer.displaySize.width
+                height: imageViewer.displaySize.height
+                source: imageViewer.sourceUrl
+                asynchronous: true
+                cache: true
+                smooth: true
+                fillMode: Image.PreserveAspectFit
+
+                HoverHandler {
+                    cursorShape: panner.interactive ? Qt.OpenHandCursor : Qt.ArrowCursor
+                }
+            }
+
+            TapHandler {
+                onTapped: imageViewer.close()
+            }
+
+            // 桌面端以滚轮为准（触控板双指滑动同样走 angleDelta）
+            WheelHandler {
+                onWheel: function(event) {
+                    imageViewer.zoomBy(event.angleDelta.y > 0 ? 0.25 : -0.25)
+                    event.accepted = true
+                }
+            }
+        }
+
+        // 放大后看不出自己在哪一层，给个刻度 + 操作提示
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: AppTheme.spacingLg
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: imageViewer.zoomPercent + "%" + qsTr(" · 滚轮缩放 · 拖动平移 · 点击关闭")
+            color: "#FFFFFF"
+            opacity: 0.7
+            font.family: AppTheme.fontFamily
+            font.pixelSize: AppTheme.fontSizeSmall
+        }
+
+        ReaderButton {
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: AppTheme.spacingMd
+            icon: "x"
+            fg: "#FFFFFF"
+            hoverFill: Qt.rgba(1, 1, 1, 0.14)
+            onClicked: imageViewer.close()
+        }
+    }
+
     // ---------------- 加载 / 错误 ----------------
     Rectangle {
         id: stateOverlay
@@ -884,7 +1475,7 @@ Item {
                 wrapMode: Text.Wrap
                 color: root.ink
                 text: Novel.errorText.length > 0 ? Novel.errorText : Novel.statusText
-                font.family: AppTheme.fontFamily
+                font.family: Novel.fontFamilies
                 font.pixelSize: AppTheme.fontSizeBody
             }
 

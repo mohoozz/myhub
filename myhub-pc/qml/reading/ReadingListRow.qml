@@ -24,12 +24,16 @@ Item {
     property real entryFileSize: -1
     property real entryFileModSecs: -1
     property bool selected: false
+    /// 文件名行数（§14.3）：与浏览/收藏页共用 `browse.fileNameLines`，改完即时生效
+    property int nameLines: 1
 
     signal clicked(var mouse)
     signal doubleClicked()
     signal rightClicked(real mouseX, real mouseY)
 
-    implicitHeight: 76
+    // 单行时保持 76；多行时跟着标题长高，不能把第二行裁掉
+    implicitHeight: Math.max(76, nameText.implicitHeight + metaRow.implicitHeight
+                             + textColumn.spacing + AppTheme.spacingMd * 2)
 
     CellPressHighlight {
         anchors.fill: parent
@@ -94,6 +98,7 @@ Item {
 
         // ---- 标题 + 元信息 ----
         Column {
+            id: textColumn
             anchors.left: thumb.right
             anchors.leftMargin: AppTheme.spacingMd
             anchors.right: progressColumn.left
@@ -102,17 +107,21 @@ Item {
             spacing: AppTheme.spacingXs + 1
 
             Text {
+                id: nameText
                 width: parent.width
                 text: root.entryTitle
                 font.family: AppTheme.fontFamily
                 font.pixelSize: AppTheme.fontSizeBody
                 font.bold: true
                 color: AppTheme.colors.textPrimary
-                maximumLineCount: 1
+                wrapMode: root.nameLines > 1
+                    ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap
+                maximumLineCount: root.nameLines
                 elide: Text.ElideRight
             }
 
             Row {
+                id: metaRow
                 spacing: AppTheme.spacingSm
 
                 Rectangle {

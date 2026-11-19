@@ -25,6 +25,10 @@ bool Migrations::migrate(AppDatabase &db)
         ok = v2_reading_fingerprint(db);
     if (ok && current < 3)
         ok = v3_novel_chapter_cache(db);
+    if (ok && current < 4)
+        ok = v4_comic_page_list(db);
+    if (ok && current < 5)
+        ok = v5_epub_meta(db);
 
     if (!ok) {
         db.rollback();
@@ -234,6 +238,77 @@ bool Migrations::v3_novel_chapter_cache(AppDatabase &db)
         }
     }
     MH_INFO(Database, QStringLiteral("v3_novel_chapter_cache applied"));
+    return true;
+}
+
+bool Migrations::v4_comic_page_list(AppDatabase &db)
+{
+    // 漫画「页名清单」快照（§5 `ComicPageStore`、§6「页名清单持久化 + 离线源」）。
+    //
+    // 页名只能从压缩包里读出来（zip 要读尾部队列表，远程 cbr 甚至要整包在手），
+    // 存在这里就等于把「有几页、第几页叫什么」变成一次查表：
+    //   · 重开同一本：页数与页序立刻就有，续读页在盘上就直接上屏；
+    //   · 源够不着：靠这一行恢复指纹，页缓存键仍能对上，读过的页照看。
+    //
+    // 一个文件一行（页名清单是「一本书的元数据」，不是按页寻址的块数据）；
+    // 指纹冗余在行上，文件一变旧行自然失配，不需要先删再建。
+    const QStringList statements = {
+        QStringLiteral(R"(
+            CREATE TABLE IF NOT EXISTS comicPages (
+                id           TEXT PRIMARY KEY,
+                connectionID TEXT NOT NULL,
+                filePath     TEXT NOT NULL,
+                pagesJSON    TEXT NOT NULL DEFAULT '[]',
+                fileSize     INTEGER NOT NULL DEFAULT 0,
+                modTime      INTEGER NOT NULL DEFAULT 0,
+                updatedAt    INTEGER NOT NULL
+            ))"),
+        QStringLiteral("CREATE UNIQUE INDEX IF NOT EXISTS idx_comicpages_unique "
+                       "ON comicPages(connectionID, filePath)"),
+    };
+
+    for (const QString &sql : statements) {
+        if (!db.execute(sql)) {
+            MH_ERROR(Database, QStringLiteral("v4_comic_page_list failed: %1").arg(db.lastError()));
+            return false;
+        }
+    }
+    MH_INFO(Database, QStringLiteral("v4_comic_page_list applied"));
+    return true;
+}
+
+bool Migrations::v5_epub_meta(AppDatabase &db)
+{
+    // epub 的目录与元数据快照（§5「epub 元数据快照」、§13 离线阅读）。
+    //
+    // epub 没有可缓存的行表 / 字节索引：目录藏在 OPF 与 NAV/NCX 里，
+    // 要读它们就得先打开 zip（还要先 stat 到文件长度）。源够不着时 stat 就失败了，
+    // 连「有几章」都答不上来 —— 所以把「书名 + 章名 + 条目路径」单独存一份。
+    //
+    // 与 `comicPages` 同一套约定：一个文件一行、指纹冗余在行上；
+    // 文件变了旧行自然对不上（离线时用它把指纹恢复出来，章节缓存键因此仍能命中）。
+    const QStringList statements = {
+        QStringLiteral(R"(
+            CREATE TABLE IF NOT EXISTS epubMeta (
+                id           TEXT PRIMARY KEY,
+                connectionID TEXT NOT NULL,
+                filePath     TEXT NOT NULL,
+                metaJSON     TEXT NOT NULL DEFAULT '{}',
+                fileSize     INTEGER NOT NULL DEFAULT 0,
+                modTime      INTEGER NOT NULL DEFAULT 0,
+                updatedAt    INTEGER NOT NULL
+            ))"),
+        QStringLiteral("CREATE UNIQUE INDEX IF NOT EXISTS idx_epubmeta_unique "
+                       "ON epubMeta(connectionID, filePath)"),
+    };
+
+    for (const QString &sql : statements) {
+        if (!db.execute(sql)) {
+            MH_ERROR(Database, QStringLiteral("v5_epub_meta failed: %1").arg(db.lastError()));
+            return false;
+        }
+    }
+    MH_INFO(Database, QStringLiteral("v5_epub_meta applied"));
     return true;
 }
 

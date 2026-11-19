@@ -75,8 +75,21 @@ public:
     /// 按 updatedAt 淘汰超量行；返回删掉的行数
     static int trim(int keep = kMaxRows);
 
-    /// 整本书的章节缓存（删书 / 改名时用）
+    /// 整本书的章节缓存（删单本时用）
     static int remove(const QString &connectionId, const QString &path);
+
+    /// 删除目录时连同子孙缓存一并清掉；返回删掉的行数
+    static int removeSubtree(const QString &connectionId, const QString &path);
+
+    /**
+     * 重命名 / 移动后同步缓存路径（目录则连同子孙前缀一起改写）；返回改写的行数。
+     *
+     * 覆盖式移动（目标路径已有同书的旧缓存）时，目标行先被删掉再让位 ——
+     * 唯一键是 `(connectionID, filePath, chapterIndex)`，硬 UPDATE 会撞键；
+     * 而目标那份缓存本来也属于被覆盖掉的那个文件，留着只会按指纹失配被当垃圾。
+     */
+    static int renamePath(const QString &connectionId, const QString &oldPath,
+                          const QString &newPath);
 
     /**
      * 这本书已经有缓存的章号（升序）。

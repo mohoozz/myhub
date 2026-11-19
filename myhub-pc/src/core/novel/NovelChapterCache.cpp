@@ -313,6 +313,83 @@ int NovelChapterCache::remove(const QString &connectionId, const QString &path)
     return ok ? changedRows(db) : 0;
 }
 
+int NovelChapterCache::removeSubtree(const QString &connectionId, const QString &path)
+{
+    auto &db = AppDatabase::instance();
+    if (!db.isOpen() || connectionId.isEmpty() || path.isEmpty()) {
+        return 0;
+    }
+
+    // 与 `NovelIndexStore::removeSubtree` 同一套：文件路径里可能含 % 与 _，
+    // 取回本连接的全部路径在内存里判前缀，比给 LIKE 拼 ESCAPE 稳
+    const QString prefix = path + QLatin1Char('/');
+    const auto rows = db.query(
+        QStringLiteral("SELECT DISTINCT filePath FROM novelChapter WHERE connectionID = ?"),
+        {connectionId});
+
+    int removed = 0;
+    for (const auto &row : rows) {
+        const QString rowPath = row.value(QStringLiteral("filePath")).toString();
+        if (rowPath != path && !rowPath.startsWith(prefix)) {
+            continue;
+        }
+        if (db.execute(
+                QStringLiteral("DELETE FROM novelChapter WHERE connectionID = ? AND filePath = ?"),
+                {connectionId, rowPath})) {
+            removed += changedRows(db);
+        }
+    }
+    if (removed > 0) {
+        MH_INFO(NovelIndex,
+                QStringLiteral("删除目录，清掉 %1 行章节缓存：%2").arg(removed).arg(path));
+    }
+    return removed;
+}
+
+int NovelChapterCache::renamePath(const QString &connectionId, const QString &oldPath,
+                                  const QString &newPath)
+{
+    auto &db = AppDatabase::instance();
+    if (!db.isOpen() || connectionId.isEmpty() || oldPath.isEmpty() || newPath.isEmpty()
+        || oldPath == newPath) {
+        return 0;
+    }
+
+    const QString prefix = oldPath + QLatin1Char('/');
+    const auto rows = db.query(
+        QStringLiteral("SELECT DISTINCT filePath FROM novelChapter WHERE connectionID = ?"),
+        {connectionId});
+
+    int updated = 0;
+    for (const auto &row : rows) {
+        const QString rowPath = row.value(QStringLiteral("filePath")).toString();
+        QString target;
+        if (rowPath == oldPath) {
+            target = newPath;
+        } else if (rowPath.startsWith(prefix)) {
+            target = newPath + rowPath.mid(oldPath.size());
+        } else {
+            continue;
+        }
+        // 覆盖式移动：目标路径可能已有被覆盖那本书的缓存行。先清掉再改路径 ——
+        // 直接 UPDATE 会撞 `(connectionID, filePath, chapterIndex)` 唯一键
+        db.execute(
+            QStringLiteral("DELETE FROM novelChapter WHERE connectionID = ? AND filePath = ?"),
+            {connectionId, target});
+        if (db.execute(QStringLiteral("UPDATE novelChapter SET filePath = ? "
+                                      "WHERE connectionID = ? AND filePath = ?"),
+                       {target, connectionId, rowPath})) {
+            updated += changedRows(db);
+        }
+    }
+    if (updated > 0) {
+        MH_INFO(
+            NovelIndex,
+            QStringLiteral("缓存路径随文件改写 %1 行：%2 → %3").arg(updated).arg(oldPath, newPath));
+    }
+    return updated;
+}
+
 QList<int> NovelChapterCache::cachedChapters(const QString &connectionId, const QString &path)
 {
     auto &db = AppDatabase::instance();

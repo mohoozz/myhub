@@ -2,6 +2,7 @@
 #include "app/MediaSession.h"
 #include "app/PlayerBridge.h"
 #include "core/utils/AppLogger.h"
+#include "features/reading/BundledFonts.h"
 
 #include <QGuiApplication>
 #include <QIcon>
@@ -91,6 +92,10 @@ int main(int argc, char *argv[])
     // 否则启动 Loading 永远等不到 ready（§14.4）
     AppState &appState = AppState::instance();
     appState.bootstrap();
+
+    // 内置字体要在任何 QML / 排版之前注册好：NovelBridge 构造时就会把族名拼进回退链。
+    // 放在 bootstrap（日志就绪）之后，注册失败才有地方记日志。
+    BundledFonts::initialize();
 
     QQmlApplicationEngine engine;
 

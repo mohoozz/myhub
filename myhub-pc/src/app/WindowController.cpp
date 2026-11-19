@@ -269,4 +269,9 @@ void WindowController::openLogFolder()
     QDesktopServices::openUrl(QUrl::fromLocalFile(AppPaths::logDir()));
 }
 
+void WindowController::openCacheFolder()
+{
+    QDesktopServices::openUrl(QUrl::fromLocalFile(AppPaths::cacheDir()));
+}
+
 } // namespace myhub

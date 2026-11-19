@@ -50,6 +50,19 @@ public:
      */
     static FileEntry nextBook(const FileEntryList &entries, const QString &currentPath,
                               const QString &sortKey, bool ascending);
+
+    /**
+     * 翻完这卷该接哪卷（漫画阅读器的「下一本」）。
+     *
+     * 与 `nextBook` 同一套顺序规则，只换「同类」的判定：**按是不是漫画包归类**，
+     * 也就是 cbz/zip/cbr/rar 四选一 —— cbz 只是改了名的 zip，同一话的两种打包
+     * 不该把连续阅读打断。夹在中间的封面图、字幕、视频同样跳过。
+     *
+     * @param entries     该目录的全部条目（顺序不限，内部按 `sortKey`/`ascending` 重排）
+     * @param currentPath 当前正在看的漫画路径
+     */
+    static FileEntry nextComic(const FileEntryList &entries, const QString &currentPath,
+                               const QString &sortKey, bool ascending);
 };
 
 } // namespace myhub

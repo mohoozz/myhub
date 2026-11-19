@@ -2,8 +2,12 @@
 
 #include "TrashStore.h"
 #include "core/cache/DirectoryCache.h"
+#include "core/comic/ComicPageStore.h"
 #include "core/favorites/FavoriteRepository.h"
 #include "core/history/ProgressRepository.h"
+#include "core/novel/EpubMetaStore.h"
+#include "core/novel/NovelChapterCache.h"
+#include "core/novel/NovelIndexStore.h"
 #include "core/storage/StorageAdapter.h"
 #include "core/storage/StoragePath.h"
 #include "core/text/TextCodec.h"
@@ -280,6 +284,10 @@ void FileOperations::rename(StorageAdapter *adapter, const QString &connectionId
                     }
                     ProgressRepository::instance().renamePath(connectionId, source, target);
                     FavoriteRepository::instance().renamePath(connectionId, source, target);
+                    ComicPageStore::renamePath(connectionId, source, target);
+                    EpubMetaStore::renamePath(connectionId, source, target);
+                    NovelIndexStore::renamePath(connectionId, source, target);
+                    NovelChapterCache::renamePath(connectionId, source, target);
                     DirectoryCache::instance().invalidate(connectionId, parent);
                     DirectoryCache::instance().invalidate(connectionId,
                                                           StoragePath::parent(target));
@@ -492,6 +500,10 @@ void FileOperations::finishRemove(const BatchPtr &batch)
     for (const QString &path : batch->done) {
         ProgressRepository::instance().removeSubtree(batch->connectionId, path);
         FavoriteRepository::instance().removeSubtree(batch->connectionId, path);
+        ComicPageStore::removeSubtree(batch->connectionId, path);
+        EpubMetaStore::removeSubtree(batch->connectionId, path);
+        NovelIndexStore::removeSubtree(batch->connectionId, path);
+        NovelChapterCache::removeSubtree(batch->connectionId, path);
         DirectoryCache::instance().invalidate(batch->connectionId, StoragePath::parent(path));
     }
     end();
@@ -1408,6 +1420,10 @@ void FileOperations::finishTransfer(const TransferOpPtr &op)
                                                       move.second);
             FavoriteRepository::instance().renamePath(op->sourceConnectionId, move.first,
                                                       move.second);
+            ComicPageStore::renamePath(op->sourceConnectionId, move.first, move.second);
+            EpubMetaStore::renamePath(op->sourceConnectionId, move.first, move.second);
+            NovelIndexStore::renamePath(op->sourceConnectionId, move.first, move.second);
+            NovelChapterCache::renamePath(op->sourceConnectionId, move.first, move.second);
         }
         DirectoryCache::instance().invalidate(op->sourceConnectionId,
                                               StoragePath::parent(move.first));

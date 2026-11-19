@@ -1,5 +1,7 @@
 #include "PlaybackStreamService.h"
 
+#include "core/cache/CacheCleaner.h"
+#include "core/cache/CachePartition.h"
 #include "core/preferences/AppSettings.h"
 #include "core/storage/RoutedWebDAVAdapter.h"
 #include "core/storage/StorageAdapter.h"
@@ -20,6 +22,12 @@ namespace {
 
 constexpr int kSegmentBytes = 1024 * 1024;
 constexpr int kMaxConcurrentReads = 3;
+
+/// 该缓存键分片所在目录：交给 `CacheCleaner` 做「正在播」保护
+QString segmentDirOf(const SegmentCache::Config &config, const QString &key)
+{
+    return config.rootDir + QLatin1Char('/') + key;
+}
 /// 预读上限：即使 preloadSeconds 给得很大，也不会一次把整部 4K 拉下来
 constexpr int kMaxPrefetchSegments = 16;
 
@@ -43,7 +51,7 @@ PlaybackStreamService::PlaybackStreamService()
     : m_proxy(std::make_unique<LocalStreamProxy>())
 {
     SegmentCache::Config config;
-    config.rootDir = AppPaths::cachePartition(QStringLiteral("stream"));
+    config.rootDir = AppPaths::cachePartition(QLatin1String(CacheDirs::MediaSegments));
     config.segmentBytes = kSegmentBytes;
     config.totalLimitBytes =
         qint64(qMax(128, AppSettings::instance().cacheTotalLimitMB())) * 1024 * 1024;
@@ -131,6 +139,8 @@ PlaybackStreamService::prepare(const QString &connectionId, const QString &path,
     }
 
     m_activeStream = streamId;
+    // 正在播的分片受保护：跨分区兜底只看 mtime，不认 SegmentCache 的播放点保护
+    CacheCleaner::instance().protect(segmentDirOf(m_cache->config(), key));
 
     // 缓存身份：断网后凭它反查（findCachedIdentity）仍可起播已完整缓存的文件
     QVariantMap meta;
@@ -201,6 +211,7 @@ PlaybackStreamService::Prepared PlaybackStreamService::prepareOffline(const QStr
     }
 
     m_activeStream = streamId;
+    CacheCleaner::instance().protect(segmentDirOf(m_cache->config(), key));
     MH_INFO(Stream,
             QStringLiteral("离线起播（缓存完整）：%1（%2 字节，缓存键 %3）")
                 .arg(path)
@@ -226,6 +237,7 @@ void PlaybackStreamService::release(const QString &streamId)
     if (it == m_sessions.end())
         return;
 
+    const QString key = it->key;
     if (it->reader) {
         it->reader->cancelAll();
         it->reader->deleteLater();
@@ -238,6 +250,14 @@ void PlaybackStreamService::release(const QString &streamId)
 
     if (m_activeStream == streamId)
         m_activeStream.clear();
+
+    // 同一文件的其它会话还活着就继续保护，别把正在播的分片暴露给淘汰
+    for (const Session &session : m_sessions) {
+        if (session.key == key) {
+            return;
+        }
+    }
+    CacheCleaner::instance().unprotect(segmentDirOf(m_cache->config(), key));
 }
 
 void PlaybackStreamService::releaseAll()

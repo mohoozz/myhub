@@ -1,5 +1,8 @@
 #include "features/cover/CoverService.h"
 
+#include "core/cache/CacheCleaner.h"
+#include "core/cache/CachePartition.h"
+#include "core/cache/CacheStore.h"
 #include "core/comic/ComicBook.h"
 #include "core/cover/EmbeddedCoverExtractor.h"
 #include "core/novel/EpubBook.h"
@@ -170,8 +173,8 @@ QString CoverService::coverFile(const QString &key) const
 {
     const QString hash = QString::fromLatin1(
         QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex());
-    return AppPaths::cachePartition(QStringLiteral("thumbnails")) + QLatin1Char('/') + hash
-        + QStringLiteral(".jpg");
+    return CachePartitions::path(QString::fromLatin1(CacheDirs::Thumbnails)) + QLatin1Char('/')
+        + hash + QStringLiteral(".jpg");
 }
 
 QString CoverService::metaFile(const QString &key) const
@@ -229,6 +232,10 @@ CoverService::CacheProbe CoverService::probeCache(const QString &key, qint64 siz
             return CacheProbe::Stale;
         }
     }
+
+    // 命中即刷新 mtime：缩略图是「一进浏览页就看」的东西，按创建时间淘汰会让常用库的封面
+    // 反复重算（解码 + 缩放 + JPEG 编码都在后台线程，不便宜）
+    CacheStore::touch(jpg);
 
     const QString fileUrl = QUrl::fromLocalFile(jpg).toString();
     rememberMemory(key, fileUrl);
@@ -616,6 +623,8 @@ void CoverService::submitImageBytes(const Job &job, const QByteArray &raw)
         rememberMemory(job.key, url);
         m_failedAt.remove(job.key);
         emit coverReady(job.key, url);
+        // 缩略图只增不减，写一张就请求一次（清理层节流 60 秒）
+        CacheCleaner::instance().requestCleanup();
         dispatch();
     });
     watcher->setFuture(
