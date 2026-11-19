@@ -111,6 +111,8 @@ struct FavoritesView: View {
                     .padding(.vertical, 8)
                 }
             }
+            // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一项停在胶囊上方
+            .reservedBottomChrome()
         }
     }
 

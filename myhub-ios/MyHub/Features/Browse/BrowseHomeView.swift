@@ -68,6 +68,8 @@ struct BrowseHomeView: View {
             }
             .padding(12)
         }
+        // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一张连接源卡停在胶囊上方
+        .reservedBottomChrome()
         .background(AppColors.pageBackground)
         .leadingNavTitle("浏览")
         .overlay {

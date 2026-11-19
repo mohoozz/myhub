@@ -547,6 +547,8 @@ struct BrowseDirectoryView: View {
             .coordinateSpace(name: "browseScroll")
             .refreshable { await viewModel.refresh() }
             .scrollDismissesKeyboard(.immediately)
+            // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一个文件停在胶囊上方
+            .reservedBottomChrome()
             .onPreferenceChange(BrowseScrollOffsetKey.self) { value in
                 // 输入中不参与显隐：键盘弹出会改变可用高度并让偏移上报抖动，
                 // 此时若收起搜索框会把正在编辑的输入框一并收走（TODO 403）。

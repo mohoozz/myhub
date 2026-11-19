@@ -105,6 +105,8 @@ struct SettingsHomeView: View {
                 }
             }
         }
+        // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一项（关于 MyHub）停在胶囊上方
+        .reservedBottomChrome()
         .leadingNavTitle("设置")
         .tint(AppColors.primary)
         .sheet(isPresented: shareSheetBinding) {

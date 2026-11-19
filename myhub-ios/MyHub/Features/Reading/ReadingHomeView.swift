@@ -194,6 +194,8 @@ struct ReadingHomeView: View {
             }
             // 批量删除后重建滚动视图，清理残留的越界滚动偏移（详见 listEpoch）
             .id(listEpoch)
+            // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一条停在胶囊上方而不是被压住
+            .reservedBottomChrome()
         }
     }
 

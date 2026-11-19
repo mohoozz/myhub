@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>列表底部被悬浮页签栏遮挡 · 方案原型</title>
+<style>
+:root{
+  --primary:#2563EB;--tp:#1A1A2E;--ts:#6B7280;--line:#E5E7EB;--bar:#D1D5DB;
+  --ok:#047857;--bad:#B91C1C;--warn:#B45309;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 72px}
+h1{font-size:22px;margin-bottom:8px}
+.subtitle{color:var(--ts);font-size:13px;line-height:1.8;max-width:1080px;margin-bottom:10px}
+.subtitle code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.issue{background:#fff;border:1px solid #F3D0D0;border-left:3px solid #DC2626;border-radius:10px;padding:12px 16px;font-size:12.5px;line-height:1.85;max-width:1080px;margin:14px 0 26px;color:#374151}
+.issue b{color:#B91C1C}
+.scene{background:#fff;border-radius:16px;padding:18px 20px 20px;margin-bottom:22px;box-shadow:0 2px 12px rgba(17,24,39,.06);max-width:1080px}
+.scene-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.scene-head h2{font-size:16px}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#F3F4F6;color:var(--ts);border:1px solid #E5E7EB}
+.tag.rec{background:#DBEAFE;color:#1D4ED8;border-color:#BFDBFE}
+.tag.before{background:#FEF3C7;color:#92400E;border-color:#FDE68A}
+.desc{font-size:12.5px;color:#4B5563;line-height:1.8;margin:6px 0 16px;max-width:1000px}
+.desc b{color:var(--tp)}
+.desc .pros{color:var(--ok)}
+.desc .cons{color:var(--warn)}
+.phones{display:flex;gap:22px;flex-wrap:wrap}
+
+/* ---------- 手机外壳 ---------- */
+.pw{width:302px}
+.phone{width:302px;height:622px;border:8px solid #111827;border-radius:42px;overflow:hidden;position:relative;background:#fff;display:flex;flex-direction:column;box-shadow:0 12px 28px rgba(17,24,39,.18)}
+.cap{font-size:11.5px;color:var(--ts);margin-top:8px;line-height:1.6;text-align:center}
+.cap b{color:var(--tp)}
+.statusbar{height:26px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:10.5px;font-weight:600;color:#111827;z-index:6}
+.navbar{height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 16px;z-index:6}
+.navbar .t{font-size:20px;font-weight:700}
+.navbar .ic{font-size:13px;color:var(--ts);letter-spacing:3px}
+.stage{flex:1;position:relative;overflow:hidden;background:#fff}
+
+/* ---------- 阅读列表行 ---------- */
+.rows{padding:6px 12px 0;display:flex;flex-direction:column}
+.sechead{font-size:11px;font-weight:700;color:var(--ts);padding:10px 2px 8px;letter-spacing:.3px}
+.rrow{display:flex;align-items:center;gap:10px;height:58px;flex:none}
+.rth{width:42px;height:42px;border-radius:9px;background:#F1F3F6;border:1px solid #E8EBEF;display:flex;align-items:center;justify-content:center;font-size:18px;flex:none}
+.rmain{flex:1;min-width:0}
+.rname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rsub{font-size:10.5px;color:var(--ts);margin-top:3px}
+.pbar{height:3px;border-radius:2px;background:#EDF0F4;margin-top:5px;overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--primary);border-radius:2px}
+
+/* ---------- 设置分组列表 ---------- */
+.sgroup{margin:0 12px 14px;background:#FAFAFB;border:1px solid #EEEFF2;border-radius:12px;overflow:hidden}
+.ghead{font-size:10.5px;color:var(--ts);padding:12px 4px 6px;font-weight:600;letter-spacing:.3px}
+.srow{display:flex;align-items:center;gap:10px;height:42px;padding:0 12px;font-size:12.5px}
+.srow+.srow{border-top:1px solid #EEEFF2}
+.srow .ico{width:22px;text-align:center;font-size:13px}
+.srow .lab{flex:1}
+.srow .chev{color:#C3C7CE;font-size:12px}
+.srow .val{color:var(--ts);font-size:11.5px}
+
+/* ---------- 悬浮胶囊页签栏 ---------- */
+.bar{position:absolute;left:12px;right:12px;bottom:22px;height:56px;border-radius:26px;
+  background:rgba(255,255,255,.74);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid var(--bar);box-shadow:0 3px 8px rgba(0,0,0,.08);display:flex;align-items:center;z-index:5}
+.tb{flex:1;display:flex;align-items:center;justify-content:center;font-size:17px;opacity:.35}
+.tb.on{opacity:1;color:var(--primary);transform:scale(1.1)}
+.home{position:absolute;bottom:7px;left:50%;transform:translateX(-50%);width:104px;height:4px;border-radius:2px;background:#111827;opacity:.22;z-index:6}
+
+/* ---------- 通栏页签栏（方案 C） ---------- */
+.bar.full{left:0;right:0;bottom:0;height:66px;border-radius:0;border:none;border-top:1px solid var(--line);
+  background:rgba(255,255,255,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:none;align-items:flex-start;padding-top:6px}
+.bar.full .tb{font-size:18px;flex-direction:column;gap:3px}
+.bar.full .home{bottom:5px}
+
+/* ---------- 让位带（方案 B） ---------- */
+.underband{position:absolute;left:0;right:0;bottom:0;height:78px;background:linear-gradient(#FFFFFF,#FFFFFF 60%,#FAFBFC);border-top:1px dashed #D8DCE2;z-index:1}
+
+/* ---------- 标注 ---------- */
+.badge{position:absolute;z-index:9;font-size:10.5px;padding:3px 8px;border-radius:8px;line-height:1.35;max-width:220px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,.12)}
+.badge.bad{background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5}
+.badge.ok{background:#DCFCE7;color:#166534;border:1px solid #86EFAC}
+.badge.warn{background:#FEF3C7;color:#92400E;border:1px solid #FCD34D}
+.mark-block{position:absolute;left:8px;right:8px;border:1.5px dashed #DC2626;border-radius:10px;z-index:8;pointer-events:none}
+.mark-safe{position:absolute;left:6px;right:6px;height:0;border-top:1.5px dashed #059669;z-index:8;pointer-events:none}
+.ghost-bar{opacity:.16}
+.ghost-outline{position:absolute;left:12px;right:12px;bottom:22px;height:56px;border:1.5px dashed #9CA3AF;border-radius:26px;z-index:4}
+
+table{border-collapse:collapse;margin-top:8px;font-size:12.5px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);max-width:1080px;width:100%}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.65}
+th{background:#F9FAFB;font-size:11.5px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:18px;font-size:12px;color:var(--ts);line-height:1.95;max-width:1080px}
+.footnote b{color:var(--tp)}
+.footnote code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:11.5px}
+h3.sec{font-size:15px;margin:30px 0 10px}
+</style>
+</head>
+<body>
+<h1>列表底部被悬浮页签栏遮挡 · 处理方案原型</h1>
+<p class="subtitle">
+  涉及页面：<b>阅读</b>（<code>ReadingHomeView</code>）、<b>浏览</b>（<code>BrowseHomeView</code> 路径源 / <code>BrowseDirectoryView</code> 目录 / 收藏页同理）、<b>设置</b>（<code>SettingsHomeView</code>）。<br>
+  每个方案给出「阅读列表 + 设置分组列表」两个场景，用于确认修复对列表型与分组型页面同时生效。
+</p>
+
+<div class="issue">
+  <b>根因（现状）：</b>页签栏在 TODO 376 方案 C 改为<b>悬浮圆角胶囊</b>、经 <code>RootView</code> 的 <code>.safeAreaInset(edge: .bottom)</code> 注入，同时设计为「内容可滚动穿过胶囊下方」。<br>
+  但页面内的滚动容器（<code>NavigationStack</code> 里的 <code>ScrollView</code> / <code>List</code>）拿到的底部安全区<b>只有 Home 指示条</b>，并不包含这条胶囊（<code>RootView</code> 里已有同样结论：页面内 <code>overlay</code> 会落进页签栏之下，因此多选操作栏要靠 <code>bottomChromeHeight</code> 手动抬升）。<br>
+  结果是：列表末尾没有为胶囊预留滚动空间 → <b>滚到底也再多滑不出 78pt</b>，最后一行 / 最后一个选项永久停在胶囊下方，点击被胶囊拦截。<br>
+  以前页签栏是物理 VStack 占位，内容天然让位，所以没有这个问题；<b>文件越多、列表越长越容易踩到</b>。
+</div>
+
+<div class="scene">
+  <div class="scene-head"><h2>现状</h2><span class="tag before">Before</span></div>
+  <p class="desc">
+    滚到底时，阅读列表最后一条记录、设置最后一项「关于 MyHub」都落在胶囊下方；胶囊是半透明玻璃，文字隐隐透出，看起来能点，实际被胶囊挡住。<br>
+    <span class="cons">还有一处不易察觉：胶囊四周的阴影会把压住的那一行盖得更糊，用户只能反复上滑尝试。</span>
+  </p>
+  <div class="phones" id="before"></div>
+</div>
+
+<div class="scene">
+  <div class="scene-head"><h2>方案 A · 滚动内容末尾安全留白</h2><span class="tag rec">已选定并实施</span></div>
+  <p class="desc">
+    页面滚动容器末尾统一补一段 <code>bottomChromeHeight + 12pt</code> 的透明留白（<code>ScrollView</code> 用 <code>safeAreaInset</code> 占位、<code>List</code> 同法），
+    滚到底时<b>最后一行完整停在胶囊上沿上方 12pt</b>，可正常点击。<br>
+    内容仍然可以从胶囊下方穿过（玻璃透出、层次保留），现状视觉语言不变。<br>
+    <span class="pros">优点：改动最小、可封装成一个 <code>ViewModifier</code> 一次覆盖所有页面（含未来新页）；多选态胶囊隐藏时留白自动归零，与现有 <code>bottomChromeHeight</code> 体系天然对齐。</span><br>
+    <span class="cons">缺点：底部会多出约 12pt 空白；每页仍需挂一次修饰器（可接受）。</span>
+  </p>
+  <div class="phones" id="optA"></div>
+</div>
+
+<div class="scene">
+  <div class="scene-head"><h2>方案 B · 物理让位（内容截止在胶囊上沿）</h2><span class="tag">结构最稳</span></div>
+  <p class="desc">
+    把胶囊高度变成<b>真正的布局占位</b>：内容区域在胶囊上沿截止，胶囊下方 78pt 由页面底色垫底（不再有内容穿过）。<br>
+    滚到底时最后一行紧贴胶囊上沿（可留 8pt），任何页面、任何滚动位置都不会出现内容与胶囊重叠。<br>
+    <span class="pros">优点：从结构上根除遮挡，不依赖每页自觉留白；阴影下不再有残影，观感更干净。</span><br>
+    <span class="cons">缺点：失去「内容从玻璃下穿过」的悬浮感；胶囊下方出现一条没有内容的底色带（白底上靠极浅灰/虚线分隔才不显空）。</span>
+  </p>
+  <div class="phones" id="optB"></div>
+</div>
+
+<div class="scene">
+  <div class="scene-head"><h2>方案 C · 页签栏改回贴底通栏</h2><span class="tag">最系统</span></div>
+  <p class="desc">
+    放弃悬浮胶囊，页签栏改回<b>贴底通栏磨砂条 + 顶部 1pt 灰色分隔线</b>（与系统 TabBar 同形态），内容区域截止在栏上沿，物理上不存在遮挡。<br>
+    <span class="pros">优点：问题零残留、实现最简单、适配任何内容；滚动条也在栏上方结束。</span><br>
+    <span class="cons">缺点：与已选定的 TODO 376 方案 C「悬浮圆角胶囊」视觉语言冲突，等于回退一次设计；mini 播放器需重新对齐为贴底通栏形态。</span>
+  </p>
+  <div class="phones" id="optC"></div>
+</div>
+
+<div class="scene">
+  <div class="scene-head"><h2>方案 D · 滚动时胶囊自动淡出（Safari 风）</h2><span class="tag">体验向</span></div>
+  <p class="desc">
+    在方案 A 的保底留白之上，再加一层<b>滚动联动</b>：页面上滑翻列表时胶囊淡出并下沉，停止滚动 0.8s 或回滑到顶部时淡入恢复；
+    这样滚动过程中底部可视区域最大，停下后胶囊仍在原位，最后一行也不会被挡。<br>
+    <span class="pros">优点：可视区域最大、最现代；各页已有滚动偏移探针（浏览页搜索框显隐就靠它）可直接复用。</span><br>
+    <span class="cons">缺点：交互多一层状态（滚动中 / 停止 / 多选态 / 沉浸态互相叠加），排查成本高；页签在滚动时短暂不可见，与「页签常驻」的习惯有偏差。</span>
+  </p>
+  <div class="phones" id="optD"></div>
+</div>
+
+<h3 class="sec">方案对比</h3>
+<table>
+  <tr><th>方案</th><th>遮挡是否根治</th><th>观感影响</th><th>改动范围</th><th>风险</th></tr>
+  <tr><td>A 末尾安全留白</td><td>是（滚到底可完整露出）</td><td>几乎无，底部多 12pt 空白</td><td>1 个 ViewModifier + 4~5 个页面挂载</td><td>低；需注意与多选操作栏 inset 叠加（胶囊隐藏后高度归零，天然不冲突）</td></tr>
+  <tr><td>B 物理让位</td><td>是（结构上不可能重叠）</td><td>失去内容穿透玻璃的层次，底部多一条底色带</td><td>RootView 布局方式 + 胶囊外层容器</td><td>中；改动全局布局，所有页面底部视觉一起变</td></tr>
+  <tr><td>C 贴底通栏</td><td>是</td><td>回退悬浮胶囊设计</td><td>BottomTabBar 样式 + mini 播放器对齐</td><td>中；与 376 已确认方案冲突</td></tr>
+  <tr><td>D 滚动淡出</td><td>是（含 A 的保底）</td><td>滚动中页签不可见</td><td>A + 各页滚动监听 + 全局状态</td><td>较高；多状态叠加易出「闪一下」「收起不恢复」类 bug</td></tr>
+</table>
+
+<div class="footnote">
+  <b>已选定：方案 A（已实施，见 TODO 425）。</b>它只补「本该存在但被悬浮布局漏掉」的底部滚动空间，不动已经确认的悬浮胶囊视觉，且能用 <code>bottomChromeHeight</code> 现成机制自动适配「多选态隐藏页签栏 / mini 播放器出现 / iPad 无页签栏」三种高度变化。<br>
+  <b>实现要点：</b>新增 <code>reservedBottomChrome(extra: 12)</code> 修饰器，内部 <code>@Environment(\\.bottomChromeHeight)</code> +
+  <code>.safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: chrome + extra) }</code>；
+  挂到 <code>ReadingHomeView</code> 的 <code>ScrollView</code>、<code>BrowseHomeView</code> 的源列表、<code>BrowseDirectoryView</code> 的目录 <code>ScrollView</code>、<code>SettingsHomeView</code> 的 <code>List</code>（以及收藏页）。
+  若选 B / C / D，我再按对应形态出更细的落地拆解。
+</div>
+
+<script>
+const STATUS = '<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>';
+const TABS = [['📚',1],['📁',0],['🌐',0],['⚙️',0]];
+
+function tabs(){ return TABS.map(t=>`<div class="tb ${t[1]?'on':''}">${t[0]}</div>`).join(''); }
+
+const READ = [
+  ['🎬','星际穿越.mkv','视频 · 2:49:00 · 已看 65%',65],
+  ['📖','三体.epub','小说 · 已读 12%',12],
+  ['🎵','深夜电台.mp3','音频 · 3:24:00 · 上次听到 45%',45],
+  ['🎬','沙丘2.mkv','视频 · 2:46:00 · 已看 8%',8],
+  ['📚','海贼王 第1080话.cbz','漫画 · 已读 30%',30],
+  ['🎬','蓝色星球 S01E03.mkv','视频 · 0:49:00 · 已看完',100],
+  ['📖','球状闪电.epub','小说 · 已读 4%',4],
+  ['🎵','播客 · 忽左忽右','音频 · 1:12:00 · 上次听到 22%',22]
+];
+
+function readRows(n){
+  return READ.slice(0,n).map(r=>`
+    <div class="rrow">
+      <div class="rth">${r[0]}</div>
+      <div class="rmain">
+        <div class="rname">${r[1]}</div>
+        <div class="rsub">${r[2]}</div>
+        <div class="pbar"><i style="width:${r[3]}%"></i></div>
+      </div>
+    </div>`).join('');
+}
+
+/* 设置分组：顺序与 SettingsHomeView 一致（取末尾几组用于「滚到底」场景） */
+const SEC = {
+  play:  { t:'阅读与播放', rows:[['📖','阅读器偏好','chev'],['▶️','播放器偏好','chev']] },
+  store: { t:'存储',       rows:[['💾','缓存与存储','chev'],['🗑️','回收站','chev']] },
+  data:  { t:'数据',       rows:[['⬆️','导出配置',''],['⬇️','导入配置','']] },
+  safe:  { t:'安全',       rows:[['🔒','应用锁与凭据','chev']] },
+  about: { t:'关于',       rows:[['ℹ️','关于 MyHub','v1.4.0']] }
+};
+
+function secs(keys){
+  return keys.map(k=>{
+    const s = SEC[k];
+    const rows = s.rows.map(r=>{
+      const trail = r[2] === 'chev' ? '<span class="chev">›</span>'
+                  : r[2] ? `<span class="val">${r[2]}</span><span class="chev">›</span>`
+                  : '';
+      return `<div class="srow"><span class="ico">${r[0]}</span><span class="lab">${r[1]}</span>${trail}</div>`;
+    }).join('');
+    return `<div class="ghead">${s.t}</div><div class="sgroup">${rows}</div>`;
+  }).join('');
+}
+
+/* 内容高度：阅读 = 6 + 31(小标题) + 58n；设置 = Σ(31 + 42n + 1) */
+const CFG = {
+  before: { readN:9, keys:['play','store','data','safe','about'] },
+  A:      { readN:7, keys:['play','store','data','safe'] },
+  B:      { readN:7, keys:['play','store','data','safe'] },
+  C:      { readN:7, keys:['play','store','data','safe'] },
+  D:      { readN:7, keys:['play','store','data','safe'] }
+};
+
+/* 组装手机：kind = reading | settings ；mode = before | A | B | C | D */
+function phone(kind, mode){
+  const cfg = CFG[mode];
+  const nav = kind==='reading'
+    ? '<div class="navbar"><span class="t">阅读</span><span class="ic">🔍 ⋯</span></div>'
+    : '<div class="navbar"><span class="t">设置</span><span class="ic"></span></div>';
+
+  // 胶囊上沿（stage 坐标）：534 - 22 - 56 = 456
+  const BAR_TOP = 456;
+  const contentH = kind==='reading' ? 6 + 31 + 58*cfg.readN : null;
+
+  let body = '';
+  if (kind === 'reading'){
+    // 现状：列表滚到底，最后一条正好躺在胶囊背后（透过玻璃隐约可见）
+    const shift = mode === 'before' ? ' style="margin-top:-55px"' : '';
+    body = `<div class="rows"${shift}><div class="sechead">最近阅读</div>${readRows(cfg.readN)}</div>`;
+  } else {
+    const shift = mode === 'before' ? ' style="margin-top:-23px"' : '';
+    body = `<div${shift}>${secs(cfg.keys)}</div>`;
+  }
+
+  // 方案 B：内容在胶囊上沿裁切，下方由底色带垫底（不再穿透）
+  let pad = 0;
+  if (mode === 'B'){
+    const h = kind==='reading' ? contentH : 422;
+    pad = Math.max(0, BAR_TOP - h);
+    body = `<div style="padding-bottom:${pad}px">${body}</div>`;
+  }
+
+  let bar = `<div class="bar">${tabs()}</div>`;
+  if (mode === 'D'){
+    bar = `<div class="ghost-outline"></div><div class="bar ghost-bar">${tabs()}</div>`;
+  }
+  if (mode === 'C'){
+    bar = `<div class="bar full">${tabs()}<div class="home"></div></div>`;
+  }
+
+  const extra = mode === 'B' ? '<div class="underband"></div>' : '';
+
+  // 现状：红色虚线标出被胶囊吃掉的区间
+  let mark = '';
+  if (mode === 'before'){
+    mark = `<div class="mark-block" style="bottom:0;height:78px"></div>`;
+  }
+
+  const caps = {
+    before: {
+      reading: '<b>阅读</b> · 滚到底：最后一条压在胶囊下，点不到',
+      settings:'<b>设置</b> · 滚到底：「关于 MyHub」压在胶囊下'
+    },
+    A: {
+      reading: '<b>阅读</b> · 滚到底：最后一条完整露出（末尾留白 78+12pt）',
+      settings:'<b>设置</b> · 滚到底：最后一项完整露出'
+    },
+    B: {
+      reading: '<b>阅读</b> · 内容在胶囊上沿裁切，下方垫底色带',
+      settings:'<b>设置</b> · 内容在胶囊上沿裁切'
+    },
+    C: {
+      reading: '<b>阅读</b> · 通栏底栏，内容截止其上',
+      settings:'<b>设置</b> · 通栏底栏，内容截止其上'
+    },
+    D: {
+      reading: '<b>阅读</b> · 滚动中胶囊淡出，停止 0.8s 恢复',
+      settings:'<b>设置</b> · 滚动中胶囊淡出'
+    }
+  };
+
+  return `<div class="pw">
+    <div class="phone">
+      ${STATUS}${nav}
+      <div class="stage">${body}${extra}${bar}${mark}</div>
+      ${mode==='C' ? '' : '<div class="home"></div>'}
+    </div>
+    <div class="cap">${caps[mode][kind]}</div>
+  </div>`;
+}
+
+function fill(id, mode){
+  document.getElementById(id).innerHTML = phone('reading', mode) + phone('settings', mode);
+}
+fill('before','before');
+fill('optA','A');
+fill('optB','B');
+fill('optC','C');
+fill('optD','D');
+</script>
+</body>
+</html>
