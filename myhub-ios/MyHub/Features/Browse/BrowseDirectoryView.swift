@@ -958,22 +958,23 @@ struct BrowseDirectoryView: View {
     private var uikitTrailingButtons: [NavigationBarTrailingButtons.Item] {
         [
             NavigationBarTrailingButtons.Item(symbol: "plus", accessibilityLabel: "添加") { anchor in
-                popupMenu.show(items: addItems, anchor: anchor, style: .popover)
+                popupMenu.show(items: addItems, anchor: anchor, style: .drawer)
             },
             NavigationBarTrailingButtons.Item(symbol: "ellipsis", accessibilityLabel: "更多操作") { anchor in
-                popupMenu.show(items: overflowItems, anchor: anchor)
+                popupMenu.show(items: overflowItems, anchor: anchor, style: .drawer)
             },
         ]
     }
 
-    /// 右上角 ＋（上传文件 / 从相册上传 / 新建文件夹）——iOS 26 以下的 SwiftUI 版本
+    /// 右上角 ＋（上传文件 / 从相册上传 / 新建文件夹）——iOS 26 以下的 SwiftUI 版本。
+    /// 与长按文件一致走底部抽屉（`.drawer`），不再用锚点卡片。
     private var addButton: some View {
-        ToolbarMenuButton(items: addItems, symbol: "plus", style: .popover)
+        ToolbarMenuButton(items: addItems, symbol: "plus", style: .drawer)
     }
 
-    /// 右上角 …（多选 / 视图切换 / 排序 / 升降序 / 刷新）
+    /// 右上角 …（多选 / 视图切换 / 排序 / 升降序 / 刷新）——同为底部抽屉
     private var overflowButton: some View {
-        ToolbarMenuButton(items: overflowItems)
+        ToolbarMenuButton(items: overflowItems, style: .drawer)
     }
 
     /// ＋菜单：上传文件 / 从相册上传 / 新建文件夹

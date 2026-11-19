@@ -105,7 +105,9 @@ struct RootView: View {
             )
         }
         // mini 播放器：iPhone 贴底部页签栏（见 mainShell），iPad 悬浮底部
-        // 全局弹出菜单层：… 按钮 / iOS 长按 → 底部抽屉；+ 按钮 / 指针右键 → 锚点圆角卡片
+        // 全局弹出菜单层：iOS 长按 / 导航栏右上角（+ / …）→ 底部抽屉；指针右键 → 锚点圆角卡片
+        // 注意：本层挂在根视图上，位于 `.sheet` / `.fullScreenCover` 之下，
+        // 故模态容器内的菜单只能各自用系统 Menu / contextMenu，无法复用此抽屉。
         .overlay {
             if let state = popup.state {
                 switch state.style {

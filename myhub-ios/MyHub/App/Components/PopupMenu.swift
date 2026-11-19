@@ -22,12 +22,12 @@ struct PopupMenuItem: Identifiable {
 // MARK: - 全局菜单呈现器
 
 /// 统一弹出菜单入口（TODO §1.1）：… 菜单 / 长按菜单 / 右键菜单（iPad·Mac 指针）
-/// 由 RootView 顶层悬浮层承载；长按走底部抽屉，… 按钮 / 指针右键走锚点圆角卡片。
+/// 由 RootView 顶层悬浮层承载；长按与导航栏右上角（+ / …）走底部抽屉，指针右键走锚点圆角卡片。
 final class PopupMenuPresenter: ObservableObject {
     /// 菜单呈现样式
     enum Style {
-        case popover   // 锚点圆角卡片：+ 按钮 / iPad·Mac 指针右键
-        case drawer    // 底部抽屉：… 按钮 / iOS 长按（参照 Flutter showModalBottomSheet）
+        case popover   // 锚点圆角卡片：仅 iPad·Mac 指针右键
+        case drawer    // 底部抽屉：iOS 长按 / 右上角 + 与 …（参照 Flutter showModalBottomSheet）
     }
 
     struct State {
@@ -284,7 +284,7 @@ private struct DrawerRowStyle: ButtonStyle {
 // MARK: - 触发组件
 
 /// 「…」触发按钮：记录自身全局位置并弹出底部抽屉菜单（与长按文件菜单一致）；
-/// symbol 可定制（默认「…」），style 可定制（默认底部抽屉，+ 按钮传 .popover 保持锚点卡片）。
+/// symbol 可定制（默认「…」），style 可定制（默认底部抽屉；`.popover` 仅供指针右键等特殊场景）。
 ///
 /// 按压反馈由 `PressBridge` 真实触摸驱动，而非系统 Button 的 `isPressed`：
 /// NavigationStack 左滑返回手势期间，系统为返回按钮高亮时会误把导航栏 trailing
