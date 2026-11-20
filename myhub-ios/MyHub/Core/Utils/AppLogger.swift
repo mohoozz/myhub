@@ -2,13 +2,33 @@ import Foundation
 import OSLog
 
 /// 文件日志：落盘 Documents/Logs/myhub-yyyy-MM-dd.log（按天滚动，保留最近 7 份），同时输出 os_log。
-/// 用 Documents 目录配合 File Sharing，真机可直接导出日志给 AI 分析。
 final class AppLogger {
     static let shared = AppLogger()
 
     enum Level: String {
         case debug = "DEBUG", info = "INFO", warn = "WARN", error = "ERROR"
+
+        /// 落盘过滤用序：debug < info < warn < error
+        var order: Int {
+            switch self {
+            case .debug: return 0
+            case .info: return 1
+            case .warn: return 2
+            case .error: return 3
+            }
+        }
     }
+
+    /// 「详细日志」开关（debug 是否落盘），取值持久化在 UserDefaults
+    static let verboseLoggingKey = "diagnostics.verboseLogging"
+
+    var isVerboseLogging: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.verboseLoggingKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.verboseLoggingKey) }
+    }
+
+    /// 低于此级别的日志不写文件（仍进 os_log）
+    private var fileMinLevel: Level { isVerboseLogging ? .debug : .info }
 
     private let logger = Logger(subsystem: "com.myhub.MyHub", category: "app")
     private let queue = DispatchQueue(label: "com.myhub.MyHub.AppLogger")
@@ -16,6 +36,21 @@ final class AppLogger {
     private var fileURL: URL
     private var currentDay: String
     private let maxBytes = 10 * 1024 * 1024
+    /// 落盘行计数：体积检查（stat）按批触发，不再每行一次
+    private var writtenLines = 0
+    /// 最近 N 条（含未落盘的 debug）：崩溃时随栈一并写进 crash.log
+    private var recent: [String] = []
+    private let recentLimit = 300
+
+    /// 崩溃现场用：最近日志快照（在日志队列上同步取）
+    var recentLines: [String] { queue.sync { recent } }
+
+    private func appendRecent(_ line: String) {
+        recent.append(line.hasSuffix("\n") ? String(line.dropLast()) : line)
+        if recent.count > recentLimit {
+            recent.removeFirst(recent.count - recentLimit)
+        }
+    }
 
     private init() {
         dir = FileManager.default
@@ -40,7 +75,11 @@ final class AppLogger {
         case .error: logger.error("\(message, privacy: .public)")
         }
         let line = "\(Self.timestampFormatter.string(from: Date())) [\(level.rawValue)] [\(module)] \(message)\n"
+        // 落盘过滤：低于落盘级别的日志到此为止（os_log 已出去，仍然留在内存快照里）
+        let writeToFile = level.order >= fileMinLevel.order
         queue.async { [self] in
+            appendRecent(line)
+            guard writeToFile else { return }
             rollIfNeeded()
             guard let data = line.data(using: .utf8) else { return }
             if let handle = try? FileHandle(forWritingTo: fileURL) {
@@ -50,7 +89,9 @@ final class AppLogger {
             } else {
                 try? data.write(to: fileURL, options: .atomic)
             }
-            trimIfNeeded()
+            // 体积检查带 stat，按批触发即可：逐行检查时这部分开销与日志量成正比
+            writtenLines += 1
+            if writtenLines % 200 == 0 { trimIfNeeded() }
         }
     }
 
@@ -64,14 +105,14 @@ final class AppLogger {
     func clear() {
         queue.sync {
             guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
-            files.forEach { try? FileManager.default.removeItem(at: $0) }
+            // 崩溃日志保留：清空只针对运行日志
+            files
+                .filter { $0.lastPathComponent != CrashReporter.fileName }
+                .forEach { try? FileManager.default.removeItem(at: $0) }
         }
     }
 
-    /// 每次重新编译打包后的第一次启动：把 Logs 目录里已有的 .log 备份到 backup/ 子目录，
-    /// 从零开始写新日志，避免旧构建的日志污染本次分析。
-    /// 构建标识取 App 可执行文件的 mtime——每次重新编译打包都会重写可执行文件，mtime 必然变化；
-    /// 同一次安装内多次启动 mtime 不变，不会误触发备份。
+    /// 每次重新编译打包后的第一次启动：把 Logs 目录里已有的 .log 备份到 backup/ 子目录
     private func backupLogsIfNewBuild() {
         let stamp = Self.currentBuildStamp()
         let key = "com.myhub.AppLogger.lastBuildStamp"
@@ -82,7 +123,8 @@ final class AppLogger {
         defaults.set(stamp, forKey: key)
 
         guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
-        let logs = files.filter { $0.pathExtension == "log" }
+        // crash.log 留在原位：崩溃记录跨构建保留
+        let logs = files.filter { $0.pathExtension == "log" && $0.lastPathComponent != CrashReporter.fileName }
         guard !logs.isEmpty else { return }
 
         let backupDir = dir.appendingPathComponent("backup", isDirectory: true)
@@ -132,7 +174,12 @@ final class AppLogger {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
               let size = attrs[.size] as? Int, size > maxBytes,
               let data = try? Data(contentsOf: fileURL) else { return }
-        try? data.suffix(maxBytes / 2).write(to: fileURL, options: .atomic)
+        // 按行对齐，避免从多字节字符中间截断导致整个文件读不出来
+        var slice = data.suffix(maxBytes / 2)
+        if let newline = slice.firstIndex(of: 0x0A) {
+            slice = slice[slice.index(after: newline)...]
+        }
+        try? Data(slice).write(to: fileURL, options: .atomic)
     }
 
     private static let timestampFormatter: DateFormatter = {

@@ -1,11 +1,7 @@
 import Foundation
 import GRDB
 
-/// 「正在阅读」进度记录全局 Store（IOS-209 / TODO §7）：
-/// ReadingProgress 表唯一读取源（按最后阅读时间降序，含已读完记录——保留至用户手动删除）。
-/// 订阅 `playbackProgressDidChange`（播放 / 小说 / 漫画进度落库共用广播通道），
-/// **进度上报后自动刷新列表**，无需手动下拉。
-/// 单例 + environmentObject 注入同一实例（与 FavoritesStore 同一模式）。
+/// 「正在阅读」进度记录全局 Store
 @MainActor
 final class ReadingHistoryStore: ObservableObject {
     static let shared = ReadingHistoryStore()
@@ -13,8 +9,6 @@ final class ReadingHistoryStore: ObservableObject {
     @Published private(set) var records: [ReadingProgress] = []
 
     private var progressObserver: NSObjectProtocol?
-    /// 诊断（TODO 413）：reload 次数
-    private var reloadCount = 0
 
     private init() {
         progressObserver = NotificationCenter.default.addObserver(
@@ -32,20 +26,13 @@ final class ReadingHistoryStore: ObservableObject {
 
     /// 全量重载：最后阅读时间降序
     func reload() {
-        // 诊断（TODO 413）：浏览页会观察本对象，`reload` 每次都会整表重读并发布 `records`，
-        // 若被高频调用（进度广播风暴 / 页面反复挂载），就会推动整页高频重绘
-        reloadCount += 1
-        AppLogger.shared.log(
-            "ReadingHistoryStore.reload 第 \(reloadCount) 次", level: .debug, module: "history"
-        )
         guard let db = AppDatabase.shared.dbQueue else { return }
         do {
             records = try db.read {
                 try ReadingProgress.order(Column("updatedAt").desc).fetchAll($0)
             }
         } catch {
-            // 读取失败时保留上一次的列表：此前 `?? []` 会把整页清成空态，
-            // 表现为「记录全部消失，必须重启 app 才能恢复」。日志留痕便于定位。
+            // 读取失败时保留上一次的列表：此前 `?? []` 会把整页清成空态
             AppLogger.shared.log(
                 "ReadingHistoryStore.reload 失败，保留旧列表：\(error)",
                 level: .error,
@@ -54,7 +41,7 @@ final class ReadingHistoryStore: ObservableObject {
         }
     }
 
-    // MARK: - 删除阅读记录（手动移除；不影响源文件）
+ // MARK: - 删除阅读记录（手动移除；不影响源文件）
 
     func remove(_ record: ReadingProgress) {
         guard let id = record.id else { return }
@@ -71,12 +58,7 @@ final class ReadingHistoryStore: ObservableObject {
         reload()
     }
 
-    /// 撤销删除（TODO 408 左滑删除的撤销兜底）：把删除前缓存的记录原样插回。
-    ///
-    /// 保留原 `id` 写回（SQLite 允许显式 rowid），这样撤销后列表项身份不变，
-    /// 封面/指纹等按 id 建立的视图状态（`resolved`/`statFailedAt`）继续命中，不会闪烁重载。
-    /// 若该 `(connectionID, filePath)` 期间已被新进度重新写入（唯一约束冲突），
-    /// 则保留较新的那条、丢弃本次回插——用户刚产生的真实进度优先于撤销的旧快照。
+    /// 撤销删除：把删除前缓存的记录原样插回。
     func restore(_ snapshots: [ReadingProgress]) {
         guard let db = AppDatabase.shared.dbQueue, !snapshots.isEmpty else { return }
         _ = try? db.write { database in
@@ -88,7 +70,7 @@ final class ReadingHistoryStore: ObservableObject {
         reload()
     }
 
-    // MARK: - 源文件同步（浏览界面删除 / 移动 / 重命名时，TODO §7.309）
+ // MARK: - 源文件同步（浏览界面删除 / 移动 / 重命名时）
 
     /// 删除某连接下指定路径的阅读记录（源文件被删除或移动后同步清理，避免残留失效记录）
     func remove(connectionID: Int64, filePaths: Set<String>) {
@@ -106,9 +88,6 @@ final class ReadingHistoryStore: ObservableObject {
     }
 
     /// 删除某路径**及其子路径**下的阅读记录（删除/移走目录时用）。
-    ///
-    /// `remove(connectionID:filePaths:)` 是 `filePath IN (…)` 精确匹配，对目录只会命中
-    /// 目录自身那条（通常并不存在），目录内文件的记录会全部残留在阅读页、指向已删文件。
     func removeTree(connectionID: Int64, path: String) {
         guard let db = AppDatabase.shared.dbQueue, !path.isEmpty else { return }
         _ = try? db.write { database in
@@ -123,7 +102,7 @@ final class ReadingHistoryStore: ObservableObject {
         reload()
     }
 
-    // MARK: - 文件指纹（stat 成功后写回，重进时秒出封面）
+ // MARK: - 文件指纹（stat 成功后写回，重进时秒出封面）
 
     /// 更新指定记录的文件指纹（仅 stat 成功时调用；失败保留旧指纹，重进时封面仍可命中缓存）
     func updateFingerprint(recordID: Int64, size: Int64, modTime: Date) {

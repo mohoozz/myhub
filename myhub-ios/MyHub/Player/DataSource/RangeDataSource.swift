@@ -1,23 +1,20 @@
 import Foundation
 
-/// 可 Range 读取的数据源（《需求分析文档》§4.3 数据源层）：
-/// 本地文件 / WebDAV HTTP Range / SMB 分块统一为随机访问读取，供播放器/阅读器按需拉取。
+/// 可 Range 读取的数据源（数据源层）
 protocol RangeDataSource: AnyObject {
     var contentLength: Int64 { get }
     func read(range: Range<Int64>) async throws -> Data
 }
 
 /// 存储适配器数据源。
-/// 弱网自适应（TODO 356）：增量流式下载 + 停滞超时（只要持续收到数据就不超时）+ 断点续传
-/// （超时/中断保留已下载数据、从断点续拉不重下）+ 连续零进展退避重试；
-/// 拖动进度条时由上层传入目标区间，实现秒开与快速 seek。
+/// 弱网自适应：增量流式下载 + 停滞超时（只要持续收到数据就不超时）+ 断点续传
 final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
     let adapter: StorageAdapter
     let path: String
     let contentLength: Int64
     /// 连续「零进展」容忍次数（离线模式传 1 快速失败）；有进展即清零持续续传，已缓存分片不经过数据源
     let maxAttempts: Int
-    /// 停滞判定阈值（秒）：连续无新字节到达超过该时长才视为停滞（TODO 356）
+    /// 停滞判定阈值（秒）：连续无新字节到达超过该时长才视为停滞
     let stallTimeout: TimeInterval = 15
 
     init(adapter: StorageAdapter, path: String, contentLength: Int64, maxAttempts: Int = 3) {
@@ -39,7 +36,7 @@ final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
             let start = range.lowerBound + Int64(accumulated.count)
             let before = accumulated.count
             do {
-                // 断点续传（TODO 356）：从已累积末尾继续请求剩余区间
+                // 断点续传：从已累积末尾继续请求剩余区间
                 let part = try await collectStalled(range: start..<range.upperBound)
                 accumulated.append(part)
             } catch let partial as PartialReadError {
@@ -60,8 +57,7 @@ final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
                 stallStrikes = 0   // 本轮有进展，继续续传直至取满
             } else {
                 stallStrikes += 1
-                // 零进展停滞（TODO 366）：当前锁定地址可能已不可达（长时间熄屏 / 网络环境变化），
-                // 通知路由层失效锁定，下一轮续传重试重新竞速判定可达地址（内部带冷却，避免抖动反复竞速）
+                // 零进展停滞：当前锁定地址可能已不可达（长时间熄屏 / 网络环境变化）
                 (adapter as? RouteRecoverable)?.invalidateRoute(reason: "分片读取零进展停滞")
                 if stallStrikes >= maxAttempts { break }
                 try? await Task.sleep(nanoseconds: UInt64(stallStrikes) * 400_000_000)
@@ -72,12 +68,9 @@ final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
         throw lastError
     }
 
-    /// 停滞超时收集：只要在持续接收数据就不超时；连续 `stallTimeout` 秒无新字节判定停滞，
-    /// 抛出 `PartialReadError` 携带已收数据供断点续传（TODO 356）。
-    /// 相比旧的「整段绝对超时」，弱网慢速但持续的下载不会被误杀、已下载数据不作废。
+    /// 停滞超时收集：只要在持续接收数据就不超时；连续 `stallTimeout` 秒无新字节判定停滞
     private func collectStalled(range: Range<Int64>) async throws -> Data {
-        // HTTP 源（WebDAV）额外带上期望总长：服务器返回的区间起点/对象总长对不上时直接失败，
-        // 避免「Range 被忽略」或「被换成别的视频」的字节错位写进分片缓存（表现为突然跳到另一段内容）
+        // HTTP 源（WebDAV）额外带上期望总长：服务器返回的区间起点/对象总长对不上时直接失败
         let stream: AsyncThrowingStream<Data, Error>
         if let verifying = adapter as? RangeVerifyingAdapter {
             stream = try await verifying.readStream(path, range: range, expectedTotal: contentLength)
@@ -119,7 +112,7 @@ final class AdapterRangeDataSource: RangeDataSource, @unchecked Sendable {
     }
 }
 
-/// 停滞看门狗共享状态（actor 串行化累积与时间戳读写，供停滞超时断点续传，TODO 356）
+/// 停滞看门狗共享状态（actor 串行化累积与时间戳读写，供停滞超时断点续传）
 private actor StallGuard {
     private var data = Data()
     private var lastAdvance: TimeInterval = ProcessInfo.processInfo.systemUptime
@@ -135,7 +128,7 @@ private actor StallGuard {
     func idleSeconds(now: TimeInterval) -> TimeInterval { now - lastAdvance }
 }
 
-/// 停滞超时 / 中途失败时携带已下载的部分数据，供上层断点续传（TODO 356）
+/// 停滞超时 / 中途失败时携带已下载的部分数据，供上层断点续传
 private struct PartialReadError: Error {
     let data: Data
     let underlying: Error
@@ -146,15 +139,7 @@ struct HardTimeoutError: Error {
     let seconds: TimeInterval
 }
 
-/// **硬**超时执行（TODO 404）：`operation` 跑在独立的非结构化任务中，超时立即抛出
-/// `HardTimeoutError` 返回，**不等待** `operation` 真正结束。
-///
-/// 为什么不能用下面的 `withTimeout`：`withThrowingTaskGroup` 在作用域结束时会隐式等待
-/// 所有子任务，`cancelAll()` 只是协作式请求。VLC / AVFoundation / SMB 的内部挂起并不响应
-/// 协作式取消，结构化版本会被挂死的子任务反向拖住，照样永不返回（封面并发许可因此泄漏）。
-///
-/// 调用方被取消时经 `withTaskCancellationHandler` 向 `operation` 传导取消并立即抛
-/// `CancellationError` 返回，不等待其收尾。
+/// **硬**超时执行：`operation` 跑在独立的非结构化任务中，超时立即抛出
 func withHardTimeout<T: Sendable>(
     seconds: TimeInterval,
     operation: @escaping @Sendable () async -> T
@@ -170,7 +155,7 @@ func withHardTimeout<T: Sendable>(
     }
     defer {
         timer.cancel()
-        work.cancel()   // 协作式取消；不 await，避免被挂死的 operation 反向拖住调用方
+        work.cancel()
     }
     let result = await withTaskCancellationHandler {
         await box.wait()

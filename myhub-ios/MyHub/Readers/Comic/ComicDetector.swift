@@ -1,19 +1,11 @@
 import Foundation
 
-/// 漫画识别策略（IOS-207）：
-/// 1. 扩展名优先：`.cbz` / `.cbr` 直接按漫画处理；
-/// 2. 内容嗅探兜底：zip/rar 内图片占比 ≥ 90% 且文件名呈自然序列判定为漫画；
-/// 3. epub 图集型判定：spine 抽样 XHTML 文本稀少且含插图（见 EpubBook.isComicSpine）；
-/// 4. 手动覆盖：浏览页右键/长按菜单「以漫画阅读打开 / 以小说阅读打开」（见 BrowseDirectoryView）；
-/// 5. 目录层预判：列目录时对 epub 判定并缓存，直接显示漫画徽标 + 打开走漫画阅读器（见 EpubComicCache）。
-///
-/// 注：zip/rar 在 UI 上按「压缩包」展示（`MediaType.archive`），仅打开时做内容嗅探；
-/// cbz/cbr 仍按「漫画」展示。
+/// 漫画识别策略
+/// 1. 扩展名优先：`.cbz` / `.cbr` 直接按漫画处理
 enum ComicDetector {
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "avif"]
 
     /// 漫画阅读器实际能解析的「压缩包」扩展名（zip 走 RangeZipReader，rar 走 UnrarKit）。
-    /// 7z/tar/gz 等暂不支持解析：仍显示「压缩包」，但打开时走通用不支持菜单。
     static let readableArchiveExtensions: Set<String> = ["zip", "rar"]
 
     /// 归档条目名是否为图片页
@@ -27,7 +19,6 @@ enum ComicDetector {
     }
 
     /// 内容嗅探：图片占比 ≥ 90% 且存在自然序列命名（编号页）
-    /// - Parameter entryNames: 归档内全部非目录条目名
     static func sniff(entryNames: [String]) -> Bool {
         let files = entryNames.filter { !$0.hasSuffix("/") }
         guard !files.isEmpty else { return false }
@@ -42,10 +33,7 @@ enum ComicDetector {
     }
 }
 
-/// epub 图集型（漫画）判定结果缓存（IOS-207 漫画识别策略 5）：
-/// 目录层预判 epub 是否漫画，命中后直接显示漫画徽标 + 打开直接走漫画阅读器，
-/// 避免「小说阅读器判定 → 转交漫画阅读器」的双重解包（大文件 Range 密集请求易触发 WebDAV 空响应）。
-/// 键含文件 size/modTime，文件替换即失效。
+/// epub 图集型（漫画）判定结果缓存（漫画识别策略 5）
 enum EpubComicCache {
     private static let defaults = UserDefaults.standard
     private static let keyPrefix = "epub.comic."

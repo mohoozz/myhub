@@ -1,8 +1,6 @@
 import Foundation
 
-/// 全局漫画阅读器呈现（TODO §6）：与播放器/小说阅读器同为独立全屏路由，不随 Tab 切换销毁。
-/// 打开即展示加载 UI（弱网优化：点击后立即进入加载界面，而非卡住等待）；
-/// 重复点击同一文件去重防抖；epub 图集经 `NovelReaderPresenter.onOpenComic` 转入。
+/// 全局漫画阅读器呈现：与播放器/小说阅读器同为独立全屏路由，不随 Tab 切换销毁。
 final class ComicReaderPresenter: ObservableObject {
     @Published private(set) var current: NovelOpenContext?
 

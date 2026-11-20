@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-/// 浏览器设置（TODO §8.3，IOS-405）：默认搜索引擎 / 默认 UA / 清除浏览数据。
+/// 浏览器设置：默认搜索引擎 / 默认 UA / 清除浏览数据。
 struct BrowserSettingsView: View {
     @State private var clearingData = false
     @State private var showingClearConfirm = false
@@ -70,7 +70,7 @@ struct BrowserSettingsView: View {
         }
     }
 
-    // MARK: - 绑定
+ // MARK: - 绑定
 
     private var searchEngineBinding: Binding<SearchEngine> {
         Binding(
@@ -93,7 +93,7 @@ struct BrowserSettingsView: View {
         )
     }
 
-    /// 新标签页是否立即跳转（TODO 408）：读取即最新值，无需重启生效
+    /// 新标签页是否立即跳转：读取即最新值，无需重启生效
     private var openNewTabInForegroundBinding: Binding<Bool> {
         Binding(
             get: { AppSettings.Browser.openNewTabInForeground },
@@ -101,7 +101,7 @@ struct BrowserSettingsView: View {
         )
     }
 
-    // MARK: - 清除浏览数据
+ // MARK: - 清除浏览数据
 
     private func clearBrowsingData() {
         clearingData = true

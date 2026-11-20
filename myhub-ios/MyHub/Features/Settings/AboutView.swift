@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 关于页（TODO §10）：版本、开源许可、存储用量、运行日志、应用图标
+/// 关于页：版本、开源许可、存储用量、运行日志、应用图标
 struct AboutView: View {
     @State private var cacheSize: Int64 = 0
 
@@ -97,29 +97,67 @@ struct AboutView: View {
     }
 }
 
-/// 运行日志查看（AppLogger 文件日志：查看 / 分享 / 清空）
+/// 日志查看：崩溃日志（完整调用栈）+ 运行日志，可分别分享
 struct LogView: View {
+    private enum ShareTarget: Identifiable {
+        case runtime, crash
+
+        var id: Int {
+            switch self {
+            case .runtime: return 0
+            case .crash: return 1
+            }
+        }
+
+        var url: URL {
+            switch self {
+            case .runtime: return AppLogger.shared.url
+            case .crash: return CrashReporter.fileURL
+            }
+        }
+    }
+
     @State private var content = ""
-    @State private var showShare = false
+    @State private var crashContent = ""
+    @State private var shareTarget: ShareTarget?
     @State private var confirmClear = false
+    /// 详细日志：debug 级（按压层、逐页缓存、逐请求）是否也落盘，默认关闭
+    @State private var verbose = AppLogger.shared.isVerboseLogging
 
     var body: some View {
         ScrollView {
-            Text(content.isEmpty ? "暂无日志" : content)
-                .font(.caption.monospaced())
-                .foregroundStyle(AppColors.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
+            VStack(alignment: .leading, spacing: 16) {
+                if !crashContent.isEmpty {
+                    Text("崩溃日志（crash.log）")
+                        .font(.caption.bold())
+                        .foregroundStyle(AppColors.textSecondary)
+                    logText(crashContent)
+                }
+                Text("运行日志")
+                    .font(.caption.bold())
+                    .foregroundStyle(AppColors.textSecondary)
+                logText(content.isEmpty ? "暂无日志" : content)
+            }
+            .padding()
         }
         .background(AppColors.pageBackground)
         .navigationTitle("运行日志")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 16) {
-                    Button { showShare = true } label: {
+                    Menu {
+                        Toggle("详细日志（含 debug）", isOn: $verbose)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    Menu {
+                        Button("分享运行日志") { shareTarget = .runtime }
+                            .disabled(content.isEmpty)
+                        Button("分享崩溃日志") { shareTarget = .crash }
+                            .disabled(crashContent.isEmpty)
+                    } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .disabled(content.isEmpty)
                     Button { confirmClear = true } label: {
                         Image(systemName: "trash")
                     }
@@ -127,9 +165,16 @@ struct LogView: View {
                 }
             }
         }
-        .onAppear { content = AppLogger.shared.tail() }
-        .sheet(isPresented: $showShare) {
-            ActivityView(url: AppLogger.shared.url)
+        .onChange(of: verbose) { newValue in
+            AppLogger.shared.isVerboseLogging = newValue
+            AppLogger.shared.log(
+                newValue ? "已开启详细日志（debug 落盘）" : "已关闭详细日志（仅 info 及以上落盘）",
+                module: "app"
+            )
+        }
+        .onAppear(perform: reload)
+        .sheet(item: $shareTarget) { target in
+            ActivityView(url: target.url)
         }
         .alert("清空日志", isPresented: $confirmClear) {
             Button("清空", role: .destructive) {
@@ -137,6 +182,24 @@ struct LogView: View {
                 content = ""
             }
             Button("取消", role: .cancel) {}
+        } message: {
+            Text("仅清空运行日志，崩溃日志会保留")
         }
+    }
+
+    private func logText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospaced())
+            .foregroundStyle(AppColors.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func reload() {
+        content = AppLogger.shared.tail()
+        // 崩溃记录可能累计很长，界面只显示最近的 400 行
+        let crash = CrashReporter.logText()
+        crashContent = crash.isEmpty
+            ? ""
+            : crash.components(separatedBy: "\n").suffix(400).joined(separator: "\n")
     }
 }

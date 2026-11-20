@@ -1,9 +1,8 @@
 import Foundation
 import GRDB
 
-/// 浏览器数据 Store（TODO §8.3，IOS-402/403）：
-/// 书签 / 浏览历史 / 起始页快捷入口 的唯一数据源（单例 + environmentObject 注入）。
-/// 无痕浏览不记录历史（由调用方依据 `BrowserSessionStore.isIncognito` 决定是否调用）。
+/// 浏览器数据 Store
+/// 书签 / 浏览历史 / 起始页快捷入口的唯一数据源（单例 + environmentObject 注入）。
 @MainActor
 final class BrowserDataStore: ObservableObject {
     static let shared = BrowserDataStore()
@@ -16,19 +15,15 @@ final class BrowserDataStore: ObservableObject {
 
     private init() {}
 
-    // MARK: - 启动预载
+ // MARK: - 启动预载
 
     /// App 启动、数据库就绪后调用（`AppState.launch`）：补种首启预置快捷入口，并加载书签/历史/快捷入口。
-    ///
-    /// 注意：**不能**在 `init` 中加载——单例随 `MyHubApp` 的 `@StateObject` 属性初始化即创建，
-    /// 早于 `AppDatabase.setup()`，此时 `dbQueue` 为 nil，`reload*` 会全部早退，列表将一直为空
-    /// （历史记录/书签/快捷入口都读不出数据）。
     func bootstrap() {
         seedShortcutsIfNeeded()
         reloadAll()
     }
 
-    // MARK: - 加载
+ // MARK: - 加载
 
     func reloadAll() {
         reloadBookmarks()
@@ -51,7 +46,7 @@ final class BrowserDataStore: ObservableObject {
         shortcuts = (try? db.read { try BrowserShortcut.order(Column("sortOrder").asc).fetchAll($0) }) ?? []
     }
 
-    // MARK: - 书签
+ // MARK: - 书签
 
     func isBookmarked(_ url: String) -> Bool {
         bookmarks.contains { $0.url == url }
@@ -86,7 +81,7 @@ final class BrowserDataStore: ObservableObject {
         reloadBookmarks()
     }
 
-    // MARK: - 历史
+ // MARK: - 历史
 
     /// 记录一次访问；同一 URL 连续访问仅更新时间戳，避免重复条目
     func recordVisit(title: String, url: String, favicon: String?) {
@@ -119,7 +114,7 @@ final class BrowserDataStore: ObservableObject {
         reloadHistory()
     }
 
-    // MARK: - 起始页快捷入口
+ // MARK: - 起始页快捷入口
 
     func addShortcut(title: String, url: String) {
         guard let db = AppDatabase.shared.dbQueue else { return }
@@ -156,7 +151,7 @@ final class BrowserDataStore: ObservableObject {
         reloadShortcuts()
     }
 
-    // MARK: - 首启预置
+ // MARK: - 首启预置
 
     private func seedShortcutsIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: Self.seededKey) else { return }

@@ -3,13 +3,7 @@ import UIKit
 
 // MARK: - 撤销吐司状态
 
-/// 底部「已删除 · 撤销」提示条状态（TODO 408 左滑删除的误删兜底）。
-///
-/// 方案 A 不弹确认框以求「点一下就删」的爽快，代价必须由撤销来补：删除后 5 秒内可一键还原。
-///
-/// **撤销按栈累积**：连删多行是极常见操作，若后一次 `show` 直接覆盖前一次的撤销闭包，
-/// 先删那条会被静默变成不可撤销（用户完全无感知）——而方案 A 的全部安全兜底就压在这 5 秒上。
-/// 故把待撤销动作压栈，`performUndo()` 逆序全部执行，计时窗口随每次新删除顺延。
+/// 底部「已删除 · 撤销」提示条状态。
 @MainActor
 final class UndoToastState: ObservableObject {
     struct Item: Equatable {
@@ -49,11 +43,7 @@ final class UndoToastState: ObservableObject {
         scheduleDismiss()
     }
 
-    /// 开始一项耗时的破坏性操作（删除 / 移入回收站）：确认弹窗收起前调用，
-    /// 立刻在吐司位置显示「菊花 + 正在删除 N 项…」，填掉后台执行期间的无反馈空档。
-    ///
-    /// 与 `show` 的差异：**不动撤销栈**（此前左滑删除的 5 秒撤销窗口不能被抹掉），
-    /// 也不排队自动消失——必须由 `finish` / `dismiss` 显式收尾（调用方用 do/catch 保证）。
+    /// 开始一项耗时的破坏性操作（删除 / 移入回收站）：确认弹窗收起前调用
     func beginWorking(_ message: String) {
         dismissTask?.cancel()
         dismissTask = nil
@@ -64,8 +54,6 @@ final class UndoToastState: ObservableObject {
     }
 
     /// 结束进行中提示：原位置替换为结果文案，并恢复 5 秒撤销窗口。
-    ///
-    /// `undo` 传入时会把撤销动作压栈（与 `show` 一致）；进行中期间既有的撤销栈保持不变。
     func finish(_ message: String, undo: (@MainActor () -> Void)? = nil) {
         dismissTask?.cancel()
         if let undo { undoActions.append(undo) }
@@ -106,11 +94,6 @@ final class UndoToastState: ObservableObject {
 // MARK: - 提示条视图
 
 /// 删除结果提示条：`已删除 · 撤销`（撤销按钮在右）。
-///
-/// 样式沿用浏览页现有轻提示（深色圆角 + 白字），尺寸放大到可点按。
-/// 调用方把它放进自己的底部覆盖层（与多选操作栏 / 传输横幅同一个 VStack），
-/// 复用该页已有的 `bottomChromeHeight` 抬升逻辑——页面内 overlay 的落点是系统底部
-/// 安全区，不含祖先注入的悬浮页签栏，必须由页面自己抬升（TODO 379）。
 struct UndoToastBar: View {
     @ObservedObject var state: UndoToastState
 

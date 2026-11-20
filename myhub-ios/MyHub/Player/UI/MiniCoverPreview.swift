@@ -3,16 +3,6 @@ import MobileVLCKit
 import SwiftUI
 
 /// mini 播放器封面实时视频预览（与 Flutter 端 `_MusicCoverArt` 对应）。
-///
-/// 复用 `PlayerCore.videoOutput`（AVPlayer / VLCMediaPlayer）把小画面渲染到封面
-/// 宿主视图上，实现「封面实时画面」。全屏播放器收起后其 `VideoRenderView` 已
-/// dismantle（AVPlayerLayer 移除 / VLC drawable 释放），因此 mini 出现后可安全
-/// 重新挂载。
-///
-/// 与全屏 `VideoRenderView` 的差异：
-/// - 不绑定画中画（mini 无 PiP 入口）；
-/// - VLC 软解路径仅清除**自己挂载**的宿主（全屏收起瞬间 mini 可能已接管
-///   `drawable`，互不干扰，避免 mini 画面被全屏清理误清）。
 struct MiniCoverPreview: UIViewRepresentable {
     /// PlayerCore.videoOutput（AVPlayer / VLCMediaPlayer）
     let output: Any?

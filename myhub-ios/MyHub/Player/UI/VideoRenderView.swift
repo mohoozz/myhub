@@ -23,18 +23,13 @@ final class PiPState: NSObject, ObservableObject {
     func attach(layer: AVPlayerLayer) {
         playerLayer = layer
         isSupported = AVPictureInPictureController.isPictureInPictureSupported()
-        // 「退后台自动画中画」默认关闭。系统只有在 App 持有 AVPictureInPictureController（且其
-        // playerLayer 关联着正在播放的视频）时才有能力自动进入画中画 —— 因此关闭开关时**不建立**
-        // controller，从根本上杜绝退后台自动画中画（手动画中画按钮点击时按需创建，不受影响）；
-        // 开启时才建立 controller 并置 canStartPictureInPictureAutomaticallyFromInline = true。
+        // 「退后台自动画中画」默认关闭。系统只有在 App 持有 AVPictureInPictureController
         syncAutoPreference()
-        // AVPlayerLayer/Controller 只在开播/引擎切换时重建，开关却可能在播放过程中被改动；
-        // 因此在每次退后台前重新读取一次开关，确保本轮行为与当前设置一致。
+        // AVPlayerLayer/Controller 只在开播/引擎切换时重建，开关却可能在播放过程中被改动
         startObservingBackground()
     }
 
-    /// 依据「退后台自动画中画」开关决定是否持有 AVPictureInPictureController：
-    /// 开启 → 建立并允许系统自动进入画中画；关闭 → 释放（画中画正在显示时不释放，否则会强制退出）。
+    /// 依据「退后台自动画中画」开关决定是否持有 AVPictureInPictureController
     private func syncAutoPreference() {
         if AppSettings.Player.autoPiPOnBackground {
             ensureController()?.canStartPictureInPictureAutomaticallyFromInline = true
@@ -91,12 +86,8 @@ final class PiPState: NSObject, ObservableObject {
     }
 
     /// 视图拆除期清理（dismantleUIView）：视图正在被 SwiftUI 销毁。
-    /// 绝不能在此同步修改 @Published（会触发 Combine send 与视图拆除事务并发，
-    /// 导致 exclusivity violation → abort）。本对象随 PlayerView 一起释放，无需再通知 UI。
     func teardown() {
         // 先断开 delegate 再 stop：防止 stopPictureInPicture 触发
-        // pictureInPictureControllerDidStopPictureInPicture → isActive = false（改 @Published）
-        // 与 dismantleUIView 拆除事务并发 → exclusivity violation → abort。
         controller?.delegate = nil
         controller?.stopPictureInPicture()
         controller = nil
@@ -105,7 +96,6 @@ final class PiPState: NSObject, ObservableObject {
     }
 
     /// 切换画中画：激活中点击则退出，未激活则启动
-    /// （开关关闭时 controller 未预建，这里按需创建，保证手动按钮始终可用）
     func toggle() {
         guard let controller = ensureController() else {
             lastError = "当前设备不支持画中画"
@@ -120,8 +110,7 @@ final class PiPState: NSObject, ObservableObject {
         }
     }
 
-    /// 刚创建的 controller 可能尚未进入「可画中画」状态（按需创建的场景），
-    /// 稍等一帧再启动；最多重试两次，仍未就绪则直接启动交由失败回调提示。
+    /// 刚创建的 controller 可能尚未进入「可画中画」状态（按需创建的场景）
     private func startWhenPossible(_ controller: AVPictureInPictureController, attempt: Int = 0) {
         guard self.controller === controller else { return }
         if controller.isPictureInPicturePossible || attempt >= 2 {
@@ -138,13 +127,10 @@ final class PiPState: NSObject, ObservableObject {
 }
 
 extension PiPState: AVPictureInPictureControllerDelegate {
-    // AVPictureInPictureControllerDelegate 为 nonisolated 协议，而 PiPState 是 @MainActor 类；
-    // 直接实现会触发「main actor-isolated instance method cannot satisfy nonisolated requirement」。
-    // 故方法标 nonisolated，回调线程通过 Task 派发到主线程再改 @Published（与 VLCEngine delegate 同款）。
+    // AVPictureInPictureControllerDelegate 为 nonisolated 协议，而 PiPState 是 @MainActor 类
     nonisolated func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
         Task { @MainActor in
-            // 兜底：非手动触发（即系统「退后台自动画中画」）且开关为关闭时，取消本次启动，
-            // 避免个别系统版本忽略 canStartPictureInPictureAutomaticallyFromInline 而照常进入画中画。
+            // 兜底：非手动触发（即系统「退后台自动画中画」）且开关为关闭时，取消本次启动
             if !self.manualRequest, !AppSettings.Player.autoPiPOnBackground {
                 controller.stopPictureInPicture()
             }
@@ -175,8 +161,7 @@ extension PiPState: AVPictureInPictureControllerDelegate {
     }
 }
 
-/// 视频渲染桥：硬解 → AVPlayerLayer（videoGravity .resizeAspect，不同分辨率/竖屏正确适配，不拉伸不裁切）；
-/// 软解 → VLCMediaPlayer.drawable 指向宿主 UIView。引擎切换（硬解失败回退软解）时透明重挂。
+/// 视频渲染桥：硬解 → AVPlayerLayer（videoGravity .resizeAspect，不同分辨率/竖屏正确适配，不拉伸不裁切）
 struct VideoRenderView: UIViewRepresentable {
     /// PlayerCore.videoOutput（AVPlayer / VLCMediaPlayer）
     let output: Any?
@@ -204,8 +189,7 @@ struct VideoRenderView: UIViewRepresentable {
     final class Coordinator {
         private let pip: PiPState
         private weak var attachedOutput: AnyObject?
-        /// 自己挂载的宿主（VLC 软解路径：全屏收起瞬间 mini 可能已接管 drawable，
-        /// 清理时必须只断自己，避免误清 mini 封面画面）
+        /// 自己挂载的宿主
         private weak var hostView: PlayerRenderUIView?
         private var playerLayer: AVPlayerLayer?
 
@@ -227,7 +211,7 @@ struct VideoRenderView: UIViewRepresentable {
                 playerLayer = layer
                 attachedOutput = player
                 pip.attach(layer: layer)
-                // 渲染桥面包屑（TODO 380）：确认熄屏回前台/引擎切换后画面输出层是否重新挂载
+                // 渲染桥面包屑：确认熄屏回前台/引擎切换后画面输出层是否重新挂载
                 AppLogger.shared.log("渲染桥挂载 硬解 AVPlayerLayer", level: .debug, module: "player")
             } else if let mediaPlayer = object as? VLCMediaPlayer {
                 mediaPlayer.drawable = view

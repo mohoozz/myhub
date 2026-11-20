@@ -1,12 +1,8 @@
 import SwiftUI
 import GRDB
 
-/// 正在阅读首页（TODO §7，IOS-209）：
-/// - 列表项：封面、标题、类型徽标、进度条、最后阅读时间；网格/列表两种视图（偏好持久化）；
-/// - 点击恢复进度进入对应阅读器/播放器（精准续播/锚点定位/页码恢复由各自内核完成）；
-/// - 长按弹底部抽屉菜单（含「多选」入口），多选时底部操作栏「删除阅读记录」（不影响源文件）/「删除源文件」（优先移入回收站，回收站不可用时彻底删除）；
-/// - 文案区分：视频「已看完」/ 音频「已听完」/ 漫画·小说「已读完」（默认「已读完」）；
-/// - 进度上报后自动刷新（ReadingHistoryStore 订阅 playbackProgressDidChange 广播）。
+/// 正在阅读首页
+/// - 列表项：封面、标题、类型徽标、进度条、最后阅读时间；网格/列表两种视图（偏好持久化）
 struct ReadingHomeView: View {
     @EnvironmentObject private var history: ReadingHistoryStore
     @EnvironmentObject private var player: PlayerPresenter
@@ -17,9 +13,9 @@ struct ReadingHomeView: View {
     /// 文件名行数等浏览显示偏好（设置「文件名行数」，浏览页与阅读页的卡片、列表均生效）
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
 
-    /// 全局底部装饰（悬浮页签栏 / mini 播放器）占用高度：多选操作栏据此抬升（TODO 379）
+    /// 全局底部装饰（悬浮页签栏 / mini 播放器）占用高度：多选操作栏据此抬升
     @Environment(\.bottomChromeHeight) private var bottomChromeHeight
-    /// 多选态隐藏全局悬浮页签栏（回写 RootView，底部让给操作栏，TODO 385）
+    /// 多选态隐藏全局悬浮页签栏（回写 RootView，底部让给操作栏）
     @Environment(\.bottomTabBarHidden) private var bottomTabBarHidden
 
     @State private var viewMode: BrowseViewMode = AppSettings.Reading.viewMode {
@@ -43,12 +39,9 @@ struct ReadingHomeView: View {
     @State private var message: String?
     /// 长按菜单 →「属性」：当前展示属性页的记录
     @State private var infoRecord: ReadingProgress?
-    /// 左滑删除后的「撤销」提示条（TODO 408）
+    /// 左滑删除后的「撤销」提示条
     @StateObject private var undoToast = UndoToastState()
-    /// 列表滚动视图重建令牌：批量删除（多选删记录 / 删源文件）后内容高度骤减，
-    /// SwiftUI 的 ScrollView 会残留越界的滚动偏移，剩余条目全部落到可视区之外，
-    /// 表现为「没被选中的记录也不见了」，且页签保活下切换页面也不会恢复，只能重启 app。
-    /// 批量删除后递增本令牌重建 ScrollView，等价于重启后的全新布局（偏移归零）。
+    /// 列表滚动视图重建令牌：批量删除（多选删记录 / 删源文件）后内容高度骤减
     @State private var listEpoch = 0
 
     private var isSelecting: Bool { selection != nil }
@@ -61,15 +54,13 @@ struct ReadingHomeView: View {
                 .toolbar { toolbar }
                 // 多选态标题居中；常态用 .editor 令「阅读」大标题左对齐（与其余标签一致）。
                 .toolbarRole(isSelecting ? .navigationStack : .editor)
-                // 多选操作栏（TODO 379）：safeAreaInset 只负责为滚动内容预留底部空间（高度固定），
-                // 操作栏本体由 overlay 绘制并抬升——页面内 safeAreaInset / overlay 的落点是「系统底部
-                // 安全区」，不含祖先注入的悬浮页签栏，直接注入会被页签栏遮挡。
+                // 多选操作栏：safeAreaInset 只负责为滚动内容预留底部空间（高度固定）
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     Color.clear.frame(height: isSelecting ? Self.selectionBarReserve : 0)
                 }
                 .overlay(alignment: .bottom) { bottomOverlay }
         }
-        // 多选态隐藏全局页签栏：底部让给操作栏；退出多选或本页退场即恢复（TODO 385）
+        // 多选态隐藏全局页签栏：底部让给操作栏；退出多选或本页退场即恢复
         .onChange(of: isSelecting) { bottomTabBarHidden.wrappedValue = $0 }
         .onAppear { bottomTabBarHidden.wrappedValue = isSelecting }   // 返回本页时按当前多选态校正
         .onDisappear { bottomTabBarHidden.wrappedValue = false }
@@ -103,7 +94,6 @@ struct ReadingHomeView: View {
             Button("移入回收站", role: .destructive) {
                 if let ids = deletingSourceIDs {
                     // 方案 D：弹窗收起前先把「正在删除」挂到吐司上。
-                    // 源文件是逐个 stat + MOVE（含占用重试），弱网下可达数秒，此前完全无反馈
                     undoToast.beginWorking("正在删除 \(ids.count) 个源文件…")
                     Task {
                         do {
@@ -166,7 +156,7 @@ struct ReadingHomeView: View {
         .onReceive(history.$records) { _ in resolveAll() }
     }
 
-    // MARK: - 内容区
+ // MARK: - 内容区
 
     @ViewBuilder
     private var content: some View {
@@ -196,14 +186,13 @@ struct ReadingHomeView: View {
                     }
                 }
                 .animation(.appQuick, value: viewMode)
-                // 点击空白区域收起左滑展开行（TODO 411）
+                // 点击空白区域收起左滑展开行
                 .dismissSwipeRowOnBlankTap()
-                // 多选操作栏的占位由 safeAreaInset（固定高度）为 ScrollView 预留内容内边距（TODO 379），
-                // 操作栏本体是 overlay，不再手工叠加底部留白
+                // 多选操作栏的占位由 safeAreaInset（固定高度）为 ScrollView 预留内容内边距
             }
             // 批量删除后重建滚动视图，清理残留的越界滚动偏移（详见 listEpoch）
             .id(listEpoch)
-            // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一条停在胶囊上方而不是被压住
+            // 方案 A：末尾预留悬浮胶囊 + 12pt，滚到底时最后一条停在胶囊上方而不是被压住
             .reservedBottomChrome()
         }
     }
@@ -222,10 +211,9 @@ struct ReadingHomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - 网格单元格
+ // MARK: - 网格单元格
 
-    /// 网格卡（参照旧版 Flutter）：封面铺满整卡 + 左深右浅渐变蒙层，
-    /// 标题/进度白字叠加在封面上，类型徽标在右上角，底部白色细进度条
+    /// 网格卡（参照旧版 Flutter）：封面铺满整卡 + 左深右浅渐变蒙层
     private func gridCell(_ record: ReadingProgress) -> some View {
         let entry = entry(for: record)
         let isSelected = isSelected(record)
@@ -289,7 +277,7 @@ struct ReadingHomeView: View {
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)   // 常态极细描边界，选中态由高亮层接管
         )
         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-        // 卡片被沉浸式封面铺满，选中描边用不透明主色保证对比度（TODO 375 方案 D）
+        // 卡片被沉浸式封面铺满，选中描边用不透明主色保证对比度
         .cellPressableMenu(
             cornerRadius: 14,
             selectedScale: 1.03,
@@ -300,7 +288,7 @@ struct ReadingHomeView: View {
         )
     }
 
-    // MARK: - 列表行
+ // MARK: - 列表行
 
     private func listRow(_ record: ReadingProgress) -> some View {
         let entry = entry(for: record)
@@ -327,7 +315,7 @@ struct ReadingHomeView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
-                // 多选态仍保留进度环（勾选标记并排在其右侧，TODO 371）
+                // 多选态仍保留进度环（勾选标记并排在其右侧）
                 if record.finished || record.percent > 0 {
                     progressRing(record)
                 }
@@ -342,7 +330,7 @@ struct ReadingHomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .hoverEffect(.highlight)
-            // 通栏列表行：高亮块内缩 4/6 收边成悬浮片，选中浮起（TODO 375 方案 D）
+            // 通栏列表行：高亮块内缩 4/6 收边成悬浮片，选中浮起
             .cellPressableMenu(
                 cornerRadius: 0,
                 highlightInset: EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6),
@@ -351,7 +339,7 @@ struct ReadingHomeView: View {
                 onTap: { tap(record) }
             )
         }
-        // 左滑删除阅读记录（TODO 408 方案 A）：左滑只露出按钮，点按才删除；多选态禁用
+        // 左滑删除阅读记录：左滑只露出按钮，点按才删除；多选态禁用
         .swipeActions(
             enabled: !isSelecting,
             rowBackground: AppColors.pageBackground,
@@ -379,8 +367,7 @@ struct ReadingHomeView: View {
         }
     }
 
-    /// 饼状图进度条（参考浏览界面的饼状图进度条）：环形进度从 12 点方向顺时针填充，
-    /// 百分比/状态文案（已看完/已听完/已读完 或 百分比）显示在饼状图下面。
+    /// 饼状图进度条（参考浏览界面的饼状图进度条）：环形进度从 12 点方向顺时针填充
     private func progressRing(
         _ record: ReadingProgress,
         textColor: Color = AppColors.textSecondary,
@@ -423,7 +410,7 @@ struct ReadingHomeView: View {
         return parts.joined(separator: " · ")
     }
 
-    // MARK: - 工具栏
+ // MARK: - 工具栏
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
@@ -460,7 +447,7 @@ struct ReadingHomeView: View {
         }
     }
 
-    /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）
+    /// 右上角 … 菜单（圆角 + 弹出动画）
     private var overflowItems: [PopupMenuItem] {
         [
             PopupMenuItem(title: "选择", systemImage: "checkmark.circle") {
@@ -508,7 +495,7 @@ struct ReadingHomeView: View {
         ]
     }
 
-    // MARK: - 底部多选操作栏
+ // MARK: - 底部多选操作栏
 
     /// 多选操作栏高度（供 safeAreaInset 为滚动内容预留空间：操作栏 + 10pt 间距）
     private static let selectionBarReserve: CGFloat = 64
@@ -516,14 +503,14 @@ struct ReadingHomeView: View {
     @ViewBuilder
     private var bottomOverlay: some View {
         VStack(spacing: 8) {
-            // 左滑删除的撤销提示条（TODO 408）：与多选操作栏共用同一抬升逻辑
+            // 左滑删除的撤销提示条：与多选操作栏共用同一抬升逻辑
             UndoToastBar(state: undoToast)
             if isSelecting {
                 selectionBar
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        // 抬到全局底部装饰（悬浮页签栏 / mini 播放器）之上；非多选态高度为 0，不占空间（TODO 379）
+        // 抬到全局底部装饰（悬浮页签栏 / mini 播放器）之上；非多选态高度为 0，不占空间
         .padding(.bottom, isSelecting || undoToast.item != nil ? bottomChromeHeight + 10 : 0)
         .animation(.appQuick, value: isSelecting)
     }
@@ -582,7 +569,7 @@ struct ReadingHomeView: View {
             .fill(.ultraThinMaterial)
     }
 
-    // MARK: - 交互
+ // MARK: - 交互
 
     private func tap(_ record: ReadingProgress) {
         if isSelecting {
@@ -612,15 +599,13 @@ struct ReadingHomeView: View {
         let entry = entry(for: record)
         switch record.mediaType {
         case .video, .audio:
-            // 精准续播：PlaybackSourceResolver 查历史进度直接从历史位置起播（TODO §4.2）
+            // 精准续播：PlaybackSourceResolver 查历史进度直接从历史位置起播
             player.play(connection: connection, entry: entry)
         case .novel:
-            // 从阅读界面打开的小说（txt/epub 等）统一走小说阅读器：
-            // 阅读记录均由小说阅读器产生（含章节索引/进度锚点），恢复时才可精准续读；
-            // 纯 txt 阅读器仅用于浏览/收藏页的轻量全文滚动入口，不产生进度记录。
+            // 从阅读界面打开的小说（txt/epub 等）统一走小说阅读器
             novelReader.open(connection: connection, entry: entry)
         case .comic:
-            // 直接恢复到上次页码（TODO §6）
+            // 直接恢复到上次页码
             comicReader.open(connection: connection, entry: entry)
         case .archive:
             // 压缩包（zip/rar）经漫画阅读器打开过：同样恢复到上次页码；其余格式无进度可言
@@ -634,17 +619,15 @@ struct ReadingHomeView: View {
         }
     }
 
-    /// 定位到源路径位置：跳浏览页并呼吸灯定位（IOS-704，参照收藏页「在浏览中定位」）
+    /// 定位到源路径位置：跳浏览页并呼吸灯定位（，参照收藏页「在浏览中定位」）
     private func locate(_ record: ReadingProgress) {
         locator.locate(connectionID: record.connectionID, filePath: record.filePath)
         router.selectedTab = .browse
     }
 
-    // MARK: - 数据解析
+ // MARK: - 数据解析
 
-    /// 记录 → FileEntry：stat 成功用最新值（文件指纹校验依赖准确的 size/modTime）；
-    /// 否则用库内持久化的指纹（重进 app 时 stat 尚未完成也能得到真实 size > 0 的 entry，
-    /// 封面直接命中浏览页磁盘缓存秒出，不被 stat 网络请求阻塞）；都没有才落兜底占位。
+    /// 记录 → FileEntry：stat 成功用最新值（文件指纹校验依赖准确的 size/modTime）
     private func entry(for record: ReadingProgress) -> FileEntry {
         if let resolved = resolved[record.id ?? -1] { return resolved }
         if let fileSize = record.fileSize, fileSize > 0, let modTime = record.modTime {
@@ -680,11 +663,7 @@ struct ReadingHomeView: View {
         })
     }
 
-    /// 批量 stat 解析最新 FileEntry（限并发 statConcurrency）：
-    /// - 成功写入 resolved（视图重建后封面走 RemoteCoverImage 命中浏览页磁盘缓存），
-    ///   并把最新指纹写回数据库（重进 app 时先用旧指纹秒出封面，后台静默校正）；
-    /// - 失败不写 resolved（保持 nil，库内旧指纹保留——封面仍可命中缓存不丢），
-    ///   进入 statFailedAt 冷却，期满后自动重试——避免弱网/连接抖动时一次失败导致封面永久占位。
+    /// 批量 stat 解析最新 FileEntry（限并发 statConcurrency）
     private func resolveAll() {
         let now = Date()
         let targets = history.records.filter {
@@ -728,7 +707,7 @@ struct ReadingHomeView: View {
         }
     }
 
-    // MARK: - 删除源文件
+ // MARK: - 删除源文件
 
     /// 删除源文件的统计（供提示文案区分「源文件」与「关联文件」数量）
     private struct SourceDeleteResult {
@@ -738,8 +717,7 @@ struct ReadingHomeView: View {
         var companions: Int = 0
     }
 
-    /// 开启「删除时移除同名文件」时的确认文案补充（阅读页没有目录列表，弹窗内无法预知关联文件数量，
-    /// 实际数量在删除完成的提示里给出）
+    /// 开启「删除时移除同名文件」时的确认文案补充
     private var sameNameHint: String {
         AppSettings.Browse.deleteSameNameFiles
             ? "，以及同目录下与它们同名或带语言后缀（如 .zh.srt）的字幕等文件"
@@ -758,15 +736,11 @@ struct ReadingHomeView: View {
     }
 
     /// 同目录、可随源文件一起删除的关联文件（`movie.mp4` → `movie.srt` / `movie.zh.srt`）。
-    ///
-    /// 与浏览界面 `BrowseDirectoryViewModel.sameStemSiblings` 同一口径，规则集中在 `CompanionFiles`：
-    /// 主名精确相同，或字幕带语言后缀（`movie.zh.srt` / `movie.en.ass`）。
     private static func sameStemSiblings(of entry: FileEntry, in listing: [FileEntry]) -> [FileEntry] {
         CompanionFiles.sameStemSiblings(of: entry, in: listing)
     }
 
     /// 预取本批记录涉及的目录列表（同一目录只 LIST 一次）。
-    /// 失败按空列表处理——联动删除是尽力而为，不能影响主流程。
     private func prefetchListings(
         for records: [ReadingProgress],
         adapter: StorageAdapter
@@ -778,13 +752,7 @@ struct ReadingHomeView: View {
         return listings
     }
 
-    /// 删除源文件（回收站优先，与浏览界面同机制）：
-    /// 按连接分组，将文件移动到挂载点下 `.trash/时间戳-原名` 并写 `.meta.json` 还原元数据；
-    /// 源文件已不存在 / 连接不可用的记录只清理阅读记录；返回实际移入回收站数量。
-    ///
-    /// 开启「删除时移除同名文件」（设置 → 文件操作）后，同目录下主名相同、扩展名不同的文件
-    /// （字幕/封面/元数据）以及带语言后缀的字幕（`movie.zh.srt`）也会一并移入回收站；
-    /// 它们失败只跳过，不影响源文件删除（规则见 `CompanionFiles`）。
+    /// 删除源文件（回收站优先，与浏览界面同机制）
     @discardableResult
     private func deleteSourceFiles(ids: [Int64]) async throws -> SourceDeleteResult {
         let records = history.records.filter { ids.contains($0.id ?? -1) }
@@ -849,8 +817,6 @@ struct ReadingHomeView: View {
     }
 
     /// 彻底删除源文件（回收站不可用时的降级路径）：按连接分组直接删除，已不存在的文件忽略。
-    /// 开启「删除时移除同名文件」时，同目录下主名相同、扩展名不同的文件一并删除（尽力而为）。
-    /// - Returns: 结果提示文案（由调用方放进吐司，替代原先的阻塞式「提示」弹窗）
     @discardableResult
     private func forceDeleteSourceFiles(ids: [Int64]) async -> String {
         let records = history.records.filter { ids.contains($0.id ?? -1) }
@@ -923,9 +889,7 @@ struct ReadingHomeView: View {
 
 // MARK: - 封面
 
-/// 正在阅读封面（与浏览页一致，IOS-702）：
-/// 优先进度记录内嵌的缩略图缓存（epub/漫画阅读时提取写入 Caches/Thumbnails，零网络秒出）；
-/// 否则复用浏览页 `RemoteCoverImage` 异步加载（占位先行、失败占位、不阻塞点击进入）。
+/// 正在阅读封面（与浏览页一致）
 private struct ReadingCoverImage: View {
     let record: ReadingProgress
     let entry: FileEntry
@@ -991,8 +955,6 @@ private struct ReadingCoverImage: View {
     @ViewBuilder
     private var fallback: some View {
         // entry.size == 0 表示 stat 尚未完成（媒体文件恒 > 0），此时缓存键（含 size/modTime）
-        // 与浏览页不一致，会错过已存封面并触发重复加载。先显示占位，待真实 entry 就绪后
-        // 视图重建再加载，确保命中浏览页磁盘缓存。
         if let connection, let adapter, entry.size > 0 {
             RemoteCoverImage(
                 entry: entry, connection: connection, adapter: adapter,

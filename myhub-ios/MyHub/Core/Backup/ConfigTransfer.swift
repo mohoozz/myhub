@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// 导出包：连接源（不含明文密码，密码留 Keychain）+ 偏好设置快照（§2.3 数据导入导出）
+/// 导出包：连接源（不含明文密码，密码留 Keychain）+ 偏好设置快照（数据导入导出）
 struct ConfigBundle: Codable {
     var formatVersion: Int = 1
     var exportedAt: Date

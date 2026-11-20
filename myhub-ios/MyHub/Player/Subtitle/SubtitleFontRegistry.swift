@@ -1,31 +1,7 @@
 import CoreText
 import Foundation
 
-/// 内嵌字幕（软解 VLC 渲染路径）的字体供给（TODO 412）。
-///
-/// 背景：内嵌字幕由 VLC 自己画进画面（`VLCEngine.selectSubtitleTrack` 只交索引），
-/// 而 VLC 3.x 在 Apple 平台**不自带任何字幕字体**——`modules/codec/libass.c` 里
-/// `default_font = NULL`（注释原文「We don't ship a default font with VLC」）、
-/// 默认族名硬编码 `Helvetica Neue`；动漫 ASS 字幕的 Style 普遍指定方正/华康/思源等中文字体，
-/// 片源又常常不内附字体（或附件 MIME / 后缀不在 libass 的
-/// `application/x-truetype-font` + `.ttf/.otf/.ttc` 白名单内），
-/// 于是中文落到无中文字形的字体上，整行渲染成 □ 方框——这正是「只有部分动漫出问题」的原因。
-///
-/// 本模块按三层补齐字体供给：
-/// 1. 把可用字体汇聚到一个**独立目录**，经 `--ssa-fontsdir` 交给 libass。
-///    注意 libass 的 `load_fonts_from_dir` 会把该目录下**每个文件整体读入内存**（不筛扩展名、
-///    不递归、只跳过点文件），所以绝不能直接把 App Bundle 根目录丢过去，必须自建只含字体的目录；
-///    符号链接会被 `fopen` 透明跟随，因此这里优先建链接、不复制字体（省磁盘、免首启拷贝）。
-///    目录字体与「内嵌附件字体」共用同一条通道注册进 libass 字体库，既参与按族名匹配，
-///    也参与「按字形覆盖兜底」——即 ASS 指定的字体缺失时能被挑中补位。
-/// 2. 用 CoreText **进程级**注册同一批字体，让 libass 的 coretext provider 与 VLC freetype 的
-///    darwin 字体选择器都能按族名查到它们（仅本进程可见，不污染系统字体库）。
-/// 3. 用 `--freetype-font` 指定默认族名（内嵌 srt 等纯文本字幕走 freetype 渲染）：
-///    有打包/用户字体时用其族名，否则回落系统中文族 `PingFang SC`。
-///
-/// 字体来源优先级：用户目录 `Documents/Fonts`（`UIFileSharingEnabled` 已开启，
-/// 可用「文件」App 自行投放，无需重新打包）> App Bundle（`MyHub/Resources/Fonts/`，见 README）
-/// > 系统中文字体文件（上述两者都没有时的兜底，只取一个文件，避免目录字体整体读入内存过大）。
+/// 内嵌字幕（软解 VLC 渲染路径）的字体供给。
 enum SubtitleFontRegistry {
     /// FreeType / libass 可读的字体扩展名
     private static let fontExtensions: Set<String> = ["ttf", "otf", "ttc", "otc"]
@@ -58,7 +34,7 @@ enum SubtitleFontRegistry {
     private static var lastSnapshot = Snapshot(directory: nil, families: [], fontCount: 0)
     private static var didLogResult = false
 
-    // MARK: - 目录
+ // MARK: - 目录
 
     /// 汇聚目录（只含字体文件 / 指向字体的符号链接）
     static var stagingDirectory: URL {
@@ -74,7 +50,7 @@ enum SubtitleFontRegistry {
         return docs.appendingPathComponent("Fonts", isDirectory: true)
     }
 
-    // MARK: - 对外
+ // MARK: - 对外
 
     /// libvlc 启动选项（随 `VLCLibrary` 创建一次；目录路径固定不变，目录内容由每次起播前的 sync 刷新）
     static func libraryOptions() -> [String] {
@@ -136,7 +112,7 @@ enum SubtitleFontRegistry {
         return lastSnapshot
     }
 
-    // MARK: - 来源收集
+ // MARK: - 来源收集
 
     /// 用户字体 > 打包字体 > 系统中文字体兜底；同名只取优先级最高的一个
     private static func collectSources(fm: FileManager) -> [URL] {
@@ -156,8 +132,6 @@ enum SubtitleFontRegistry {
         guard result.isEmpty else { return result }
 
         // 兜底：没有打包 / 用户字体时借用系统中文字体文件。
-        // libass 会把目录字体**整体读入内存**（峰值约文件大小 2 倍），因此只取一个、且优先挑最小的，
-        // 超过 60MB 的直接放弃（宁可没有兜底，也不冒播放中被 Jetsam 回收的风险）。
         let candidates = systemFontCandidates
             .compactMap { path -> (path: String, size: Int)? in
                 guard fm.isReadableFile(atPath: path),
@@ -183,7 +157,7 @@ enum SubtitleFontRegistry {
         let directory = userDirectory
         if !fm.fileExists(atPath: directory.path) {
             try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
-            // 首次创建时留一份说明，用户在「文件」App 里能看懂这个目录是干什么的
+            // 首次创建时留一份说明，用户在「文件」App 里能看懂这个目录是干什么
             let readme = directory.appendingPathComponent("使用说明.txt")
             let text = """
             把中文 / 日文字体文件（.ttf / .otf / .ttc）放进本目录，
@@ -208,7 +182,7 @@ enum SubtitleFontRegistry {
         return urls.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
 
-    // MARK: - 汇聚
+ // MARK: - 汇聚
 
     /// 在汇聚目录建立指向 source 的符号链接（已存在且有效则跳过；建链接失败回退复制）
     private static func stage(source: URL, into directory: URL, fm: FileManager) -> Bool {
@@ -242,7 +216,7 @@ enum SubtitleFontRegistry {
         }
     }
 
-    // MARK: - CoreText / 族名
+ // MARK: - CoreText / 族名
 
     private static func registerWithCoreText(sources: [URL]) {
         // 系统字体本就在字体库中，无需注册
@@ -252,8 +226,7 @@ enum SubtitleFontRegistry {
         for url in pending {
             var error: Unmanaged<CFError>?
             guard !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) else { continue }
-            // 打包字体已由 Info.plist `UIAppFonts` 注册，这里会以「已注册」失败——属预期，
-            // 族名解析与 `--ssa-fontsdir` 直读都不依赖本次注册，故仅记 debug 不作处理。
+            // 打包字体已由 Info.plist `UIAppFonts` 注册，这里会以「已注册」失败——属预期
             let cfError = error?.takeRetainedValue()
             let message = cfError.map { String(describing: $0) } ?? "未知原因"
             AppLogger.shared.log(
@@ -278,7 +251,7 @@ enum SubtitleFontRegistry {
         return result
     }
 
-    // MARK: - 日志
+ // MARK: - 日志
 
     /// 结果日志只在「首次」或「结果发生变化」时打，避免每次起播刷屏
     private static func logResultIfNeeded(snapshot: Snapshot, level: AppLogger.Level, detail: String?) {

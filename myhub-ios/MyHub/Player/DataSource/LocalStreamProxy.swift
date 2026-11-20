@@ -2,10 +2,7 @@ import Darwin
 import Foundation
 import Network
 
-/// 本地 HTTP 代理（IOS-203 边下边播，参考 nPlayer 缓存架构）。
-/// 127.0.0.1 回环 HTTP 服务：将解码器（AVPlayer / VLC 双引擎通用）的 HTTP Range 请求
-/// 转为 CachedRangeReader 分片读取——缓存命中直出，未命中走 WebDAV Range / SMB 分块并写盘预读。
-/// 拖动进度条时解码器发起目标区间 Range 请求，实现秒开与快速 seek。
+/// 本地 HTTP 代理（边下边播，参考 nPlayer 缓存架构）。
 final class LocalStreamProxy {
     static let shared = LocalStreamProxy()
     static let pathPrefix = "/stream/"
@@ -19,19 +16,22 @@ final class LocalStreamProxy {
     private let connectionQueue = DispatchQueue(label: "myhub.streamproxy.conn", attributes: .concurrent)
     private var listener: NWListener?
     private var port: UInt16 = 0
-    /// 监听是否已就绪（.ready）：长时间后台（熄屏）后监听可能进入 waiting/failed，
-    /// 端口不再可用且此前只有重启 App 才能恢复（TODO 366）；
-    /// 作为健康标记，register / recoverIfNeeded 据此判断是否重建
+    /// 监听是否已就绪（.ready）：长时间后台（熄屏）后监听可能进入 waiting/failed
     private var listenerReady = false
     private let lock = NSLock()
     /// 串行化监听重建流程：重建期间可能等待信号量，故不能持有状态锁（避免与 stateUpdateHandler 互锁）
     private let lifecycleLock = NSLock()
     private var sessions: [String: Session] = [:]
+    /// 会话级请求汇总（受 `lock` 保护）：起播/seek 会产生几十个 Range 请求
+    private struct StreamStats {
+        var requests = 0
+        var sentBytes: Int64 = 0
+    }
+    private var streamStats: [String: StreamStats] = [:]
 
     private init() {}
 
     /// 注册串流会话，返回回环 URL：`http://127.0.0.1:<port>/stream/<id>/<文件名>`
-    /// （保留文件名供引擎按扩展名探测格式）
     func register(reader: CachedRangeReader, fileName: String) throws -> URL {
         try startIfNeeded()
         let id = UUID().uuidString
@@ -46,7 +46,7 @@ final class LocalStreamProxy {
         lock.lock()
         sessions[id] = Session(reader: reader, contentType: Self.mimeType(forFileName: fileName))
         lock.unlock()
-        // 注册面包屑（TODO 380）：记录起播时监听端口与 reader 参数，复现时确认「熄屏后回环地址是否仍可用」
+        // 注册面包屑：记录起播时监听端口与 reader 参数，复现时确认「熄屏后回环地址是否仍可用」
         AppLogger.shared.log(
             "register 串流会话 file=\(fileName) port=\(currentPort) 内容长度=\(reader.contentLength) 缓存=\(reader.cachingEnabled) 离线=\(reader.offlineMode) 预取=\(reader.prefetchEnabled) 网络=\(NetworkPathMonitor.shared.snapshot())",
             level: .info, module: "stream"
@@ -54,7 +54,7 @@ final class LocalStreamProxy {
         return url
     }
 
-    /// 监听健康快照（诊断日志用，TODO 380）：ready/端口/活跃会话数
+    /// 监听健康快照（诊断日志用）：ready/端口/活跃会话数
     func healthSnapshot() -> String {
         lock.lock()
         let state = listenerReady ? "ready" : (listener == nil ? "未启动" : "未就绪")
@@ -73,16 +73,33 @@ final class LocalStreamProxy {
         guard !sessionID.isEmpty else { return 0 }
         lock.lock()
         let session = sessions.removeValue(forKey: sessionID)
+        let stats = streamStats.removeValue(forKey: sessionID)
         lock.unlock()
+        if let stats, stats.requests > 0 {
+            AppLogger.shared.log(
+                "串流会话结束 请求=\(stats.requests) 次 发送=\(stats.sentBytes)B 网络拉取=\(session?.reader.networkBytesFetched ?? 0)B",
+                level: stats.requests >= 5 ? .info : .debug, module: "stream"
+            )
+        }
         session?.reader.cancel()
         return session?.reader.networkBytesFetched ?? 0
     }
 
-    // MARK: - 服务生命周期
+    /// 累计一次 Range 请求的发送量（供注销时汇总，见 `unregister`）。
+    private func recordStreamStat(sessionID: String, bytes: Int64) {
+        lock.lock()
+        if sessions[sessionID] != nil {
+            var stats = streamStats[sessionID] ?? StreamStats()
+            stats.requests += 1
+            stats.sentBytes += bytes
+            streamStats[sessionID] = stats
+        }
+        lock.unlock()
+    }
 
-    /// 长时间后台回前台等场景的健康自愈（TODO 366）：
-    /// 以真实回环探活判定监听是否仍可用，不可用才异步重建；
-    /// 探活通过的监听不动，避免打断后台音频仍在进行的分片连接。
+ // MARK: - 服务生命周期
+
+    /// 长时间后台回前台等场景的健康自愈
     func recoverIfNeeded() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
@@ -99,9 +116,7 @@ final class LocalStreamProxy {
         }
     }
 
-    /// 复用已注册会话、在**重建后的新端口**上返回同一会话的 URL（TODO 366）。
-    /// 挂起后回环监听被系统回收时，解码器已拿到的旧端口 URL 已不可用（连接被拒 -1004），
-    /// 但会话（reader / 分片缓存）仍然有效，重建监听换端口即可恢复起播，无需重新解析数据源。
+    /// 复用已注册会话、在**重建后的新端口**上返回同一会话的 URL。
     func revivedURL(for url: URL) throws -> URL {
         let rawPath = url.path
         guard rawPath.hasPrefix(Self.pathPrefix) else {
@@ -144,10 +159,7 @@ final class LocalStreamProxy {
 
         var zombie = false
         if !force, flaggedUsable {
-            // 被动标记为 ready 不代表端口真的可用：App 被系统挂起时 iOS 会回收回环监听 socket，
-            // 且不回调 waiting/failed/cancelled，`listenerReady` 便永久停留在 true（僵尸监听），
-            // 复用该端口会让解码器连 127.0.0.1 立刻被拒（-1004）→ 硬解、软解起播全部失败。
-            // 故以真实回环探活为准，探活通过才复用（TODO 366）
+            // 被动标记为 ready 不代表端口真的可用：App 被系统挂起时 iOS 会回收回环监听 socket
             if probe(port: candidatePort) {
                 AppLogger.shared.log("监听探活通过，复用 port=\(candidatePort)", level: .debug, module: "stream")
                 return
@@ -155,8 +167,7 @@ final class LocalStreamProxy {
             zombie = true
         }
 
-        // 监听不可用（从未启动 / waiting、failed、cancelled / 挂起后被系统回收的僵尸监听）：
-        // 清理僵尸监听后重建，避免复用失效端口导致音视频加载全失败（TODO 366）
+        // 监听不可用（从未启动 / waiting、failed、cancelled / 挂起后被系统回收的僵尸监听）
         lock.lock()
         let stale = listener
         listener = nil
@@ -190,7 +201,6 @@ final class LocalStreamProxy {
                 let readyPort = listener?.port?.rawValue
                 self.lock.lock()
                 // 仅接受「当前待安装（listener == nil）或已安装」的监听，避免被替换的旧监听
-                // 迟到回调把新监听的状态/端口覆盖掉（TODO 366）
                 if self.listener === listener || self.listener == nil {
                     self.listenerReady = true
                     if let readyPort { self.port = readyPort }
@@ -201,8 +211,7 @@ final class LocalStreamProxy {
                 semaphore.signal()
                 AppLogger.shared.log("listener ready port=\(currentPort)", level: .info, module: "stream")
             case .waiting(let error):
-                // 运行中进入等待（系统网络栈重置等）：标记未就绪（保留对象供重建时 cancel），
-                // 由 register 探活 / 回前台（recoverIfNeeded）触发重建（TODO 366）
+                // 运行中进入等待（系统网络栈重置等）：标记未就绪（保留对象供重建时 cancel）
                 self.lock.lock()
                 self.listenerReady = false
                 self.lock.unlock()
@@ -244,8 +253,7 @@ final class LocalStreamProxy {
         lock.unlock()
     }
 
-    /// 监听彻底不可用（failed / cancelled）：仅当它仍是当前监听时清除状态，
-    /// 避免已被替换的旧监听迟到回调把新监听标记为不可用（TODO 366）
+    /// 监听彻底不可用（failed / cancelled）：仅当它仍是当前监听时清除状态
     private func clearIfCurrent(_ listener: NWListener?) {
         lock.lock()
         if self.listener === listener {
@@ -256,14 +264,9 @@ final class LocalStreamProxy {
         lock.unlock()
     }
 
-    // MARK: - 主动探活（TODO 366）
+ // MARK: - 主动探活
 
     /// 真实连一次回环端口，判定监听是否仍然可用。
-    ///
-    /// 只靠 `NWListener.stateUpdateHandler` 的被动标记判定是不够的：App 被系统挂起时
-    /// iOS 会回收回环监听 socket，但并不回调 waiting/failed/cancelled，`listenerReady`
-    /// 会永久停留在 true。此后复用该端口，解码器连 127.0.0.1 会立即被拒（-1004），
-    /// 硬解与软解起播全部失败且无法自愈。故以真实 connect 结果为准。
     private func probe(port: UInt16, timeout: TimeInterval = 0.3) -> Bool {
         guard port > 0 else { return false }
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
@@ -299,7 +302,7 @@ final class LocalStreamProxy {
         return socketError == 0
     }
 
-    // MARK: - 连接处理（每连接一个请求，响应后关闭；客户端按需重连）
+ // MARK: - 连接处理（每连接一个请求，响应后关闭；客户端按需重连）
 
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: connectionQueue)
@@ -404,12 +407,15 @@ final class LocalStreamProxy {
                     }
                     sentBytes = offset - start
                 }
+                recordStreamStat(sessionID: sessionID, bytes: sentBytes)
+            } catch is CancellationError {
+                // seek / 停止播放导致的正常取消：每个请求都会发生，只进 os_log
                 AppLogger.shared.log(
-                    "stream 完成 range=\(start)-\(end)/\(total) 发送=\(sentBytes)B",
+                    "stream 取消 range=\(start)-\(end)/\(total) 已发送=\(sentBytes)B",
                     level: .debug, module: "stream"
                 )
             } catch {
-                // 客户端中断（seek 取消旧请求）或底层读取失败：记录真实错误，定位封面抽帧超时/断连
+                // 底层读取失败/连接断开：记录真实错误，定位封面抽帧超时、弱网断连
                 AppLogger.shared.log(
                     "stream 中断 range=\(start)-\(end)/\(total) 已发送=\(sentBytes)B error=\(String(describing: error))",
                     level: .warn, module: "stream"
@@ -438,7 +444,7 @@ final class LocalStreamProxy {
         }
     }
 
-    // MARK: - MIME
+ // MARK: - MIME
 
     static func mimeType(forFileName name: String) -> String {
         switch StoragePath.ext(of: name) {

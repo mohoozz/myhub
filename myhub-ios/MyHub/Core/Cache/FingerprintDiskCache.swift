@@ -1,10 +1,6 @@
 import Foundation
 
-/// 按文件指纹组织的磁盘 LRU 缓存（IOS-605 内容缓存本地化）。
-/// 目录布局：`<分区>/<fileKey>/<条目>` + `<分区>/<fileKey>/_identity.json`；
-/// - fileKey 含文件指纹（size + modTime），文件被替换则键变、旧目录经 LRU 自然淘汰；
-/// - `_identity.json` 记录 `SegmentCache.FileIdentity`，其 mtime 即最近访问时间（LRU 依据）；
-/// - 供漫画解压页 / 小说章节等「需成组保留」的内容缓存使用；配额见 `CacheManager.limitBytes`。
+/// 按文件指纹组织的磁盘 LRU 缓存（内容缓存本地化）。
 actor FingerprintDiskCache {
     private let partition: CacheManager.Partition
     private let manager = CacheManager.shared
@@ -13,7 +9,7 @@ actor FingerprintDiskCache {
         self.partition = partition
     }
 
-    // MARK: - 读写
+ // MARK: - 读写
 
     /// 读取条目（命中刷新目录访问时间；不存在/损坏返回 nil）
     func data(named name: String, for file: SegmentCache.FileIdentity) -> Data? {
@@ -50,7 +46,7 @@ actor FingerprintDiskCache {
         try? FileManager.default.removeItem(at: directory(for: file))
     }
 
-    // MARK: - 离线身份反查（已完整缓存内容无网络可用：指纹随身份一并取回）
+ // MARK: - 离线身份反查（已完整缓存内容无网络可用：指纹随身份一并取回）
 
     /// 按连接 + 路径反查最近访问的缓存身份（离线时 stat 失败的兜底入口）
     func identity(connectionID: Int64, path: String) -> SegmentCache.FileIdentity? {
@@ -73,17 +69,15 @@ actor FingerprintDiskCache {
         return best?.identity
     }
 
-    // MARK: - LRU（目录粒度：页/章需成组保留，按 _identity.json 访问时间整目录淘汰）
+ // MARK: - LRU（目录粒度：页/章需成组保留，按 _identity.json 访问时间整目录淘汰）
 
-    /// 淘汰检查节流：统计分区占用要遍历所有缓存文件（数千次 stat），原先每写一页/一章就做一次，
-    /// 会让缓存读写这个 actor 长时间排队（缓存越大打开/翻页越慢）。改为最多 10s 检查一次。
+    /// 淘汰检查节流：统计分区占用要遍历所有缓存文件（数千次 stat），原先每写一页/一章就做一次
     private var lastEvictCheck = Date.distantPast
     private static let evictCheckInterval: TimeInterval = 10
     /// 元数据条目不可裁（页名列表/宽高比/身份：丢了就得重新整包解析）
     private static let protectedNames: Set<String> = ["_identity.json", "pages.json", "ratios.json"]
 
-    /// - Parameter active: 正在读写的目录（本次写入所属文件）；不整体删除，避免把
-    ///   「刚缓存完正在读的这本」连页名列表一起清空 → 下次打开又走完整归档解析
+    /// - Parameter active: 正在读写的目录（本次写入所属文件），不参与清空
     private func evictIfNeeded(keeping active: URL) {
         let now = Date()
         guard now.timeIntervalSince(lastEvictCheck) >= Self.evictCheckInterval else { return }
@@ -113,8 +107,7 @@ actor FingerprintDiskCache {
             try? FileManager.default.removeItem(at: unit.url)
             total -= size
         }
-        // 2) 只有活跃目录、且它自身就超配额（单本漫画缓存 > 分区上限）：裁掉其中最旧的条目，
-        //    保留元数据。否则整目录被删 = 页名列表丢失，下次打开必然重新解析归档（缓存形同失效）
+        // 2) 只有活跃目录、且它自身就超配额（单本漫画缓存 > 分区上限）：裁掉其中最旧的条目
         if total > limit {
             trimOldestEntries(in: active, total: total, limit: limit)
         }
@@ -142,7 +135,7 @@ actor FingerprintDiskCache {
         }
     }
 
-    // MARK: - 路径
+ // MARK: - 路径
 
     private func directory(for file: SegmentCache.FileIdentity) -> URL {
         manager.url(for: partition).appendingPathComponent(file.key, isDirectory: true)

@@ -9,12 +9,8 @@ struct ExternalSubtitleTrack: Equatable, Identifiable {
     let displayName: String
 }
 
-/// 字幕管理（IOS-201 播放能力）：
-/// - 外挂 srt/ass/ssa 自动匹配同目录同名文件（含语言后缀），启动自动加载最优匹配；
-/// - 双引擎统一以 `SubtitleRenderView` 浮层渲染（AVPlayer 不原生支持外挂字幕，VLC 亦保持一致体验）；
-/// - ASS 保留样式/位置/滚动动画（B 站弹幕 ASS 不再只能挤在底部），SRT 走底部居中默认样式；
-/// - 样式（AppSettings.Player.subtitleFontSize）与延迟（subtitleDelay，正数=字幕延后）可调；
-/// - 内嵌轨选择走 PlayerCore（selectSubtitleTrack），与外挂互斥。
+/// 字幕管理（播放能力）
+/// - 外挂 srt/ass/ssa 自动匹配同目录同名文件（含语言后缀），启动自动加载最优匹配
 @MainActor
 final class SubtitleManager: ObservableObject {
     @Published private(set) var externalTracks: [ExternalSubtitleTrack] = []
@@ -25,7 +21,7 @@ final class SubtitleManager: ObservableObject {
     /// ASS 脚本分辨率（PlayRes，映射到视频显示区域的基准）
     private var scriptSize: CGSize?
 
-    // MARK: - 发现（PlayerView 打开后调用）
+ // MARK: - 发现（PlayerView 打开后调用）
 
     /// 扫描同目录外挂字幕并自动加载最优匹配（精确同名 > 语言后缀序）
     func discover(connectionID: Int64?, mediaPath: String) async {
@@ -71,7 +67,7 @@ final class SubtitleManager: ObservableObject {
         }
     }
 
-    // MARK: - 选择
+ // MARK: - 选择
 
     /// 选择外挂字幕轨（与内嵌轨互斥：调用方需同时 core.selectSubtitleTrack(nil)）
     func select(track: ExternalSubtitleTrack, connectionID: Int64?) async {
@@ -106,7 +102,7 @@ final class SubtitleManager: ObservableObject {
         clearSelection()
     }
 
-    // MARK: - 解析
+ // MARK: - 解析
 
     /// 后台解析：B 站弹幕 ASS 可达数万条事件，主线程解析会卡住播放页
     private static func parse(ext: String, text: String) async -> SubtitleTimeline {
@@ -152,7 +148,7 @@ final class SubtitleManager: ObservableObject {
         return SubtitleTimeline(cues: cues, scriptSize: nil)
     }
 
-    // MARK: - 工具
+ // MARK: - 工具
 
     private func loadConnection(_ id: Int64) -> Connection? {
         guard let db = AppDatabase.shared.dbQueue else { return nil }
@@ -163,7 +159,7 @@ final class SubtitleManager: ObservableObject {
         let stream = try await adapter.readStream(path, range: nil)
         var data = Data()
         for try await chunk in stream {
-            // 显式响应取消：切换视频 / 退出播放器时停止字幕下载（TODO 372 同类检查）
+            // 显式响应取消：切换视频 / 退出播放器时停止字幕下载
             try Task.checkCancellation()
             data.append(chunk)
             if data.count > 8 * 1024 * 1024 { break }   // 字幕文件上限保护

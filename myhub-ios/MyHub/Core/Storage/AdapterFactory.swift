@@ -4,8 +4,7 @@ import Foundation
 enum AdapterFactory {
     private static let credentials = CredentialStore()
 
-    /// 适配器用途（TODO 404）：决定 WebDAV 走哪个 URLSession 连接池。
-    /// 封面加载与「列目录 / 播放」隔离，避免失控的封面抽帧占满连接导致点击音视频无法播放。
+    /// 适配器用途：决定 WebDAV 走哪个 URLSession 连接池。
     enum Purpose {
         /// 列目录 / 播放 / 文件操作（共享 `WebDAVAdapter.streamSession`，16 连接）
         case general
@@ -20,10 +19,7 @@ enum AdapterFactory {
         }
     }
 
-    /// - Parameters:
-    ///   - connection: 连接源记录
-    ///   - passwordOverride: 表单「连接测试」时传入未保存的密码；nil 则读 Keychain
-    ///   - purpose: 用途（决定 WebDAV 连接池隔离，见 `Purpose`）
+    /// - Parameters
     static func makeAdapter(
         for connection: Connection,
         passwordOverride: String? = nil,
@@ -46,10 +42,7 @@ enum AdapterFactory {
             guard let config = connection.decodeConfig(WebDAVConfig.self) else {
                 throw StorageError.invalidConfig("WebDAV 配置缺失")
             }
-            // 内外网双地址：配置了合法内网地址时启用路由适配器（内网优先、失败回退外网），
-            // 否则退化为单地址适配器。
-            // 内网探测用 5s 短超时：外网环境下快速失败回退，而不是每个目录页都干等 30s
-            //（配合 RoutedWebDAVAdapter 的进程级冷却，见 TODO 324）。
+            // 内外网双地址：配置了合法内网地址时启用路由适配器（内网优先、失败回退外网）
             let internalURL = config.internalBaseURL?.trimmingCharacters(in: .whitespaces) ?? ""
             if !internalURL.isEmpty {
                 var internalConfig = config

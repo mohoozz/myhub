@@ -1,11 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// 小说阅读器主界面（TODO §5）：
-/// - 翻页模式（行边界分页，点击左右分区 / 滑动翻页）与滚动模式（连续滚动页块）；
-/// - 点击中央呼出控制层：顶栏（关闭 / 书名）、底栏（进度 / 上下章 / 目录 / 设置）；
-/// - 目录抽屉（当前章高亮跳转）+ 阅读设置面板（字号 / 行距 / 主题 / 翻页模式 / 亮度 / 字体）；
-/// - epub 图集型自动转漫画阅读器；沉浸式背景随阅读主题（夜间纯黑）。
+/// 小说阅读器主界面
+/// - 翻页模式（行边界分页，点击左右分区 / 滑动翻页）与滚动模式（连续滚动页块）
 struct NovelReaderView: View {
     let context: NovelOpenContext
 
@@ -39,8 +36,7 @@ struct NovelReaderView: View {
             }
         }
         .background(
-            // 左滑退出：从屏幕左边缘右滑关闭阅读器。手势实际挂在 window 上（见 EdgeSwipeBack），
-            // 此处仅作为生命周期锚点，不占布局、不拦截 ScrollView 滚动 / TabView 翻页 / 按钮点击。
+            // 左滑退出：从屏幕左边缘右滑关闭阅读器。手势实际挂在 window 上（见 EdgeSwipeBack）
             EdgeSwipeBack(
                 onChanged: { translation in
                     guard viewModel.state == .ready else { return }
@@ -79,8 +75,7 @@ struct NovelReaderView: View {
             // 图集型 epub：默认直接以漫画阅读器打开（不再弹选择框）
             guard isComic else { return }
             if let handler = presenter.onOpenComic {
-                // 先关闭小说阅读器，再于下一 runloop 打开漫画阅读器：
-                // 两个全屏路由若在同一更新周期内同时 present/dismiss 会触发 SwiftUI 崩溃。
+                // 先关闭小说阅读器，再于下一 runloop 打开漫画阅读器
                 presenter.close()
                 DispatchQueue.main.async { handler(context) }
             } else {
@@ -105,7 +100,7 @@ struct NovelReaderView: View {
         .animation(.appQuick, value: viewModel.toast)
     }
 
-    // MARK: - 内容区
+ // MARK: - 内容区
 
     @ViewBuilder
     private var content: some View {
@@ -245,14 +240,8 @@ struct NovelReaderView: View {
                 }
                 .onPreferenceChange(NovelVisibleKey.self) { frames in
                     // 最接近视口中点的页视为当前页（程序滚动期间由 scrollIntent 锁定忽略回写）
-                    guard viewModel.scrollIntent == nil else {
-                        AppLogger.shared.log("NovelVisible 忽略 scrollIntent=\(String(describing: viewModel.scrollIntent))", module: "novel-reader")
-                        return
-                    }
-                    guard !frames.isEmpty else {
-                        AppLogger.shared.log("NovelVisible values 为空", module: "novel-reader")
-                        return
-                    }
+                    guard viewModel.scrollIntent == nil else { return }
+                    guard !frames.isEmpty else { return }
                     let mid = viewport.size.height / 2
                     if let best = frames.min(by: { abs($0.value.midY - mid) < abs($1.value.midY - mid) })?.key {
                         viewModel.scrollVisiblePage(best)
@@ -271,8 +260,7 @@ struct NovelReaderView: View {
                 }
                 .onChange(of: viewModel.scrollIntentRevision) { _ in
                     guard viewModel.scrollIntent != nil else { return }
-                    // 延迟一帧再滚动，确保 scrollStream 变更后的 LazyVStack 布局已完成，
-                    // 避免向上插入章节时 scrollTo 与布局竞争造成跳动。
+                    // 延迟一帧再滚动，确保 scrollStream 变更后的 LazyVStack 布局已完成
                     DispatchQueue.main.async {
                         guard let current = viewModel.scrollIntent else { return }
                         withAnimation(.appQuick) {
@@ -290,7 +278,7 @@ struct NovelReaderView: View {
         }
     }
 
-    // MARK: - 点击分区（左翻 / 菜单 / 右翻）
+ // MARK: - 点击分区（左翻 / 菜单 / 右翻）
 
     private var touchZones: some View {
         GeometryReader { proxy in
@@ -326,7 +314,7 @@ struct NovelReaderView: View {
         }
     }
 
-    // MARK: - 控制层
+ // MARK: - 控制层
 
     private var controls: some View {
         VStack {
@@ -364,7 +352,7 @@ struct NovelReaderView: View {
         }
     }
 
-    // MARK: - 底栏（方案 B+：单行胶囊 + 下沿可拖动进度轨）
+ // MARK: - 底栏
 
     /// 拖动中的目标区间（0...1，nil = 未拖动）。拖动期间只改本地区间值，**松手才真正跳章**。
     @State private var dragRatio: Double?
@@ -374,18 +362,14 @@ struct NovelReaderView: View {
     /// 轨道左右内缩（对应原型 .railhit 的 left/right:8px）
     private let railInset: CGFloat = 8
     /// 胶囊高度（对应原型 .pillbar.slim.dragbar 的 height:82px）
-    /// 56 → 64 → 74 → 82：胶囊内要叠三层（图标行 / 细字读数 / 进度轨），图标与文字放大一档后
-    /// 需要更多净空，否则图标行会顶到细字读数上
     private let capsuleHeight: CGFloat = 82
     /// 轨道线粗细（对应原型 railbg / railfill 的 height:3px）
     private let railThickness: CGFloat = 3
-    /// 胶囊下方额外留白：手柄下探到胶囊外（原型 .rknob bottom:-6px），拖动放大后也不被切
+    /// 胶囊下方额外留白：手柄下探到胶囊外，拖动放大后也不被切
     private let railOverhang: CGFloat = 14
     /// 图标行距胶囊上沿（对应原型 .dragbar .bcol 的 padding-top:6px；图标放大后一路下压：6 → 8 → 12）
-    /// 12pt 时按钮行底 ~48pt，与细字读数（自 56pt 起）留 8pt 净空，也仍在下沿拖动带（54pt 起）之外
     private let iconRowTopPadding: CGFloat = 12
-    /// 下沿拖动带：自胶囊顶部 54pt 起（含胶囊外 14pt 手柄区），按钮文字（至 ~47pt）不被遮挡；
-    /// 对应原型 .dragrail 的 height:42px
+    /// 下沿拖动带：自胶囊顶部 54pt 起（含胶囊外 14pt 手柄区），按钮文字（至 ~47pt）不被遮挡
     private let railStripHeight: CGFloat = 42
     /// 细字读数距胶囊下沿（对应原型 .pillbar .dcap 的 bottom:12px）
     private let readoutBottomInset: CGFloat = 12
@@ -396,12 +380,10 @@ struct NovelReaderView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 2)
-            // 悬浮胶囊直接压在正文之上：不再用「通栏白条 + 分割线」（原型指出的现状问题），
-            // 仅保留一层自上而下渐显的底衬，隔开正文、保住胶囊下沿的进度轨与手柄
+            // 悬浮胶囊直接压在正文之上：不再用「通栏白条 + 分割线」
             .background(
                 LinearGradient(
-                    // 渐隐底衬整体调轻：胶囊已改半透毛玻璃，底衬若仍近乎不透明，
-                    // 玻璃就透不出正文、白费一层材质（0.96/0.98 → 0.70/0.82）
+                    // 渐隐底衬整体调轻：胶囊已改半透毛玻璃，底衬若仍近乎不透明
                     stops: [
                         .init(color: viewModel.themeSpec.background.opacity(0), location: 0),
                         .init(color: viewModel.themeSpec.background.opacity(0.45), location: 0.26),
@@ -416,7 +398,6 @@ struct NovelReaderView: View {
     }
 
     /// 胶囊内一行细字读数（对应原型 .pillbar .dcap：11.5pt 居中、距胶囊下沿 12pt、紧贴在进度轨上方）
-    /// 拖动中就地变成蓝色读数「松手跳到 第 N 章 · 全书 p%」，不额外弹气泡
     private func progressReadout(width: CGFloat) -> some View {
         let dragging = dragRatio != nil
         let text = dragging
@@ -435,7 +416,7 @@ struct NovelReaderView: View {
             .animation(.appQuick, value: dragging)
     }
 
-    /// 单行胶囊：左起 目录 / 上一章 / 下一章 / 设置，下沿内嵌可拖动进度轨
+    /// 单行胶囊：左起目录 / 上一章 / 下一章 / 设置，下沿内嵌可拖动进度轨
     private var capsuleBar: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
@@ -455,8 +436,7 @@ struct NovelReaderView: View {
                 // 阴影只加在胶囊底形上，避免图标 / 文字被一并投影
                 .background(
                     Capsule()
-                        // 毛玻璃：系统薄材质打底，主题控制色 72% 作为 tint 叠在其上（形状一致，
-                        // 阴影仍只落在胶囊底形上，不会连图标 / 文字一起投影）
+                        // 毛玻璃：系统薄材质打底，主题控制色 72% 作为 tint 叠在其上
                         .fill(.thinMaterial)
                         .overlay(Capsule().fill(capsuleFill))
                         .shadow(color: isNight ? .clear : .black.opacity(0.10), radius: 6, y: 3)
@@ -472,7 +452,6 @@ struct NovelReaderView: View {
     }
 
     /// 可拖动进度轨：3pt 轨（被下沿圆角容器裁形）+ 16pt 手柄（拖动中放大到 22pt 并带光圈）
-    /// 轨道线贴胶囊下沿，手柄跨在下沿上、下探到胶囊外，与原型 .railhit / .rknob 一致
     private func progressRail(width: CGFloat) -> some View {
         let usable = max(width - railInset * 2, 1)
         let ratio = min(max(dragRatio ?? totalProgress, 0), 1)
@@ -484,7 +463,6 @@ struct NovelReaderView: View {
 
         let visuals = ZStack(alignment: .top) {
             // 轨道层：整条贴在胶囊下沿，用胶囊同形裁剪，两端随胶囊圆角收口 —— 与原型
-            // 方案 B（.pillbar.slim 的 overflow:hidden）一致的观感，绝不戳出胶囊轮廓
             ZStack(alignment: .bottomLeading) {
                 Rectangle()
                     .fill(isNight ? Color.white.opacity(0.20) : Color(hex: 0x6B7280).opacity(0.22))
@@ -514,8 +492,7 @@ struct NovelReaderView: View {
 
         return ZStack(alignment: .bottom) {
             visuals
-            // 命中区只占胶囊下沿一条带（自胶囊顶部 54pt 起，含胶囊外手柄区）：细字读数与进度轨、
-            // 手柄都能直接按下去拖；图标行与按钮文字（至 ~48pt）不受影响
+            // 命中区只占胶囊下沿一条带（自胶囊顶部 54pt 起，含胶囊外手柄区）：细字读数与进度轨
             Color.clear
                 .frame(width: width, height: railStripHeight)
                 .contentShape(Rectangle())
@@ -574,11 +551,10 @@ struct NovelReaderView: View {
         "\(Int((min(max(ratio, 0), 1) * 100).rounded()))"
     }
 
-    /// 是否夜间主题（原型用 #141414 / #3A3A3C 一套夜间胶囊变量）
+    /// 是否夜间主题
     private var isNight: Bool { viewModel.appearance.theme == .night }
 
     /// 胶囊底色（毛玻璃的 tint）：日间主题控制底色 72%，夜间 #141414 72% 与纯黑正文分层。
-    /// 模糊底由 capsuleBar 的 `.thinMaterial` 提供，这里只负责把主题色压上去（半透，正文能透出一层）
     private var capsuleFill: Color {
         isNight ? Color(hex: 0x141414).opacity(0.72)
                 : viewModel.themeSpec.controlBackground.opacity(0.72)
@@ -593,12 +569,11 @@ struct NovelReaderView: View {
     }
 
     /// 拖动中的就地读数：日间 primary，夜间 #60A5FA
-    /// （对应原型 .pillbar .dcap.on / .reader.night .pillbar .dcap.on）
     private var readoutActiveText: Color {
         isNight ? Color(hex: 0x60A5FA) : AppColors.primary
     }
 
-    /// 手柄底色：夜间用近黑（原型 #1C1C1E），其余用白
+    /// 手柄底色：夜间用近黑，其余用白
     private var knobFill: Color {
         isNight ? Color(hex: 0x1C1C1E) : .white
     }
@@ -626,7 +601,7 @@ struct NovelReaderView: View {
         .disabled(!enabled)
     }
 
-    // MARK: - 目录抽屉（当前章高亮跳转）
+ // MARK: - 目录抽屉（当前章高亮跳转）
 
     private var catalogDrawer: some View {
         NavigationStack {
@@ -665,8 +640,6 @@ struct NovelReaderView: View {
 // MARK: - 分页富文本渲染（遵循 NSParagraphStyle 行距/段距）
 
 /// SwiftUI `Text` 会忽略 `NSAttributedString` 中的 `NSParagraphStyle`
-/// （`minimumLineHeight` / `maximumLineHeight` / `paragraphSpacing`），导致“行距”设置不生效。
-/// 改用 `UILabel` 渲染分页文本，与 CoreText 分页使用同一套段落样式，保证视觉与分页一致。
 private struct PagedTextLabel: UIViewRepresentable {
     let attributedString: NSAttributedString
 
@@ -690,7 +663,7 @@ private struct PagedTextLabel: UIViewRepresentable {
     }
 }
 
-// MARK: - 阅读设置面板（IOS-502）
+// MARK: - 阅读设置面板
 
 struct ReaderSettingsPanel: View {
     @ObservedObject var viewModel: NovelReaderViewModel
@@ -698,15 +671,12 @@ struct ReaderSettingsPanel: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                // 字号
                 settingRow(title: "字号", value: "\(Int(viewModel.appearance.fontSize))") {
                     Slider(value: fontSizeBinding, in: 12...32, step: 1)
                 }
-                // 行距
                 settingRow(title: "行距", value: String(format: "%.1f", viewModel.appearance.lineSpacing)) {
                     Slider(value: lineSpacingBinding, in: 1.2...2.4, step: 0.1)
                 }
-                // 主题
                 settingRow(title: "主题") {
                     Picker("主题", selection: themeBinding) {
                         Text("自动").tag(ReaderTheme.auto)
@@ -716,7 +686,6 @@ struct ReaderSettingsPanel: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                // 翻页模式
                 settingRow(title: "翻页模式") {
                     Picker("翻页模式", selection: pageModeBinding) {
                         Text("翻页").tag(ReaderPageMode.paging)
@@ -724,7 +693,6 @@ struct ReaderSettingsPanel: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                // 亮度
                 settingRow(title: "亮度", value: brightnessText) {
                     Slider(value: brightnessBinding, in: 0...1)
                 }
@@ -768,7 +736,7 @@ struct ReaderSettingsPanel: View {
         }
     }
 
-    // MARK: - Bindings
+ // MARK: - Bindings
 
     private var fontSizeBinding: Binding<Double> {
         Binding(
@@ -845,5 +813,3 @@ private struct NovelVisibleKey: PreferenceKey {
         value.merge(nextValue()) { $1 }
     }
 }
-
-

@@ -1,6 +1,6 @@
 import Foundation
 
-/// 存储条目（《需求分析文档》§4.4）；Codable 供目录结果本地缓存（DirectoryCache）
+/// 存储条目；Codable 供目录结果本地缓存（DirectoryCache）
 struct FileEntry: Codable, Sendable {
     let name: String
     let path: String          // 连接内虚拟绝对路径（以 "/" 开头）
@@ -18,10 +18,9 @@ enum StorageError: Error, LocalizedError {
     case http(status: Int, message: String?)
     case authenticationFailed
     case unsupportedProtocol(String)
-    /// 服务器响应异常：可达但返回的不是预期协议响应（如反代/网关返回的 HTML 错误页、空体），
-    /// 与 notFound/http 区分，避免调用方把异常响应当作「空结果」（TODO 369）
+    /// 服务器响应异常：可达但返回的不是预期协议响应（如反代/网关返回的 HTML 错误页、空体）
     case invalidResponse(String)
-    /// 离线模式：请求的内容未缓存（已缓存内容无网络播放/阅读，IOS-605）
+    /// 离线模式：请求的内容未缓存（已缓存内容无网络播放/阅读）
     case offline(String)
     case underlying(Error)
 
@@ -81,7 +80,7 @@ enum StoragePath {
     }
 }
 
-/// 存储适配器协议（IOS-101）。
+/// 存储适配器协议。
 /// 实现：LocalAdapter / WebDAVAdapter / SMBAdapter（可扩展 FTP/SFTP/NFS）。
 protocol StorageAdapter {
     func list(_ dir: String) async throws -> [FileEntry]
@@ -98,9 +97,6 @@ protocol StorageAdapter {
 }
 
 /// 可校验 Range 响应的适配器（HTTP 源，如 WebDAV）。
-/// 把「期望的对象总长」一并交给适配器，由适配器确认服务器返回的确实是**这个对象的这一区间**。
-/// 目的：挡住「中间网络 / 反向代理忽略 Range 或直接换源」——两者都会让播放器拿到别的区间或别的视频，
-/// 且错位数据一旦写进分片缓存就会永久复现（表现为播放中突然跳到另一段内容）。
 protocol RangeVerifyingAdapter: AnyObject {
     func readStream(
         _ path: String, range: Range<Int64>?, expectedTotal: Int64

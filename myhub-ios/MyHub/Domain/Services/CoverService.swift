@@ -12,12 +12,8 @@ struct CoverResult {
     var duration: Double?
 }
 
-/// 封面加载服务（IOS-102 / IOS-702）：
-/// - 图片：流式读取 + ImageIO 下采样；视频：本地直读 / 远程经边下边播回环串流按需 Range 抽帧；
-/// - 漫画：zip/cbz 经 RangeZipReader 仅拉中央目录与首页，rar/cbr 本地经 UnrarKit；
-/// - 音频：同目录同名 / cover / folder / front 图片（复用浏览页已加载的兄弟列表，零额外请求）。
-/// 内存 + 磁盘双缓存（Caches/Thumbnails），失败结果仅在会话内记忆；
-/// 全部异步执行，UI 侧先展示占位——封面加载不阻塞点击进入播放/阅读。
+/// 封面加载服务
+/// - 图片：流式读取 + ImageIO 下采样；视频：本地直读 / 远程经边下边播回环串流按需 Range 抽帧
 actor CoverService {
     static let shared = CoverService()
 
@@ -33,20 +29,16 @@ actor CoverService {
 
     private let memory = NSCache<NSString, Box>()
     private var inflight: [String: Task<CoverResult, Never>] = [:]
-    /// 失败冷却（IOS-702）：加载失败的封面在冷却期内不重试，直接返回占位；
-    /// 冷却期过后（滚动重新可见触发 .task）自动重试，避免弱网抖动导致「一次失败永久占位」。
+    /// 失败冷却：加载失败的封面在冷却期内不重试，直接返回占位
     private var failedAt: [String: Date] = [:]
     /// 失败冷却时长（秒）：期间返回占位不重试；期满允许重新加载
     private let failureCooldown: TimeInterval = 30
     private var running = 0
     private var permitQueue: [CheckedContinuation<Bool, Never>] = []
     private let maxConcurrent = 4
-    /// 许可排队上限（TODO 404）：快速滚动大目录会瞬间产生上千个封面请求，
-    /// 超限时丢弃**最早入队**（多半已划出屏幕）的请求，避免过期请求排在可见条目前面
-    /// ——表现为「越滑越慢直到完全不动」。被丢弃者返回占位且不记失败冷却，重新可见时自动重试。
+    /// 许可排队上限：快速滚动大目录会瞬间产生上千个封面请求
     private let maxQueued = 48
-    /// 单条封面加载的硬超时（秒，TODO 404）：VLC / AVFoundation / SMB 内部挂起不响应
-    /// 协作式取消，必须以硬超时保证许可与连接在有限时间内释放
+    /// 单条封面加载的硬超时（秒）：VLC / AVFoundation / SMB 内部挂起不响应
     private static let produceTimeout: TimeInterval = 30
     /// VLC 抽帧硬超时（秒）：略大于 `probeRemoteVideo` 自带的 8s，兜它不回调 / 不响应取消的情况
     private static let vlcProbeTimeout: TimeInterval = 12
@@ -59,7 +51,7 @@ actor CoverService {
         memory.countLimit = 300
     }
 
-    // MARK: - 入口
+ // MARK: - 入口
 
     /// 加载封面（去重 + 限并发 + 双缓存）。siblings 传当前目录条目（音频找同名封面用）。
     func cover(
@@ -69,7 +61,6 @@ actor CoverService {
         siblings: [FileEntry] = []
     ) async -> CoverResult {
         // 恒无封面的类型提前短路：txt 小说 / 字幕 / 其它文件（epub 有内嵌封面，不短路）。
-        // 省去缓存查找、并发许可与 actor 调度，浏览大目录时更省。
         if Self.hasNoCover(entry) { return CoverResult(image: nil, duration: nil) }
 
         let key = cacheKey(for: entry, connection: connection)
@@ -88,7 +79,7 @@ actor CoverService {
         }
         if let task = inflight[key] { return await awaitCover(task: task, key: key) }
 
-        // 封面的网络读取统一走封面专用连接池（与列目录 / 播放隔离，TODO 404）
+        // 封面的网络读取统一走封面专用连接池（与列目录 / 播放隔离）
         let ioAdapter = Self.coverIOAdapter(connection: connection, fallback: adapter)
 
         let task = Task<CoverResult, Never> {
@@ -99,13 +90,11 @@ actor CoverService {
                 Self.logCover(.debug, "封面请求排队溢出被丢弃（滚动过快），重新可见时重试", entry: entry)
                 return placeholder
             }
-            // 许可必须无条件归还（TODO 404）：produce 内部任何挂起 / 抛错 / 取消都不能吃掉许可，
-            // 否则累计 maxConcurrent 次后全 App 封面永久停滞，只有杀进程才能恢复
+            // 许可必须无条件归还：produce 内部任何挂起 / 抛错 / 取消都不能吃掉许可
             defer { self.releasePermit() }
             guard !Task.isCancelled else { return placeholder }
             do {
-                // 硬超时兜底：produce 内部（VLC / AVFoundation / SMB）可能永不返回，
-                // 超时即放弃并归还许可，不等待其真正结束
+                // 硬超时兜底：produce 内部（VLC / AVFoundation / SMB）可能永不返回
                 let result = try await withHardTimeout(seconds: Self.produceTimeout) {
                     await self.produce(
                         for: entry, connection: connection, adapter: ioAdapter, siblings: siblings
@@ -118,8 +107,6 @@ actor CoverService {
                     self.saveToDisk(key: key, result: result)
                 } else if !Task.isCancelled {
                     // 失败：不写内存（否则本会话永不重试），仅记冷却时间供限流。
-                    // 取消导致的空结果不记冷却（produce 内部会吞掉 CancellationError），
-                    // 否则滑过一次就让该条目 30s 内不再加载
                     self.failedAt[key] = Date()
                     self.trimFailedIfNeeded()
                 }
@@ -142,10 +129,7 @@ actor CoverService {
         return await awaitCover(task: task, key: key)
     }
 
-    /// 等待在途加载，并登记等待者（TODO 404）：
-    /// 调用方（cell 的 `.task`）被取消时撤销登记，最后一个等待者消失即取消在途加载，
-    /// 使其停止网络请求、尽快归还并发许可——避免快速滚动时早已划出屏幕的条目
-    /// 继续抢占许可与连接池。
+    /// 等待在途加载，并登记等待者
     private func awaitCover(task: Task<CoverResult, Never>, key: String) async -> CoverResult {
         waiterCounts[key, default: 0] += 1
         let result = await withTaskCancellationHandler {
@@ -158,10 +142,7 @@ actor CoverService {
         return result
     }
 
-    /// 封面网络读取所用的适配器（TODO 404）：
-    /// WebDAV 改用**封面专用 URLSession**（4 连接 + 短超时，与列目录 / 播放的 16 连接池隔离），
-    /// 从根上杜绝「封面把连接占满 → 点音视频无法播放」；
-    /// 本地（需安全作用域书签）与 SMB（无 URLSession，复用连接实例）沿用调用方传入的实例。
+    /// 封面网络读取所用的适配器
     private static func coverIOAdapter(connection: Connection, fallback: StorageAdapter) -> StorageAdapter {
         guard connection.type == .webdav,
               let adapter = try? AdapterFactory.makeAdapter(for: connection, purpose: .cover) else {
@@ -181,9 +162,7 @@ actor CoverService {
         }
     }
 
-    /// 按播放条目取封面（音频播放页 / 锁屏共用）：
-    /// 内部经 connectionID 解析连接与适配器，构造条目并复用 `cover(for:)` 全套内存/磁盘缓存与去重。
-    /// 播放页与浏览页命中同一磁盘缓存键（连接 + 路径 + 指纹），避免重复网络拉取。
+    /// 按播放条目取封面（音频播放页 / 锁屏共用）
     func cover(forItem item: PlayableItem) async -> CoverResult {
         guard let connectionID = item.connectionID,
               let db = AppDatabase.shared.dbQueue,
@@ -206,7 +185,7 @@ actor CoverService {
         return await cover(for: entry, connection: connection, adapter: adapter, siblings: siblings)
     }
 
-    // MARK: - 并发许可
+ // MARK: - 并发许可
 
     /// 申请并发许可。返回 false 表示排队溢出被丢弃（调用方应直接返回占位、不记失败冷却）。
     private func acquirePermit() async -> Bool {
@@ -221,8 +200,7 @@ actor CoverService {
         return await withCheckedContinuation { permitQueue.append($0) }
     }
 
-    /// 归还并发许可：队列非空则直接移交给**最新**入队者（LIFO——最新请求对应当前可见区域，
-    /// 先出图体验更好；旧请求由队列上限淘汰）
+    /// 归还并发许可：队列非空则直接移交给**最新**入队者
     private func releasePermit() {
         if let next = permitQueue.popLast() {
             next.resume(returning: true)
@@ -238,7 +216,7 @@ actor CoverService {
         failedAt = failedAt.filter { now.timeIntervalSince($0.value) < failureCooldown }
     }
 
-    // MARK: - 缓存
+ // MARK: - 缓存
 
     private func cacheKey(for entry: FileEntry, connection: Connection) -> String {
         let raw = "\(connection.id ?? 0)|\(entry.path)|\(entry.size)|\(entry.modTime.timeIntervalSince1970)"
@@ -276,15 +254,13 @@ actor CoverService {
         if let data = try? JSONEncoder().encode(meta) {
             try? data.write(to: diskURL(key: key, ext: "json"), options: .atomic)
         }
-        // IOS-605：封面分区超配额时按 LRU 淘汰（统一容量上限）
+        // ：封面分区超配额时按 LRU 淘汰（统一容量上限）
         CacheManager.shared.evictPartitionIfNeeded(.thumbnails)
     }
 
-    // MARK: - 按类型产出
+ // MARK: - 按类型产出
 
     /// 恒无封面（`CoverService` 视角）：目录、字幕、其它文件、txt 小说。
-    /// epub 封面改由本服务 `produce` 轻量提取（`EpubBook.extractCover`），供浏览目录直接显示封面；
-    /// txt 纯文本仍短路。原「epub 封面仅打开后经 cacheCoverThumbnail 写缩略图分区」不再承担目录封面。
     private static func hasNoCover(_ entry: FileEntry) -> Bool {
         if entry.isDir { return true }
         switch MediaType.detect(ext: entry.ext) {
@@ -323,24 +299,23 @@ actor CoverService {
                     let data = try await readAll(adapter: adapter, path: coverEntry.path, limit: maxImageBytes)
                     let image = await Task.detached { ImageDownsampler.downsample(data: data) }.value
                     if image != nil {
-                        Self.logCover(.info, "audio 同目录封面命中: \(coverEntry.name) -> \(entry.name)", entry: entry)
                         return CoverResult(image: image, duration: nil)
                     }
-                    Self.logCover(.warn, "audio 同目录封面图片解码失败: \(coverEntry.name) -> \(entry.name)", entry: entry)
+                    Self.logCover(.debug, "audio 同目录封面图片解码失败: \(coverEntry.name) -> \(entry.name)", entry: entry)
                 } else {
                     Self.logCover(.debug, "audio 同目录无同名/cover/folder/front 图片", entry: entry)
                 }
                 // 2. 音频内嵌封面（ID3 APIC / m4a covr / flac PICTURE）
                 if let image = try await embeddedAudioCover(entry: entry, connection: connection, adapter: adapter) {
-                    Self.logCover(.info, "audio 内嵌封面命中", entry: entry)
                     return CoverResult(image: image, duration: nil)
                 }
-                Self.logCover(.warn, "audio 封面缺失（同目录约定 + 内嵌均无）", entry: entry)
+                // 封面缺失是常态（多数音频/文档没有封面），只在详细日志里留痕
+                Self.logCover(.debug, "audio 封面缺失（同目录约定 + 内嵌均无）", entry: entry)
                 return CoverResult(image: nil, duration: nil)
             case .comic:
                 let image = try await comicCover(entry: entry, connection: connection, adapter: adapter)
                 if image == nil {
-                    Self.logCover(.warn, "comic 封面缺失", entry: entry)
+                    Self.logCover(.debug, "comic 封面缺失", entry: entry)
                 }
                 return CoverResult(image: image, duration: nil)
             case .archive:
@@ -350,7 +325,7 @@ actor CoverService {
                 }
                 let image = try await comicCover(entry: entry, connection: connection, adapter: adapter)
                 if image == nil {
-                    Self.logCover(.warn, "archive 封面缺失", entry: entry)
+                    Self.logCover(.debug, "archive 封面缺失", entry: entry)
                 }
                 return CoverResult(image: image, duration: nil)
             case .novel:
@@ -358,7 +333,7 @@ actor CoverService {
                 if entry.ext == "epub" {
                     let image = await EpubBook.extractCover(adapter: adapter, entry: entry)
                     if image == nil {
-                        Self.logCover(.warn, "epub 封面缺失", entry: entry)
+                        Self.logCover(.debug, "epub 封面缺失", entry: entry)
                     }
                     return CoverResult(image: image, duration: nil)
                 }
@@ -382,7 +357,7 @@ actor CoverService {
         )
     }
 
-    // MARK: - 视频：抽帧 + 时长
+ // MARK: - 视频：抽帧 + 时长
 
     private func videoCover(
         entry: FileEntry, connection: Connection, adapter: StorageAdapter
@@ -400,8 +375,6 @@ actor CoverService {
             }
         }
         // 远程：优先手动解析 mp4（只按需读 moov + 首帧关键帧，总量数百 KB~数 MB）。
-        // moov 后置（非 faststart）时 VLC/AVFoundation 会发起「读整个文件」Range 请求（几 GB），
-        // 在 NAS 上读不完必然超时，且几百个并发请求会把连接打爆（连读 1 字节都超时）。
         if let result = await manualMP4Cover(entry: entry, adapter: adapter) {
             return result
         }
@@ -415,17 +388,15 @@ actor CoverService {
         Self.logCover(.debug, "video 远程串流抽帧", entry: entry)
         defer {
             let bytes = LocalStreamProxy.shared.unregister(url)
-            Self.logCover(.info, "video 远程串流抽帧 网络拉取=\(DisplayFormatters.size(bytes))", entry: entry)
+            Self.logCover(.debug, "video 远程串流抽帧 网络拉取=\(DisplayFormatters.size(bytes))", entry: entry)
         }
-        // VLC（内部 8s 超时）→ AVFoundation 回退，两者都再包一层**硬**超时（TODO 404）：
-        // 远程 moov 后置文件上它们会发起「读整个文件」Range 请求（几 GB），
-        // 既不返回也不响应协作式取消——不限时就会永久占用并发许可与连接池。
+        // VLC（内部 8s 超时）→ AVFoundation 回退，两者都再包一层**硬**超时
         if let result = try await withHardTimeout(seconds: Self.vlcProbeTimeout, operation: {
             try? await Self.probeRemoteVideo(url: url)
         }) {
             return result
         }
-        Self.logCover(.warn, "video VLC 抽帧失败/超时，回退 AVFoundation 限时抽帧", entry: entry)
+        Self.logCover(.debug, "video VLC 抽帧失败/超时，回退 AVFoundation 限时抽帧", entry: entry)
         if let result = try await withHardTimeout(seconds: Self.avProbeTimeout, operation: {
             try? await Self.probeVideo(url: url)
         }) {
@@ -435,9 +406,7 @@ actor CoverService {
         throw StorageError.invalidPath(entry.path)
     }
 
-    /// 远程视频手动解析 mp4 取封面 + 时长：只按需读 moov（末尾）与首帧关键帧，
-    /// 完全不读整个文件，规避 moov 后置时 VLC/AVFoundation 读整个文件打爆 NAS。
-    /// 返回 nil 表示未命中（非 mp4 或解析失败），由调用方回退 VLC/AVFoundation。
+    /// 远程视频手动解析 mp4 取封面 + 时长：只按需读 moov（末尾）与首帧关键帧
     private func manualMP4Cover(entry: FileEntry, adapter: StorageAdapter) async -> CoverResult? {
         guard ["mp4", "m4v", "mov"].contains(entry.ext), entry.size > 0 else { return nil }
         do {
@@ -448,13 +417,11 @@ actor CoverService {
                 return data
             }
             // 只有真的拿到封面（内嵌 covr 或首帧解码成功）才算命中。
-            // image 为 nil 但 duration 有值（首帧手动解码失败）不能直接返回占位 ——
-            // VLC 抽帧更健壮，能抽到 H.264/HEVC 首帧，应继续回退 VLC，否则这些视频永久变占位符。
             guard result.image != nil else {
-                Self.logCover(.warn, "video 手动 mp4 解析无封面 duration=\(result.duration ?? 0)，回退 VLC 抽帧", entry: entry)
+                Self.logCover(.debug, "video 手动 mp4 解析无封面 duration=\(result.duration ?? 0)，回退 VLC 抽帧", entry: entry)
                 return nil
             }
-            Self.logCover(.info, "video 手动 mp4 解析命中 网络拉取=\(DisplayFormatters.size(fetched)) duration=\(result.duration ?? 0)", entry: entry)
+            Self.logCover(.debug, "video 手动 mp4 解析命中 网络拉取=\(DisplayFormatters.size(fetched)) duration=\(result.duration ?? 0)", entry: entry)
             return CoverResult(image: result.image, duration: result.duration)
         } catch {
             Self.logCover(.warn, "video 手动 mp4 解析失败 error=\(String(describing: error))", entry: entry)
@@ -479,7 +446,6 @@ actor CoverService {
     }
 
     /// 远程视频用 VLCKit（ffmpeg 内核）抽首帧 + 读时长。
-    /// libavformat 对 moov 后置 mp4 会精确 seek 读末尾 moov + 首帧，规避 AVFoundation 读整个文件。
     private static func probeRemoteVideo(url: URL, timeout: TimeInterval = 8) async throws -> CoverResult {
         let media = VLCMedia(url: url)
         media.addOption(":avcodec-hw=videotoolbox")
@@ -492,13 +458,12 @@ actor CoverService {
         return CoverResult(image: UIImage(cgImage: cgImage), duration: duration)
     }
 
-    // MARK: - 漫画：zip/cbz Range 解析；rar/cbr 本地 UnrarKit
+ // MARK: - 漫画：zip/cbz Range 解析；rar/cbr 本地 UnrarKit
 
     private func comicCover(
         entry: FileEntry, connection: Connection, adapter: StorageAdapter
     ) async throws -> UIImage? {
-        // 首页原始解压数据顺带写入漫画页缓存（对齐阅读器键：entry 指纹 + 页名），
-        // 阅读器打开时首页直接命中，免重复 Range 下载/解压（隐患5）。
+        // 首页原始解压数据顺带写入漫画页缓存（对齐阅读器键：entry 指纹 + 页名）
         let cacheIdentity = SegmentCache.FileIdentity(
             connectionID: connection.id ?? 0,
             path: entry.path,
@@ -578,7 +543,7 @@ actor CoverService {
         await ComicPageCache.storePage(data, file: identity, name: name)
     }
 
-    // MARK: - 音频：同目录封面约定
+ // MARK: - 音频：同目录封面约定
 
     /// 同目录同名图片 / cover / folder / front（大小写不敏感）
     static func audioCoverEntry(in siblings: [FileEntry], for audio: FileEntry) -> FileEntry? {
@@ -593,10 +558,9 @@ actor CoverService {
         return fallback
     }
 
-    // MARK: - 音频：内嵌封面
+ // MARK: - 音频：内嵌封面
 
     /// 音频内嵌封面（ID3 APIC / m4a covr / flac PICTURE）。
-    /// 本地直接读 metadata；远程复用边下边播回环串流 URL，AVFoundation 按需读头部/moov 取 artwork。
     private func embeddedAudioCover(
         entry: FileEntry, connection: Connection, adapter: StorageAdapter
     ) async throws -> UIImage? {
@@ -614,7 +578,6 @@ actor CoverService {
             }
         }
         // 远程：复用边下边播回环串流 URL，AVFoundation 只按需读头部/moov 取 artwork
-        // （ID3 APIC / flac PICTURE 在头部、m4a covr 在 moov），不再整文件下载。
         guard let url = try await PlaybackSourceResolver.makeRemoteStreamURL(
             connection: connection, entry: entry, purpose: .cover
         ) else {
@@ -624,9 +587,9 @@ actor CoverService {
         Self.logCover(.debug, "audio 远程串流读内嵌封面", entry: entry)
         defer {
             let bytes = LocalStreamProxy.shared.unregister(url)
-            Self.logCover(.info, "audio 远程串流读封面 网络拉取=\(DisplayFormatters.size(bytes))", entry: entry)
+            Self.logCover(.debug, "audio 远程串流读封面 网络拉取=\(DisplayFormatters.size(bytes))", entry: entry)
         }
-        // 硬超时（TODO 404）：AVFoundation 读远程 metadata 同样可能整文件拉取且不响应取消
+        // 硬超时：AVFoundation 读远程 metadata 同样可能整文件拉取且不响应取消
         do {
             let image = try await withHardTimeout(seconds: Self.avProbeTimeout) {
                 try? await Self.audioArtwork(url: url)
@@ -655,7 +618,7 @@ actor CoverService {
         return nil
     }
 
-    // MARK: - 流收集
+ // MARK: - 流收集
 
     /// 收集适配器流到 Data（可选 Range，带字节上限防失控）
     private func readAll(
@@ -679,12 +642,9 @@ private enum VLCCoverError: Error {
 }
 
 /// VLCMediaThumbnailer 抽帧的一次性 async 桥接。
-/// - `VLCMediaThumbnailer.delegate` 为 weak，这里让 holder 自身即 delegate，由调用方
-///   `probeRemoteVideo` 的 async 帧持有 holder 直到完成，保证 delegate/thumbnailer 生命周期；
-/// - 内部 `finished` 标记 + 兜底超时，防止 VLC 不回调或重复回调导致 continuation 悬挂/二次 resume。
 private final class VLCCoverThumbnailHolder: NSObject, VLCMediaThumbnailerDelegate {
     private let timeout: TimeInterval
-    /// VLC 回调来自自身线程，与兜底超时存在竞态：状态统一加锁（TODO 404）
+    /// VLC 回调来自自身线程，与兜底超时存在竞态：状态统一加锁
     private let lock = NSLock()
     private var thumbnailer: VLCMediaThumbnailer?
     private var continuation: CheckedContinuation<CGImage, Error>?
@@ -728,8 +688,6 @@ private final class VLCCoverThumbnailHolder: NSObject, VLCMediaThumbnailerDelega
     }
 
     /// 先到者胜出：resume 一次 continuation，并**释放 thumbnailer 停止 VLC 取流**。
-    /// `VLCMediaThumbnailer` 无显式 stop，释放即销毁其内部 media player 停止拉流；
-    /// 否则超时返回后 ffmpeg 仍在后台从回环代理整文件拉数据，持续占用连接池（TODO 404）。
     private func finish(_ result: Result<CGImage, Error>) {
         lock.lock()
         guard !finished else {

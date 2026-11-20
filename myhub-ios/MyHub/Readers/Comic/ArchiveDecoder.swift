@@ -1,9 +1,7 @@
 import Foundation
 import UnrarKit
 
-/// 漫画页数据源（IOS-207）：按需解出单页图片 Data，不整包解压落盘。
-/// 实现：zip/cbz/epub 走 `RangeZipReader`（仅拉中央目录 + 目标条目，远程源零整包下载）；
-/// rar/cbr 走 UnrarKit（本地直读；远程源先流式落地临时文件，加载阶段带进度）。
+/// 漫画页数据源：按需解出单页图片 Data，不整包解压落盘。
 protocol ComicPageSource {
     /// 页名列表（自然序），下标即页码
     var pageNames: [String] { get }
@@ -35,9 +33,6 @@ enum ArchiveDecodeError: Error, LocalizedError {
 enum ArchiveDecoder {
 
     /// 打开归档并列出页（自然排序）。
-    /// - Parameters:
-    ///   - connectionID: 连接源 ID（rar/cbr 远程源整包缓存复用的指纹组成部分，IOS-605）
-    ///   - onDownloadProgress: 仅 rar/cbr 远程源落地临时文件时回报（0~1）
     static func open(
         entry: FileEntry,
         adapter: StorageAdapter,
@@ -45,10 +40,6 @@ enum ArchiveDecoder {
         knownPageNames: [String]? = nil,
         onDownloadProgress: ((Double) -> Void)? = nil
     ) async throws -> ComicPageSource {
-        AppLogger.shared.log(
-            "ArchiveDecoder.open: ext=\(entry.ext) size=\(entry.size) path=\(entry.path)",
-            module: "comic-reader"
-        )
         switch entry.ext {
         case "zip", "cbz":
             return try await openZipFamily(entry: entry, adapter: adapter)
@@ -65,14 +56,12 @@ enum ArchiveDecoder {
         }
     }
 
-    // MARK: - 内容校验（zip / rar 本地 / rar 远程落地三处复用）
+ // MARK: - 内容校验（zip / rar 本地 / rar 远程落地三处复用）
 
     /// 校验归档内容为漫画并返回自然排序的图片页名。
-    /// 嗅探兜底（识别策略 2）：cbz/cbr 扩展名直接放行；zip/rar 需图片占比 ≥90% + 自然序列。
     private static func validatedComicPageNames(
         ext: String, entryNames: [String], logLabel: String
     ) throws -> [String] {
-        AppLogger.shared.log("\(logLabel) 条目数=\(entryNames.count) ext=\(ext)", module: "comic-reader")
         if !ComicDetector.isComicExtension(ext), !ComicDetector.sniff(entryNames: entryNames) {
             AppLogger.shared.log(
                 "\(logLabel) 内容嗅探未通过（判定非漫画）: 条目数=\(entryNames.count)",
@@ -83,7 +72,6 @@ enum ArchiveDecoder {
         let names = entryNames
             .filter { !$0.hasSuffix("/") && ComicDetector.isImageName($0) }
             .naturalSorted()
-        AppLogger.shared.log("\(logLabel) 图片页数=\(names.count)", module: "comic-reader")
         guard !names.isEmpty else {
             AppLogger.shared.log("\(logLabel) 无图片页 → noPages", level: .warn, module: "comic-reader")
             throw ArchiveDecodeError.noPages
@@ -91,7 +79,7 @@ enum ArchiveDecoder {
         return names
     }
 
-    // MARK: - zip / cbz（Range 解包，不整包下载）
+ // MARK: - zip / cbz（Range 解包，不整包下载）
 
     private static func openZipFamily(entry: FileEntry, adapter: StorageAdapter) async throws -> ComicPageSource {
         let reader = RangeZipReader(totalSize: entry.size) { range in
@@ -114,7 +102,7 @@ enum ArchiveDecoder {
         return ZipComicSource(reader: reader, pages: pages)
     }
 
-    // MARK: - epub 漫画（按 spine 阅读顺序提取插图页）
+ // MARK: - epub 漫画（按 spine 阅读顺序提取插图页）
 
     private static func openEpub(
         entry: FileEntry, adapter: StorageAdapter, knownPageNames: [String]? = nil
@@ -145,7 +133,7 @@ enum ArchiveDecoder {
         return EpubComicSource(book: book, pageNames: pageNames)
     }
 
-    // MARK: - rar / cbr（UnrarKit 需要文件 URL）
+ // MARK: - rar / cbr（UnrarKit 需要文件 URL）
 
     private static func openRar(
         entry: FileEntry,
@@ -165,8 +153,6 @@ enum ArchiveDecoder {
             }
         }
         // 远程源：UnrarKit 不支持 Range，需流式落地文件。
-        // IOS-605：内容缓存本地化开启时落漫画页缓存分区（指纹键），下次/离线打开直接复用；
-        // 关闭时退回临时文件，退出即删。
         let caching = AppSettings.Cache.contentCachingEnabled
         let identity = SegmentCache.FileIdentity(
             connectionID: connectionID,
@@ -313,7 +299,7 @@ private final class TempRarComicSource: ComicPageSource {
     let pageNames: [String]
     private let archive: URKArchive
     private let tempURL: URL
-    /// true = 文件落漫画页缓存分区（IOS-605 复用，LRU 管理），退出不删除
+    /// true = 文件落漫画页缓存分区（复用，LRU 管理），退出不删除
     private let keepFile: Bool
 
     init(archive: URKArchive, pageNames: [String], tempURL: URL, keepFile: Bool = false) {

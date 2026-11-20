@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// 浏览列表文件状态指示（参考 Flutter `file_status_indicator.dart`）：
-/// - 正在播放 → 三竖条均衡器动画（此时不显示进度环）；
-/// - 有阅读记录 → 顶部起顺时针的环形进度；
-/// - 二者皆无 → 不显示。
-/// 优先级：正在播放 > 进度环 > 空。
+/// 浏览列表文件状态指示（参考 Flutter `file_status_indicator.dart`）
 struct FileStatusIndicator: View {
     /// 阅读进度 0~1；nil 表示无历史记录（不显示进度环）
     let progress: Double?

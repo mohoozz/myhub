@@ -1,7 +1,6 @@
 import Foundation
 
 /// WebDAV 适配器：URLSession + PROPFIND/GET，支持 HTTP Range 串流、HTTPS、Basic 认证
-/// 所有存储属性均为不可变 `let`（URLSession 亦线程安全），可安全跨并发域使用（内外网竞速判定捕获）。
 final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sendable {
     private let config: WebDAVConfig
     private let password: String?
@@ -15,8 +14,6 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
     var rootURLString: String { rootURL.absoluteString }
 
     /// 串流专用共享 URLSession：与 `URLSession.shared` 隔离，避免边下边播的高频 Range 请求
-    /// 与频繁取消污染全局共享连接池（僵尸连接导致后续请求 30s 超时）。
-    /// 提升单主机并发上限、关闭 URL 缓存（视频流不缓存）。
     static let streamSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.httpMaximumConnectionsPerHost = 16
@@ -28,11 +25,7 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
         return URLSession(configuration: config)
     }()
 
-    /// 封面加载专用 URLSession（TODO 404）：与 `streamSession` 的连接池完全隔离。
-    /// 封面抽帧会产生大量短 Range 请求（mp4 box 头逐个 8B GET、zip 中央目录、首帧分片），
-    /// 失控时（moov 后置整文件拉取）会把共享的 16 连接占满 —— 此时目录 PROPFIND 与播放器
-    /// 首片 GET 只能排队至 120s 超时，表现为「封面不再加载，点音视频也播不了，只能重启 App」。
-    /// 独立 session + 更小并发上限 + 更短超时，保证播放/列目录永远有可用连接。
+    /// 封面加载专用 URLSession：与 `streamSession` 的连接池完全隔离。
     static let coverSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.httpMaximumConnectionsPerHost = 4
@@ -68,7 +61,7 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
         self.rootURL = url
     }
 
-    // MARK: - 请求构造
+ // MARK: - 请求构造
 
     private func url(for path: String) -> URL {
         let normalized = StoragePath.normalize(path)
@@ -142,9 +135,6 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
         let parser = WebDAVMultiStatusParser()
         let items = parser.parse(data: data)
         // 合法响应必然包含 <multistatus> 根元素（空目录亦然）；解析不到根元素说明服务器/反代
-        // 返回的不是 DAV 响应（HTML 错误页、登录页、空体等）。若按空数组返回，调用方会把它
-        // 当成「空目录」：界面显示整个目录文件消失、空列表还会写入目录缓存固化错误，
-        // 刷新也无法恢复、只能重启 App 重新判定地址（TODO 369）。这里抛错让上层保留旧数据。
         guard parser.sawMultiStatus else {
             let http = response as? HTTPURLResponse
             let status = http?.statusCode ?? -1
@@ -167,7 +157,7 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
         return text.isEmpty ? "<empty>" : String(text.prefix(160))
     }
 
-    // MARK: - StorageAdapter
+ // MARK: - StorageAdapter
 
     func list(_ dir: String) async throws -> [FileEntry] {
         let items = try await propfind(dir, depth: "1")
@@ -216,9 +206,7 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
         try await readStream(path, range: range, expectedTotal: nil)
     }
 
-    /// 带「期望对象总长」的 Range 流式读取（`RangeVerifyingAdapter`）：
-    /// 服务器回报的区间起点 / 对象总长与预期不符时直接失败，绝不把错位或被换源的字节写进分片缓存。
-    /// 协议要求非可选总长，具体实现见下方私有重载（同样兼容「未知总长」）。
+    /// 带「期望对象总长」的 Range 流式读取（`RangeVerifyingAdapter`）
     func readStream(
         _ path: String, range: Range<Int64>?, expectedTotal: Int64
     ) async throws -> AsyncThrowingStream<Data, Error> {
@@ -241,16 +229,12 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
             originHost: request.url?.host?.lowercased()
         )
         return AsyncThrowingStream { continuation in
-            // 真正的增量流式下载（TODO 356）：按网络到达的数据块（通常几 KB~几十 KB）持续 yield，
-            // 弱网慢速下载不再「整块下完才返回」——配合上层停滞超时可断点续传、不丢弃已下载数据。
-            // 用 per-task delegate（iOS 15+，task 强引用直至完成）承接回调，而非 AsyncBytes
-            // （后者逐字节 await，1MB ≈ 百万次，性能极差）。task 保持对 delegate 强引用，无需额外持有。
+            // 真正的增量流式下载：按网络到达的数据块（通常几 KB~几十 KB）持续 yield
             let delegate = StreamingReadDelegate(continuation: continuation, expectation: expectation)
             let task = session.dataTask(with: request)
             task.delegate = delegate
             continuation.onTermination = { _ in
-                // 先标记终止再取消：cancel 触发的完成回调会看到终止标记直接忽略，
-                // 避免对已终止的 continuation 二次 finish 导致崩溃
+                // 先标记终止再取消：cancel 触发的完成回调会看到终止标记直接忽略
                 delegate.markTerminated()
                 task.cancel()
             }
@@ -259,7 +243,7 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
     }
 
     func writeStream(_ path: String, data: AsyncThrowingStream<Data, Error>) async throws {
-        // WebDAV PUT 需要 Content-Length：v1 先落临时文件再上传；分片断点续传见 TODO §3.2
+        // WebDAV PUT 需要 Content-Length：v1 先落临时文件再上传；分片断点续传见
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         FileManager.default.createFile(atPath: temp.path, contents: nil)
         let handle = try FileHandle(forWritingTo: temp)
@@ -321,12 +305,9 @@ final class WebDAVAdapter: StorageAdapter, RangeVerifyingAdapter, @unchecked Sen
     }
 }
 
-// MARK: - 增量流式下载 delegate（TODO 356）
+// MARK: - 增量流式下载 delegate
 
-/// `readStream` 的响应校验上下文：把「请求区间 / 期望对象总长 / 原始主机」交给 delegate，
-/// 由它确认服务器返回的确实是**这个对象的这一段字节**。
-/// 这是「播放中突然变成另一段视频」的最后一道闸门：Range 被忽略（200 全量）会让数据整体错位，
-/// 跨主机 302 或中间网络换源则会让播放器拿到别的视频——两者都会污染分片缓存、并且此后越播越乱。
+/// `readStream` 的响应校验上下文：把「请求区间 / 期望对象总长 / 原始主机」交给 delegate
 struct StreamingReadExpectation {
     let path: String
     let requestedRange: Range<Int64>?
@@ -335,8 +316,7 @@ struct StreamingReadExpectation {
     /// 原始请求主机（小写）：跨主机重定向一律不跟
     let originHost: String?
 
-    /// 是否对响应做「网页 / 错误页」嗅探：只针对带 Range 的二进制媒体读取，
-    /// 文本类文件（可能真是 html/xml）不拦，避免误伤
+    /// 是否对响应做「网页 / 错误页」嗅探：只针对带 Range 的二进制媒体读取
     var shouldRejectWebPage: Bool {
         guard requestedRange != nil else { return false }
         let textual: Set<String> = ["html", "htm", "xhtml", "xml", "txt", "md", "json", "css", "js"]
@@ -344,10 +324,7 @@ struct StreamingReadExpectation {
     }
 }
 
-/// `readStream` 的 per-task 数据接收 delegate：将网络到达的数据块持续 `yield` 给上游，
-/// 完成或失败时结束流。URLSession 的 per-task delegate（iOS 15+）会被 task 强引用直至结束，
-/// 无需额外持有；消费方取消迭代时经 `markTerminated` 提前标记，避免已终止后续流再 `finish` 崩溃。
-/// 同时承担「响应是否仍是这个对象的这一区间」的校验（防 Range 被忽略 / 换源）。
+/// `readStream` 的 per-task 数据接收 delegate：将网络到达的数据块持续 `yield` 给上游
 final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
     private let continuation: AsyncThrowingStream<Data, Error>.Continuation
     private let expectation: StreamingReadExpectation
@@ -372,11 +349,9 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionT
         lock.unlock()
     }
 
-    // MARK: - 重定向（防换源）
+ // MARK: - 重定向（防换源）
 
     /// 只跟随同主机重定向（允许 http → https 升级）。
-    /// 跨主机的 302/307 意味着后续字节不再来自你配置的那台服务器——典型症状正是
-    /// 「看着看着突然开始播另一段视频」；此时宁可报错，也不要把别人的内容写进分片缓存。
     func urlSession(
         _ session: URLSession, task: URLSessionTask,
         willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
@@ -392,14 +367,15 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionT
             completionHandler(nil)   // 不跟随：任务以 3xx 收尾，由 didReceive 抛错
             return
         }
+        // 同主机重定向是分片请求的常态（每个 Range 请求都可能 302），只进 os_log
         AppLogger.shared.log(
             "readStream 同主机重定向 path=\(expectation.path) status=\(response.statusCode) → \(request.url?.absoluteString ?? "-")",
-            level: .info, module: "webdav"
+            level: .debug, module: "webdav"
         )
         completionHandler(request)
     }
 
-    // MARK: - 响应校验
+ // MARK: - 响应校验
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         lock.lock()
@@ -428,8 +404,7 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionT
 
     /// 校验响应与请求的一致性，返回本次允许输出的最大字节数（nil = 不限）。
     private func validate(_ http: HTTPURLResponse) throws -> Int64? {
-        // 状态码必须 2xx：否则（416 / 4xx / 5xx / 网关错误页）响应体若被当数据 yield，
-        // 会污染 RangeZipReader 的中央目录/条目解析，表现为「malformed」「图片一直加载中」等偶发故障。
+        // 状态码必须 2xx：否则（416 / 4xx / 5xx / 网关错误页）响应体若被当数据 yield
         let status = http.statusCode
         guard (200...299).contains(status) else {
             throw StorageError.http(
@@ -451,8 +426,7 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionT
 
         if status == 206 {
             guard let raw = http.value(forHTTPHeaderField: "Content-Range") else {
-                // 非标准服务器可能省略 Content-Range：从 0 起的分片可按请求长度截断兜底；
-                // 非 0 起点则无从判断对齐，宁可失败也不写入错位数据
+                // 非标准服务器可能省略 Content-Range：从 0 起的分片可按请求长度截断兜底
                 guard range.lowerBound == 0 else {
                     throw StorageError.invalidResponse(
                         "206 响应缺少 Content-Range，无法确认分片对齐（起点 \(range.lowerBound)）"
@@ -483,7 +457,7 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionT
                     "206 Content-Length \(contentLength) 与 Content-Range 区间长度 \(available) 不一致"
                 )
             }
-            // 允许服务器少给（不足部分由上层断点续传补齐），但绝不允许多给
+            // 允许服务器少给，绝不多给
             return min(requestedCount, available)
         }
 
@@ -525,8 +499,7 @@ final class StreamingReadDelegate: NSObject, URLSessionDataDelegate, URLSessionT
             receivedBytes += Int64(payload.count)
         }
         if capReached {
-            // 请求区间已取满即视为完成：服务器忽略 Range 返回整份对象时，
-            // 不截断会把整个文件下完——既费流量，也会让「分片」变成整文件
+            // 请求区间已取满即视为完成：服务器忽略 Range 返回整份对象时
             terminated = true
         }
         lock.unlock()
@@ -635,7 +608,6 @@ final class WebDAVMultiStatusParser: NSObject, XMLParserDelegate {
     private var currentText = ""
     private var insideResponse = false
     /// 是否解析到 multistatus 根元素：区分「合法的空 multistatus」与「非 DAV 响应」
-    /// （HTML 错误页/登录页/空体等），后者不能当作空目录返回（TODO 369）
     private(set) var sawMultiStatus = false
 
     func parse(data: Data) -> [WebDAVResponseItem] {

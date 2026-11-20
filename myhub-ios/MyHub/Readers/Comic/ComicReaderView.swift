@@ -1,11 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// 漫画阅读器（TODO §6 / IOS-207）：
-/// - 单页 / 双页（横屏·平板自动启用，从右向左 / 从左向右可切换并持久化）/ 条漫（纵向连续滚动）；
-/// - 双指缩放（UIScrollView 桥接）；点击中央呼出控制层；
-/// - 页码进度直接恢复（条漫模式经 ScrollViewReader 程序滚动定位）；
-/// - 翻完最后一页弹出「下一本」提示，点击提示条才打开（不自动打开）。
+/// 漫画阅读器
+/// - 单页 / 双页（横屏·平板自动启用，从右向左 / 从左向右可切换并持久化）/ 条漫（纵向连续滚动）
 struct ComicReaderView: View {
     let context: NovelOpenContext
     var onClose: () -> Void = {}
@@ -18,7 +15,7 @@ struct ComicReaderView: View {
     /// 左滑退出的跟手位移（屏幕左边缘右滑时内容整体右移，松手超过阈值关闭阅读器）
     @State private var edgeDragOffset: CGFloat = 0
 
-    // MARK: 方案 A 控制层（IOS-210）
+ // MARK: 方案 A 控制层
     /// 拖动中的进度区间（0...1，nil = 未拖动）；拖动期间只改本地值，**松手才跳页**
     @State private var dragRatio: Double?
     /// 拖动中吸附到的目标页（0 基）
@@ -96,8 +93,7 @@ struct ComicReaderView: View {
         }
         .offset(x: edgeDragOffset)
         .background(
-            // 左滑退出：从屏幕左边缘右滑关闭阅读器。手势实际挂在 window 上（见 EdgeSwipeBack），
-            // 此处仅作为生命周期锚点，不占布局、不拦截滚动 / 翻页 / 缩放 / 按钮点击。
+            // 左滑退出：从屏幕左边缘右滑关闭阅读器。手势实际挂在 window 上（见 EdgeSwipeBack）
             EdgeSwipeBack(
                 onChanged: { translation in
                     edgeDragOffset = translation
@@ -135,7 +131,7 @@ struct ComicReaderView: View {
         .onDisappear { viewModel.teardown() }
     }
 
-    // MARK: - 加载 / 失败（弱网先展示 UI，不阻塞）
+ // MARK: - 加载 / 失败（弱网先展示 UI，不阻塞）
 
     private func loadingState(_ progress: Double?) -> some View {
         VStack(spacing: 14) {
@@ -183,7 +179,7 @@ struct ComicReaderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - 阅读区
+ // MARK: - 阅读区
 
     @ViewBuilder
     private var readerContent: some View {
@@ -225,8 +221,7 @@ struct ComicReaderView: View {
         }
     }
 
-    /// 条漫：纵向连续滚动；恢复页码 / 模式切换经 ScrollViewReader 程序滚动定位；
-    /// 可见页经 PreferenceKey 回写页码（条漫模式恢复页码显示）
+    /// 条漫：纵向连续滚动；恢复页码 / 模式切换经 ScrollViewReader 程序滚动定位
     private var webtoonContent: some View {
         ScrollViewReader { reader in
             ScrollView(.vertical, showsIndicators: false) {
@@ -256,8 +251,7 @@ struct ComicReaderView: View {
                 guard let intent = scrollIntent, intent.page == target else { return }
                 runProgrammaticScroll(reader, intent: intent, animated: false)
             }
-            // 页宽高比逐个补齐会让懒加载页高变化、整段内容位移：定位窗口内重新钉住目标页，
-            // 否则视口被推离目标页落到未解码页上（表现为「跳过去闪一下 → 立刻变加载中」）
+            // 页宽高比逐个补齐会让懒加载页高变化、整段内容位移：定位窗口内重新钉住目标页
             .onChange(of: viewModel.pageRatios) { _ in
                 guard let intent = scrollIntent else { return }
                 reader.scrollTo(intent.page, anchor: intent.anchor)
@@ -278,7 +272,6 @@ struct ComicReaderView: View {
     }
 
     /// 分阶段重试 scrollTo（恢复定位 / 底栏跳页共用）：LazyVStack 懒加载、页高未知时
-    /// 单次 scrollTo 会落错位置甚至停在顶部，随布局推进反复重试把目标页钉在锚点上。
     private func runProgrammaticScroll(
         _ reader: ScrollViewProxy, intent: WebtoonScrollIntent, animated: Bool
     ) {
@@ -307,8 +300,6 @@ struct ComicReaderView: View {
     }
 
     /// 恢复定位 anchor：把页内偏移 f（页面被屏顶切割的分数位置）还原到屏顶。
-    /// scrollTo anchor 语义：页分数位置 a 与滚动区分数位置 a 对齐，页高 h、屏高 H 时
-    /// 屏顶落在页分数 f 处需 a = f·h/(h−H)（h≤H 时页可整屏显示，直接页顶）。
     private func webtoonRestoreAnchor(for target: Int) -> UnitPoint {
         let f = CGFloat(viewModel.pageOffset)
         guard f > 0.001,
@@ -339,10 +330,9 @@ struct ComicReaderView: View {
             )
     }
 
-    // MARK: - 控制层（白色 UI：对齐小说阅读器，白玻璃底 + 深灰字 + primary 强调）
+ // MARK: - 控制层（白色 UI：对齐小说阅读器，白玻璃底 + 深灰字 + primary 强调）
 
     /// 白色 UI 风格色板：整层直接复用小说阅读器的日间配方
-    /// （底 `#FFFFFF` 72% 毛玻璃 / 主字 `#1F2937` / 次字 `#6B7280` / 描边 `AppColors.tabBarBorder`）
     private var spec: ReaderThemeSpec { ReaderThemeSpec.spec(for: .day) }
 
     @ViewBuilder
@@ -358,8 +348,6 @@ struct ComicReaderView: View {
     }
 
     /// 顶栏（现状式裸显示）：✕ + 书名 + ⋯ 菜单（模式 / 双页方向 / 亮度）
-    /// 不套容器、不用白玻璃条——只靠一层顶部压暗的黑色渐变托住白字：漫画页黑白线条多变，
-    /// 白条压在画面上会把页面「切」成两段，裸标题行则完全融进画面
     private var topBar: some View {
         HStack(spacing: 2) {
             Button { onClose() } label: {
@@ -386,8 +374,7 @@ struct ComicReaderView: View {
         .padding(.bottom, 10)
         .background(
             LinearGradient(
-                // 原来是两段线性（0.78 → clear），纯白漫画页上渐变收尾会留下一条可辨的暗带；
-                // 改四段让它在中段就基本化开，同时顶部压到 0.80 保证状态栏白字也读得清
+                // 原来是两段线性（0.78 → clear），纯白漫画页上渐变收尾会留下一条可辨的暗带
                 stops: [
                     .init(color: .black.opacity(0.80), location: 0),
                     .init(color: .black.opacity(0.55), location: 0.42),
@@ -440,7 +427,6 @@ struct ComicReaderView: View {
     }
 
     /// 底部控制区：单行毛玻璃主胶囊（图标行 + 细字读数 + 内嵌进度轨），与小说阅读器底栏同构同高
-    /// 细字读数收进胶囊内部（见 progressReadout），「下一本」收进图标行，不再有额外的 chip 行
     private var bottomControls: some View {
         glassCapsule
             .padding(.horizontal, 12)
@@ -488,7 +474,6 @@ struct ComicReaderView: View {
     }
 
     /// 主胶囊：图标行（缩略图 / 上一页 / 下一页 / 下一本）+ 细字读数 + 贴下沿可拖进度轨
-    /// 结构与小说阅读器 capsuleBar 完全一致：高 82、图标距上沿 12、读数距下沿 12、轨 3pt、手柄下探 14
     private var glassCapsule: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
@@ -551,7 +536,6 @@ struct ComicReaderView: View {
     }
 
     /// 可拖动进度轨：3pt 轨贴胶囊下沿（胶囊同形裁剪，两端随圆角收口）+ 白手柄 primary 描边
-    /// 手柄 16pt、拖动中放大到 22pt 并下探到胶囊外；拖动只改本地值，松手才跳页
     private func progressRail(width: CGFloat) -> some View {
         let usable = max(width - railInset * 2, 1)
         let ratio = min(max(dragRatio ?? viewModel.currentPercent, 0), 1)
@@ -586,8 +570,7 @@ struct ComicReaderView: View {
 
         return ZStack(alignment: .bottom) {
             visuals
-            // 命中区只占胶囊下沿一条带（自胶囊顶部 54pt 起，含胶囊外手柄区）：细字读数与进度轨、
-            // 手柄都能直接按下去拖；图标行与按钮文字（至 ~48pt）不受影响
+            // 命中区只占胶囊下沿一条带（自胶囊顶部 54pt 起，含胶囊外手柄区）：细字读数与进度轨
             Color.clear
                 .frame(width: width, height: railStripHeight)
                 .contentShape(Rectangle())
@@ -626,7 +609,6 @@ struct ComicReaderView: View {
     }
 
     /// 胶囊 / 进度轨几何常量：与小说阅读器底栏 capsuleBar 同一套
-    /// （胶囊高 82、图标距上沿 12、读数距下沿 12、轨 3pt、手柄下探 14、拖动带 42、轨内缩 8）
     private let capsuleHeight: CGFloat = 82
     private let iconRowTopPadding: CGFloat = 12
     private let readoutBottomInset: CGFloat = 12
@@ -635,7 +617,7 @@ struct ComicReaderView: View {
     private let railStripHeight: CGFloat = 42
     private let railInset: CGFloat = 8
 
-    // MARK: - 交互与布局
+ // MARK: - 交互与布局
 
     private var isRightToLeft: Bool {
         switch viewModel.direction {
@@ -665,8 +647,6 @@ struct ComicReaderView: View {
         // 条漫：目标页页码变化才需要程序滚动（onChange 消费 intent）
         if viewModel.mode == .webtoon, target != viewModel.page {
             // 跳页定位到目标页页顶：清掉旧页内偏移，抑制可见页回写并分阶段重试钉住目标页。
-            // 否则懒加载页高逐个补齐时内容整体位移，视口会被推离目标页落到未解码页上
-            // （表现为「跳过去闪一下画面 → 立刻又变加载中」，需要手动滑动才恢复）
             viewModel.resetPageOffset()
             viewModel.beginWebtoonRestore()
             scrollIntent = WebtoonScrollIntent(page: target, anchor: .top)
@@ -731,7 +711,6 @@ private struct ComicImagePage: View {
     var aspectRatio: CGFloat? = nil
 
     /// 未知页占位比例（高/宽）兜底：按宽度折算高度。原固定 420pt 与真实页高
-    /// （宽×比例，手机约 550+）相差几百点，跳页后页面陆续解码会让内容整体位移、定位漂移
     static let estimatedRatio: CGFloat = 1.45
 
     var body: some View {
@@ -761,7 +740,7 @@ private struct ComicImagePage: View {
 
 // MARK: - 双指缩放（UIScrollView 桥接）
 
-/// 双指缩放容器（IOS-207）：捏合 1x~4x，双击放大/还原
+/// 双指缩放容器：捏合 1x~4x，双击放大/还原
 private struct ZoomableScrollView<Content: View>: UIViewRepresentable {
     let content: Content
 
@@ -844,7 +823,6 @@ private struct ZoomableScrollView<Content: View>: UIViewRepresentable {
 // MARK: - 条漫可见页偏好键
 
 /// 条漫程序滚动意图：目标页 + 对齐锚点（恢复定位按页内偏移换算，跳页固定 `.top`）
-/// `id` 区分同一目标页的多次跳转，避免上一轮的延时重试提前结束新一轮定位
 private struct WebtoonScrollIntent: Equatable {
     let id = UUID()
     let page: Int
@@ -858,7 +836,7 @@ private struct WebtoonVisibleKey: PreferenceKey {
     }
 }
 
-// MARK: - 缩略图面板（IOS-210 控制层重设计：☰ / 「缩略图」chip）
+// MARK: - 缩略图面板
 
 /// 页面缩略图网格：点击跳页；缩略图按需加载（已解码页直接缩略 / 磁盘缓存解码 / 归档解压）
 private struct ComicThumbnailSheet: View {
@@ -942,9 +920,7 @@ private struct ComicThumbnailSheet: View {
 
 // MARK: - 白色毛玻璃底衬
 
-/// 白色毛玻璃底衬（对齐小说阅读器控制层：`themeSpec.controlBackground` 72% + 系统薄材质）：
-/// 固定白 tint，与漫画页面本身的深浅解耦，同时保住玻璃质感。
-/// 材质强制走浅色变体——App 处于深色模式时 `.thinMaterial` 会变暗，会把白 tint 一起压成灰。
+/// 白色毛玻璃底衬（对齐小说阅读器控制层：`themeSpec.controlBackground` 72% + 系统薄材质）
 private struct LightGlassBackground<S: Shape>: View {
     let shape: S
     var material: Material = .thinMaterial
@@ -961,7 +937,7 @@ private struct LightGlassBackground<S: Shape>: View {
     }
 }
 
-// MARK: - 亮度面板（IOS-210 控制层重设计：⋯ 菜单 / 「亮度」chip）
+// MARK: - 亮度面板
 
 /// 亮度调节：复用全局阅读亮度偏好（reader.brightness），与小说阅读器同档；-1 = 跟随系统
 private struct ComicBrightnessSheet: View {

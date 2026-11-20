@@ -1,12 +1,6 @@
 import Foundation
 
-/// 每个目录的文件显示顺序偏好（TODO 370）：
-/// 浏览界面按「连接 + 目录路径」单独缓存排序字段（名称/大小/修改时间）与升降序，
-/// 切换目录时各自恢复自己的顺序；某目录首次进入（无记录）时回落全局默认
-/// `AppSettings.Browse.sortKey` / `sortAscending`（由最近一次修改更新，新目录沿用最近使用的顺序）。
-///
-/// 存储：UserDefaults 单键 JSON 字典（键 = `connectionID|标准化路径`）。
-/// 长期使用会产生大量目录记录，超过 `maxEntries` 时按最久未更新淘汰，避免无限膨胀。
+/// 每个目录的文件显示顺序偏好
 enum BrowseSortPreferences {
 
     /// 单目录排序偏好
@@ -22,7 +16,7 @@ enum BrowseSortPreferences {
     private static let storageKey = "browse.sortPreferences.v1"
     private static let lock = NSLock()
 
-    // MARK: - 读写
+ // MARK: - 读写
 
     /// 读取某目录的排序偏好；无记录返回 nil（调用方回落全局默认）
     static func preference(connectionID: Int64, path: String) -> Preference? {
@@ -45,7 +39,7 @@ enum BrowseSortPreferences {
         }
     }
 
-    // MARK: - 内部
+ // MARK: - 内部
 
     /// 存储键：连接 ID 数字前缀 + 「|」分隔（首个分隔符前必为纯数字 ID，无歧义）
     private static func key(connectionID: Int64, path: String) -> String {

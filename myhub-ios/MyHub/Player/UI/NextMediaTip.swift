@@ -1,7 +1,7 @@
 import GRDB
 import SwiftUI
 
-/// 播完查找下一个（IOS-204）：在当前目录按浏览排序偏好查找下一个同类型（视频/音频）文件
+/// 播完查找下一个：在当前目录按浏览排序偏好查找下一个同类型（视频/音频）文件
 enum NextMediaFinder {
     static func find(after item: PlayableItem) async -> (Connection, FileEntry)? {
         guard let connectionID = item.connectionID,
@@ -16,7 +16,7 @@ enum NextMediaFinder {
         guard let siblings = try? await adapter.list(parent) else { return nil }
         let sameType = siblings.filter { !$0.isDir && MediaType.detect(ext: $0.ext) == mediaType }
 
-        // 与浏览页一致的排序偏好：优先用该目录单独缓存的顺序（TODO 370），无记录回落全局默认
+        // 与浏览页一致的排序偏好：优先用该目录单独缓存的顺序，无记录回落全局默认
         let preference = BrowseSortPreferences.preference(connectionID: connectionID, path: parent)
         let ascending = preference?.ascending ?? AppSettings.Browse.sortAscending
         let sorted: [FileEntry]
@@ -39,9 +39,7 @@ enum NextMediaFinder {
     }
 }
 
-/// 「下一个：xxx」提示（IOS-204 / IOS-208）：播完 / 翻完推荐同目录下一个（视频 / 音频 / 漫画），
-/// 不自动播放、不自动切换，由用户点击提示条才播放 / 打开，或点 × 取消。
-/// 位置由播放页固定在中央按钮正下方，不随控制栏显隐移动。
+/// 「下一个：xxx」提示：播完 / 翻完推荐同目录下一个（视频 / 音频 / 漫画）
 struct NextMediaTip: View {
     let entry: FileEntry
     let onPlay: () -> Void

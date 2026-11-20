@@ -1,9 +1,9 @@
 import Foundation
 import GRDB
 
-// MARK: - 连接源（IOS-101）
+// MARK: - 连接源
 
-/// 连接源类型；ftp / sftp / nfs 为预留（§8.2 协议适配器扩展点）
+/// 连接源类型；ftp / sftp / nfs 为预留（协议适配器扩展点）
 enum ConnectionType: String, Codable, CaseIterable {
     case local, webdav, smb
     case ftp, sftp, nfs   // 预留
@@ -58,7 +58,7 @@ struct LocalConfig: Codable {
     var bookmarkData: Data?     // 「文件」App 共享目录的 Security-Scoped Bookmark
 }
 
-// MARK: - 收藏（IOS-107）
+// MARK: - 收藏
 
 struct Favorite: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var id: Int64?
@@ -75,7 +75,7 @@ struct Favorite: Codable, FetchableRecord, PersistableRecord, Identifiable {
     }
 }
 
-// MARK: - 阅读/播放进度（IOS-209）
+// MARK: - 阅读/播放进度
 
 struct ReadingProgress: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var id: Int64?
@@ -101,8 +101,7 @@ struct ReadingProgress: Codable, FetchableRecord, PersistableRecord, Identifiabl
 }
 
 extension ReadingProgress {
-    /// 展示用类型：归档类（zip/rar → 压缩包、cbz/cbr → 漫画）按扩展名实时校正，
-    /// 兼容历史记录里 zip/rar 曾被一律写死为 `.comic` 的旧数据。
+    /// 展示用类型：归档类（zip/rar → 压缩包、cbz/cbr → 漫画）按扩展名实时校正
     var displayMediaType: MediaType {
         let detected = MediaType.detect(ext: StoragePath.ext(of: filePath))
         return detected.isArchiveLike ? detected : mediaType
@@ -135,7 +134,7 @@ struct ChapterInfo: Codable {
     var ruleID: String? = nil
 }
 
-// MARK: - 浏览器（IOS-403 / 402）
+// MARK: - 浏览器
 
 struct Bookmark: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var id: Int64?
@@ -178,7 +177,7 @@ struct BrowserShortcut: Codable, FetchableRecord, PersistableRecord, Identifiabl
     }
 }
 
-// MARK: - 下载任务（IOS-603）
+// MARK: - 下载任务
 
 enum DownloadStatus: String, Codable {
     case queued, downloading, paused, done, failed
@@ -199,7 +198,7 @@ struct DownloadTask: Codable, FetchableRecord, PersistableRecord, Identifiable {
     }
 }
 
-// MARK: - 动态（IOS-301，预留）
+// MARK: - 动态
 
 enum FeedItemType: String, Codable {
     case video, audio, text

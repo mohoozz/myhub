@@ -4,9 +4,7 @@ import UIKit
 /// 阅读器顶部栏高度（按钮 36 + 上下内边距 14），正文内容据此避开顶部栏，避免文字穿透/被遮挡
 private let txtTopBarHeight: CGFloat = 50
 
-/// 纯 txt 阅读器（全屏）：编码自动检测 + 全文滚动阅读（懒加载）+ 一键复制全文；
-/// 阅读排版（字号 / 行距 / 主题 / 衬线）实时生效并持久化；
-/// 不建章节索引、不追踪进度，与小说阅读器区分（需要章节/进度走「以小说阅读器打开」）。
+/// 纯 txt 阅读器（全屏）：编码自动检测 + 全文滚动阅读（懒加载）+ 一键复制全文
 struct TxtReaderView: View {
     let context: TxtOpenContext
 
@@ -49,7 +47,7 @@ struct TxtReaderView: View {
             }
     }
 
-    // MARK: - 正文
+ // MARK: - 正文
 
     @ViewBuilder
     private var content: some View {
@@ -97,7 +95,7 @@ struct TxtReaderView: View {
         }
     }
 
-    // MARK: - 顶部栏
+ // MARK: - 顶部栏
 
     private var topBar: some View {
         HStack(spacing: 12) {
@@ -156,7 +154,7 @@ struct TxtReaderView: View {
         .background(viewModel.themeSpec.background)
     }
 
-    // MARK: - 阅读设置面板
+ // MARK: - 阅读设置面板
 
     private var settingsPanel: some View {
         VStack(spacing: 0) {
@@ -434,7 +432,7 @@ final class TxtReaderViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 排版调整
+ // MARK: - 排版调整
 
     func adjustFont(_ delta: Double) {
         var a = appearance

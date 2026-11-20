@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 首启 / 网络判定期 loading 页（TODO §1.1）：品牌图标 + 旋转动画，杜绝长白屏。
+/// 首启 / 网络判定期 loading 页：品牌图标 + 旋转动画，杜绝长白屏。
 struct LaunchLoadingView: View {
     @State private var rotating = false
 

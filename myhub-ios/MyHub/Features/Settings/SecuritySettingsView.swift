@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 安全设置（TODO §10 / IOS-501）：应用锁（Face ID / Touch ID）+ 凭据安全说明
+/// 安全设置：应用锁（Face ID / Touch ID）+ 凭据安全说明
 struct SecuritySettingsView: View {
     @State private var appLockEnabled = AppSettings.Security.appLockEnabled
     private let lock = AppLockManager.shared

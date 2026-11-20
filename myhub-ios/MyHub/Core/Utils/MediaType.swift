@@ -1,6 +1,6 @@
 import Foundation
 
-/// 媒体类型与扩展名识别（《需求分析文档》§8.1）
+/// 媒体类型与扩展名识别
 enum MediaType: String, Codable, CaseIterable {
     case video, audio, novel, comic, archive, image, subtitle, other
 

@@ -23,7 +23,7 @@ struct SubtitleStyleSpec {
     /// 描边宽度（PlayRes 单位）
     var outlineWidth: CGFloat = 1.5
     var shadow: CGFloat = 0
-    /// numpad 对齐：1/2/3 底 左/中/右，4/5/6 中，7/8/9 顶
+    /// numpad 对齐：1/2/3 底左/中/右，4/5/6 中，7/8/9 顶
     var alignment: Int = 2
     var marginL: CGFloat = 0
     var marginR: CGFloat = 0
@@ -74,7 +74,6 @@ extension SubtitleTimeline: Equatable {
 }
 
 /// ASS / SSA 解析（支持 `[V4+ Styles]` 样式表、`\an` `\pos` `\move` `\c` `\fs` `\bord` 等覆盖标签）。
-/// 目的：B 站导出的一类 ASS 弹幕能按各自位置 / 颜色 / 滚动轨迹渲染，而不是只能挤在最底下。
 enum ASSParser {
     /// 解析失败或无有效事件时返回空时间轴
     static func parse(_ text: String) -> SubtitleTimeline {
@@ -147,7 +146,7 @@ enum ASSParser {
         )
     }
 
-    // MARK: - 样式表
+ // MARK: - 样式表
 
     private static func parseStyle(_ value: String, format: [String], into styles: inout [String: SubtitleStyleSpec]) {
         let defaultFormat = [
@@ -184,7 +183,7 @@ enum ASSParser {
         return CGFloat(value)
     }
 
-    // MARK: - 事件行
+ // MARK: - 事件行
 
     private static func parseEvent(
         _ value: String,
@@ -231,7 +230,7 @@ enum ASSParser {
         )
     }
 
-    // MARK: - 覆盖标签
+ // MARK: - 覆盖标签
 
     private static func resolveOverrides(
         _ raw: String,
@@ -384,7 +383,7 @@ enum ASSParser {
         }
     }
 
-    // MARK: - 工具
+ // MARK: - 工具
 
     /// 提取标签括号内的数字（`pos(1,2)` / `move(1,2,3,4,0,500)`，支持负坐标）
     private static func numbers(in tag: String) -> [CGFloat] {

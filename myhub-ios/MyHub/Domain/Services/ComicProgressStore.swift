@@ -3,9 +3,7 @@ import CryptoKit
 import GRDB
 import UIKit
 
-/// 漫画阅读进度落库（IOS-207 / IOS-209）：
-/// progressJSON 存 `ComicAnchor`（页码 + 文件指纹，排版无关）；落库后广播
-/// `playbackProgressDidChange` 供「正在阅读」列表自动刷新（与播放/小说进度共用通道）。
+/// 漫画阅读进度落库
 enum ComicProgressStore {
 
     /// 漫画进度锚点：页码 + 页内偏移 + 文件指纹（fileSize + modTime，文件被替换则进度作废）
@@ -74,8 +72,7 @@ enum ComicProgressStore {
         guard let db = AppDatabase.shared.dbQueue else { return }
         let percent = pageCount > 0 ? Double(anchor.page + 1) / Double(pageCount) : 0
         let clamped = min(1, max(0, percent))
-        // 类型按扩展名落库：cbz/cbr → 漫画，zip/rar 等 → 压缩包，
-        // 保证「正在阅读」徽标/副标题与浏览页一致（不再一律写死 .comic）。
+        // 类型按扩展名落库：cbz/cbr → 漫画，zip/rar 等 → 压缩包
         let detected = MediaType.detect(ext: StoragePath.ext(of: path))
         let mediaType: MediaType = detected.isArchiveLike ? detected : .comic
         try? db.write { database in
@@ -130,7 +127,7 @@ enum ComicProgressStore {
         let name = "comic-\(key).jpg"
         let url = CacheManager.shared.url(for: .thumbnails).appendingPathComponent(name)
         try? jpeg.write(to: url, options: .atomic)
-        CacheManager.shared.evictPartitionIfNeeded(.thumbnails)   // 封面分区 LRU（IOS-605）
+        CacheManager.shared.evictPartitionIfNeeded(.thumbnails)
         return name
     }
 }

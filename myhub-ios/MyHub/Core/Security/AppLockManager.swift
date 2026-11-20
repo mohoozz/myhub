@@ -1,9 +1,8 @@
 import Foundation
 import LocalAuthentication
 
-/// 应用锁（TODO §10 / IOS-501 安全设置）：
+/// 应用锁
 /// 开启后应用进入后台再上滑返回时要求 Face ID / Touch ID（无生物识别回退设备密码）验证。
-/// 开关本身需先通过身份验证，防止他人直接关闭。
 final class AppLockManager: ObservableObject {
     static let shared = AppLockManager()
 

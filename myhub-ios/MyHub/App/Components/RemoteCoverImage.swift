@@ -1,9 +1,6 @@
 import SwiftUI
 
-/// 远程封面组件（IOS-102 / IOS-702，浏览页与「正在阅读」页共用）：
-/// - 立即渲染占位（类型图标），后台异步加载封面，完成后淡入替换；
-/// - 失败保持占位图标；**封面加载不阻塞点击进入播放/阅读**（加载挂在 cell 的 task 上，与点击无关）；
-/// - 探测到的视频时长经 `duration` Binding 回传（时长角标）。
+/// 远程封面组件（浏览页与「正在阅读」页共用）
 struct RemoteCoverImage: View {
     let entry: FileEntry
     let connection: Connection
@@ -39,8 +36,6 @@ struct RemoteCoverImage: View {
             }
             if let image = result?.image {
                 // 用 Color.clear 撑满容器，图片仅作为 overlay 填充，避免图片原始分辨率
-                // 作为理想尺寸泄漏到外层布局（否则漫画/竖屏视频封面的卡片会被撑高、
-                // 正常视频封面会比无封面的宽，导致网格卡片大小不一）。
                 Color.clear
                     .overlay {
                         Image(uiImage: image)
@@ -65,7 +60,6 @@ struct RemoteCoverImage: View {
     }
 
     /// 无封面时的占位：去掉白底，仅显示放大后的类型/目录图标，尺寸随容器自适应
-    /// （列表小缩略图与网格大卡都能得到足够大的图标）。
     private var placeholderIcon: some View {
         GeometryReader { geo in
             let side = min(geo.size.width, geo.size.height)

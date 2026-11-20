@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// 呼吸灯高亮（IOS-704）：「定位到原路径」等场景的临时强调——
-/// 主色底/描边透明度循环呼吸，仅提示一段时间（由外部控制 active 开关，约 10s），不常亮。
+/// 呼吸灯高亮：「定位到原路径」等场景的临时强调
 struct BreathingHighlightModifier: ViewModifier {
     let active: Bool
     var cornerRadius: CGFloat = 12

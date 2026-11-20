@@ -1,10 +1,7 @@
 import Foundation
 import Network
 
-/// 网络路径监测（TODO 380）：记录熄屏/长时间后台期间的网络环境变化
-/// （WiFi 断开/重连换 IP、切换蜂窝、整体断网、受限网络），
-/// 为「熄屏一段时间回来后视频无法播放」提供环境侧证据——判断问题是否与网络变化有关。
-/// 仅记录日志与提供只读快照，不改变任何请求行为（自愈仍由 NetworkRecovery 负责）。
+/// 网络路径监测：记录熄屏/长时间后台期间的网络环境变化
 final class NetworkPathMonitor {
     static let shared = NetworkPathMonitor()
 

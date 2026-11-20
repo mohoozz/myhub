@@ -1,10 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 字幕渲染层（外挂 SRT / ASS 通用）：
-/// - 按 ASS `PlayRes` 映射到**视频实际显示区域**（letterbox 内），竖屏/横屏都贴画面底部；
-/// - 支持 `\an` 对齐、`\pos` 定位、`\move` 滚动弹幕、`\c` 颜色、`\bord` 描边，可同时叠加多条；
-/// - 纯文字 + 描边，无背景色块；位置固定，不随控制栏显隐上下移动。
+/// 字幕渲染层（外挂 SRT / ASS 通用）
 final class SubtitleRenderView: UIView {
     var timeline: SubtitleTimeline = .empty {
         didSet {
@@ -55,7 +52,7 @@ final class SubtitleRenderView: UIView {
         didSet { syncClock(to: playerTime) }
     }
 
-    // MARK: - 内部状态
+ // MARK: - 内部状态
 
     private var cueStarts: [TimeInterval] = []
     private var timelineHasAnimation = false
@@ -75,7 +72,7 @@ final class SubtitleRenderView: UIView {
     }
     private struct TextKey: Hashable {
         let id: Int
-        let fontBucket: Int      // 字号 ×2，避免浮点抖动造成缓存失效
+        let fontBucket: Int
         let outlineBucket: Int   // 描边 ×10
         let shadowBucket: Int    // 阴影 ×10
     }
@@ -122,7 +119,7 @@ final class SubtitleRenderView: UIView {
         setNeedsDisplay()
     }
 
-    // MARK: - 时钟
+ // MARK: - 时钟
 
     private func syncClock(to time: TimeInterval) {
         let target = time - subtitleDelay
@@ -134,7 +131,6 @@ final class SubtitleRenderView: UIView {
             clockRateCorrection = 0
         } else {
             // 正常播放：位置保持连续，只把误差摊进推进速率（±25%）慢慢追平。
-            // 以前直接改位置，4Hz 校准一次就跳一下——滚动弹幕看起来一卡一卡的。
             clockBase = predicted
             clockRateCorrection = abs(delta) < 0.02 ? 0 : max(-0.2, min(0.2, delta * 2.5))
         }
@@ -165,7 +161,7 @@ final class SubtitleRenderView: UIView {
 
     fileprivate func tick() { setNeedsDisplay() }
 
-    // MARK: - 绘制
+ // MARK: - 绘制
 
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
@@ -251,7 +247,7 @@ final class SubtitleRenderView: UIView {
         return sorted.count > 120 ? Array(sorted.suffix(120)) : sorted
     }
 
-    // MARK: - 单条绘制
+ // MARK: - 单条绘制
 
     private func draw(_ cue: SubtitleCue, at time: TimeInterval, videoRect: CGRect, metrics: Metrics) {
         let rawSize = metrics.isAss ? cue.style.fontSize * metrics.fontScale : simpleFontSize
@@ -263,7 +259,6 @@ final class SubtitleRenderView: UIView {
             ? cue.style.outlineWidth * metrics.fontScale
             : max(1.2, simpleFontSize * 0.09)
         // ASS 的 Outline 是 PlayRes 单位，弹幕/字幕文件里常出现「小字号配大描边」（如 25 号字配 2 描边）。
-        // 描边由 renderedImage 以「外描边」方式绘制（不会吃掉字形填充），此处仅做异常值限幅。
         let outlineWidth = metrics.isAss ? min(rawOutline, fontSize * 0.12) : rawOutline
         let shadowOffset = metrics.isAss ? cue.style.shadow * metrics.fontScale : 0
         let cached = renderedImage(
@@ -356,12 +351,9 @@ final class SubtitleRenderView: UIView {
         return CGPoint(x: x, y: y)
     }
 
-    // MARK: - 文本构建
+ // MARK: - 文本构建
 
     /// 把一条字幕预渲染成位图（按文字 + 样式缓存）。
-    /// 描边分两遍画：先画「空心描边」打底，再用纯填充盖住描边内半圈 —— 等效于 libass 的外描边。
-    /// 之前用负值 strokeWidth 一遍画完，CoreText 的描边是**居中**的，会吃掉字形填充；
-    /// 弹幕这种「25 号字 + 2 描边」的小字场景下白字会被黑色描边糊成深色一团。
     private func renderedImage(
         for cue: SubtitleCue,
         fontSize: CGFloat,
@@ -442,8 +434,6 @@ final class SubtitleRenderView: UIView {
     }
 
     /// 填充色可读性兜底：ASS 原样照搬作者配色，但「深色填充 + 深色描边」在视频上等于没字
-    /// （以前所有字幕统一白字 + 半透明黑底，所以不会出现）。仅当填充和描边都明显偏深时才提亮为白色；
-    /// 「黑字 + 白描边」这类刻意配色（描边是浅色）保持原样。
     private func readableFill(for style: SubtitleStyleSpec) -> UIColor {
         guard styleFillAndOutlineBothDark(style) else { return style.primaryColor }
         return .white
@@ -493,8 +483,7 @@ final class SubtitleRenderView: UIView {
         return result
     }
 
-    /// ASS 里常见的字体族名（微软雅黑 / 黑体 / 宋体…）在 iOS 上都不存在：
-    /// 统一回落到打包的思源黑体（Noto Sans SC，已由 `SubtitleFontRegistry` 注册）与系统苹方
+    /// ASS 里常见的字体族名（微软雅黑 / 黑体 / 宋体…）在 iOS 上都不存
     private func fontCandidates(for name: String) -> [String] {
         let normalized = name.lowercased().replacingOccurrences(of: " ", with: "")
         let cjkNames = ["yahei", "msyh", "微软雅黑", "simhei", "黑体", "heiti", "song", "宋体",
@@ -513,8 +502,7 @@ private final class SubtitleDisplayLinkProxy {
     @objc func tick() { view?.tick() }
 }
 
-/// SwiftUI 桥：时间轴来自 SubtitleManager，播放时间由 PlayerCore（4Hz）驱动，
-/// 视图内部再用本地时钟插值到 30fps 渲染滚动弹幕
+/// SwiftUI 桥：时间轴来自 SubtitleManager，播放时间由 PlayerCore（4Hz）驱动
 struct SubtitleOverlay: UIViewRepresentable {
     let timeline: SubtitleTimeline
     let videoSize: CGSize
@@ -538,4 +526,3 @@ struct SubtitleOverlay: UIViewRepresentable {
         view.playerTime = time
     }
 }
-

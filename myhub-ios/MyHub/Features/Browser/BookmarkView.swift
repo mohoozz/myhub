@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 书签管理页（TODO §8.3，IOS-402）：列表 / 搜索 / 编辑 / 删除。
+/// 书签管理页：列表 / 搜索 / 编辑 / 删除。
 struct BookmarkView: View {
     @EnvironmentObject private var dataStore: BrowserDataStore
     @Environment(\.dismiss) private var dismiss

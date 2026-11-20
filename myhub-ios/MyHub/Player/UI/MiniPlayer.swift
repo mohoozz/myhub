@@ -1,15 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// 贴底式 mini 播放器（对齐 Flutter `MiniPlayer`，QQ 音乐风格）：
-/// iPhone 上紧贴底部页签栏、宽度占满屏幕；点击展开回全屏、下拉拖拽关闭。
-///
-/// 封面 64×64 圆角 8、顶部溢出 8px（浮在卡片上边界，突出显示）；
-/// 标题显示「标题」，副标题显示「作者」（不显示路径）；
-/// 视频播放时封面实时渲染画面（`MiniCoverPreview`），音频播放时显示内嵌/同目录封面（缺失回落图标）。
+/// 贴底式 mini 播放器（对齐 Flutter `MiniPlayer`，QQ 音乐风格）
 struct MiniPlayer: View {
-    /// iPhone 悬浮胶囊页签栏上方：四周圆角卡片（TODO 376 方案 C）；
-    /// iPad 悬浮底部保持贴底式仅顶部圆角
+    /// iPhone 悬浮胶囊页签栏上方：四周圆角卡片
     var roundedBottom: Bool = false
 
     @EnvironmentObject private var player: PlayerPresenter
@@ -21,13 +15,12 @@ struct MiniPlayer: View {
     /// 封面尺寸（对齐 Flutter compact 布局）
     private let coverSize: CGFloat = 64
     /// 封面顶部溢出量：`.offset` 视觉上浮出卡片上边界，**不参与布局测量**。
-    /// 公开为静态常量供兄弟视图避让复用（如 `BrowserHomeView.bottomBarGap`），避免多处写死漂移。
     static let coverOverflow: CGFloat = 8
     /// 封面距卡片左缘 / 封面与标题区间距
     private let coverLeading: CGFloat = 16
     private let coverGap: CGFloat = 12
 
-    /// 卡片外形：iPhone 悬浮态四周圆角（TODO 376 方案 C）；iPad 贴底态仅顶部圆角
+    /// 卡片外形：iPhone 悬浮态四周圆角；iPad 贴底态仅顶部圆角
     private var cardShape: TopRoundedShape {
         TopRoundedShape(radius: 16, roundedBottom: roundedBottom)
     }
@@ -55,10 +48,7 @@ struct MiniPlayer: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // 卡片主体（不含封面）。封面作为 ZStack 兄弟节点而非卡片子节点，
-            // 顶部溢出才不会被卡片的 ClipShape 裁掉。
-            // iPhone：与胶囊页签栏对齐的悬浮圆角卡片（TODO 376 方案 C）；
-            // iPad：贴底布局，与底部页签栏同背景色、仅顶部圆角、宽度占满（对齐 Flutter mini）。
+            // 卡片主体（不含封面）。封面作为 ZStack 兄弟节点而非卡片子节点
             cardBody
                 .background(AppColors.sidebarBackground)
                 .clipShape(cardShape)
@@ -71,8 +61,7 @@ struct MiniPlayer: View {
         }
         .offset(y: dragOffset)
         .gesture(
-            // 用 .global 坐标空间：卡片自身随手指偏移，若用默认 .local 坐标空间，
-            // 视图移动会反过来改变 translation 的换算基准，产生正反馈导致拖动抖动。
+            // 用 .global 坐标空间：卡片自身随手指偏移，若用默认 .local 坐标空间
             DragGesture(coordinateSpace: .global)
                 .updating($dragOffset) { value, state, _ in
                     state = max(0, value.translation.height)
@@ -92,9 +81,8 @@ struct MiniPlayer: View {
     }
 
     /// 音频模式加载内嵌 / 同目录封面（复用 `CoverService` 内存/磁盘缓存，命中即时返回，与全屏/锁屏同源）。
-    /// 加载到即显示并回填锁屏封面；缺失或非音频时保持图标占位。
     private func loadAudioCover() async {
-        audioCover = nil   // 切歌先清空，避免残留上一首封面
+        audioCover = nil
         guard isAudio, let item = player.current else { return }
         let result = await CoverService.shared.cover(forItem: item)
         // 加载期间可能已切歌，回填前确认仍是当前条目
@@ -183,9 +171,7 @@ struct MiniPlayer: View {
                         .resizable()
                         .scaledToFill()   // 填满封面（对齐全屏/浏览页 BoxFit.cover 观感）
                 } else {
-                    // 占位封面：主色仅 12% 不透明度（近乎透明），若直接叠加会透出背后
-                    // 卡片上边框（`cardShape.stroke`）与溢出区后方页面内容。故先垫一层
-                    // 与卡片同色的不透明底色，再叠加主色浅色块，观感不变但不透光。
+                    // 占位封面：主色仅 12% 不透明度（近乎透明）
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(AppColors.primary.opacity(0.12))
                         .background(
@@ -213,8 +199,7 @@ struct MiniPlayer: View {
     }
 }
 
-/// mini 播放器圆角外形：默认仅顶部圆角（贴底态，对齐 Flutter mini 顶部 16 圆角）；
-/// `roundedBottom = true` 时四周圆角（iPhone 悬浮于胶囊页签栏上方，TODO 376 方案 C）
+/// mini 播放器圆角外形：默认仅顶部圆角（贴底态，对齐 Flutter mini 顶部 16 圆角）
 private struct TopRoundedShape: Shape {
     var radius: CGFloat
     var roundedBottom: Bool = false

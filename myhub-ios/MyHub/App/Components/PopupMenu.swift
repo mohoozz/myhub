@@ -21,8 +21,7 @@ struct PopupMenuItem: Identifiable {
 
 // MARK: - 全局菜单呈现器
 
-/// 统一弹出菜单入口（TODO §1.1）：… 菜单 / 长按菜单 / 右键菜单（iPad·Mac 指针）
-/// 由 RootView 顶层悬浮层承载；长按与导航栏右上角（+ / …）走底部抽屉，指针右键走锚点圆角卡片。
+/// 统一弹出菜单入口：… 菜单 / 长按菜单 / 右键菜单（iPad·Mac 指针）
 final class PopupMenuPresenter: ObservableObject {
     /// 菜单呈现样式
     enum Style {
@@ -133,8 +132,6 @@ struct PopupMenuLayer: View {
     }
 
     /// 关闭菜单：先播退出动画，动画结束后移除悬浮层并执行可选动作。
-    /// 动作延迟到悬浮层移除后再执行——避免菜单还在顶层 overlay 时立即触发
-    /// 系统 confirmationDialog/alert，导致确认框在奇怪位置弹出。
     private func dismiss(_ action: (() -> Void)? = nil) {
         withAnimation(.appQuick) { visible = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -146,9 +143,7 @@ struct PopupMenuLayer: View {
 
 // MARK: - 底部抽屉菜单
 
-/// 底部滑出抽屉式菜单（参照 Flutter showModalBottomSheet，iOS 长按统一入口）：
-/// 顶部拖拽把手（可下拉关闭）+ 可滚动列表（超高时内部滚动）+ 点击蒙层关闭；
-/// iPad 上限宽居中，圆角顶边，与全局菜单同一悬浮层承载。
+/// 底部滑出抽屉式菜单（参照 Flutter showModalBottomSheet，iOS 长按统一入口）
 struct BottomMenuDrawer: View {
     let items: [PopupMenuItem]
     let onDismiss: () -> Void
@@ -163,9 +158,7 @@ struct BottomMenuDrawer: View {
     private let cornerRadius: CGFloat = 16
     private let maxWidth: CGFloat = 520      // iPad 限宽居中
 
-    /// 底部安全区高度（Home 指示条）：本视图 `.ignoresSafeArea()` 后
-    /// `GeometryProxy.safeAreaInsets` 会失效为 0，需从 keyWindow 读取真实值，
-    /// 否则最底部菜单项会贴着屏幕底边、不好点击。
+    /// 底部安全区高度（Home 指示条）
     private var bottomInset: CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -262,8 +255,6 @@ struct BottomMenuDrawer: View {
     }
 
     /// 关闭菜单：先播退出动画，动画结束后移除悬浮层并执行可选动作。
-    /// 动作延迟到悬浮层移除后再执行——避免菜单还在顶层 overlay 时立即触发
-    /// 系统 confirmationDialog/alert，导致确认框在奇怪位置弹出。
     private func dismiss(_ action: (() -> Void)? = nil) {
         withAnimation(.appQuick) { visible = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -283,29 +274,12 @@ private struct DrawerRowStyle: ButtonStyle {
 
 // MARK: - 触发组件
 
-/// 「…」触发按钮：记录自身全局位置并弹出底部抽屉菜单（与长按文件菜单一致）；
-/// symbol 可定制（默认「…」），style 可定制（默认底部抽屉；`.popover` 仅供指针右键等特殊场景）。
-///
-/// 按压反馈由 `PressBridge` 真实触摸驱动，而非系统 Button 的 `isPressed`：
-/// NavigationStack 左滑返回手势期间，系统为返回按钮高亮时会误把导航栏 trailing
-/// 按钮的 `isPressed` 置为 true、手势结束复位，导致 `.pressScale` 播放缩放动画，
-/// 表现为「左滑返回 / 进入下一级目录后右上角图标像被点击一样弹一下」。改用
-/// `PressBridge` 后仅在手指真实按下按钮时才反馈，彻底消除该误触。
-///
-/// 另一路同样表现为「弹一下」的来源是**导航转场事务**（TODO 404）：切换上/下一级目录时，
-/// toolbar 内容属于「新页面的新视图」，SwiftUI 按插入处理并在一个**带动画的转场事务**里
-/// 渲染它。`scaleEffect` 若不自带显式动画，就会继承该事务的动画、从转场初值插值到 1 ——
-/// 在 iOS 26 的圆形玻璃胶囊按钮上看起来和按压回弹一模一样。故按压缩放必须把动画来源
-/// 锁死为「真实按压信号」这唯一一个，并显式声明插入/移除无转场（见 body 内注释）。
-///
-/// 锚点写回同理：全局坐标在转场期间逐帧变化，绝不能用 `@State` 承接（见 `AnchorBox`）。
+/// 「…」触发按钮：记录自身全局位置并弹出底部抽屉菜单（与长按文件菜单一致）
 struct PopupMenuButton: View {
     let items: [PopupMenuItem]
     var symbol: String = "ellipsis"
     var style: PopupMenuPresenter.Style = .drawer
-    /// 触控格尺寸：默认 32pt（导航栏内沿用原尺寸），
-    /// 需要满足 44pt 最小点击区的场景（如浏览器底部操作栏，TODO 406）由调用方显式放大。
-    /// `PressBridge` 以 overlay 覆盖本尺寸，故改这里即同时放大命中区。
+    /// 触控格尺寸：默认 32pt（导航栏内沿用原尺寸）
     var size: CGSize = CGSize(width: 32, height: 32)
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
@@ -319,9 +293,7 @@ struct PopupMenuButton: View {
             .frame(width: size.width, height: size.height)
             .contentShape(Rectangle())
             .scaleEffect(press.isPressing ? 0.92 : 1)
-            // 缩放只认 `press.isPressing` 这一个动画来源：`.animation(_:value:)` 在 value
-            // 未变化时会把继承来的动画置空，导航转场事务便再也驱动不了这里的插值。
-            // 动画值随方向取舍，保留原语义——按下瞬时（nil，跟手）、抬起回弹（.appFast）。
+            // 缩放只认 `press.isPressing` 这一个动画来源
             .animation(press.isPressing ? nil : Animation.appFast, value: press.isPressing)
             .background(AnchorReader(box: anchorBox))
             .overlay(PressBridge(
@@ -331,23 +303,13 @@ struct PopupMenuButton: View {
             ))
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(symbol == "plus" ? "添加" : "更多操作")
-            // push/pop 时本视图会被当作插入/移除，默认转场（缩放 + 淡入）即「弹一下」的观感；
-            // 显式声明 identity 转场 + 掐断继承动画，让目录切换只是「直接在那里」。
-            // 外层 transaction 不影响上面的 `.animation(_:value:)`——内侧声明优先级更高。
+            // 避免 push/pop 时被当成插入/移除而「弹一下」
             .transition(.identity)
             .transaction { transaction in transaction.animation = nil }
     }
 }
 
 /// 放**导航栏 toolbar** 里的菜单触发按钮：**标准 `Button`**，不套 `PressBridge`。
-///
-/// 与 `PopupMenuButton` 的区别是「少做手工活」：不自绘按压回缩、不铺 `PressBridge`
-/// （`UIViewRepresentable`）那层 UIKit 手势。切目录时右上角的那一下「弹」由 `AnchorBox`
-/// 负责（见其注释），此处保留标准 `Button` 是为了跟左上角系统返回按钮同构——
-/// 导航栏里能少一个自定义视图就少一个变数，这也正是用户指出的参照物。
-///
-/// 取舍：按压反馈交回系统（iOS 26 是玻璃按压效果，其余版本是系统默认按压态），
-/// 不再有自绘的 0.92 回缩。那点回缩本来就常被误认成「被点了一下」，换成静止更划算。
 struct ToolbarMenuButton: View {
     let items: [PopupMenuItem]
     var symbol: String = "ellipsis"
@@ -371,35 +333,13 @@ struct ToolbarMenuButton: View {
 
 // MARK: - 导航栏右上角按钮（UIKit 承载）
 
-/// 右上角按钮改由 **UIKit** 装到页面的 `UINavigationItem` 上，与左上角系统返回按钮同一套机制（TODO 404）。
-///
-/// **为什么换机制**：左上角返回按钮从来不弹。差别在 **item 是谁**——自绘 view 装的 item
-/// （`UIBarButtonItem(customView:)`）对导航栏是「外来户」，栏得给它现量尺寸、现配玻璃胶囊，
-/// 成形动画就发生在这一步；标准 item 的图标是栏**自己的**内容，只随栏走转场。此前六轮修法
-/// （自绘 item、标准 `Button`、锁死动画来源、显式无转场事务、逐帧锚点写回、
-/// 自绘胶囊 + `.glassEffectTransition(.identity)`）改的都是 item 的*内容*或*时机*，所以处处照弹。
-///
-/// **别把结论修回「时机」**：真机日志（模块 `navbar`）证明新页面的 item 在 `viewWillAppear` 时就已
-/// 装好（`转场中=true 已上屏=false`，即转场动画开始前就在位），且全程没有被 SwiftUI 清掉重装；
-/// 连 `setRightBarButtonItems(animated: false)` + `performWithoutAnimation` 也压不住那一下弹。
-///
-/// **做法**：借返回按钮那套机制——把标准 `UIBarButtonItem` 装到所在页面的
-/// `UINavigationItem.rightBarButtonItems` 上（图标/尺寸/胶囊全归 UIKit，观感与返回按钮同源），
-/// 并在 `viewWillAppear` 与每次布局时**幂等**写回。
-///
-/// 用法：挂在页面 body 上（`.background` 即可），同时**不要在 `.toolbar` 里声明右上角 item**，
-/// 否则 SwiftUI 会改写 `rightBarButtonItems`，把这里装的覆盖掉（见 `BrowseDirectoryView`）。
-///
-/// 取舍：图标与胶囊样式交给 UIKit（`UIBarButtonItem` 自有一套度量，不再由我们指定尺寸）；
-/// 弹出菜单仍是 app 自绘的卡片 / 抽屉，锚点按无障碍标签在导航栏子树里认领那颗实体按钮，
-/// 交互与观感不变。
+/// 右上角按钮改由 **UIKit** 装到页面的 `UINavigationItem` 上，与左上角系统返回按钮同一套机制。
 struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
     /// 一颗按钮：SF Symbol + 点按回调
     struct Item {
         let symbol: String
         let accessibilityLabel: String
         /// 点按回调；参数是按钮在**窗口**中的位置，供自绘菜单定位
-        /// （窗口坐标与 SwiftUI `.global` / 全屏 overlay 是同一套）
         let action: (CGRect) -> Void
 
         init(symbol: String, accessibilityLabel: String, action: @escaping (CGRect) -> Void) {
@@ -445,14 +385,11 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
         /// 转场动画开始前就把 item 装好——这正是与 `.toolbar` 的关键差别
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            AppLogger.shared.log("挂载点 viewWillAppear（转场中=\(viewIfLoaded?.window != nil)）", level: .debug, module: "navbar")
             install?()
         }
 
-        /// 诊断：转场结束后这里若才第一次装 → 说明「转场前就位」这个前提没成立，弹的就是插入
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            AppLogger.shared.log("挂载点 viewDidAppear（转场已结束）", level: .debug, module: "navbar")
             install?()
         }
 
@@ -473,7 +410,7 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
         /// 认领 item 实体视图（菜单锚点）用；页面变化时随之刷新
         private weak var navigationBar: UINavigationBar?
 
-        /// 幂等安装：内容没变且 item 仍在位时**什么都不做**——重装即等于插入，正是要避免的那一下
+        /// 幂等安装：内容不变且 item 在位时什么都不做
         func apply(from host: UIViewController) {
             guard let page = Self.pageController(from: host) else {
                 AppLogger.shared.log("右上角按钮：找不到页面导航项（挂载点还没接上）", level: .debug, module: "navbar")
@@ -490,8 +427,7 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
 
             if oursInPlace, signature == installedSignature { return }
 
-            // 诊断（TODO 404）：我们的 item 本来在位、现在却没了 → **有人把它们清掉了**。
-            // 清掉之后的任何重装都会是一次「插入」，那正是要抓的那一下。
+            // 记录重装原因（重装即等同一次插入，是排查重点）
             let reason: String
             if installedBarItems.isEmpty {
                 reason = "首次安装"
@@ -501,8 +437,6 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
                 reason = "内容变化（\(installedSignature ?? "-") → \(signature)）"
             }
 
-            // 数组顺序即「右起」：`rightBarButtonItems` 第一个落在最右边，所以按显示顺序倒着排
-            //（`items` 是「添加 / 更多」的书写顺序，栏里应为「更多」在最右）
             let ordered = Array(items.reversed())
             let barItems = ordered.map(makeBarItem)
             installedSignature = signature
@@ -515,7 +449,7 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
                 module: "navbar"
             )
 
-            // `animated: false` + 关闭隐式动画：即便这次是重装，也不许它演成「插入」
+            // 关闭隐式动画，避免重装演成「插入」
             UIView.performWithoutAnimation {
                 navigationItem.setRightBarButtonItems(barItems.isEmpty ? nil : barItems, animated: false)
             }
@@ -539,14 +473,8 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
         }
 
         /// 标准 item：图标、尺寸、玻璃胶囊全交给 `UIBarButtonItem` 自己——与返回按钮同一套东西
-        ///
-        /// 为什么不用 `UIBarButtonItem(customView:)`：自绘视图是「外来户」，导航栏得给它现量尺寸、
-        /// 现配外观，成形动画就发生在这一步；标准 item 的图标是导航栏**自己的**内容，只随栏一起
-        /// 走转场（返回按钮同理，所以它从不弹）。见 `BrowseDirectoryView` 里那段六轮修法的记录。
         private func makeBarItem(_ item: Item) -> UIBarButtonItem {
-            // `withTintColor(_:renderingMode: .alwaysOriginal)`：图**自带**颜色，不去等导航栏的
-            // tint——iOS 26 下栏 tint 对字形不生效（见 `GlobalAppearance.applyBackIndicator` 里的实测），
-            // 主色必须画进图里才稳。
+            // 图自带颜色，不继承导航栏 tint
             let image = UIImage(
                 systemName: item.symbol,
                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)
@@ -570,8 +498,6 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
         }
 
         /// 自绘菜单的锚点：`UIBarButtonItem` 不暴露它的 view，只能按无障碍标签在导航栏子树里认领
-        /// （标签就是我们设的那个，导航栏会把它透到实体按钮上）；认不到时退回导航栏右侧区域，
-        /// 菜单只是粘在栏右端，不会飘到别处。
         private func anchorRect(of barItem: UIBarButtonItem, label: String) -> CGRect {
             if let navigationBar {
                 var queue: [UIView] = [navigationBar]
@@ -579,11 +505,6 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
                     if let control = view as? UIControl,
                        control.accessibilityLabel == label,
                        control.window != nil {
-                        AppLogger.shared.log(
-                            "菜单锚点：认到「\(label)」的实体视图（\(type(of: control))）",
-                            level: .debug,
-                            module: "navbar"
-                        )
                         return control.convert(control.bounds, to: nil)
                     }
                     queue.append(contentsOf: view.subviews)
@@ -610,18 +531,6 @@ struct NavigationBarTrailingButtons: UIViewControllerRepresentable {
 }
 
 /// 弹出锚点：只在「按下 / 长按 / 右键的那一刻」读一次的值，**故意不是 SwiftUI 状态**。
-///
-/// 用普通引用类型承接全局坐标，而不是 `@State CGRect`，是「切上/下一级目录时右上角弹一下」
-/// 这条线的最后一环（TODO 404）：
-/// 导航转场期间导航栏内容是横向滑入的，按钮的全局坐标会**逐帧**变化。写进 `@State` 就等于
-/// 逐帧重写 toolbar item 的内容，而 iOS 26 的共享玻璃底色由 SwiftUI 自己绘制
-/// （`.sharedBackgroundVisibility` 即是它的开关），item 内容在**插入动画进行中**被反复更新，
-/// 就会把玻璃胶囊那次 materialize（消散→成形）重播一遍——观感正是「像被点了一下」。
-/// 这一条同时解释了此前两种实现为何都复现：`PopupMenuButton`（自绘 + `PressBridge`）与
-/// `ToolbarMenuButton`（标准 `Button`）都挂着这个逐帧写回；方案 A 把按钮搬到容器层后，
-/// 逐帧写回只是从「item 内容」换成了「`@Published` 坐标」，按钮照样一路跟着动画走。
-/// 换成引用类型后：坐标照旧保持最新，但**写入不触发任何视图失效**，
-/// 转场期间导航栏 item 的内容彻底静止。
 final class AnchorBox {
     var rect: CGRect = .zero
 }
@@ -696,13 +605,7 @@ enum CellPressHighlightShape {
     case circle
 }
 
-/// 单元格按压/选中交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单无法触发）：
-/// - 点击 → onTap；长按 → 底部抽屉菜单（互斥：长按识别后松开不再触发点击）；
-/// - 三态视觉（TODO 375 方案 D「浮起抬升」）：常态无底色；
-///   hover 6% / 按压 8% 的内缩圆角极淡填充（按压内容回缩 0.975 跟手）；
-///   选中不再铺满整行/整卡的矩形色块，改为「轻微放大 + 主色软阴影抬升 + 细描边 + 4% 填充」，
-///   靠抬升层次而非色块面积表达选中（与勾选标记 / 进度环共存更干净）；
-/// - iPad/Mac 指针右键弹锚点圆角菜单（与长按同一组菜单项）。
+/// 单元格按压/选中交互（替代 Button：Button 内部手势会吞掉长按，导致长按菜单无法触发）
 private struct CellPressModifier: ViewModifier {
     var cornerRadius: CGFloat = 12
     let highlightShape: CellPressHighlightShape
@@ -718,11 +621,11 @@ private struct CellPressModifier: ViewModifier {
     let onTap: () -> Void
 
     @EnvironmentObject private var presenter: PopupMenuPresenter
-    /// 按压视觉状态：按下瞬时点亮，抬起补足最短可见时长再回弹（快速单点也能看到动画，TODO 402）
+    /// 按压视觉状态：按下瞬时点亮，抬起补足最短可见时长再回弹（快速单点也能看到动画）
     @StateObject private var press = PressStateHolder()
     @State private var isHovering = false
     @State private var anchorBox = AnchorBox()
-    /// 左滑操作桥接（由 `swipeActions` 注入；nil = 本行不支持左滑，TODO 408）
+    /// 左滑操作桥接（由 `swipeActions` 注入；nil = 本行不支持左滑）
     @Environment(\.swipeRowBridge) private var swipeBridge
 
     private var isPressing: Bool { press.isPressing }
@@ -747,8 +650,7 @@ private struct CellPressModifier: ViewModifier {
 
     private var hasHighlight: Bool { isSelected || isPressing || isHovering }
 
-    /// 高亮层（内缩圆角）：hover / 按压 / 选中共用底色；
-    /// 选中额外叠加细描边 + 主色软阴影 = 浮起抬升
+    /// 高亮层（内缩圆角）：hover / 按压 / 选中共用底色
     @ViewBuilder
     private var highlightLayer: some View {
         switch highlightShape {
@@ -787,7 +689,7 @@ private struct CellPressModifier: ViewModifier {
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(PressBridge(
                 onTap: {
-                    // 左滑展开态：点击仅收起该行，不触发打开（防误触，TODO 408）
+                    // 左滑展开态：点击仅收起该行，不触发打开（防误触）
                     guard swipeBridge?.consumeGesture() != true else { return }
                     onTap()
                 },
@@ -815,10 +717,6 @@ private struct CellPressModifier: ViewModifier {
 
 extension View {
     /// 单元格交互：点击 + 长按弹底部抽屉菜单 + 指针右键弹锚点菜单（修复 Button 吞长按）
-    /// - Parameters:
-    ///   - cornerRadius: cell 自身形状圆角（同时决定可点区域）
-    ///   - highlightInset: 按压/hover/选中高亮块的内缩（列表行 4/6 收边，卡片 1pt 贴边）
-    ///   - isSelected: 多选选中态（浮起抬升，TODO 375 方案 D）
     func cellPressableMenu(
         cornerRadius: CGFloat = 12,
         highlightShape: CellPressHighlightShape = .roundedRect,
@@ -845,26 +743,16 @@ extension View {
 // MARK: - 按压桥接（点击 + 长按）
 
 /// UIKit 桥接的「点击 + 长按」手势，替代 SwiftUI 的 `onTapGesture` + `LongPressGesture`。
-///
-/// SwiftUI 的 `LongPressGesture` 底层 `UILongPressGestureRecognizer` 默认
-/// `delaysTouchesBegan = true`，在 ScrollView 内会延迟触摸事件传递，导致 iPhone
-/// 真机手指滑动失效（滚动无法及时接管）；而 Mac 的 iPhone 镜像里触摸板滑动走的是
-/// 滚轮/间接滚动事件、不经过触摸手势，所以能正常滚动——这正是「真机手指滑不动、
-/// 镜像触摸板能滑」的根因。这里显式关闭 `delaysTouchesBegan` 与 `cancelsTouchesInView`，
-/// 让长按不再干扰滚动。
 private struct PressBridge: UIViewRepresentable {
     let onTap: () -> Void
     let onPress: (PressPhase) -> Void
     let onLongPress: () -> Void
-    /// 横向左滑回调（nil = 本行不支持左滑，pan 识别器直接禁用，TODO 408）
+    /// 横向左滑回调（nil = 本行不支持左滑，pan 识别器直接禁用）
     var onSwipe: (@MainActor (SwipeDragPhase) -> Void)?
 
     func makeUIView(context: Context) -> PressBridgeView {
         let view = PressBridgeView(onTap: onTap, onPress: onPress, onLongPress: onLongPress)
         view.onSwipe = onSwipe
-        // 诊断（TODO 417）：区分「UIKit 层被重建」与「同一层被反复移入窗口」——
-        // 前者说明 SwiftUI 判定该 cell 的身份变了（整行重建），后者说明宿主层级被重排
-        AppLogger.shared.log("按压层新建 #\(view.layerTag)", level: .debug, module: "press")
         return view
     }
 
@@ -882,9 +770,6 @@ private struct PressBridge: UIViewRepresentable {
 }
 
 /// 标记协议：接管了 cell 点击 / 长按 / 左滑的 UIKit 手势层（`PressBridgeView`）。
-///
-/// 「点击空白区域收起左滑展开行」的识别器靠它区分点击落在 cell 上还是空白处——
-/// 落在 cell 上的点击必须交回 cell 自己处理（展开态点击只收起不打开，见 `SwipeRowBridge`）。
 protocol PressBridgedView {}
 
 private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressBridgedView {
@@ -899,7 +784,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
             // 正在识别时改 isEnabled 会强制取消手势，故仅在状态真正变化时写入
             if pan.isEnabled != shouldEnable {
                 pan.isEnabled = shouldEnable
-                // 首次开启（左滑行上屏）时注册侧滑返回识别器，交给协调器按展开态开关（TODO 412）
+                // 首次开启（左滑行上屏）时注册侧滑返回识别器，交给协调器按展开态开关
                 if shouldEnable { registerEnclosingPopGesture() }
             }
         }
@@ -911,22 +796,14 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
     private var isLongPressing = false
     /// 横向拖动是否已进入（期间抑制点击，避免滑完手指抬起又触发打开）
     private var isPanning = false
-    /// 本视图上屏时刻（`CACurrentMediaTime`，与 `UITouch.timestamp` 同一时基）：
-    /// 用于过滤「比本视图出现得还早」的在途触摸（TODO 405）
+    /// 本视图上屏时刻（`CACurrentMediaTime`，与 `UITouch.timestamp` 同一时基）
     private var appearedAt: TimeInterval = 0
-    /// 本次按压是否由本视图自己上报过 `.began`：保证 began / ended 成对，
-    /// 被过滤掉的触摸不会引发空转的回弹动画
+    /// 本次按压是否由本视图自己上报过 `.began`：保证 began / ended 成
     private var isPressReported = false
-    /// 本次按压的起始时刻（`CACurrentMediaTime`）：按压时间线日志用（TODO 405）
+    /// 本次按压的起始时刻（`CACurrentMediaTime`）：按压时间线日志用
     private var pressStartedAt: TimeInterval = 0
 
-    /// 诊断（TODO 417）：实例短标识（同一运行期内唯一），用于区分「层被重建」与「层被反复移入窗口」
-    private static var layerSeq = 0
-    let layerTag: String
-    /// 创建时刻与上屏次数（诊断：反复上屏会不断刷新 `appearedAt`，削弱 TODO 405 的过滤）
-    private let createdAt: TimeInterval
-    private var windowAttachCount = 0
-    /// 最近一次离开窗口的时刻（用于区分真上屏 / 宿主层级重排，TODO 413）
+    /// 最近一次离开窗口的时刻（用于区分真上屏 / 宿主层级重排）
     private var detachedAt: TimeInterval = 0
 
     init(onTap: @escaping () -> Void,
@@ -935,9 +812,6 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         self.onTap = onTap
         self.onPress = onPress
         self.onLongPress = onLongPress
-        Self.layerSeq += 1
-        self.layerTag = "L\(Self.layerSeq)"
-        self.createdAt = CACurrentMediaTime()
         super.init(frame: .zero)
         isUserInteractionEnabled = true
 
@@ -951,9 +825,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         addGestureRecognizer(tap)
         addGestureRecognizer(longPress)
 
-        // 左滑（TODO 408）：与点击/长按同属本视图，复用同一套仲裁。
-        // 不用 `require(toFail:)` 串联——手指静止不动时 pan 既不开始也不失败，
-        // 会把长按无限期挂起；改为「pan 一旦开始就主动取消长按 + 抑制点击」。
+        // 左滑：与点击/长按同属本视图，复用同一套仲裁。
         pan.delegate = self
         pan.cancelsTouchesInView = false
         pan.isEnabled = false                      // 默认关闭，由 onSwipe 赋值时开启
@@ -963,12 +835,9 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// 挂到窗口上时关闭所在滚动容器的触摸延迟：
-    /// UIScrollView 默认攒 ~150ms 才把 touchesBegan 下发，快速单点时按下/抬起被压缩进同一批事件，
-    /// 按压态一帧都渲染不出来（表现为「快点没动画、按住一会儿才有动画」，TODO 402）。
+    /// 挂到窗口上时关闭所在滚动容器的触摸延迟
     override func willMove(toWindow newWindow: UIWindow?) {
         // 高频重绘会把同一层「移出再移入」窗口：记录离开时刻，用来区分
-        // 「真的重新上屏」与「宿主层级被重排」（TODO 413）
         if newWindow == nil { detachedAt = CACurrentMediaTime() }
         super.willMove(toWindow: newWindow)
     }
@@ -977,27 +846,16 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         super.didMoveToWindow()
         guard window != nil else { return }
         let now = CACurrentMediaTime()
-        // 只有「首次上屏」或「确实离开过一段时间后的上屏」才刷新 `appearedAt`（TODO 405/413）。
-        // 每次重排都刷新会让「在途触摸」过滤失去参照系——真手指被当在途、幽灵按压被放行
+        // 只有「首次上屏」或「确实离开过一段时间后的上屏」才刷新 `appearedAt`。
         let refreshAppearedAt = appearedAt == 0 || now - detachedAt > 0.2
         if refreshAppearedAt { appearedAt = now }
-        windowAttachCount += 1
-        AppLogger.shared.log(
-            "按压层 #\(layerTag) 上屏（第 \(windowAttachCount) 次\(refreshAppearedAt ? "·刷新上屏时刻" : "·仅宿主重排")，创建后 \(Int((now - createdAt) * 1000))ms）",
-            level: .debug,
-            module: "press"
-        )
         disableTouchDelayInEnclosingScrollView(of: self)
         registerEnclosingPopGesture()
     }
 
-    // MARK: - 侧滑返回识别器（TODO 412）
+ // MARK: - 侧滑返回识别器
 
     /// 注册所在导航栈的「侧滑返回」识别器，交给 `SwipeRowCoordinator` 按行的展开态开关。
-    ///
-    /// 行展开后文件名恰好落在屏幕左缘，用户「右滑收起删除按钮」的起手位置就压在系统
-    /// 侧滑返回的识别区内，系统会先抢走手势——按钮没收起、反而回了上一级目录。
-    /// 非左滑行不注册（没有展开态，无需接管）。
     private func registerEnclosingPopGesture() {
         guard onSwipe != nil else { return }
         let gestures = enclosingPopGestures()
@@ -1005,8 +863,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
             AppLogger.shared.log("左滑行未找到侧滑返回识别器：右滑收起只能靠行内 pan 与系统抢手势", level: .warn, module: "swipe")
             return
         }
-        // 诊断（TODO 412）：打印实际接管到的识别器，用于确认「右滑仍返回上一级」时禁用是否真的落到了
-        // 正在生效的那个识别器上（嵌套导航栈 / SwiftUI 自有手势都会让禁用落到别的对象上）
+        // 诊断：打印实际接管到的识别器，用于确认「右滑仍返回上一级」时禁用是否真的落到了
         AppLogger.shared.log(
             "左滑行接管侧滑返回 \(gestures.count) 个：" + gestures.map { "\(type(of: $0))#enabled=\($0.isEnabled)" }.joined(separator: ", "),
             level: .debug,
@@ -1015,11 +872,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         SwipeRowCoordinator.shared.attachPopGestures(gestures)
     }
 
-    /// 采集所在导航栈的「侧滑返回」识别器（TODO 412）。
-    ///
-    /// 首选 `interactivePopGestureRecognizer`，再把导航栈视图层级里**类名疑似返回手势**的
-    /// 系统识别器一并收下：iOS 26 的返回手势未必只有属性暴露的那一个，漏掉任何一个，
-    /// 那一层照样会把手势抢走（表现为「右滑仍返回上一级」）。
+    /// 采集所在导航栈的「侧滑返回」识别器。
     private func enclosingPopGestures() -> [UIGestureRecognizer] {
         var result: [UIGestureRecognizer] = []
         var seen = Set<ObjectIdentifier>()
@@ -1037,8 +890,6 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
     }
 
     /// 在 `view` 及其至多 `depth` 层子视图里挑出「疑似系统返回手势」。
-    /// 只按类名白名单认（Parallax / Transition / EdgePan），绝不碰普通 `UIPanGestureRecognizer`
-    /// ——cell 左滑 pan、滚动容器 pan 都是它。
     private static func popLikeRecognizers(in view: UIView, depth: Int) -> [UIGestureRecognizer] {
         guard depth >= 0 else { return [] }
         var found = (view.gestureRecognizers ?? []).filter(isPopLike)
@@ -1054,11 +905,6 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
     }
 
     /// 当前视图所属（含嵌套）的导航栈控制器。
-    ///
-    /// 响应链上可能有多层 `UINavigationController`（Tab 容器 / 嵌套 `NavigationStack`），
-    /// 任意一层的「侧滑返回」都会抢走「右滑收起删除按钮」的那次手势，故全部收集。
-    /// 响应链被打断时（SwiftUI 内部容器不保证 `next` 串联到控制器）再从 window 根往下找
-    /// 「视图层级包含本视图」的导航栈兜底。
     private func enclosingNavigationControllers() -> [UINavigationController] {
         var result: [UINavigationController] = []
         var seen = Set<ObjectIdentifier>()
@@ -1104,14 +950,10 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         if recognizer.state == .ended { onTap() }
     }
 
-    // 手指按下立即进入按压态（高亮 + 缩放跟手），不等长按阈值；
-    // 抬起（.ended，保证动画播完）/ 取消（.cancelled，滚动接管则立即复位）。
-    // 长按菜单仍由 longPress 的 .began（0.5s）触发，职责分离。
+    // 手指按下立即进入按压态（高亮 + 缩放跟手），不等长按阈值
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        // 手指一落下就再禁用一遍侧滑返回（TODO 412）：系统/框架在部分更新后会把
-        // `interactivePopGestureRecognizer.isEnabled` 重置回 true，此处比
-        // `gestureRecognizerShouldBegin` 更早，能在系统识别器决定是否识别之前把它按下去
+        // 手指一落下就再禁用一遍侧滑返回：系统/框架在部分更新后会
         SwipeRowCoordinator.shared.reassertPopGesturesDisabled(reason: "手指落下")
         guard shouldReportPress(touches) else { return }
         isPressReported = true
@@ -1132,10 +974,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         report(.cancelled)
     }
 
-    /// 上报按压相位，并把按压时间线写进日志（TODO 405）。
-    ///
-    /// 「切换目录后按钮像被点了一下」的复现必须能一眼看出：这次按压是真实手指（持续几十毫秒
-    /// 后 ended），还是被转投进来的假信号（几毫秒内 cancelled / 上屏后极短时间就 began）。
+    /// 上报按压相位，并把按压时间线写进日志。
     private func report(_ phase: PressPhase) {
         let now = CACurrentMediaTime()
         switch phase {
@@ -1158,16 +997,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         onPress(phase)
     }
 
-    /// 是否该把这次触摸当作「点在本视图上」（TODO 405）。
-    ///
-    /// 导航栏的 `+` / `…` 与页面里的 cell 共用本手势层。切换目录时 SwiftUI 会把新页面的
-    /// toolbar 按钮重新插进导航栏，UIKit 可能把**在途触摸转投 / 重投**到刚上屏的视图上——
-    /// 一次无人按下的 `touchesBegan` + 转场结束时的 `touchesCancelled`，按压态就演出成
-    /// 「按钮被点了一下」。三道过滤：
-    /// 1. **命中归属**：触摸的 `view` 必须是本视图本身。转投来的触摸其归属仍是原来那个视图
-    ///    （UIKit 不会改写已有触摸的 `view`），这一条筛得最干净；
-    /// 2. 导航转场（push / 侧滑返回）进行中，一律不认；
-    /// 3. 触摸的 `timestamp` 早于本视图上屏时刻（触摸比按钮先存在），也不是点它。
+    /// 是否该把这次触摸当作「点在本视图上」。
     private func shouldReportPress(_ touches: Set<UITouch>) -> Bool {
         let belonged = touches.contains { $0.view === self }
         if !belonged, touches.contains(where: { $0.view != nil }) {
@@ -1210,7 +1040,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         }
     }
 
-    // MARK: - 左滑
+ // MARK: - 左滑
 
     @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
         guard let onSwipe else { return }
@@ -1227,8 +1057,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
                 translation: recognizer.translation(in: self).x,
                 velocity: recognizer.velocity(in: self).x
             ))
-            // 延到下一轮 runloop 复位：同一次抬手里 tap / pan 回调的投递顺序 UIKit 不保证，
-            // 同步置 false 可能让随后到达的 tap 漏过 isPanning 守卫、误把文件打开
+            // 延到下一轮 runloop 复位：同一次抬手里 tap / pan 回调的投递顺序 UIKit 不保证
             DispatchQueue.main.async { [weak self] in self?.isPanning = false }
         case .cancelled, .failed:
             onSwipe(.cancelled)
@@ -1246,13 +1075,11 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         if isLongPressing { isLongPressing = false }
     }
 
-    /// 仅当横向分量明显占优时才让 pan 开始：竖向滚动继续归 UIScrollView，
-    /// 斜向拖动也判给滚动，避免列表滑动时误露出删除按钮。
+    /// 仅当横向分量明显占优时才让 pan 开始：竖向滚动继续归 UIScrollView
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer === pan else { return true }
         guard onSwipe != nil else { return false }
         // 行展开时的这次横向拖动意图是「收起按钮」而不是返回上一级：在识别开始前
-        // 再把系统侧滑返回按下去一遍（TODO 412，详见 `reassertPopGesturesDisabled`）
         SwipeRowCoordinator.shared.reassertPopGesturesDisabled(reason: "pan 即将识别")
         let velocity = pan.velocity(in: self)
         // 极慢起手时首帧速度可能为 0，退化用累计位移判方向，避免这一次左滑整体失效
@@ -1263,8 +1090,7 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
         return abs(velocity.x) > abs(velocity.y) * 1.5
     }
 
-    /// 不与滚动容器的 pan 同时识别（否则左滑时列表会一起竖向滚动）；
-    /// 与本视图自己的 tap/longPress 可并存——它们的互斥已由 isPanning / cancelLongPress 处理。
+    /// 不与滚动容器的 pan 同时识别（否则左滑时列表会一起竖向滚动）
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
@@ -1276,12 +1102,6 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
 // MARK: - 右键桥接
 
 /// 窗口级 `.secondary`（右键）手势桥接：不拦截普通触摸，命中本视图区域时回调。
-/// 供 iPad / Mac Catalyst 指针右键触发与长按一致的自定义菜单。
-///
-/// 实现为「每个 window 一个共享 recognizer」（见 SecondaryClickCoordinator），
-/// 而不是每个单元格各挂一个 recognizer 到 window——后者在大目录下会随单元格
-/// 出现/消失高频 add/remove，导致 window 上累积大量手势识别器、拖垮手势系统，
-/// 表现为滚动滑动卡死（文件越少越正常）。
 private struct SecondaryClickBridge: UIViewRepresentable {
     let onSecondaryClick: () -> Void
 

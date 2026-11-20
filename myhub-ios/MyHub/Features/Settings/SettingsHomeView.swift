@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 设置首页（TODO §10，IOS-501 ~ 504）
+/// 设置首页
 struct SettingsHomeView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var browseDisplaySettings: BrowseDisplaySettings
@@ -105,7 +105,7 @@ struct SettingsHomeView: View {
                 }
             }
         }
-        // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一项（关于 MyHub）停在胶囊上方
+        // 方案 A：末尾预留悬浮胶囊 + 12pt，滚到底时最后一项（关于 MyHub）停在胶囊上方
         .reservedBottomChrome()
         .leadingNavTitle("设置")
         .tint(AppColors.primary)

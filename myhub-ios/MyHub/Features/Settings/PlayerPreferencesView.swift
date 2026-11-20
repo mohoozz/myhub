@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 播放器偏好（TODO §10 / IOS-503）：默认倍速/解码偏好/预读窗口/字幕样式/纯音频默认/音量步进（默认 5%）/退后台自动画中画
+/// 播放器偏好：默认倍速/解码偏好/预读窗口/字幕样式/纯音频默认/音量步进（默认 5%）/退后台自动画中画
 struct PlayerPreferencesView: View {
     @State private var defaultSpeed = AppSettings.Player.defaultSpeed
     @State private var decodePreference = AppSettings.Player.decodePreference

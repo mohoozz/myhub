@@ -3,12 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import Photos
 
-/// 目录浏览 ViewModel（IOS-102 浏览 + IOS-103~105 文件操作）：
-/// - stale-while-revalidate：先展示目录缓存（秒开），再后台拉新；
-/// - 排序 / 搜索 / 视图模式偏好持久化：排序按「连接 + 目录」单独缓存（BrowseSortPreferences，TODO 370），
-///   其余落 AppSettings.Browse；
-/// - 多选模式与文件操作：新建文件夹 / 重命名 / 移动 / 复制（跨源流式中转）/ 删除入回收站 / 收藏；
-/// - 传输：上传（文件/相册，字节级进度）、下载到本地沙盒 / 相册 / 「文件」App。
+/// 目录浏览 ViewModel（浏览 + ~105 文件操作）
 @MainActor
 final class BrowseDirectoryViewModel: ObservableObject {
     enum State: Equatable {
@@ -35,7 +30,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// 回收站不支持或移动失败时的降级错误（UI 引导真删确认）
     enum TrashError: Error, LocalizedError {
         /// movedToTrash：本次已成功移入回收站、无需再彻底删除的路径
-        /// reason：失败原因摘要（占用/网络/不支持，UI 提示用，TODO 373）
         case unsupported(movedToTrash: Set<String>, reason: String?)
         var errorDescription: String? {
             if let reason { return "移入回收站失败：\(reason)" }
@@ -76,13 +70,11 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// 当前目录已收藏路径（星标状态）
     @Published private(set) var favoritePaths: Set<String> = []
 
-    /// 当前目录被判定为图集型（漫画）的 epub 路径集合（目录层预判，IOS-207 策略 5）
+    /// 当前目录被判定为图集型（漫画）的 epub 路径集合（目录层预判， 策略 5）
     @Published private(set) var comicEpubPaths: Set<String> = []
     private var comicEpubDetectTask: Task<Void, Never>?
 
     /// 排序与视图模式：读写均落到 UserDefaults。
-    /// 排序按「连接 + 目录」单独缓存（TODO 370）：每个目录各自记忆顺序，
-    /// 首次进入无记录时回落全局默认；视图模式仍为全局偏好。
     @Published var sortKey: BrowseSortKey {
         didSet {
             displayedEntriesCache = nil
@@ -110,12 +102,10 @@ final class BrowseDirectoryViewModel: ObservableObject {
     private var refreshPending = false
     private var toastTask: Task<Void, Never>?
     private var favoritesObserver: NSObjectProtocol?
-    /// displayedEntries 排序结果缓存：文件多时 localizedStandardCompare 排序很慢，
-    /// 若每次 body 求值都重排会阻塞主线程导致滑动卡死，这里在数据变化时重算一次并复用。
+    /// displayedEntries 排序结果缓存：文件多时 localizedStandardCompare 排序很慢
     private var displayedEntriesCache: [FileEntry]?
 
-    /// 诊断（TODO 413）：实例序号 / 短标识——父视图每重算一次 `BrowseDirectoryView` 就会
-    /// 构造一个 VM（`StateObject` 只保留首个，其余随即丢弃），序号暴涨即父视图在高频重算
+    /// 诊断：实例序号 / 短标识——父视图每重算一次 `BrowseDirectoryView` 就会
     private static var instanceSeq = 0
     private(set) var instanceTag = ""
     /// 诊断：`loadIfNeeded` / 公开 `refresh()` 的调用次数
@@ -129,7 +119,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         self.connection = connection
         self.path = normalizedPath
         self.adapter = try? AdapterFactory.makeAdapter(for: connection)
-        // 排序（TODO 370）：优先恢复本目录单独缓存的顺序，无记录回落全局默认
+        // 排序：优先恢复本目录单独缓存的顺序，无记录回落全局默认
         let sortPreference = BrowseSortPreferences.preference(
             connectionID: connection.id ?? 0, path: normalizedPath
         )
@@ -153,8 +143,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    /// 排序变更：写入本目录单独缓存的偏好（TODO 370，其次进入该目录时恢复），
-    /// 并同步全局默认——未记录过顺序的目录首次进入时沿用最近使用的顺序。
+    /// 排序变更：写入本目录单独缓存的偏好
     private func persistSortPreference() {
         BrowseSortPreferences.save(
             BrowseSortPreferences.Preference(
@@ -167,7 +156,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         AppSettings.Browse.sortAscending = sortAscending
     }
 
-    // MARK: - 展示数据（搜索过滤 + 排序，文件夹在前）
+ // MARK: - 展示数据（搜索过滤 + 排序，文件夹在前）
 
     var displayedEntries: [FileEntry] {
         if let cached = displayedEntriesCache { return cached }
@@ -210,11 +199,11 @@ final class BrowseDirectoryViewModel: ObservableObject {
         entries.first { $0.path == path }
     }
 
-    // MARK: - 加载
+ // MARK: - 加载
 
     /// 首次进入：先出缓存再后台刷新（目录结果本地缓存，二次进入加速）
     func loadIfNeeded() async {
-        // 诊断（TODO 413）：页面 `.task` 若被反复触发，这里会连续计数
+        // 诊断：页面 `.task` 若被反复触发，这里会连续计数
         loadIfNeededCount += 1
         AppLogger.shared.log(
             "loadIfNeeded \(instanceTag) 第 \(loadIfNeededCount) 次（已加载=\(loaded)）",
@@ -235,7 +224,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
     /// 下拉刷新
     func refresh() async {
-        // 诊断（TODO 413）：谁在高频调用刷新
+        // 诊断：谁在高频调用刷新
         refreshCallCount += 1
         AppLogger.shared.log(
             "refresh() \(instanceTag) 第 \(refreshCallCount) 次", level: .debug, module: "browse"
@@ -244,11 +233,8 @@ final class BrowseDirectoryViewModel: ObservableObject {
         await refresh(using: adapter, notifyFailure: true)
     }
 
-    /// 目录刷新：
-    /// - 正在刷新时登记补刷（`refreshPending`）而不是丢弃——否则删除/上传等操作后的刷新会撞上
-    ///   进行中的后台刷新被静默吞掉，列表长时间不更新；
-    /// - 失败保留旧数据（stale-while-revalidate），仅首载（无任何数据）时进入错误态，
-    ///   避免弱网下一次抖动把已显示的目录打成空白（TODO 369）。
+    /// 目录刷新
+    /// 进行中的后台刷新被静默吞掉，列表长时间不更新
     private func refresh(using adapter: StorageAdapter, notifyFailure: Bool = false) async {
         if isRefreshing {
             refreshPending = true
@@ -294,7 +280,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    // MARK: - epub 漫画预判（IOS-207 策略 5）
+ // MARK: - epub 漫画预判
 
     /// 同步判定（目录显示 / 打开分发用）：优先用已算好的集合，未就绪时兜底查持久化缓存。
     func isComicEpub(_ entry: FileEntry) -> Bool {
@@ -330,15 +316,12 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    /// 操作后刷新：**不再预删磁盘缓存**——刷新成功会由 `save` 覆盖为新数据；
-    /// 若刷新失败（弱网/地址切换），旧缓存得以保留，避免下次进入该目录时既无缓存可展示、
-    /// 刷新又失败 → 整个目录显示为空/错误页、只能重启 App（TODO 369）。
+    /// 操作后刷新：**不再预删磁盘缓存**——刷新成功会由 `save` 覆盖为新数据
     private func invalidateAndRefresh() async {
         await refresh()
     }
 
     /// 删除/移动成功后本地立即移除条目并同步目录缓存：不等网络刷新，弱网下界面依然正确
-    /// （否则刷新失败时被删文件会继续留在列表里，或陈旧缓存导致下次进入仍显示已删文件）
     private func applyLocalRemoval(_ removedPaths: Set<String>) {
         guard !removedPaths.isEmpty else { return }
         entries.removeAll { removedPaths.contains($0.path) }
@@ -346,7 +329,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         DirectoryCache.shared.save(connectionID: connectionID, path: path, entries: entries)
     }
 
-    // MARK: - 多选模式（菜单「多选」/ 右上角「…」→「选择」进入）
+ // MARK: - 多选模式（菜单「多选」/ 右上角「…」→「选择」进入）
 
     func toggleSelection(_ entry: FileEntry) {
         guard var set = selection else { return }
@@ -366,7 +349,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         selection = nil
     }
 
-    // MARK: - 新建文件夹 / 重命名
+ // MARK: - 新建文件夹 / 重命名
 
     func createFolder(named name: String) async {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
@@ -385,7 +368,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         do {
             let newPath = StoragePath.joining(StoragePath.parent(of: entry.path), trimmed)
             try await adapter.move(entry.path, newPath)
-            // 重命名：同步更新阅读记录 filePath（目录重命名时内部文件前缀一并更新，TODO §7.309）
+            // 重命名：同步更新阅读记录 filePath（目录重命名时内部文件前缀一并更新）
             ReadingHistoryStore.shared.updatePath(connectionID: connection.id ?? 0, from: entry.path, to: newPath)
             await invalidateAndRefresh()
         } catch {
@@ -393,7 +376,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 移动 / 复制（同源走适配器；跨源设备端流式中转，不落大临时文件）
+ // MARK: - 移动 / 复制（同源走适配器；跨源设备端流式中转，不落大临时文件）
 
     func move(paths: Set<String>, to destination: Connection, at destDir: String) async {
         await transfer(paths: paths, to: destination, at: destDir, isMove: true)
@@ -433,13 +416,12 @@ final class BrowseDirectoryViewModel: ObservableObject {
                 failed.append(entry.name)
             }
         }
-        // 移动成功：同步删除源连接下的阅读记录 + 本地列表立即移除（TODO §7.309，路径已变更，记录不再指向原文件）
+        // 移动成功：同步删除源连接下的阅读记录 + 本地列表立即移除
         if isMove, !movedPaths.isEmpty {
             ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
             applyLocalRemoval(Set(movedPaths))
         }
-        // 源目录刷新（不预删缓存：刷新成功会覆盖，失败保留旧缓存，避免弱网下目录空白，TODO 369）；
-        // 跨源时目标目录缓存同样不预删，进入该目录时先展示缓存再后台刷新自愈
+        // 源目录刷新（不预删缓存：刷新成功会覆盖，失败保留旧缓存，避免弱网下目录空白）
         await refresh()
         if failed.isEmpty {
             showToast(isMove ? "已移动 \(paths.count) 项" : "已复制 \(paths.count) 项")
@@ -469,19 +451,14 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 删除（回收站机制：挂载点下 .trash；不支持时降级由 UI 确认真删）
+ // MARK: - 删除（回收站机制：挂载点下 .trash；不支持时降级由 UI 确认真删）
 
     /// 与条目同目录、可随它一起删除的关联文件（`movie.mp4` → `movie.srt` / `movie.zh.srt`）。
-    ///
-    /// 只比对当前目录已加载的 `entries`，不额外发起网络请求。规则集中在
-    /// `CompanionFiles.sameStemSiblings`（阅读页「删除源文件」共用同一口径）：
-    /// 主名精确相同，或字幕带语言后缀（`movie.zh.srt` / `movie.en.ass`）。
     private func sameStemSiblings(of entry: FileEntry) -> [FileEntry] {
         CompanionFiles.sameStemSiblings(of: entry, in: entries)
     }
 
-    /// 实际删除目标：开启「删除时移除同名文件」（设置 → 文件操作，默认关闭）后，
-    /// 把主名相同、扩展名不同的兄弟文件，以及带语言后缀的字幕（`movie.zh.srt`）一并纳入。
+    /// 实际删除目标
     func deleteTargets(for paths: Set<String>) -> Set<String> {
         guard AppSettings.Browse.deleteSameNameFiles else { return paths }
         var result = paths
@@ -513,7 +490,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
                 let trashName = "\(stamp)-\(entry.name)"
                 let trashPath = "/.trash/\(trashName)"
                 do {
-                    // 占用类瞬时失败自动重试（TODO 373）：刚播放完的文件服务端句柄可能尚未释放
+                    // 占用类瞬时失败自动重试：刚播放完的文件服务端句柄可能尚未释放
                     try await Self.withOccupancyRetry { try await adapter.move(sourcePath, trashPath) }
                 } catch {
                     failureReason = Self.failureHint(for: error)
@@ -521,32 +498,22 @@ final class BrowseDirectoryViewModel: ObservableObject {
                 }
                 movedPaths.append(sourcePath)
                 if entry.isDir { movedDirs.insert(sourcePath) }
-                // 记录原路径元数据（§3.3 回收站还原用）
+                // 记录原路径元数据（回收站还原用）
                 await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: entry)
             }
         } catch {
             // 部分成功：已移入回收站的文件同样清理阅读记录并立即从列表移除
-            // （回收站还原不还原记录，见 TODO §7.309 决策）；未成功的由 UI 引导「彻底删除」降级处理，
-            // 并携带失败原因（占用/网络/不支持）供弹窗提示（TODO 373）
             finishTrashMove(movedPaths, knownDirs: movedDirs)
             throw TrashError.unsupported(movedToTrash: Set(movedPaths), reason: failureReason)
         }
-        // 移入回收站即删除对应阅读记录（还原后无需还原记录，TODO §7.309）
+        // 移入回收站即删除对应阅读记录（还原后无需还原记录）
         finishTrashMove(movedPaths, knownDirs: movedDirs)
         await invalidateAndRefresh()
         endSelection()
-        // 结果提示由视图层吐司承担（方案 D：进行中 → 原地替换为结果），此处不再重复 showToast，
-        // 否则同一次删除会在底部同时出现两条提示
+        // 结果提示由视图层吐司承担（方案 D：进行中 → 原地替换为结果），此处不再重复 showToast
     }
 
     /// 移入回收站收尾：清理阅读记录 + 本地列表立即移除并同步缓存（弱网下界面依然正确）。
-    ///
-    /// 目录走 `removeTree`（按路径前缀）而非精确匹配——否则目录内文件的阅读记录会全部
-    /// 残留在阅读页、指向已被移走的文件。
-    /// - Parameter knownDirs: 调用方已确认是目录的路径。move/delete 的 `await` 期间
-    ///   `entries` 可能被并发刷新（下拉刷新 / `refreshPending` 补刷 / 回前台刷新）整体替换，
-    ///   此时回查 `entry(for:)` 会返回 nil、把目录误判成文件；调用方手里有 `FileEntry`
-    ///   时应直接传入，避免与快照侧（用的是 `entry.isDir`）口径不一致。
     private func finishTrashMove(_ movedPaths: [String], knownDirs: Set<String> = []) {
         guard !movedPaths.isEmpty else { return }
         let id = connectionID
@@ -564,7 +531,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         applyLocalRemoval(Set(movedPaths))
     }
 
-    // MARK: - 左滑删除（TODO 408 方案 A：点按按钮即删，不弹确认，由撤销兜底）
+ // MARK: - 左滑删除
 
     /// 左滑删除的撤销句柄：记录回收站落点与被一并清理的阅读记录，供「撤销」原样还原
     struct SwipeTrashReceipt {
@@ -579,11 +546,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
     }
 
     /// 左滑删除单个条目：移入挂载点 `.trash` 并返回撤销句柄。
-    ///
-    /// 与多选删除 `delete(paths:)` 的差异：
-    /// - **不**在失败时抛 `TrashError.unsupported` 引导「彻底删除」降级——左滑是轻量入口，
-    ///   破坏性更强的彻底删除仍只保留在长按菜单里，避免一次左滑就不可恢复；
-    /// - **不**出「已移入回收站」轻提示，反馈改由可撤销提示条承担。
     func deleteToTrash(_ entry: FileEntry) async throws -> SwipeTrashReceipt {
         guard let adapter else { throw StorageError.invalidPath("连接不可用") }
         // 同名文件需在 await 前取快照：期间 entries 可能被并发刷新替换
@@ -595,7 +557,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
         let stamp = Self.trashStamp()
         let trashPath = "/.trash/\(stamp)-\(entry.name)"
-        // 占用类瞬时失败自动重试（TODO 373）
+        // 占用类瞬时失败自动重试
         try await Self.withOccupancyRetry { try await adapter.move(entry.path, trashPath) }
         await writeTrashMeta(adapter: adapter, trashPath: trashPath, entry: entry)
         var items: [SwipeTrashReceipt.Item] = [.init(entry: entry, trashPath: trashPath)]
@@ -628,7 +590,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
     }
 
     /// 撤销左滑删除：把文件从回收站移回原路径（被占用则自动追加序号），并补回阅读记录。
-    /// 失败只提示不抛出——撤销是补偿操作，文件仍在回收站里可手动还原。
     func undoDeleteToTrash(_ receipt: SwipeTrashReceipt) async {
         guard let adapter, let primary = receipt.items.first else { return }
         let originalPath = primary.entry.path
@@ -638,8 +599,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         for item in receipt.items {
             var candidate = item.entry.path
             var counter = 1
-            // 上限保护：部分 WebDAV / 反代对任意路径都返回 200（工程为此有 StorageError.invalidResponse），
-            // stat 恒成功时无上限即变成无限网络请求，撤销按钮一按就卡住
+            // 上限保护：部分 WebDAV / 反代对任意路径都返回 200（工程为此有 StorageError.invalidResponse）
             while counter <= 20, (try? await adapter.stat(candidate)) != nil {
                 let stem = (item.entry.name as NSString).deletingPathExtension
                 let ext = (item.entry.name as NSString).pathExtension
@@ -688,32 +648,28 @@ final class BrowseDirectoryViewModel: ObservableObject {
         let dirs = Set(targets.filter { entry(for: $0)?.isDir == true })
         for sourcePath in targets.sorted() {
             do {
-                // 占用类瞬时失败自动重试（TODO 373）
+                // 占用类瞬时失败自动重试
                 try await Self.withOccupancyRetry { try await adapter.delete(sourcePath) }
                 deletedPaths.append(sourcePath)
             } catch {
                 failed.append("\(StoragePath.fileName(of: sourcePath))（\(Self.failureHint(for: error))）")
             }
         }
-        // 彻底删除：同步清理阅读记录 + 本地列表立即移除（TODO §7.309）。
-        // 复用 finishTrashMove 的清理分支：目录按路径前缀清，避免内部文件记录残留
+        // 彻底删除：同步清理阅读记录 + 本地列表立即移除。
         if !deletedPaths.isEmpty {
             finishTrashMove(deletedPaths, knownDirs: dirs)
         }
         await invalidateAndRefresh()
         endSelection()
         if !failed.isEmpty {
-            // 附具体失败原因与可操作建议（文件刚播放完时服务端句柄可能仍被占用，TODO 373）
-            // 成功提示由视图层吐司承担（方案 D），此处只报告失败
+            // 附具体失败原因与可操作建议（文件刚播放完时服务端句柄可能仍被占用）
             operationError = "删除失败：\(failed.joined(separator: "、"))。文件可能仍被占用或网络异常，请稍后重试"
         }
     }
 
-    // MARK: - 删除类操作容错（TODO 373）
+ // MARK: - 删除类操作容错
 
-    /// 占用/瞬时类错误自动重试：文件刚播放完时服务端（NAS）可能仍持有读取句柄，
-    /// 立即 MOVE/DELETE 会返回 423/409/5xx 或网络抖动错误，短延迟后通常即可成功。
-    /// 最多 3 次尝试（首次 + 2 次重试），退避 0.6s / 1.2s
+    /// 占用/瞬时类错误自动重试：文件刚播放完时服务端（NAS）可能仍持有读取句柄
     private static func withOccupancyRetry<T>(_ operation: () async throws -> T) async throws -> T {
         var attempt = 0
         while true {
@@ -731,8 +687,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    /// 可重试错误：服务端瞬时占用/网关错误（423/409/429/5xx、异常响应）与网络抖动/超时；
-    /// 认证失败 / 文件不存在等业务错误不重试
+    /// 可重试错误：服务端瞬时占用/网关错误（423/409/429/5xx、异常响应）与网络抖动/超时
     private static func isRetryableOccupancyError(_ error: Error) -> Bool {
         if let storage = error as? StorageError {
             switch storage {
@@ -756,8 +711,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    /// 失败原因提示：把底层错误翻译为用户可行动的原因（占用/网络/权限/服务器）；
-    /// 删除失败提示与「无法使用回收站」弹窗共用
+    /// 失败原因提示：把底层错误翻译为用户可行动的原因（占用/网络/权限/服务器）
     private static func failureHint(for error: Error) -> String {
         if let storage = error as? StorageError {
             switch storage {
@@ -826,7 +780,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         return formatter.string(from: Date())
     }
 
-    // MARK: - 收藏（IOS-107）：经 FavoritesStore 读写，收藏页与本页星标双向同步
+ // MARK: - 收藏：经 FavoritesStore 读写，收藏页与本页星标双向同步
 
     private func reloadFavorites() {
         favoritePaths = FavoritesStore.shared.paths(for: connectionID)
@@ -848,7 +802,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         endSelection()
     }
 
-    // MARK: - 上传（多文件队列 + 字节级进度）
+ // MARK: - 上传（多文件队列 + 字节级进度）
 
     func upload(urls: [URL]) async {
         guard let adapter, !urls.isEmpty else { return }
@@ -920,7 +874,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 下载（本地沙盒 / 「文件」App / 相册）
+ // MARK: - 下载（本地沙盒 / 「文件」App / 相册）
 
     /// 本地下载目录：Documents/Downloads（「文件」App 可见——已开 UIFileSharingEnabled）
     static var downloadsDirectory: URL {
@@ -1017,7 +971,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
         return url
     }
 
-    // MARK: - 轻提示
+ // MARK: - 轻提示
 
     private func showToast(_ message: String) {
         toastTask?.cancel()

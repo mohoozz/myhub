@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 缓存与存储（TODO §10 / IOS-504 + IOS-605）：
+/// 缓存与存储
 /// 分类占用查看 + 单项/全部清理 + 容量上限 + 内容缓存本地化开关 + 回收站保留天数
 struct CacheSettingsView: View {
     @State private var sizes: [CacheManager.Partition: Int64] = [:]

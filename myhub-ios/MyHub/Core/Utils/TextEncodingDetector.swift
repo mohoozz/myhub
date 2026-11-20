@@ -1,8 +1,7 @@
 import Foundation
 import CoreFoundation
 
-/// txt 编码检测（IOS-706 / §2.5）：BOM 判定 + 无 BOM 启发式，覆盖 UTF-8 / GBK / Big5 / UTF-16 LE/BE。
-/// 纯文本查看与 txt 在线编辑共用；小说阅读器（M3）将复用并补充码元对齐与缓存自愈。
+/// txt 编码检测：BOM 判定 + 无 BOM 启发式，覆盖 UTF-8 / GBK / Big5 / UTF-16 LE/BE。
 enum TextEncodingDetector {
     struct Result {
         let text: String

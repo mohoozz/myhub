@@ -2,8 +2,6 @@ import AVFoundation
 import CoreMedia
 
 /// 硬解引擎：AVPlayer / VideoToolbox。
-/// 处理 H.264/HEVC 等主流格式；`allowsExternalPlayback` 支持 AirPlay；
-/// 暴露 `AVPlayer` 供 §4.3 渲染层（AVPlayerLayer / AVPlayerViewController）启用 PiP。
 @MainActor
 final class AVPlayerEngine: PlaybackEngine {
     let kind: PlayerEngineKind = .hardware
@@ -16,11 +14,11 @@ final class AVPlayerEngine: PlaybackEngine {
     private var observations: [NSKeyValueObservation] = []
     private var endObserver: NSObjectProtocol?
     private var stallObserver: NSObjectProtocol?
-    /// 等待播放日志节流（TODO 380）：弱网下 waiting KVO 可能高频触发，至少间隔 2s 记一条
+    /// 等待播放日志节流：弱网下 waiting KVO 可能高频触发，至少间隔 2s 记一条
     private var lastWaitingLogAt: TimeInterval = 0
-    /// 本次 load 起始时刻（诊断日志用，TODO 380）
+    /// 本次 load 起始时刻（诊断日志用）
     private var loadStartedAt: TimeInterval = 0
-    /// 最近一次上报给上层的状态：用于兜底纠正「时间在走却仍标记 loading/buffering」（TODO 353）
+    /// 最近一次上报给上层的状态：用于兜底纠正「时间在走却仍标记 loading/buffering」
     private var lastReportedState: PlaybackState = .idle
     /// 上一次时间回调的媒体时间：判断媒体时间是否真的在推进（排除 seek 跳变）
     private var lastReportedTime: TimeInterval = 0
@@ -63,7 +61,7 @@ final class AVPlayerEngine: PlaybackEngine {
         return size
     }
 
-    /// 引擎内部状态快照（诊断日志用，TODO 380）
+    /// 引擎内部状态快照（诊断日志用）
     var diagnosticSnapshot: String {
         guard let player else { return "player=nil item=nil" }
         var parts = [
@@ -101,20 +99,15 @@ final class AVPlayerEngine: PlaybackEngine {
         }
     }
 
-    // MARK: - 加载
+ // MARK: - 加载
 
     func load(url: URL, startAt: TimeInterval?) async throws {
-        // 加载面包屑（TODO 380）：开始 / 媒体探测结果 / 提交 三段耗时，
-        // 熄屏回来后若卡住可判断是「探测无响应」（无后续日志）还是「建连慢」
+        // 加载面包屑：开始 / 媒体探测结果 / 提交三段耗时
         let loadStart = ProcessInfo.processInfo.systemUptime
         loadStartedAt = loadStart
         lastReportedState = .idle
         lastReportedTime = 0
         didReachEnd = false
-        AppLogger.shared.log(
-            "硬解加载开始 url=\(url.absoluteString) startAt=\(startAt.map { String(Int($0)) } ?? "nil") 网络=\(NetworkPathMonitor.shared.snapshot())",
-            level: .debug, module: "player-audio"
-        )
         let asset = AVURLAsset(url: url)
         let playable: Bool
         do {
@@ -126,15 +119,9 @@ final class AVPlayerEngine: PlaybackEngine {
             )
             throw error
         }
-        AppLogger.shared.log(
-            "硬解媒体探测 playable=\(playable) 耗时=\(Self.elapsedMs(since: loadStart))ms",
-            level: .debug, module: "player-audio"
-        )
         guard playable else { throw PlayerPlaybackError("系统原生无法解码该格式") }
 
         // 检测「有视频轨却无音频轨」：AVFoundation 对 DTS/DTS-HD/TrueHD/E-AC-3 等不支持的音频编码
-        // 会直接不暴露音轨（loadTracks 返回空），导致起播成功但「有画面无声」（TODO 358）。
-        // 抛错触发 PlayerCore 在 auto 模式下回退 VLC 软解兜底；纯音频文件无视频轨，不会误触发。
         let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
         let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
         if !videoTracks.isEmpty, audioTracks.isEmpty {
@@ -146,11 +133,7 @@ final class AVPlayerEngine: PlaybackEngine {
         }
 
         let item = AVPlayerItem(asset: asset)
-        // 弱网抗抖动（TODO 356）：本地回环代理会让 AVPlayer 误判带宽极高（连的是 127.0.0.1），
-        // 于是只维持很浅的缓冲；一旦代理后端弱网拉取阻塞就瞬间耗尽卡顿。显式设定前向缓冲目标时长，
-        // 强制 AVPlayer 主动多囤数据抗抖动（0 为系统自动，此处用预加载秒数对齐软解 network-caching 策略）。
-        // 发热优化：目标时长按 forwardBufferCapSeconds 封顶——高码率片源下 30s 缓冲即上百 MB，
-        // AVPlayer 会满速下载并经代理逐片落盘，持续播放时网络/磁盘全程满载。
+        // 弱网抗抖动：本地回环代理会让 AVPlayer 误判带宽极高（连的是 127.0.0.1）
         item.preferredForwardBufferDuration = max(
             0, min(AppSettings.Player.preloadSeconds, AppSettings.Player.forwardBufferCapSeconds)
         )
@@ -176,16 +159,15 @@ final class AVPlayerEngine: PlaybackEngine {
             level: .info, module: "player-audio"
         )
 
-        // 异步记录音轨编码，定位「有画面无声」——判断音频编码是否被硬解支持（TODO 358）
+        // 异步记录音轨编码，定位「有画面无声」——判断音频编码是否被硬解支持
         Task { await logAudioDiagnostics(asset: asset) }
     }
 
-    // MARK: - 控制
+ // MARK: - 控制
 
     func play() {
         guard let player else { return }
         // 仅在「确实播放到结尾」时回退起点：此前只按位置判断，会把「刚 seek 到片尾附近再起播」
-        // 误判成播放完毕而跳回 0（seek 等待结束后的自动续播正好走这条路径）
         let wasEnded = didReachEnd
         // 重新播放：解除「已播完」锁定，后续事件恢复正常上报
         didReachEnd = false
@@ -218,9 +200,7 @@ final class AVPlayerEngine: PlaybackEngine {
         }
         stallObserver = nil
         player?.pause()
-        // 先取消悬挂的 seek：片尾附近的零容差 seek 可能永远等不到完成（短时长片源尤其明显），
-        // 带着它直接 replaceCurrentItem(nil) 会让 AVPlayer 长时间卡在内部（主线程被占住、
-        // 下一次起播黑屏加载），必须先显式取消
+        // 先取消悬挂的 seek：片尾附近的零容差 seek 可能永远等不到完成（短时长片源尤其明显）
         player?.currentItem?.cancelPendingSeeks()
         player?.replaceCurrentItem(with: nil)
         player = nil
@@ -235,9 +215,6 @@ final class AVPlayerEngine: PlaybackEngine {
     }
 
     /// 精准 seek（容差为零，保证历史进度恢复不偏移）。
-    /// 例外：片尾 0.5s 内改用「就近关键帧」容差——结尾处往往没有与目标时间完全对齐的样本，
-    /// 零容差 seek 会一直等不到完成，表现为位置停在旧处、界面一直显示播放中，
-    /// 且这次悬挂的 seek 会拖累下一次起播（黑屏加载、必须杀 App 重开）。
     func seek(to seconds: TimeInterval) {
         let clamped = max(0, seconds)
         let time = CMTime(seconds: clamped, preferredTimescale: 600)
@@ -256,7 +233,7 @@ final class AVPlayerEngine: PlaybackEngine {
         }
     }
 
-    // MARK: - 轨道
+ // MARK: - 轨道
 
     var availableAudioTracks: [TrackOption] {
         guard let group = audibleGroup else { return [] }
@@ -294,7 +271,7 @@ final class AVPlayerEngine: PlaybackEngine {
         }
     }
 
-    // MARK: - 观测
+ // MARK: - 观测
 
     private func installObservers(player: AVPlayer, item: AVPlayerItem) {
         timeObserver = player.addPeriodicTimeObserver(
@@ -313,8 +290,7 @@ final class AVPlayerEngine: PlaybackEngine {
                 guard let self else { return }
                 switch item.status {
                 case .readyToPlay:
-                    // item 就绪耗时（TODO 380）：从 load 开始到可播的建连/拉流耗时，
-                    // 熄屏回来若「加载提交」后长时间无此条，说明卡在服务器不响应
+                    // item 就绪耗时：从 load 开始到可播的建连/拉流耗时
                     AppLogger.shared.log(
                         "硬解 item 就绪 起播总耗时=\(Int((ProcessInfo.processInfo.systemUptime - self.loadStartedAt) * 1000))ms",
                         level: .info, module: "player-audio"
@@ -323,8 +299,7 @@ final class AVPlayerEngine: PlaybackEngine {
                     self.report(.ready)
                     self.onEvent?(.tracksChanged)
                 case .failed:
-                    // item 失败详情（TODO 380）：error 带域名/错误码，errorLog 带 HTTP 状态码，
-                    // 用于区分「网络请求被拒/超时」与「媒体本身问题」
+                    // item 失败详情：error 带域名/错误码，errorLog 带 HTTP 状态码
                     AppLogger.shared.log(
                         "硬解 item 失败 error=\(item.error.map { "\($0)" } ?? "nil") errorLog=\(Self.errorLogSummary(item)) 网络=\(NetworkPathMonitor.shared.snapshot())",
                         level: .error, module: "player-audio"
@@ -346,8 +321,7 @@ final class AVPlayerEngine: PlaybackEngine {
                 case .paused:
                     self.report(.paused)
                 case .waitingToPlayAtSpecifiedRate:
-                    // 等待原因面包屑（TODO 380）：reason 区分「缓冲不足 / 评测起播码率 / 无 item」，
-                    // 附缓冲水位与网络路径，定位熄屏回前台后起播卡在等待态的原因
+                    // 等待原因面包屑：reason 区分「缓冲不足 / 评测起播码率 / 无 item」
                     let now = ProcessInfo.processInfo.systemUptime
                     if now - self.lastWaitingLogAt >= 2 {
                         self.lastWaitingLogAt = now
@@ -373,9 +347,7 @@ final class AVPlayerEngine: PlaybackEngine {
             }
         })
 
-        // 缓冲恢复：数据重新充足到可持续播放时，若已在播放则切回 playing，
-        // 清除「缓冲耗尽后卡在 buffering」——此前只监听 isPlaybackBufferEmpty 发 buffering，
-        // 缓冲补上后 timeControlStatus 未变化不触发 KVO，状态无人切回，菊花一直转（TODO 353）。
+        // 缓冲恢复：数据重新充足到可持续播放时，若已在播放则切回 playing
         observations.append(item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self, item.isPlaybackLikelyToKeepUp else { return }
@@ -395,15 +367,12 @@ final class AVPlayerEngine: PlaybackEngine {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 // 先置位再上报：短时长片源在结尾处 timeControlStatus→paused /
-                // isPlaybackBufferEmpty→true 的 KVO 往往晚到一步，若放行会把已结束的播放
-                // 拉回 buffering（菊花常转）或 paused（显示播放键），盖掉 ended
                 self.didReachEnd = true
                 self.report(.ended)
             }
         }
 
-        // 播放停滞通知（TODO 380）：系统判定「数据断流」时记录水位与 errorLog，
-        // 用于区分熄屏回前台后是「网络拉不动」还是「解码停顿」
+        // 播放停滞通知：系统判定「数据断流」时记录水位与 errorLog
         stallObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemPlaybackStalled,
             object: item,
@@ -419,12 +388,9 @@ final class AVPlayerEngine: PlaybackEngine {
         }
     }
 
-    // MARK: - 状态上报（含纠错兜底）
+ // MARK: - 状态上报（含纠错兜底）
 
-    /// 统一状态上报出口（TODO 353）：记录最近状态并过滤「与事实相反」的迟到事件。
-    /// - 已播完（didReachEnd）：结尾处补发的 buffering / paused 一律改报 ended，
-    ///   避免短时长片源（十余秒）在结尾处被迟到的 KVO 事件盖成永久菊花；
-    /// - 实际仍在播放（timeControlStatus == .playing）：不上报 buffering。
+    /// 统一状态上报出口：记录最近状态并过滤「与事实相反」的迟到事件。
     private func report(_ state: PlaybackState) {
         if didReachEnd, state == .buffering || state == .paused || state == .ready {
             if lastReportedState != .ended {
@@ -440,15 +406,12 @@ final class AVPlayerEngine: PlaybackEngine {
         onEvent?(.stateChanged(state))
     }
 
-    /// 时间推进兜底纠正（TODO 353）：媒体时间在一次回调间只前进了一点点（排除 seek 跳变），
-    /// 且 AVPlayer 自述正在播放，说明画面确实在动；此时若上层仍停在 loading/buffering，
-    /// 就主动纠正为 playing——KVO 事件缺失或乱序（短时长片源在结尾尤其容易）时不至于菊花常转。
+    /// 时间推进兜底纠正：媒体时间在一次回调间只前进了一点点（排除 seek 跳变）
     private func healStateIfActuallyPlaying(current: TimeInterval) {
         let previous = lastReportedTime
         lastReportedTime = current
         guard let player, player.timeControlStatus == .playing, player.rate > 0 else { return }
-        // 增量上限排除 seek 跳变（本引擎的 seek / 重播都会同步 lastReportedTime，故增量只可能是播放推进）；
-        // 上限放到 2.5s 以兼容 3 倍速下 0.5s 回调间隔的抖动
+        // 增量上限排除 seek 跳变（本引擎的 seek / 重播都会同步 lastReportedTime，故增量只可能是播放推进）
         guard current - previous > 0, current - previous <= 2.5 else { return }
         guard lastReportedState == .loading || lastReportedState == .buffering || lastReportedState == .ready else {
             return
@@ -468,12 +431,12 @@ final class AVPlayerEngine: PlaybackEngine {
         seek(to: start)
     }
 
-    /// 距起点毫秒数（诊断日志用，TODO 380）
+    /// 距起点毫秒数（诊断日志用）
     private static func elapsedMs(since start: TimeInterval) -> Int {
         Int((ProcessInfo.processInfo.systemUptime - start) * 1000)
     }
 
-    /// AVPlayerItem 错误日志摘要（HTTP 状态码等，TODO 380）
+    /// AVPlayerItem 错误日志摘要（HTTP 状态码等）
     private static func errorLogSummary(_ item: AVPlayerItem) -> String {
         guard let log = item.errorLog(), !log.events.isEmpty else { return "none" }
         return log.events.suffix(3).map { event in
@@ -481,7 +444,7 @@ final class AVPlayerEngine: PlaybackEngine {
         }.joined(separator: " ")
     }
 
-    /// 记录硬解音轨编码信息，定位「有画面无声」——判断音频编码是否被系统原生支持（TODO 358）
+    /// 记录硬解音轨编码信息，定位「有画面无声」——判断音频编码是否被系统原生支持
     private func logAudioDiagnostics(asset: AVURLAsset) async {
         let tracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
         var parts: [String] = []

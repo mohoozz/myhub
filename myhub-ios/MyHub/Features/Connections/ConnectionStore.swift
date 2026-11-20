@@ -116,10 +116,9 @@ final class ConnectionStore: ObservableObject {
         try? credentials.loadPassword(for: connectionID)
     }
 
-    // MARK: - 连接测试
+ // MARK: - 连接测试
 
-    /// 列表出现时自动测试：仅在从未测试过（内存与本地缓存均无结果）时自动测试一次；
-    /// 已有结果（成功/失败/测试中）直接复用；重新检查只由用户手动触发（点击状态点 / 表单测试）
+    /// 列表出现时自动测试：仅在从未测试过（内存与本地缓存均无结果）时自动测试一次
     func testIfNeeded(_ connection: Connection) async {
         guard let id = connection.id, connection.enabled else { return }
         switch testStates[id] {
@@ -134,9 +133,7 @@ final class ConnectionStore: ObservableObject {
         }
     }
 
-    /// App 启动时对全部已启用连接源探测一次内外网路由（TODO 324）：
-    /// 结果同时写入 UI 测试缓存与 `RoutedWebDAVAdapter` 的进程级路由锁定。
-    /// 之后所有操作一直使用锁定地址，只有用户手动「测试连接」或重启 App 才会重新判定。
+    /// App 启动时对全部已启用连接源探测一次内外网路
     func probeOnLaunch() async {
         reload()
         await withTaskGroup(of: Void.self) { group in
@@ -163,7 +160,7 @@ final class ConnectionStore: ObservableObject {
         }
     }
 
-    // MARK: - 测试结果缓存（UserDefaults，避免每次进入列表重复检查）
+ // MARK: - 测试结果缓存（UserDefaults，避免每次进入列表重复检查）
 
     /// 读取本地缓存的测试结果；无则 nil
     private func loadCachedState(for id: Int64) -> ConnectionTestState? {
@@ -207,7 +204,7 @@ final class ConnectionStore: ObservableObject {
         }
     }
 
-    /// 测试成功提示：区分内网 / 外网可达（IOS-101）
+    /// 测试成功提示：区分内网 / 外网可达
     static func reachabilityMessage(for connection: Connection, activeRoute: ConnectionRoute? = nil) -> String {
         switch connection.type {
         case .local:

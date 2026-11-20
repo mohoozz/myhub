@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 回收站连接源选择页（IOS-106）：回收站为各挂载点下 `.trash` 目录
+/// 回收站连接源选择页：回收站为各挂载点下 `.trash` 目录
 struct TrashConnectionListView: View {
     @EnvironmentObject private var store: ConnectionStore
 
@@ -34,7 +34,7 @@ struct TrashConnectionListView: View {
     }
 }
 
-/// 回收站页（IOS-106）：列表、滑动还原/彻底删除、清空、过期自动清理（默认 30 天）
+/// 回收站页：列表、滑动还原/彻底删除、清空、过期自动清理（默认 30 天）
 struct TrashView: View {
     let connection: Connection
 
@@ -162,7 +162,7 @@ struct TrashView: View {
         .padding(.vertical, 2)
     }
 
-    // MARK: - 操作
+ // MARK: - 操作
 
     private func load() async {
         guard let service else {

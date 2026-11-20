@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 连接源 添加/编辑 表单（IOS-101）：连接测试 + 内网/外网可达提示
+/// 连接源添加/编辑表单：连接测试 + 内网/外网可达提示
 struct ConnectionFormView: View {
     @ObservedObject var store: ConnectionStore
     let original: Connection
@@ -12,12 +12,10 @@ struct ConnectionFormView: View {
     @State private var name: String
     @State private var enabled: Bool
 
-    // WebDAV
     @State private var webdavBaseURL: String       // 外网地址
     @State private var webdavInternalURL: String   // 内网地址（可选，优先直连，不通回退外网）
     @State private var webdavRootPath: String
     @State private var webdavUsername: String
-    // SMB
     @State private var smbHost: String
     @State private var smbShare: String
     @State private var smbUsername: String
@@ -71,7 +69,7 @@ struct ConnectionFormView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .disabled(!isNew)   // 编辑时不允许换类型（避免凭据/配置错位）
+                    .disabled(!isNew)
                 }
 
                 Section("基本信息") {
@@ -115,7 +113,7 @@ struct ConnectionFormView: View {
         }
     }
 
-    // MARK: - 分类型配置区
+ // MARK: - 分类型配置区
 
     private var localSection: some View {
         Section("本地目录") {
@@ -195,7 +193,7 @@ struct ConnectionFormView: View {
         }
     }
 
-    // MARK: - 密码输入（带明文切换）
+ // MARK: - 密码输入（带明文切换）
 
     private var passwordField: some View {
         HStack {
@@ -218,7 +216,7 @@ struct ConnectionFormView: View {
         }
     }
 
-    // MARK: - 连接测试
+ // MARK: - 连接测试
 
     private var testSection: some View {
         Section {
@@ -278,7 +276,7 @@ struct ConnectionFormView: View {
         }
     }
 
-    // MARK: - 保存
+ // MARK: - 保存
 
     private var isValid: Bool {
         if name.trimmingCharacters(in: .whitespaces).isEmpty { return false }

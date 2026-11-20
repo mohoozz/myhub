@@ -1,8 +1,7 @@
 import Foundation
 import GRDB
 
-/// 本地数据库入口（GRDB / SQLite，IOS-002）。
-/// 表结构见 `Records/`；通过 DatabaseMigrator 建表与版本迁移。
+/// 本地数据库入口（GRDB / SQLite）。
 final class AppDatabase {
     static let shared = AppDatabase()
 
@@ -134,8 +133,6 @@ final class AppDatabase {
         }
 
         // v2：阅读/播放进度持久化文件指纹（fileSize/modTime）。
-        // 「正在阅读」页 stat 成功后写回，重进 app 时先用旧指纹构造 entry 秒出封面，
-        // 后台再静默 stat 校正，无需等待每次的网络 stat。
         migrator.registerMigration("v2_reading_fingerprint") { db in
             try db.alter(table: ReadingProgress.databaseTableName) { t in
                 t.add(column: "fileSize", .integer)

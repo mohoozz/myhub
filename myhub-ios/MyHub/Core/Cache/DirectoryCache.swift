@@ -1,8 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// 目录结果本地缓存（IOS-102）：网络源目录列表落沙盒 Caches，二次进入先展示缓存再后台刷新。
-/// 缓存为可重建派生数据，丢失自动重拉；键含 connectionID + 路径，内容含条目与拉取时间。
+/// 目录结果本地缓存：网络源目录列表落沙盒 Caches，二次进入先展示缓存再后台刷新。
 final class DirectoryCache {
     static let shared = DirectoryCache()
 
@@ -36,7 +35,7 @@ final class DirectoryCache {
         Task.detached(priority: .utility) {
             guard let data = try? JSONEncoder.directoryCache.encode(snapshot) else { return }
             try? data.write(to: url, options: .atomic)
-            CacheManager.shared.evictPartitionIfNeeded(.directoryListings)   // 目录缓存 LRU（IOS-605）
+            CacheManager.shared.evictPartitionIfNeeded(.directoryListings)
         }
     }
 

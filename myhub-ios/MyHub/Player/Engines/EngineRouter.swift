@@ -1,8 +1,6 @@
 import AVFoundation
 
-/// 格式探测与引擎自动路由（《需求分析文档》§4.3：探测容器/编码选择引擎）。
-/// 设置可强制硬解/软解（AppSettings.Player.decodePreference）；
-/// 自动模式下硬解起播失败由 PlayerCore 回退软解。
+/// 格式探测与引擎自动路由（：探测容器/编码选择引擎）。
 enum EngineRouter {
     /// 原生硬解优先（系统可播容器/编码：H.264/HEVC/AAC/ALAC…）
     static let nativeExtensions: Set<String> = [

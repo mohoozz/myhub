@@ -1,14 +1,7 @@
 import Foundation
 import GRDB
 
-/// txt 小说章节索引器（IOS-205 / 编码检测 IOS-706）：
-/// - **编码检测**：复用 `TextEncodingDetector`（BOM + 无 BOM 启发式，覆盖 UTF-8 / GBK / Big5 / UTF-16 LE/BE）；
-/// - **字节级行扫描**：直接在字节流按 \n 切行（各编码下 \n 均为单码元且不出现于多字节字符内部），
-///   章节标题的**全局字节偏移精确无漂移**（不依赖字符串重编码累加）；
-/// - **章节正则**：识别「第 x 章/节/回/卷…」「Chapter n」「楔子/序章/尾声/番外」等标题行；
-/// - **索引缓存**：`NovelIndex` 表（可重建缓存），文件指纹（fileSize + modTime）校验；
-///   旧缓存**编码复核自愈**——抽样解码异常（替换符占比高）则自动重建；
-/// - **二分反查**：全局字节偏移 → 所在章节（排版无关锚点一步定位的核心）。
+/// txt 小说章节索引器（/ 编码检测）
 enum TxtNovelIndexer {
 
     struct IndexData {
@@ -41,7 +34,7 @@ enum TxtNovelIndexer {
         }
     }
 
-    // MARK: - 入口（带缓存 + 指纹校验 + 编码复核自愈）
+ // MARK: - 入口（带缓存 + 指纹校验 + 编码复核自愈）
 
     static func index(
         adapter: StorageAdapter,
@@ -56,20 +49,20 @@ enum TxtNovelIndexer {
             if await verifyEncoding(cached, adapter: adapter, path: entry.path),
                await verifyFirstChapterConsistency(cached, adapter: adapter, path: entry.path) {
                 AppLogger.shared.log(
-                    "TXT索引缓存命中 name=\(entry.name) path=\(entry.path) chapters=\(cached.chapters.count) first=\"\(cached.chapters.first?.title ?? "无")\" second=\"\(cached.chapters.count > 1 ? cached.chapters[1].title : "无")\"",
-                    module: "novel-index"
+                    "TXT索引缓存命中 name=\(entry.name) chapters=\(cached.chapters.count) first=\"\(cached.chapters.first?.title ?? "无")\"",
+                    level: .debug, module: "novel-index"
                 )
                 return cached
             }
             AppLogger.shared.log("TXT索引缓存复核未通过，触发重建 name=\(entry.name)", level: .warn, module: "novel-index")
         }
-        AppLogger.shared.log("TXT索引重建开始 name=\(entry.name)", module: "novel-index")
+        AppLogger.shared.log("TXT索引重建开始 name=\(entry.name) size=\(entry.size) path=\(entry.path)", module: "novel-index")
         let fresh = try await rebuild(adapter: adapter, entry: entry, progress: progress)
         saveCachedIndex(fresh, connectionID: connectionID, path: entry.path)
         return fresh
     }
 
-    // MARK: - 重建索引
+ // MARK: - 重建索引
 
     private static func rebuild(
         adapter: StorageAdapter,
@@ -88,7 +81,6 @@ enum TxtNovelIndexer {
         )
 
         // 2. 字节级行扫描（分块流式，跨块行拼接），按规则表识别章节标题
-        //    每条规则各自收集候选，扫描结束后统一选规则（见 ChapterRuleTable.selectBest）
         let isUTF16 = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
         var candidatesByRule: [String: [ChapterInfo]] = [:]
         var pending = Data()
@@ -143,8 +135,7 @@ enum TxtNovelIndexer {
             )
         }
 
-        // 3. 选规则：通过校验者中取章节数最多的规则（正文里偶然出现的「第一章」数量远少于真规则，
-        //    自然落选）；无规则通过校验则退回首条命中的规则，仍为空则整本单章
+        // 3. 选规则：通过校验者中取章节数最多的规则
         var chapters: [ChapterInfo]
         var appliedRule: ChapterRuleTable.Rule?
         if let selected = ChapterRuleTable.selectBest(
@@ -168,7 +159,7 @@ enum TxtNovelIndexer {
         progress?(1)
 
         AppLogger.shared.log(
-            "TXT索引完成 name=\(entry.name) chapters=\(chapters.count) rule=\(appliedRule?.id ?? "无（整本单章）") 候选规则数=\(candidatesByRule.count) first=\"\(chapters.first?.title ?? "无")\" second=\"\(chapters.count > 1 ? chapters[1].title : "无")\" last=\"\(chapters.last?.title ?? "无")\"",
+            "TXT索引完成 name=\(entry.name) chapters=\(chapters.count) rule=\(appliedRule?.id ?? "无（整本单章）") 候选=\(candidatesByRule.count) first=\"\(chapters.first?.title ?? "无")\"",
             module: "novel-index"
         )
         return IndexData(
@@ -180,7 +171,7 @@ enum TxtNovelIndexer {
         )
     }
 
-    // MARK: - 章节标题正则（规则表见 ChapterRuleTable）
+ // MARK: - 章节标题正则（规则表见 ChapterRuleTable）
 
     /// 将不可见字符转义，便于在日志中排查 BOM / 零宽字符导致的漏检
     private static func visible(_ text: String) -> String {
@@ -202,14 +193,12 @@ enum TxtNovelIndexer {
     }
 
     /// 行字节 → 解码 → trim → 规则匹配；标题行长度受限且不以句号收尾（过滤正文）
-    /// - Parameter ruleID: 指定只测某条规则（索引缓存复核用）；nil = 按规则表顺序取首条命中
-    /// - Returns: 命中的标题文本 + 规则 ID（多规则各自收集候选，扫描结束后统一选规则）
     private static func matchChapterTitle(
         lineData: Data, encoding: String.Encoding, ruleID: String? = nil
     ) -> (title: String, ruleID: String)? {
         guard lineData.count <= 140, !lineData.isEmpty else { return nil }
         guard var text = String(data: lineData, encoding: encoding) else { return nil }
-        // 去掉文件头 BOM：UTF-8/UTF-16 BOM 解码后为 \u{FEFF}，会挡住正则 ^第 导致第一章漏检
+        // 去掉文件头 BOM：UTF-8/UTF-16 BOM 解码后为 \u{FEFF}，会挡住正则 ^第导致第一章漏检
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= 42 else { return nil }
@@ -244,7 +233,7 @@ enum TxtNovelIndexer {
         }
     }
 
-    // MARK: - 换行扫描（字节级）
+ // MARK: - 换行扫描（字节级）
 
     private struct NewlineHit {
         let lineEnd: Data.Index      // 行内容结束（不含 \r）
@@ -293,7 +282,7 @@ enum TxtNovelIndexer {
         }
     }
 
-    // MARK: - 索引缓存（NovelIndex 表，可重建）
+ // MARK: - 索引缓存（NovelIndex 表，可重建）
 
     private static func loadCachedIndex(connectionID: Int64, path: String) -> IndexData? {
         guard let db = AppDatabase.shared.dbQueue else { return nil }
@@ -361,7 +350,6 @@ enum TxtNovelIndexer {
     }
 
     /// 首章一致性自愈：从文件头扫描第一个章节标题行，与缓存首章 startOffset 比对。
-    /// 旧缓存若漏检第一章（如 BOM 未 strip），偏移不一致 → 返回 false 触发重建。
     private static func verifyFirstChapterConsistency(
         _ data: IndexData, adapter: StorageAdapter, path: String
     ) async -> Bool {
@@ -375,8 +363,7 @@ enum TxtNovelIndexer {
         let isUTF16 = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
         let newline = newlineScanner(isUTF16: isUTF16, littleEndian: encoding == .utf16LittleEndian)
 
-        // 用索引时实际命中的规则复核（旧缓存无 ruleID 时按规则表全量匹配）：
-        // 否则规则表更新后校验基准变化 → 首章对不上 → 反复重建索引
+        // 用索引时实际命中的规则复核（旧缓存无 ruleID 时按规则表全量匹配）
         let ruleID = first.ruleID
         if let ruleID, ChapterRuleTable.rules.first(where: { $0.id == ruleID }) == nil {
             AppLogger.shared.log(
@@ -405,7 +392,7 @@ enum TxtNovelIndexer {
         return true
     }
 
-    // MARK: - 工具
+ // MARK: - 工具
 
     private static func readAll(
         adapter: StorageAdapter, path: String, range: Range<Int64>
@@ -512,8 +499,7 @@ enum TxtChapterLoader {
         )
     }
 
-    /// 字节级按 \n 切行（与索引器同一原则：\n 在各编码下均为单码元且不出现于多字节字符内部），
-    /// 行文本解码失败的有损兜底，行字节范围保持精确。
+    /// 字节级按 \n 切行（与索引器同一原则：\n 在各编码下均为单码元且不出现于多字节字符内部）
     static func splitLines(_ data: Data, encoding: String.Encoding, baseOffset: Int64) -> [Line] {
         let isUTF16 = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
         let littleEndian = encoding == .utf16LittleEndian

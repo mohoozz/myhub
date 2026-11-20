@@ -1,11 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// 视频/音频边下边播分片磁盘缓存（IOS-203 / IOS-605，参考 nPlayer 缓存架构）。
-/// - 分片 1MB；命中直接返回，未命中由上层（CachedRangeReader）拉取并写盘；
-/// - LRU 淘汰 + 分区配额（`CacheManager.limitBytes(for: .mediaSegments)`）+ 单文件上限（配额 1/4）；
-/// - 缓存键含文件指纹（fileSize + modTime）：文件被替换则键变、旧分片经 LRU 自然淘汰；
-/// - 断点续播复用：重进同一文件命中已持久化分片，无需重新下载。
+/// 视频/音频边下边播分片磁盘缓存（参考 nPlayer 缓存架构）。
 actor SegmentCache {
     static let shared = SegmentCache()
     static let segmentLength: Int64 = 1024 * 1024
@@ -32,9 +28,7 @@ actor SegmentCache {
 
     private var metas: [String: FileMeta] = [:]
     private var indexLoaded = false
-    /// 索引落盘节流（发热优化）：旧实现每写 1MB 分片就把整个索引 JSON 全量重编码 + 原子写，
-    /// 高码率片源等于持续索引 IO。改为最多每 1s 合并落盘一次——索引仅用于加速淘汰决策，
-    /// 进程被杀最多丢失最近 1s 的增量（分片文件仍在，重建成本低）。
+    /// 高码率片源等于持续索引 IO。改为最多每 1s 合并落盘一次——索引仅用于加速淘汰决策
     private var indexDirty = false
     private var indexFlushTask: Task<Void, Never>?
     /// 单文件上限检查节流：超上限时列目录 + 逐分片 stat 成本高，最多每 1s 执行一次
@@ -42,7 +36,7 @@ actor SegmentCache {
 
     private init() {}
 
-    // MARK: - 读取 / 写入
+ // MARK: - 读取 / 写入
 
     /// 读取分片（命中更新访问时间；未命中返回 nil 由上层拉取）
     func data(file: FileIdentity, segment index: Int64) -> Data? {
@@ -84,8 +78,7 @@ actor SegmentCache {
         saveIndex()
     }
 
-    /// 离线身份反查（IOS-605）：stat 失败（无网络）时按连接 + 路径取回最近访问的缓存身份，
-    /// 命中后已缓存分片可离线播放（键与在线时一致）
+    /// 离线身份反查：stat 失败（无网络）时按连接 + 路径取回最近访问的缓存身份
     func cachedIdentity(connectionID: Int64, path: String) -> FileIdentity? {
         loadIndexIfNeeded()
         return metas
@@ -95,10 +88,9 @@ actor SegmentCache {
             .first
     }
 
-    // MARK: - 前缀复用（封面抽帧 ⇄ 播放边下边播互通，IOS-203）
+ // MARK: - 前缀复用（封面抽帧 ⇄ 播放边下边播互通）
 
     /// 读取从 0 起的连续前缀数据（供封面抽帧复用播放已缓存分片；遇缺口即止）。
-    /// 命中的分片刷新访问时间。返回 nil 表示第 0 分片都未缓存。
     func prefix(file: FileIdentity, maxBytes: Int64) -> Data? {
         loadIndexIfNeeded()
         let key = file.key
@@ -115,7 +107,6 @@ actor SegmentCache {
     }
 
     /// 将从 0 起的前缀数据切片写入缓存（封面抽帧顺带填充播放前缀，播放时直接命中）。
-    /// 仅补写尚未缓存的分片，不覆盖已有分片；末尾统一更新索引与执行淘汰（避免逐片写索引）。
     func storePrefix(file: FileIdentity, data: Data) {
         loadIndexIfNeeded()
         let key = file.key
@@ -148,7 +139,7 @@ actor SegmentCache {
         evictIfNeeded()
     }
 
-    // MARK: - LRU / 容量
+ // MARK: - LRU / 容量
 
     /// 本分区配额（= 总预算的 1/2）：不再独占总预算，避免媒体分片写满后把漫画/小说/封面缓存挤掉
     private var totalLimitBytes: Int64 {
@@ -159,7 +150,6 @@ actor SegmentCache {
     private var fileLimitBytes: Int64 { totalLimitBytes / 4 }
 
     /// 单文件上限：距当前播放位置最远的分片优先淘汰（预读向前，回退方向分片重新拉取即可）。
-    /// 距上次检查不足 1s 时跳过：列目录 + 逐分片 stat 在持续写入时成本明显，短时超限可接受
     private func enforceFileCap(key: String, aroundIndex: Int64) {
         guard let meta = metas[key], meta.totalBytes > fileLimitBytes else { return }
         let now = Date()
@@ -199,7 +189,7 @@ actor SegmentCache {
         scheduleIndexSave()
     }
 
-    // MARK: - 索引持久化（重建成本低，仅加速淘汰决策）
+ // MARK: - 索引持久化（重建成本低，仅加速淘汰决策）
 
     private var indexURL: URL {
         CacheManager.shared.url(for: .mediaSegments).appendingPathComponent("_index.json")
@@ -218,7 +208,6 @@ actor SegmentCache {
         try? data.write(to: indexURL, options: .atomic)
     }
 
-    /// 合并落盘：1s 内的多次写入只触发一次索引重写（旧实现每次 1MB 分片即全量重写）
     private func scheduleIndexSave() {
         indexDirty = true
         guard indexFlushTask == nil else { return }
@@ -248,7 +237,7 @@ actor SegmentCache {
         saveIndex()
     }
 
-    // MARK: - 路径
+ // MARK: - 路径
 
     private func directory(for key: String) -> URL {
         CacheManager.shared.url(for: .mediaSegments).appendingPathComponent(key, isDirectory: true)

@@ -2,10 +2,7 @@ import SwiftUI
 import UIKit
 import WebKit
 
-/// 滚动位移计量器（TODO 399）：把 `contentOffset` 的高频变化（ProMotion 下可达 120Hz）
-/// 归并成稀疏的「用户正在滑动页面」信号——累计位移超过 `distance` 且距上次信号超过 `interval`
-/// 才发一个，既保证慢速拖动（单次回调不足 1pt）也能触发收起，又避免刷爆 `@Published`。
-/// 仅在 `UIScrollView` 的主线程 KVO 回调内读写，故标注 `@unchecked Sendable`。
+/// 滚动位移计量器：把高频位移合并成稀疏的「收起操作栏」信号
 private final class ScrollDragMeter: @unchecked Sendable {
     private let distance: CGFloat = 4
     private let interval: TimeInterval = 0.15
@@ -26,17 +23,13 @@ private final class ScrollDragMeter: @unchecked Sendable {
     }
 
     /// 记录「手指仍在页面上」的一次位移回调，返回是否属于本轮拖动的**第一个**回调。
-    ///
-    /// 「点击胶囊主动展开操作栏后不再被这轮滑动打回收起态」的抑制判断依赖它：
-    /// 只有真正开始了一轮**新手势**才解除抑制，本轮手势剩余的回调一律不算。
     func beginGestureIfNeeded() -> Bool {
         guard !gestureStarted else { return false }
         gestureStarted = true
         return true
     }
 
-    /// 手指离开页面（惯性滚动 / 回弹 / 布局自动调整）时复位：计量值与手势态一并归零，
-    /// 使下一次拖动既能量到完整位移，也会被识别为「新手势」
+    /// 手指离开页面（惯性滚动 / 回弹 / 布局自动调整）时复位：计量值与手势态一并归零
     func endGesture() {
         gestureStarted = false
         reset()
@@ -49,22 +42,17 @@ private final class ScrollDragMeter: @unchecked Sendable {
     }
 }
 
-/// 浏览器标签（TODO §8.1，IOS-401）：
-/// 每个标签持有一个 `WKWebView` 实例，切换标签时不销毁视图，从而保持导航历史栈
-/// （back/forward）不因标签切换或 URL 重建而丢失；无痕标签使用独立的 `nonPersistent`
-/// 数据存储，不落盘。
+/// 浏览器标签
 @MainActor
 final class BrowserTab: NSObject, ObservableObject, Identifiable {
     let id: UUID
     let isIncognito: Bool
 
-    /// 懒创建（TODO 418）：会话恢复但尚未显示的标签不建 WebKit 实例，
-    /// 避免启动时为几十个历史标签各拉起一套 WebContent 进程；首次访问时才创建。
+    /// 懒创建：会话恢复但尚未显示的标签不建 WebKit 实例
     private(set) lazy var webView: WKWebView = {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         // 与 Safari 默认一致：静音视频可自动播放，**有声媒体必须经用户手势**。
-        // 旧值为 `[]`（完全允许自动播放），恢复的标签/后台标签会被广告页突然放音放视频。
         config.mediaTypesRequiringUserActionForPlayback = .audio
         // 无痕：非持久化数据存储，关闭即失忆
         config.websiteDataStore = isIncognito ? .nonPersistent() : .default()
@@ -85,19 +73,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var isWebViewCreated = false
 
     /// 注入脚本：去掉页面声明的 `viewport-fit=cover`。
-    ///
-    /// `viewport-fit=cover` 的语义是「布局视口铺满整块屏幕，安全区由页面用
-    /// `env(safe-area-inset-*)` 自己补」。本 App 的网页层在沉浸态下本来就铺满整屏（F1），
-    /// 但它不是 Safari 那种会向 WebKit 交代 obscured inset 的宿主，WebKit 拿到的是
-    /// 「全屏视口 + 安全区取值为 0」，于是：
-    /// - 没声明 cover 的站点（绝大多数）走 WebKit 的自动分支——布局视口被收进安全区，顶部正常；
-    /// - 声明了 cover 的站点（x.com 的 viewport 就是
-    ///   `width=device-width,initial-scale=1,...,viewport-fit=cover`）拿到全屏视口，
-    ///   而它自身 CSS 里并没有用 `env(safe-area-inset-top)` 补高度，顶部栏就正好压在
-    ///   状态栏 / 灵动岛上——这就是「只有 x.com 会重合」的原因。
-    /// 去掉 cover 后这类站点回落到与普通网页相同的「自动收进安全区」分支，表现一致。
-    /// `.atDocumentStart` + MutationObserver：文档开始阶段 `<head>` 往往还没解析到 viewport 这一行，
-    /// 等它出现立刻改写（改完即停止观察），避免首屏先按全屏排版再跳一下。
     private static let ignoreViewportFitCoverScript = WKUserScript(
         source: #"""
         (function () {
@@ -134,17 +109,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     )
 
     /// 是否为「会话恢复但尚未加载」的占位标签：不联网、不建 WebView、不挂载视图。
-    /// 由激活/可见时调用的 `loadPendingURLIfNeeded()` 置为 `false`。
     @Published private(set) var isPendingRestore = false
 
-    // MARK: - 可观察状态（KVO 驱动）
+ // MARK: - 可观察状态（KVO 驱动）
 
     @Published var title = ""
     @Published var currentURL: URL? {
         didSet {
             // 相同值（如重定向回原 URL）不重复触发；init 中的初始赋值不会触发 didSet
             guard currentURL != oldValue else { return }
-            // 页面已经换掉：旧缩略图不再代表当前内容，清空让网格重抓（TODO 423）
+            // 页面已经换掉：旧缩略图不再代表当前内容，清空让网格重抓
             if thumbnailSourceURL != currentURL?.absoluteString { thumbnail = nil }
             noteHistoryNavigation()
             onStateChange?()
@@ -161,69 +135,46 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var isSSLError = false
     @Published var errorMessage: String?
 
-    /// 页面滚动计数：用户任意方向拖动页面均自增，用于将底部操作栏收起为胶囊（TODO §8.2）
-    /// 用计数器而非布尔，保证「展开后再次滚动」也能再触发收起
+    /// 页面滚动计数：用户任意方向拖动页面均自增，用于将底部操作栏收起为胶囊
     @Published var scrollTick: Int = 0
 
-    /// 忽略「当前这一轮滚动手势」剩余的收起信号：由
-    /// `suppressScrollCollapseForCurrentGesture()` 置位，下一次手指重新按下开始拖动时解除
+    /// 忽略「当前这一轮滚动手势」剩余的收起信号
     private var suppressesScrollCollapse = false
 
-    /// 起始页回退标记：从起始页导航进入过页面后为 `true`，
-    /// 使「回退」按钮在 webView 历史为空时仍可返回到起始页（Safari 行为）
+    /// 起始页回退标记：从起始页导航进入过页面后为 `true`
     @Published private(set) var startedFromStartPage = false
 
-    /// 「从起始页出发」时 webView 历史栈的边界条目（起始页之前的最后一页；全新标签为 `nil`）。
-    /// 回退到该条目即视为回到起始页，避免回退越过起始页误入更早的残留历史（多退一页）。
     private var startPageBoundary: WKBackForwardListItem?
 
-    // MARK: - 跨重启历史栈
+ // MARK: - 跨重启历史栈
 
-    /// 含当前页在内的历史 URL（按时间顺序）。正常运行时由 `WKBackForwardList` 同步而来，
-    /// 重启恢复后作为回退/前进的唯一依据（WebKit 没有「注入历史」的公开 API）。
+    /// 含当前页在内的历史 URL（按时间顺序）。正常运行时由 `WKBackForwardList` 同步而来
     private var historyURLs: [String] = []
     /// 当前页在 `historyURLs` 中的下标；`-1` 表示无当前页（起始页）
     private var historyIndex = -1
     /// 是否由 `historyURLs` 驱动回退/前进：仅「会话恢复且历史跨进程丢失」的标签为 `true`。
-    /// 此模式下原生 back/forward 顺序不可靠（每次回退都是一次新导航），故禁用系统侧滑手势、
-    /// 改由工具栏按钮与自定义边缘手势走本栈。
     private(set) var usesRestoredHistory = false
 
     /// `target=_blank` / `window.open` 回调：交给 `BrowserSessionStore` 新建标签
     var onOpenNewTab: ((URL) -> Void)?
 
-    /// 主资源加载完成回调（url, title）：记录浏览历史（无痕不记录，TODO §8.3）
+    /// 主资源加载完成回调（url, title）：记录浏览历史（无痕不记录）
     var onDidFinishVisit: ((URL, String) -> Void)?
 
-    /// 标签状态变化回调（当前 URL 变化等）：由 `BrowserSessionStore` 订阅，驱动会话持久化，
-    /// 保证「导航后直接退出」也能保存上一次打开的页面
+    /// 标签状态变化回调（当前 URL 变化等）：由 `BrowserSessionStore` 订阅，驱动会话持久化
     var onStateChange: (() -> Void)?
 
-    /// 下拉刷新控件（由 `BrowserWebView` 创建并挂到 `scrollView`）：
-    /// 页面加载完成/失败时在此结束刷新动画（`scrollView` 强持有，故弱引用即可）
+    /// 下拉刷新控件（由 `BrowserWebView` 创建并挂到 `scrollView`）
     weak var refreshControl: UIRefreshControl?
 
     private var observations: [NSKeyValueObservation] = []
-    /// 会话恢复的延迟加载 URL（TODO 418）：
-    /// App 启动不自动联网，等标签真正显示时由 `loadPendingURLIfNeeded()` 补加载
+    /// 会话恢复的延迟加载 URL
     private var pendingLoadURL: URL?
 
     /// 最近一次**主动发起**导航的地址（`load` / 恢复补加载 / 历史回放）。
-    ///
-    /// 首次导航失败（`didFailProvisionalNavigation`）时 WebKit 从未提交过任何页面：
-    /// - `webView.url` 会被重置为 `nil`（无已提交页面），KVO 若照单全收就会把用户输入的地址抹掉；
-    /// - `webView.reload()` 此时属于「无页面可刷」，是空操作。
-    /// 故重试必须用这里记住的地址重新发起请求。
     private var requestedURL: URL?
 
     /// - Parameter autoload: 是否立即加载 `url`。
-    ///   会话恢复必须传 `false`：`RootView` 用 ZStack 保活所有页签、启动即构建 `BrowserHomeView`，
-    ///   若在此直接 load，会把上次开过的**全部**网页在启动瞬间一起联网、渲染并（允许自动播放时）出声，
-    ///   用户还没进浏览器就可能看到／听到页面内容（含网页全屏视频等系统层呈现）。
-    /// - Parameters:
-    ///   - restoredHistory: 会话恢复时读回的历史 URL 列表（含当前页），用于重建回退能力
-    ///   - restoredIndex: 当前页在上述列表中的下标
-    ///   - startedFromStartPage: 会话恢复时读回的「从起始页进入」标记
     init(
         id: UUID = UUID(),
         url: URL?,
@@ -241,7 +192,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         self.currentURL = url
 
         // 重启恢复：原生历史栈已丢失，改用磁盘里的 URL 栈驱动回退/前进。
-        // 仅当栈里确有可回退/可前进的条目时才接管，避免把普通标签也拖进自定义模式。
         if let url, restoredHistory.count > 1,
            restoredHistory.indices.contains(restoredIndex) {
             var stack = restoredHistory
@@ -267,7 +217,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
     }
 
-    // MARK: - 导航操作
+ // MARK: - 导航操作
 
     func load(_ url: URL) {
         // 从起始页导航进入页面：起始页成为可回退的第一页（需在 currentURL 更新前判断）
@@ -288,7 +238,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         webView.load(URLRequest(url: url))
     }
 
-    // MARK: - 可见性与媒体播放（TODO 418）
+ // MARK: - 可见性与媒体播放
 
     /// 会话恢复的延迟加载：标签首次真正显示时调用（重复调用无副作用）
     func loadPendingURLIfNeeded() {
@@ -301,8 +251,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     /// 暂停页面内媒体播放（标签切走 / 浏览器页签不可见 / App 进入后台）。
-    /// 标签常驻保活且允许自动播放：不暂停的话，后台标签会继续出声、占用音频会话，
-    /// 甚至在锁屏后继续消耗流量。
     func suspendMediaPlayback() {
         // 未创建的占位标签没有媒体可暂停，读 `webView` 反而会触发 lazy 创建
         guard isWebViewCreated else { return }
@@ -317,10 +265,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func reload() {
         // 刷新是操作栏上的操作，**不**收起操作栏（只有滑动页面才收起，见 `scrollTick`）。
-        // 错误页「重试」必须用用户想打开的那个地址重新发起导航：
-        // 首次导航失败时 WebKit 没有提交过条目，`webView.reload()` 是空操作，
-        // 而 `webView.url` 已被重置（新标签为 nil / 老标签退回上一页）。
-        // 旧实现只清错误 + reload，于是错误页消失、地址栏变空、用户输入过的网址丢失。
         if hasError, let url = requestedURL ?? currentURL {
             load(url)
             return
@@ -334,17 +278,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     /// 用户点击底部胶囊主动展开操作栏：本轮滚动手势剩余的回调不要再把它收回去。
-    ///
-    /// 收起由 `contentOffset` KVO 驱动，而点击胶囊那一刻这一轮滑动往往还没结束（手指仍在页面上、
-    /// 或页面仍在滚动），紧随其后的回调会把刚展开的操作栏再次收起，表现为「点了有按压动画但没展开」。
-    /// 抑制范围**只限当前这一轮手势**：手指重新按下开始新一轮拖动时由 KVO 自动解除，
-    /// 「展开后滑动页面收起操作栏」的既有行为不受影响。
     func suppressScrollCollapseForCurrentGesture() {
         suppressesScrollCollapse = true
     }
 
     /// 回退可用性：非起始页时总可回退（webView 历史栈可退，或可退回起始页）。
-    /// 起始页本身是标签的逻辑第一页，不可再回退。
     var canGoBackOrStartPage: Bool {
         guard !isShowingStartPage else { return false }
         if usesRestoredHistory { return historyIndex > 0 || startedFromStartPage }
@@ -410,14 +348,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         historyIndex = -1
         currentURL = nil
         // 注：WKBackForwardList 无公开的清空历史栈 API；此处只重置 UI 状态，webView 历史栈保留。
-        // 再次从起始页导航时会依据 `startPageBoundary` 重新界定回退边界，从而不会多退一页到残留历史。
     }
 
-    // MARK: - 卡片缩略图（标签网格方案 A，TODO 423）
+ // MARK: - 卡片缩略图
 
     /// 标签卡片的预览图：由 `captureThumbnailIfNeeded()` 异步抓取，与本标签的生命周期绑定。
-    /// 无痕标签**永不抓取**——截图会以图像形式留在内存与系统快照缓存里，
-    /// 与「无痕不落盘」的承诺冲突，网格直接走品牌色占位形态。
     @Published private(set) var thumbnail: UIImage?
     /// 当前缩略图对应的 URL：用于判断「缓存是否还能代表现在这一页」
     private var thumbnailSourceURL: String?
@@ -425,13 +360,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var isCapturingThumbnail = false
 
     /// 抓取卡片缩略图（打开标签网格时按需调用，可安全重复调用）。
-    ///
-    /// 三条硬约束：
-    /// - **无痕不抓**：隐私优先，宁可看占位图；
-    /// - **不建 WebView**：会话恢复但尚未显示的标签不能读 `webView`（lazy 会拉起 WebContent 进程）；
-    /// - **只抓顶部一屏**：卡片预览只露上半部分，抓整页既慢又占内存。
-    ///
-    /// - Parameter targetWidth: 快照目标宽度（pt）。卡片实际宽度约 160pt，取 2.5 倍保证 Retina 下清晰。
     func captureThumbnailIfNeeded(targetWidth: CGFloat = 400) {
         guard !isIncognito else { return }
         guard isWebViewCreated, !isPendingRestore else { return }
@@ -462,14 +390,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
     }
 
-    // MARK: - 侧滑返回背景（上一页画面，Safari 风格）
+ // MARK: - 侧滑返回背景（上一页画面，Safari 风格）
 
     /// 页面画面缓存，key 为 URL 绝对字符串。
-    ///
-    /// 侧滑返回时它铺在网页层之下：网页跟着手指右移，露出来的是**上一页真实画面**，
-    /// 而不是主题底色——旧实现下层是透明的，暗色模式下露出的是纯黑 `pageBackground`，
-    /// 读起来就是「滑进一块黑屏，松手后再刷一下才出画面」。
-    /// 首次打开浏览器（或该页从未加载完成）没有缓存，调用方回落到纯白底。
     private var pageSnapshots: [String: UIImage] = [:]
     /// 缓存淘汰顺序（先进先出）：只保留最近若干页，避免长会话里图片越积越多
     private var pageSnapshotOrder: [String] = []
@@ -478,9 +401,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var isCapturingPageSnapshot = false
 
     /// 下一次回退的目标页画面：无缓存返回 `nil`（调用方用白底）。
-    ///
-    /// 读 `backForwardList` 是安全的：`isWebViewCreated` 已先行短路，
-    /// 不会在会话恢复的占位标签上触发 lazy 创建。
     var backTargetSnapshot: UIImage? {
         if usesRestoredHistory {
             guard historyIndex > 0, historyURLs.indices.contains(historyIndex - 1) else { return nil }
@@ -491,10 +411,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     /// 抓取当前页画面，供下次侧滑返回当背景用（`didFinish` 时调用，可安全重复调用）。
-    ///
-    /// 与 `captureThumbnailIfNeeded` 分开：那张图给标签网格的卡片用（窄、只看顶部），
-    /// 这张给侧滑背景用（宽一点、要能铺满一屏），生命周期与用途都不同。
-    /// 无痕标签同样**不抓**：图像留在内存里与「无痕不落盘」的承诺冲突。
     func capturePageSnapshot(targetWidth: CGFloat = 600) {
         guard !isIncognito else { return }
         guard isWebViewCreated, !isPendingRestore else { return }
@@ -549,10 +465,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         currentURL == nil && !isLoading && !hasError
     }
 
-    // MARK: - 历史栈维护
+ // MARK: - 历史栈维护
 
     /// 从原生历史栈同步（正常运行时唯一来源）。
-    /// 重启恢复模式下跳过：那时原生栈是本栈「回放」出来的，条目顺序与真实历史相反，不能反向覆盖。
     private func refreshNativeHistory() {
         // 未创建的占位标签不能读 `webView`（会触发 lazy 创建、拉起 WebContent 进程），沿用已恢复的栈
         guard !usesRestoredHistory, isWebViewCreated else { return }
@@ -571,8 +486,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private func noteHistoryNavigation() {
         // 正常模式由 `refreshNativeHistory()` 从原生栈同步，这里只管自定义栈
         guard usesRestoredHistory else { return }
-        // 地址置空（回到起始页 / 加载失败）不改写栈：起始页由 `showStartPage()` 显式清空，
-        // 失败时保留历史才能让用户回退离开出错页
+        // 地址置空（回到起始页 / 加载失败）不改写栈：起始页由 `showStartPage()` 显式清空
         guard let url = currentURL?.absoluteString else { return }
         // 历史回放（goBack/goForward 引起的地址变化）：位置已由调用方设置，不新增条目
         if historyURLs.indices.contains(historyIndex), historyURLs[historyIndex] == url { return }
@@ -597,7 +511,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         webView.load(URLRequest(url: url))
     }
 
-    // MARK: - KVO
+ // MARK: - KVO
 
     /// - Parameter webView: 由 `webView` 的 lazy 初始化传入（避免初始化期间读取 `self.webView` 递归）
     private func observe(_ webView: WKWebView) {
@@ -616,13 +530,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 let value = webView.url
                 Task { @MainActor [weak self] in
                     // 首次导航失败后 WebKit 会把 `url` 重置为 nil（该次导航从未提交，没有「当前页」）。
-                    // 这个 nil 只说明「没有已提交的页面」，**不代表**用户回到了起始页：
-                    // 若照单全收，地址栏会退化为占位文案、`isShowingStartPage` 误命中，
-                    // 用户刚输入的网址也随之丢失（错误页点「重试」就直接回到空白起始页）。
-                    // 地址置空只允许由 `showStartPage()` 显式完成。
                     guard let value else { return }
-                    // 已提交的页面才是「重试」该回到的地方：重定向 / 页内跳转后
-                    // 用户真正在看的地址会与最初输入的地址不同
+                    // 已提交的页面才是「重试」该回到的地方
                     self?.requestedURL = value
                     self?.currentURL = value
                 }
@@ -648,21 +557,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 Task { @MainActor [weak self] in self?.hasOnlySecureContent = value }
             },
             // 滚动即收起操作栏为胶囊（任意方向，Safari 风格）：只有点击胶囊才恢复地址栏。
-            // 仅统计「用户手指在拖动」期间的位移（TODO 399）：操作栏展开/收起会改变 webView 高度、
-            // 页面加载与回弹也会自动调整 contentOffset，这类「伪滚动」若计入就会与点击胶囊展开形成反馈回路
-            // （展开 → webView 变矮 → offset 自动调整 → 立刻又收起，表现为「第一次点击胶囊没展开」）。
             webView.scrollView.observe(\.contentOffset, options: [.new, .old]) { [weak self] scrollView, change in
                 guard scrollView.isTracking || scrollView.isDragging else {
                     dragMeter.endGesture()
                     return
                 }
                 // 本轮拖动的第一个回调：用来解除「主动展开后的收起抑制」
-                // （滑动途中点胶囊展开时，本轮手势剩余的回调不该再把操作栏收回去）
                 let beginsGesture = dragMeter.beginGestureIfNeeded()
                 let newY = scrollView.contentOffset.y
                 let oldY = change.oldValue?.y ?? newY
-                // 按「累计位移」判定而非单次增量：慢速拖动时每次回调不足 1pt，
-                // 用单次阈值会永远触发不了收起；累计超过阈值即发一个信号并复位（兼带节流）
+                // 按「累计位移」判定而非单次增量：慢速拖动时每次回调不足 1pt
                 let shouldCollapse = dragMeter.feed(newY - oldY)
                 guard beginsGesture || shouldCollapse else { return }
                 // 手势态与收起信号放在同一个主线程任务里处理：新手势先解除抑制，再看本次是否要收起
@@ -676,7 +580,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         ]
     }
 
-    // MARK: - 错误处理
+ // MARK: - 错误处理
 
     private func handleError(_ error: Error) {
         let nsError = error as NSError
@@ -698,7 +602,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         errorMessage = nil
     }
 
-    // MARK: - Favicon 提取
+ // MARK: - Favicon 提取
 
     private func extractFavicon() {
         // 通过注入脚本读取 <link rel="icon">；失败则回退到 Google favicon 服务
@@ -730,7 +634,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
     }
 
-    // MARK: - UA
+ // MARK: - UA
 
     private static func userAgentString() -> String? {
         switch AppSettings.Browser.userAgent {
@@ -758,8 +662,7 @@ extension BrowserTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        // 忽略用户主动取消（回退/停止/刷新会取消旧导航，触发 -999 NSURLErrorCancelled），
-        // 避免把正常的回退误判为加载失败而弹出错误页
+        // 忽略用户主动取消（回退/停止/刷新会取消旧导航，触发 -999 NSURLErrorCancelled）
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
         handleError(error)
@@ -794,12 +697,7 @@ extension BrowserTab: WKUIDelegate {
         return nil
     }
 
-    /// 长按链接菜单**全部自绘**（TODO 408）：
-    /// 系统默认菜单里的「打开」在 `WKWebView`（非 Safari 宿主）下由 WebKit 自行处理，
-    /// 会走 `UIApplication.open` 把链接丢给系统默认浏览器——表现为「点了 Open Link 跳到 Safari」，
-    /// 且该动作**不经过** `decidePolicyFor`，因此无法在导航策略层拦截。
-    /// 唯一可靠的办法是接管 `contextMenuConfigurationForElement` 自建菜单，
-    /// 让每个动作都落到内置浏览器的 API 上（当前标签加载 / 新建标签 / 拷贝 / 分享）。
+    /// 长按链接菜单**全部自绘**
     func webView(
         _ webView: WKWebView,
         contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
@@ -858,9 +756,7 @@ extension BrowserTab: WKUIDelegate {
 
 // MARK: - SwiftUI 封装
 
-/// 将 `BrowserTab` 持有的 `WKWebView` 挂到视图层级（标签保活：由 `ZStack` 常驻所有标签，
-/// 仅切换透明度而非销毁重建，从而保持导航历史栈）。
-/// 附带手势：左边缘滑动（回退历史 / 回到起始页，绝不删除页签）、点击页面（展开被收起的操作栏）。
+/// 将 `BrowserTab` 持有的 `WKWebView` 挂到视图层级
 struct BrowserWebView: UIViewRepresentable {
     let tab: BrowserTab
     var onTap: (() -> Void)? = nil
@@ -868,24 +764,12 @@ struct BrowserWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UIView {
-        // 两层结构，职责分离（不要再合并成一层）：
-        // - `container`：静止不动的宿主，只负责铺满区域 + 挂手势，整个手势生命周期内坐标与
-        //   命中区域都不变；
-        // - `moving`：唯一被侧滑位移/动画作用的视图，SwiftUI 完全不碰它。
-        //
-        // 旧实现把手势挂在会 `transform` 平移的同一个视图上：手势的坐标空间与边缘命中区
-        // 跟着视图一起移动，触摸很快被判为越界，手势随即 `.cancelled` → 位移立刻回弹，
-        // 读起来就是「滑动时画面不跟手，松手后才动一下」。
+        // 两层结构，职责分离（不要再合并成一层）
         let container = UIView()
-        // 宿主必须透明：底色由位移层提供，否则侧滑露出的是这层白底，
-        // 下层的起始页预览（`BrowserView.showsStartPagePreview`）会被整块遮住
+        // 宿主必须透明：底色由位移层提供，否则侧滑露出的是这层白底
         container.backgroundColor = .clear
 
         // 侧滑背景（Safari 风格）：铺在网页层之下、宿主之上的「上一页」画面。
-        // 旧实现这一层是缺的，网页右移后露出的是 SwiftUI 的 `pageBackground`——
-        // 暗色模式下它就是纯黑，回退到未缓存页面时同样是一片黑。
-        // 现在：恒为白底（首次打开 / 该页无缓存），有上一页快照时铺快照；
-        // 只在侧滑手势期间显示，平时隐藏，避免盖住下层的起始页预览。
         let backdrop = UIImageView()
         backdrop.backgroundColor = .white
         backdrop.contentMode = .scaleAspectFill
@@ -934,9 +818,7 @@ struct BrowserWebView: UIViewRepresentable {
         webView.scrollView.refreshControl = refresh
         tab.refreshControl = refresh
 
-        // 左边缘滑动返回：全部回退场景都由本手势承担（系统 backForward 手势已关闭，见 `updateUIView`），
-        // 由它自己做跟手位移 + 松手完成/回弹的过渡（Safari 侧滑返回，TODO 421）。
-        // 挂在静止的 `container` 上，不是被移动的 `moving`——这是跟手能否成立的前提
+        // 左边缘滑动返回：全部回退场景都由本手势承担（系统 backForward 手势已关闭，见 `updateUIView`）
         let edge = UIScreenEdgePanGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleEdgeSwipe(_:))
@@ -946,9 +828,7 @@ struct BrowserWebView: UIViewRepresentable {
         container.addGestureRecognizer(edge)
         context.coordinator.edgeGesture = edge
 
-        // 让页面主滚动视图等侧滑手势先失败再开始滚动：从边缘水平起手时页面不跟着上下滚，
-        // 也不会出现两条手势互相抢触摸、双双取消（旧实现里「侧滑还在上下滑」的直接原因）。
-        // 非边缘处的滚动不受影响——侧滑手势在那里会立刻失败。
+        // 让页面主滚动视图等侧滑手势先失败再开始滚动：从边缘水平起手时页面不跟着上下滚
         webView.scrollView.panGestureRecognizer.require(toFail: edge)
 
         // 点击页面：展开操作栏（不拦截链接/表单交互）
@@ -964,19 +844,11 @@ struct BrowserWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ container: UIView, context: Context) {
-        // 回退手势统一由下面的自定义边缘手势承担（保证跟手位移 + 绝不越过起始页多退一页）：
-        // - 起始页：标签第一页，左滑不做任何事（既不删页签，也不跳到残留历史）
-        // - 其余页面：无论「下一步即起始页」还是「页面间回退」，都走同一条跟手路径
-        //
-        // 不再把页面间回退交给系统 `allowsBackForwardNavigationGestures`：它的跟手动画依赖
-        // WebKit 内部快照，在「SwiftUI 托管的 container + scrollView 上挂 refreshControl」这套
-        // 结构里会退化——滑动时画面完全不动，松手直接换页并闪一下，且与自定义手势观感割裂。
+        // 回退手势统一由下面的自定义边缘手势承担（保证跟手位移 + 绝不越过起始页多退一页）
         tab.webView.allowsBackForwardNavigationGestures = false
         context.coordinator.edgeGesture?.isEnabled = !tab.isShowingStartPage
 
-        // 位移兜底（TODO 421）：侧滑把位移层挪动过之后，若因标签切换、媒体可见性等
-        // 打断了收尾动画（completion 不再回调），位移层会卡在偏移态。
-        // 手势进行中与收尾动画进行中都不能动它，其余时机一律归位。
+        // 位移兜底：侧滑把位移层挪动过之后，若因标签切换、媒体可见性等
         let gesture = context.coordinator.edgeGesture
         let gestureActive = gesture?.state == .began || gesture?.state == .changed
         if !gestureActive, !context.coordinator.isCompletingBack,
@@ -984,7 +856,6 @@ struct BrowserWebView: UIViewRepresentable {
             if moving.transform != .identity { moving.transform = .identity }
             if moving.alpha != 1 { moving.alpha = 1 }
             // 背景层同样复位：手势被系统打断时不会走 completion，残留的白底 / 快照会
-            // 一直盖在下层（有起始页预览时整块起始页都看不见）
             if let backdrop = context.coordinator.backdropView, !backdrop.isHidden {
                 context.coordinator.resetBackdrop()
             }
@@ -999,36 +870,24 @@ struct BrowserWebView: UIViewRepresentable {
         /// 侧滑背景层（白底 + 上一页快照），躲在 `movingView` 之下，只在手势期间显示
         weak var backdropView: UIImageView?
         /// 侧滑返回的收尾动画（回弹 / 「滑出 → 滑入」）是否仍在进行。
-        /// 是 `updateUIView` 归位兜底的唯一豁免依据：动画进行中若被兜底把 `transform` 归零，
-        /// 就会退化成「一帧瞬移」，回弹的阻尼与滑入的位移全部失效。
         private(set) var isCompletingBack = false
 
-        /// 侧滑「代号」：每次手势 `.began` 自增。收尾动画的 completion 必须核对代号——
-        /// 手势可能在上一轮收尾动画还没走完时再次起手（`removeAllAnimations` 会让旧 completion
-        /// 提前回调），若不核对就会用旧的判定再 `goBack()` 一次，退成连退两页。
+        /// 侧滑「代号」：每次手势 `.began` 自增。收尾动画的 completion 必须核对代号
         private var swipeGeneration = 0
 
         init(_ parent: BrowserWebView) { self.parent = parent }
 
-        /// 侧滑返回（TODO 421）：跟手位移 + 松手后完成/回弹，对齐 Safari 的交互式返回。
-        ///
-        /// 旧实现只在 `.ended` 里 `goBack()`：全程没有位移反馈，画面在松手瞬间直接换掉，
-        /// 读起来就是「滑一下、猝不及防地跳转」。现在 `.changed` 阶段整块网页容器跟着手指右移，
-        /// 下层（起始页预览 / 页面底色）逐帧露出；松手按位移比例 + 速度决定完成还是回弹。
+        /// 侧滑返回：跟手位移 + 松手后完成/回弹，对齐 Safari 的交互式返回。
         @objc func handleEdgeSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
             // `gesture.view` 是静止的宿主，只用来取尺寸与坐标空间；被移动的是 `movingView`
             guard let container = gesture.view, let moving = movingView else { return }
             let width = max(container.bounds.width, 1)
-            // 位移换算基准取 **window**（退化为父视图）：位移层正被 `transform` 挪动，
-            // 以它为坐标空间会让 translation 反过来被自身位移缩放，形成跟手距离衰减 / 抖动
-            // （与 `MiniPlayer` 下滑收起、播放页手势同一处坑）；window 也没有任何祖先变换，
-            // 位移与手指在屏幕上的移动严格 1:1。
+            // 位移换算基准取 **window**（退化为父视图）：位移层正被 `transform` 挪动
             let space = container.window ?? container.superview ?? container
 
             switch gesture.state {
             case .began:
-                // 新一次起手：作废上一轮收尾动画（`removeAllAnimations` 会立刻回调其 completion，
-                // 靠代号一致性检查让它空转），并把位移 / 透明度归零，避免残值叠加
+                // 新一次起手：作废上一轮收尾动画
                 swipeGeneration &+= 1
                 isCompletingBack = false
                 moving.layer.removeAllAnimations()
@@ -1037,8 +896,7 @@ struct BrowserWebView: UIViewRepresentable {
                 // 下层背景就位：白底 or 上一页画面（见方法注释）
                 prepareBackdrop()
             case .changed:
-                // 夹在 [0, width]：只允许向右滑出，且最多移出一屏（回拖到负值时归零，
-                // 避免松手前出现「反向也跟手」）
+                // 夹在 [0, width]：只允许向右滑出，且最多移出一屏
                 let dx = min(max(gesture.translation(in: space).x, 0), width)
                 moving.transform = CGAffineTransform(translationX: dx, y: 0)
             case .ended:
@@ -1058,11 +916,6 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         /// 侧滑起手时准备下层背景（Safari 风格：白底 / 上一页画面）。
-        ///
-        /// - 下一步回退是起始页：下层已有常驻的起始页预览（`BrowserView.showsStartPagePreview`），
-        ///   再铺一层白底会把整块起始页盖掉，故保持隐藏，让预览直接露出来；
-        /// - 页面间回退：白底 + 回退目标页的快照。**没有缓存就是纯白**——
-        ///   这是「首次打开内置浏览器」的默认底色，不再是暗色模式下的纯黑。
         private func prepareBackdrop() {
             guard let backdrop = backdropView else { return }
             let tab = parent.tab
@@ -1075,7 +928,6 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         /// 收尾结束：隐藏背景层并释放图片，避免长会话里一直占着整屏位图。
-        /// 非 private：`updateUIView` 的归位兜底也要用它（手势被打断时 completion 不会回调）
         func resetBackdrop() {
             guard let backdrop = backdropView else { return }
             backdrop.isHidden = true
@@ -1104,19 +956,6 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         /// 过阈值：当前页整块滑出，露出下层背景，然后换页、就绪后原位淡入。
-        ///
-        /// 旧实现的两个问题（用户反馈：滑动中画面不跟手、松手后闪一下才回到上一页）：
-        /// 1. 页面间回退走的是系统 `allowsBackForwardNavigationGestures`，其跟手动画在本结构下失效，
-        ///    现已统一交给本手势（见 `updateUIView`）；
-        /// 2. 收尾时一边淡出当前页、一边 `goBack()` 后立刻滑入，而 WebKit 换页要几帧到几百毫秒——
-        ///    滑进来的还是旧页面/白底，中途被替换，读起来就是「闪一下」。
-        ///
-        /// 现在：滑出阶段只做纯位移（不淡出），露出的下层是白底 / 上一页画面（`prepareBackdrop`）；
-        /// 位移层在屏外等新页面就绪后**原位淡入**（`revealWhenPageReady`），
-        /// 观感是「页面就地换成上一页」，而不是「再刷一次才出画面」。
-        /// - **回到起始页**：下层常驻起始页预览（`BrowserView.showsStartPagePreview`），
-        ///   位移层留在屏外，等起始页插入后的那次 SwiftUI 更新由 `updateUIView` 兜底归位；
-        /// - **页面间回退**：等页面就绪后归位 + 淡入。
         private func completeBack(on moving: UIView) {
             guard !isCompletingBack else { return }
             isCompletingBack = true
@@ -1136,14 +975,11 @@ struct BrowserWebView: UIViewRepresentable {
                 guard let self, generation == self.swipeGeneration else { return }
                 self.parent.tab.goBack()
 
-                // 起始页分支：**不要**在这里把位移层挪回屏内。`goBack()` 只是切了标签的状态，
-                // 起始页那一层要等 SwiftUI 下一次提交才插入；此刻归位会先露出旧网页一帧（闪屏）。
-                // 保持屏外 + 结束收尾标记，让 `updateUIView` 的兜底在「起始页已插入」的那次更新里归位。
+                // 起始页分支：**不要**在这里把位移层挪回屏内。`goBack()` 只是切了标签的状态
                 if self.parent.tab.isShowingStartPage {
                     moving.alpha = 1
                     self.isCompletingBack = false
-                    // 保底归位：正常路径是「起始页插入后的那次 SwiftUI 更新」由 `updateUIView` 兜底归位；
-                    // 这里只防「此后没有任何状态变化、`updateUIView` 不再被调用」时位移层卡在屏外
+                    // 保底归位：正常路径是「起始页插入后的那次 SwiftUI 更新」由 `updateUIView` 兜底归位
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak moving] in
                         guard let moving, let self, generation == self.swipeGeneration else { return }
                         moving.transform = .identity
@@ -1157,10 +993,6 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         /// 等回退后的页面真正就绪（`isLoading` 落下，最多约 0.4s）后**原位淡入**。
-        ///
-        /// 旧实现从左侧 `-30%` 宽度弹入：页面在屏外等 loading，就绪后整块横推进来，
-        /// 读起来是「松手 → 画面飞进来 → 又刷一下」。Safari 的手感是「松手后直接落在上一页」，
-        /// 这里改成归位 + 0.16s 淡入：下层始终垫着上一页快照，淡入几乎不可察觉。
         private func revealWhenPageReady(
             on moving: UIView,
             width: CGFloat,
@@ -1169,8 +1001,7 @@ struct BrowserWebView: UIViewRepresentable {
         ) {
             guard generation == swipeGeneration else { return }
             let tab = parent.tab
-            // 首轮先让出一帧多：`goBack()` 触发的是 next runloop 的导航状态更新，
-            // 立刻读 `isLoading` 永远是旧值（false），会当场归位
+            // 首轮先让出一帧多：`goBack()` 触发的是 next runloop 的导航状态更新
             let delay: TimeInterval = attempt == 0 ? 0.05 : 0.02
             if (attempt == 0 || tab.isLoading), attempt < 20 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -1201,8 +1032,7 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         @objc func handleRefresh(_ sender: UIRefreshControl) {
-            // 已加载页面则重新加载（加载完成后由 isLoading KVO 收起动画）；
-            // 起始页/无 URL 时无内容可刷，立即结束动画
+            // 已加载页面则重新加载（加载完成后由 isLoading KVO 收起动画）
             if parent.tab.currentURL != nil {
                 parent.tab.reload()
             } else {
@@ -1211,15 +1041,11 @@ struct BrowserWebView: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-            // 只让「点击页面」与其它手势共存（点链接 / 表单需要它不抢触摸）；
-            // 边缘侧滑必须独占：旧实现无条件返回 `true`，导致侧滑途中 scrollView 的 pan 照样生效，
-            // 页面一边右移一边上下滚，两条手势还互相抢触摸、互相取消（跟手就此断掉）
+            // 只让「点击页面」与其它手势共存（点链接 / 表单需要它不抢触摸）
             g is UITapGestureRecognizer || other is UITapGestureRecognizer
         }
 
         /// 方向分流：只有「横向起手」才认侧滑，纵向起手直接放弃，把手势让回页面滚动
-        /// （页面滚动与侧滑的先后关系靠 `require(toFail:)` 约束，见 `makeUIView`）。
-        /// 没有这层判定时，从左边缘竖直滑动也会被侧滑吃掉，表现为「想滚动却触发了返回」。
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
             guard let pan = g as? UIPanGestureRecognizer else { return true }
             guard g === edgeGesture else { return true }
@@ -1230,10 +1056,6 @@ struct BrowserWebView: UIViewRepresentable {
 }
 
 /// 标签会话快照（持久化用，无痕标签不参与）
-///
-/// `historyURLs` / `currentIndex` 是**跨重启保留回退能力**的关键：
-/// `WKBackForwardList` 无法序列化，重启后新建的 `WKWebView` 历史栈只有当前一条，
-/// 不把历史一起落盘就只剩「能打开上次的页面，但回退键永远置灰」。
 struct BrowserTabSnapshot: Codable {
     let id: UUID
     let urlString: String?

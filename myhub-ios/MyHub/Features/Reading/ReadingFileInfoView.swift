@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// 阅读记录「属性」弹层（长按菜单 → 属性，TODO §7）：
-/// 展示标题、路径源、路径、类型，以及大小/修改时间（现场 stat，源不可用时降级提示）、
-/// 阅读进度与最近阅读时间。
+/// 阅读记录「属性」弹层（长按菜单 → 属性）
 struct ReadingFileInfoView: View {
     let record: ReadingProgress
     let connection: Connection?

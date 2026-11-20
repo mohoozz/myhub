@@ -47,16 +47,14 @@ enum MP4CoverExtractor {
         }
         // 时长来自 mvhd
         duration = parseDuration(moovBytes: moovBytes)
-        // 无内嵌封面则解码首帧。当前仅支持 avcC(H.264)/hevC(HEVC)，AV1/VP9 会抛 unsupported codec，
-        // 需由上层回退 VLC 抽帧（ffmpeg 支持 AV1/VP9 解码，能拿到封面），不能用 try? 吞掉 ——
-        // 否则 AV1 视频直接变成「无封面」占位，这正是「视频封面完全不加载」的回归根因。
+        // 无内嵌封面则解码首帧。当前仅支持 avcC(H.264)/hevC(HEVC)，AV1/VP9 会抛 unsupported codec
         if cover == nil {
             cover = try await decodeFirstFrame(moovBytes: moovBytes, moovPayloadStart: moov.payloadStart, read: read)
         }
         return MP4CoverResult(image: cover, duration: duration)
     }
 
-    // MARK: 定位 moov
+ // MARK: 定位 moov
 
     private static func locateMoov(fileSize: Int64, read: Reader) async throws -> MP4Box? {
         var offset: Int64 = 0
@@ -89,7 +87,7 @@ enum MP4CoverExtractor {
         return MP4Box(type: type, payloadStart: offset + headerSize, boxEnd: offset + boxSize)
     }
 
-    // MARK: 内嵌封面（covr）
+ // MARK: 内嵌封面（covr）
 
     private static func extractCovr(moovBytes: [UInt8]) -> UIImage? {
         guard let covr = findBox("covr", in: moovBytes, base: 0) else { return nil }
@@ -124,7 +122,7 @@ enum MP4CoverExtractor {
         return Double(duration) / Double(timescale)
     }
 
-    // MARK: 首帧定位与解码
+ // MARK: 首帧定位与解码
 
     private static func decodeFirstFrame(moovBytes: [UInt8], moovPayloadStart: Int64, read: Reader) async throws -> UIImage? {
         // 找 video trak（trak 内 hdlr 为 vide）
@@ -140,9 +138,6 @@ enum MP4CoverExtractor {
         guard let tables = SampleTables(moovBytes: moovBytes, stblBase: stblBase), tables.sampleCount >= 1 else { return nil }
 
         // 首选第一个关键帧：stss 首条目。经 ffmpeg 转码/裁剪的视频，首 sample 往往不是 IDR
-        // 关键帧（首 GOP 可能以 SEI/P/B 帧开头），直接取首 sample 会让 VideoToolbox 解码失败，
-        // 进而回退 VLC —— 而 moov 后置时 VLC 会读整个文件在 NAS 上超时，封面永久占位。
-        // 这里定位到真正的 IDR 关键帧再解码。
         var target = 0
         if let stss = findBox("stss", in: moovBytes, base: stblBase) {
             let p = Int(stss.payloadStart)
@@ -172,8 +167,7 @@ enum MP4CoverExtractor {
         return nil
     }
 
-    /// 视频 sample 定位表：解析 stsz（sample 大小）+ stsc（sample→chunk）+ stco/co64（chunk 偏移），
-    /// 支持定位任意 sample 的字节偏移与大小（用于取关键帧而非首 sample）。
+    /// 视频 sample 定位表：解析 stsz（sample 大小）+ stsc（sample→chunk）+ stco/co64（chunk 偏移）
     private struct SampleTables {
         let sampleCount: Int
         private let defaultSize: Int
@@ -183,7 +177,6 @@ enum MP4CoverExtractor {
 
         init?(moovBytes: [UInt8], stblBase: Int) {
             let bytes = moovBytes
-            // stsz
             guard let stsz = MP4CoverExtractor.findBox("stsz", in: bytes, base: stblBase) else { return nil }
             let p = Int(stsz.payloadStart)
             guard p + 12 <= bytes.count else { return nil }
@@ -201,7 +194,6 @@ enum MP4CoverExtractor {
                 }
                 sizes = arr
             }
-            // stsc
             guard let stsc = MP4CoverExtractor.findBox("stsc", in: bytes, base: stblBase) else { return nil }
             let sp = Int(stsc.payloadStart)
             guard sp + 8 <= bytes.count else { return nil }
@@ -439,7 +431,7 @@ enum MP4CoverExtractor {
         return CodecConfig(kind: .hevc(vps: vps, sps: sps, pps: pps))
     }
 
-    // MARK: VideoToolbox 单帧解码
+ // MARK: VideoToolbox 单帧解码
 
     private static func decodeFrame(codec: CodecConfig, frameData: Data) async -> UIImage? {
         await withCheckedContinuation { cont in

@@ -3,11 +3,7 @@ import Combine
 import MediaPlayer
 import UIKit
 
-/// 后台音频播放 + 锁屏/控制中心（IOS-602）：
-/// - `AVAudioSession(.playback)`：锁屏/后台继续播放音频；
-/// - `MPNowPlayingInfoCenter`：锁屏「正在播放」标题/作者/进度；
-/// - `MPRemoteCommandCenter`：远程控制（播放/暂停/快进快退/拖动定位）。
-/// App 启动时 attach（MyHubApp 根视图 onAppear）。
+/// 后台音频播放 + 锁屏/控制中心
 @MainActor
 final class NowPlaying {
     static let shared = NowPlaying()
@@ -62,7 +58,7 @@ final class NowPlaying {
             .store(in: &cancellables)
     }
 
-    // MARK: - 封面（与播放页共享 CoverService 缓存）
+ // MARK: - 封面（与播放页共享 CoverService 缓存）
 
     /// 条目切换：清空旧封面并异步加载（复用 CoverService 内存/磁盘缓存，与浏览/播放页同源）
     private func handleItemChange(_ item: PlayableItem?) {
@@ -90,7 +86,7 @@ final class NowPlaying {
         updateInfo()
     }
 
-    // MARK: - 会话与信息
+ // MARK: - 会话与信息
 
     private func handleState(_ state: PlaybackState) {
         let session = AVAudioSession.sharedInstance()
@@ -148,7 +144,7 @@ final class NowPlaying {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
-    // MARK: - 后台保活 / 音频中断
+ // MARK: - 后台保活 / 音频中断
 
     /// 退后台瞬间是否正在播放（重断言只针对「系统自动暂停」，用户主动暂停不干预）
     private var playingBeforeBackground = false
@@ -159,11 +155,7 @@ final class NowPlaying {
     private func handleEnterBackground() {
         let core = PlayerCore.shared
         playingBeforeBackground = core.isPlaying
-        // 后台保活面包屑（TODO 380）
-        AppLogger.shared.log(
-            "退后台 播放中=\(playingBeforeBackground) state=\(core.state.logDescription) 引擎=\(core.engineDiagnostics) 网络=\(NetworkPathMonitor.shared.snapshot())",
-            level: .info, module: "player-audio"
-        )
+        // 退后台快照不在此重复打印：App 级 lifecycle 已记录同刻的播放/网络/锁定状态
         guard playingBeforeBackground else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             Task { @MainActor [weak self] in
@@ -179,18 +171,10 @@ final class NowPlaying {
         }
     }
 
-    /// 回前台兜底：仍处于播放态时重新激活音频会话（长时间熄屏后可能被系统停用，TODO 366），
-    /// 并在退后台期间被系统自动暂停（非用户主动）时恢复播放
+    /// 回前台兜底：仍处于播放态时重新激活音频会话（长时间熄屏后可能被系统停用）
     private func handleWillEnterForeground() {
         let core = PlayerCore.shared
-        // 回前台面包屑（TODO 380）：对照 scenePhase/network-route 日志，确认熄屏期间播放意图是否被系统暂停
-        AppLogger.shared.log(
-            "回前台 播放中=\(core.isPlaying) state=\(core.state.logDescription) 引擎=\(core.engineDiagnostics) 后台前播放中=\(playingBeforeBackground) 用户暂停=\(core.pausedAt != nil) 网络=\(NetworkPathMonitor.shared.snapshot())",
-            level: .info, module: "player-audio"
-        )
-        // 播放状态未变时不会触发 handleState 的会话激活，
-        // 长时间熄屏后回来可能「画面在动但无声」，这里按播放态兜底重激活；
-        // 非播放态（如用户暂停）不激活，避免无谓打断其他 App 的音频
+        // 回前台快照不在此重复打印：对照 App 级 lifecycle（scenePhase -> active）与 network-route 即可
         if core.isPlaying {
             do {
                 try AVAudioSession.sharedInstance().setActive(true)
@@ -238,7 +222,7 @@ final class NowPlaying {
         }
     }
 
-    // MARK: - 远程控制
+ // MARK: - 远程控制
 
     private func setupRemoteCommands() {
         let core = PlayerCore.shared
@@ -278,7 +262,7 @@ final class NowPlaying {
         }
     }
 
-    // MARK: - 「作者 - 标题」文件名解析
+ // MARK: - 「作者 - 标题」文件名解析
 
     static func parseAuthorTitle(_ fileName: String) -> (author: String?, title: String) {
         let stem = (fileName as NSString).deletingPathExtension

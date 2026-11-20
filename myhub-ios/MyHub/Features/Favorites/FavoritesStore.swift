@@ -1,9 +1,7 @@
 import Foundation
 import GRDB
 
-/// 全局收藏 Store（IOS-107）：收藏记录唯一数据源。
-/// 浏览页星标与收藏页经它读写并广播变更（`favoritesDidChange`），实现双向同步。
-/// 单例 + environmentObject 注入同一实例。
+/// 全局收藏 Store：收藏记录唯一数据源。
 @MainActor
 final class FavoritesStore: ObservableObject {
     static let shared = FavoritesStore()
@@ -20,7 +18,7 @@ final class FavoritesStore: ObservableObject {
         }) ?? []
     }
 
-    // MARK: - 查询
+ // MARK: - 查询
 
     func isFavorited(connectionID: Int64, path: String) -> Bool {
         favorites.contains { $0.connectionID == connectionID && $0.filePath == path }
@@ -31,7 +29,7 @@ final class FavoritesStore: ObservableObject {
         Set(favorites.filter { $0.connectionID == connectionID }.map(\.filePath))
     }
 
-    // MARK: - 变更
+ // MARK: - 变更
 
     /// 切换收藏；返回当前是否已收藏
     @discardableResult

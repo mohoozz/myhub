@@ -2,17 +2,6 @@ import SwiftUI
 import UIKit
 
 /// 全屏播放器横竖屏切换（对齐 Flutter 端播放页方向控制）。
-///
-/// iOS 的界面方向由 App 的 `supportedInterfaceOrientations` 收口：SwiftUI 无直接 API，
-/// 需经 `AppDelegate.application(_:supportedInterfaceOrientationsFor:)` 返回动态方向掩码，
-/// 再用 iOS 16 的 `UIWindowScene.requestGeometryUpdate(_:)` 触发编程旋转。
-///
-/// 设计：
-/// * 平时（非播放）锁竖屏，App 行为与旋转前一致；
-/// * 进入播放页按「设置 → 播放器偏好 → 横竖屏切换」初始化方向：
-///   - 手动：沿用上次缓存的方向（`player.landscapePreferred`），点播放页按钮切换并更新缓存；
-///   - 自动：跟随设备横放/竖放（mask 放开全方向，系统自动旋转 + 通知纠偏）；
-/// * 退出 / 进 mini 时恢复竖屏，但方向偏好保留，下次播放沿用。
 @MainActor
 final class OrientationController: ObservableObject {
     static let shared = OrientationController()
@@ -35,12 +24,9 @@ final class OrientationController: ObservableObject {
 
     private init() {}
 
-    // MARK: - 播放页生命周期
+ // MARK: - 播放页生命周期
 
     /// 进入播放页：按偏好初始化方向。
-    ///
-    /// 延迟到全屏封面呈现转场结束再旋转：转场进行中调用 `requestGeometryUpdate`
-    /// 会与转场并发，导致 iOS 16 崩溃（与 dismiss 侧同一已知问题）。
     func enterPlayer() {
         isPlayerActive = true
         let mode = AppSettings.Player.orientationMode
@@ -74,7 +60,7 @@ final class OrientationController: ObservableObject {
         }
     }
 
-    // MARK: - 手动切换
+ // MARK: - 手动切换
 
     /// 切换横竖屏：竖 → 横、横 → 竖；并缓存方向偏好供下次播放沿用。
     func toggle() {
@@ -105,7 +91,7 @@ final class OrientationController: ObservableObject {
         AppLogger.shared.log("lockPortrait -> requestGeometryUpdate(.portrait)", module: "orientation")
     }
 
-    // MARK: - 自动跟随设备方向（auto 模式）
+ // MARK: - 自动跟随设备方向（auto 模式）
 
     /// 开始监听设备物理方向，并立即同步一次当前方向。
     private func startAutoFollow() {
@@ -190,5 +176,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
         OrientationController.shared.mask
+    }
+
+    /// 正常退出标记：未清除时下次启动会在 crash.log 记一条「上次会话未正常结束」
+    func applicationWillTerminate(_ application: UIApplication) {
+        CrashReporter.markCleanExit()
+        AppLogger.shared.log("applicationWillTerminate", module: "lifecycle")
     }
 }

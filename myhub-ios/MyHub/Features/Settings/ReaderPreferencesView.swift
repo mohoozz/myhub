@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 阅读器偏好（TODO §10 / IOS-502）：字号/行距/主题/翻页模式/漫画方向（含自动），持久化 AppSettings.Reader
+/// 阅读器偏好：字号/行距/主题/翻页模式/漫画方向（含自动），持久化 AppSettings.Reader
 struct ReaderPreferencesView: View {
     @State private var fontSize = AppSettings.Reader.fontSize
     @State private var lineSpacing = AppSettings.Reader.lineSpacing

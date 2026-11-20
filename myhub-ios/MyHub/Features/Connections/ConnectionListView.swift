@@ -26,7 +26,7 @@ extension ConnectionType {
     static var supportedCases: [ConnectionType] { [.local, .webdav, .smb] }
 }
 
-/// 连接源管理（IOS-101）：列表（类型图标/挂载点/开关）、测试状态绿/红点、删除确认
+/// 连接源管理：列表（类型图标/挂载点/开关）、测试状态绿/红点、删除确认
 struct ConnectionListView: View {
     @EnvironmentObject private var store: ConnectionStore
     @State private var editing: EditingContext?
@@ -107,8 +107,7 @@ struct ConnectionListView: View {
         }
     }
 
-    /// 测试状态点：正常绿点 / 异常红点 / 测试中转圈（仅首次自动测试）；
-    /// 成功后旁侧显示（内网）/（外网）实际生效路径提示；点击状态点可手动重新测试
+    /// 测试状态点：正常绿点 / 异常红点 / 测试中转圈（仅首次自动测试）
     @ViewBuilder
     private func statusDot(_ connection: Connection) -> some View {
         let state = connection.id.flatMap { store.testStates[$0] } ?? .unknown

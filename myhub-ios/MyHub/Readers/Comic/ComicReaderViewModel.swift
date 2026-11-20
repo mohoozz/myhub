@@ -1,8 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// 漫画阅读模式（IOS-207）：单页 / 双页（可切换方向）/ 条漫（纵向连续滚动）。
-/// 默认条漫，用户切换后经 `AppSettings.Reader.comicMode` 持久化。
+/// 漫画阅读模式：单页 / 双页（可切换方向）/ 条漫（纵向连续滚动）。
 enum ComicReadMode: String, CaseIterable {
     case single, double, webtoon
 
@@ -23,11 +22,8 @@ enum ComicReadMode: String, CaseIterable {
     }
 }
 
-/// 漫画阅读器状态机（TODO §6）：
-/// - 加载：打开归档列页（远程 rar 先下载临时文件，带进度）；**历史页码直接恢复，不从第一页开始**；
-/// - 页面：内存 LRU 缓存 + ±3 预加载（正向翻页前向优先，反向后向优先，最多并发 3）；
-/// - 进度：3s 节流 + 翻页/退出强制上报（`ComicProgressStore`，文件指纹校验）；
-/// - 翻完推荐下一本（同目录同类型，按浏览排序偏好）。
+/// 漫画阅读器状态机
+/// - 加载：打开归档列页（远程 rar 先下载临时文件，带进度）；**历史页码直接恢复，不从第一页开始**
 @MainActor
 final class ComicReaderViewModel: ObservableObject {
 
@@ -51,7 +47,6 @@ final class ComicReaderViewModel: ObservableObject {
     /// 每页宽高比（高/宽，随解码记录并持久化；条漫占位用真实高度，恢复定位精确）
     @Published private(set) var pageRatios: [Int: CGFloat] = [:]
     /// 当前页内阅读偏移（0=页顶；条漫可见页回写持续更新，恢复定位精确到页内位置）
-    /// 非 @Published：视图不直接渲染，仅恢复/保存时读取，避免滚动期高频刷新
     private(set) var pageOffset: Float = 0
     @Published var toast: String?
 
@@ -71,15 +66,15 @@ final class ComicReaderViewModel: ObservableObject {
         didSet { AppSettings.Reader.comicDirection = direction }
     }
 
-    /// 翻完推荐下一本（IOS-208）
+    /// 翻完推荐下一本
     @Published private(set) var nextCandidate: FileEntry?
 
-    /// 缩略图（IOS-210 控制层重设计·缩略图面板）：小尺寸解码缓存，LRU 上限 48 张
+    /// 缩略图（控制层重设计·缩略图面板）：小尺寸解码缓存，LRU 上限 48 张
     @Published private(set) var thumbnails: [Int: UIImage] = [:]
 
     private let adapter: StorageAdapter?
     private var source: ComicPageSource?
-    /// 页磁盘缓存身份（在线：entry 指纹；离线：缓存反查身份，IOS-605）
+    /// 页磁盘缓存身份（在线：entry 指纹；离线：缓存反查身份）
     private var cacheIdentity: SegmentCache.FileIdentity?
     private var loadTask: Task<Void, Never>?
     private var pageTasks: [Int: Task<UIImage?, Never>] = [:]
@@ -113,13 +108,12 @@ final class ComicReaderViewModel: ObservableObject {
         reportTask?.cancel()
         toastTask?.cancel()
         nextTask?.cancel()
-        // 兜底释放归档资源（远程 rar 临时文件）：正常路径由 teardown() 释放，
-        // 若视图未触发 onDisappear 便释放，避免临时文件残留占盘
+        // 兜底释放归档资源（远程 rar 临时文件）：正常路径由 teardown() 释放
         source?.close()
         source = nil
     }
 
-    // MARK: - 加载（直接恢复历史页码）
+ // MARK: - 加载（直接恢复历史页码）
 
     func load() {
         guard loadTask == nil else { return }
@@ -140,13 +134,7 @@ final class ComicReaderViewModel: ObservableObject {
         let identity = ComicPageCache.identity(connectionID: connectionID, entry: entry)
         cacheIdentity = identity
 
-        // 缓存秒开：页名列表已缓存（同指纹，说明之前打开过）→ 立即进入可读状态，
-        // 归档在后台补齐，缓存未命中的页回退到归档按需解压，避免每次都重新打开归档。
         if let names = await ComicPageCache.pageList(file: identity), !names.isEmpty {
-            AppLogger.shared.log(
-                "缓存秒开: pageCount=\(names.count) path=\(entry.path)",
-                module: "comic-reader"
-            )
             let cached = CachedFirstComicSource(identity: identity, pageNames: names)
             Task { await fillArchiveFallback(for: cached, adapter: adapter) }
             await finishOpen(source: cached, fileSize: entry.size, modTime: entry.modTime)
@@ -154,7 +142,6 @@ final class ComicReaderViewModel: ObservableObject {
         }
 
         // 内网 WebDAV 大文件 Range 读取偶发返回错误响应（非 206）→ ArchiveDecoder.open
-        // 偶发 malformed/decompressFailed。失败自动重试一次，避免「打开即失败」需用户手动重试。
         var opened: ComicPageSource?
         var lastError: Error?
         for attempt in 1...2 {
@@ -181,10 +168,6 @@ final class ComicReaderViewModel: ObservableObject {
             }
         }
         if let opened {
-            AppLogger.shared.log(
-                "归档打开成功: pageCount=\(opened.pageCount) 首页名=\(opened.pageNames.first ?? "-")",
-                module: "comic-reader"
-            )
             // 页名列表落盘（下次打开秒开 + 离线打开的结构基础）
             Task.detached(priority: .utility) {
                 await ComicPageCache.storePageList(opened.pageNames, file: identity)
@@ -195,7 +178,7 @@ final class ComicReaderViewModel: ObservableObject {
                 "归档打开失败: error=\(lastError) desc=\(lastError.localizedDescription)，尝试离线回退",
                 level: .warn, module: "comic-reader"
             )
-            // IOS-605 离线回退：页名列表 + 解压页已缓存时可离线阅读（远程 rar 整包亦在缓存分区）
+            // 离线回退：页名列表 + 解压页已缓存时可离线阅读（远程 rar 整包亦在缓存分区）
             if let offline = await ComicPageCache.offlineSource(
                 connectionID: connectionID, path: entry.path
             ) {
@@ -281,8 +264,7 @@ final class ComicReaderViewModel: ObservableObject {
             module: "comic-reader"
         )
 
-        // 首屏页立即加载 + 预加载窗口（先于封面提取：封面读第 1 页会占网络/带宽，
-        // 远程源上与首屏页抢资源 → 首屏更慢；「正在阅读」封面晚几百毫秒不影响）
+        // 首屏页立即加载 + 预加载窗口
         await loadPage(restored)
         AppLogger.shared.log(
             String(
@@ -313,7 +295,7 @@ final class ComicReaderViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 页面加载（内存 LRU + in-flight 去重，最多并发 3）
+ // MARK: - 页面加载（内存 LRU + in-flight 去重，最多并发 3）
 
     /// 归档解压并发限流：超过上限时挂起于 continuation（替代原 60ms 轮询等待）
     private static let maxConcurrentDecodes = 3
@@ -349,13 +331,10 @@ final class ComicReaderViewModel: ObservableObject {
             let source = await MainActor.run { self.source }
             guard let source else { return nil }
             // 先查磁盘缓存：命中直接解码返回，不占并发名额、不参与排队。
-            // 条漫模式滚动定位会批量触发 loadPage（渲染 index 0~N），若命中页也排队，
-            // 全部 task 会卡在并发名额之外、无人执行到缓存读取 → 必须让缓存读取先于 acquireDecodeSlot。
             let identity = await MainActor.run { self.cacheIdentity }
             let pageName = source.pageNames.indices.contains(index) ? source.pageNames[index] : nil
             if let identity, let pageName,
                let cached = await ComicPageCache.page(file: identity, name: pageName) {
-                AppLogger.shared.log("单页缓存命中: 第\(index + 1)页 \(pageName)", module: "comic-reader")
                 return ImageDownsampler.downsample(data: cached, maxPixel: 2200)
             }
             // 未命中需归档解压（重资源）：并发上限 3，挂起排队（continuation 唤醒，无轮询）
@@ -364,12 +343,7 @@ final class ComicReaderViewModel: ObservableObject {
                 await self.releaseDecodeSlot()
                 return nil
             }
-            AppLogger.shared.log(
-                "单页缓存未命中: 第\(index + 1)页 \(pageName ?? "-")，走归档解压",
-                module: "comic-reader"
-            )
-            // 内网 WebDAV 大文件 Range 读取偶发失败（错误响应/连接重置）：
-            // 失败自动重试一次，避免单次网络抖动让该页永久停在「加载中」。
+            // 内网 WebDAV 大文件 Range 读取偶发失败（错误响应/连接重置）
             var data: Data?
             let t0 = CFAbsoluteTimeGetCurrent()
             for attempt in 0..<2 {
@@ -389,10 +363,6 @@ final class ComicReaderViewModel: ObservableObject {
                 )
                 return nil
             }
-            AppLogger.shared.log(
-                String(format: "pageData 完成: 第%d页 size=%d 耗时=%.0fms", index + 1, data.count, cost),
-                module: "comic-reader"
-            )
             if let identity, let pageName {
                 await ComicPageCache.storePage(data, file: identity, name: pageName)
             }
@@ -443,12 +413,11 @@ final class ComicReaderViewModel: ObservableObject {
         guard images.count > 12 else { return }
         var keep = Set((index - 6)...(index + 6))
         // 阅读定位页必留：跳页后预加载/邻居页可能更晚完成解码，不能让定位页被挤出
-        // （挤出后目标页会立刻退回「加载中」占位）
         keep.formUnion((page - 2)...(page + 2))
         images = images.filter { keep.contains($0.key) }
     }
 
-    // MARK: - 翻页 / 跳转
+ // MARK: - 翻页 / 跳转
 
     /// 切回条漫前标记恢复定位中（防止 LazyVStack 顶部布局提前回写覆盖当前页）
     func beginWebtoonRestore() { isRestoring = true }
@@ -502,13 +471,11 @@ final class ComicReaderViewModel: ObservableObject {
     func ensureLoaded(_ index: Int) {
         guard state == .ready else { return }
         // 恢复定位窗口内忽略「远离目标页」的加载：进入阅读器时 LazyVStack 先按顶部（第 1 页起）
-        // 布局并触发 onAppear，这些页并不在视野内，却会占满 3 个解压并发名额、抢走首屏页的带宽
-        // → 打开后首屏要等它们跑完（表现为「打开总要加载一会儿」）。定位落定后正常加载。
         if isRestoring, abs(index - page) > 4 { return }
         Task { await loadPage(index) }
     }
 
-    // MARK: - 进度上报
+ // MARK: - 进度上报
 
     var currentPercent: Double {
         pageCount > 0 ? Double(page + 1) / Double(pageCount) : 0
@@ -576,7 +543,7 @@ final class ComicReaderViewModel: ObservableObject {
         source = nil
     }
 
-    // MARK: - 翻完推荐下一本（IOS-208）
+ // MARK: - 翻完推荐下一本
 
     /// 翻完只弹提示、不自动打开；点击提示条由 View 层经 Presenter 接管（换 entry 重建阅读器）
     private func scheduleNextTip() {
@@ -607,7 +574,7 @@ final class ComicReaderViewModel: ObservableObject {
             return type == .comic
                 || (type == .archive && ComicDetector.readableArchiveExtensions.contains(sibling.ext))
         }
-        // 用该目录单独缓存的排序（TODO 370）与浏览界面显示顺序一致，无记录回落全局默认
+        // 用该目录单独缓存的排序与浏览界面显示顺序一致，无记录回落全局默认
         let preference = BrowseSortPreferences.preference(
             connectionID: connection.id ?? 0, path: parent
         )
@@ -630,7 +597,7 @@ final class ComicReaderViewModel: ObservableObject {
         return sorted[index + 1]
     }
 
-    // MARK: - 亮度（IOS-210 控制层重设计：复用全局阅读亮度偏好，与小说阅读器同档）
+ // MARK: - 亮度
 
     /// 进入阅读器：记录系统亮度并按用户偏好施加（偏好 <0 表示跟随系统，不改动）
     func applyReaderBrightness() {
@@ -653,10 +620,9 @@ final class ComicReaderViewModel: ObservableObject {
         if systemBrightness >= 0 { UIScreen.main.brightness = systemBrightness }
     }
 
-    // MARK: - 缩略图（IOS-210 控制层重设计：☰ 缩略图面板）
+ // MARK: - 缩略图
 
-    /// 单页缩略图（小尺寸解码，独立于阅读大图缓存）：已解码页直接缩略 → 磁盘缓存解码 →
-    /// 归档按需解压（复用解压并发名额，防抢占阅读预加载）。
+    /// 单页缩略图：小尺寸解码，独立于阅读大图缓存
     func thumbnail(for index: Int) async -> UIImage? {
         guard state == .ready, index >= 0, index < pageCount else { return nil }
         if let cached = thumbnails[index] { return cached }
@@ -706,7 +672,7 @@ final class ComicReaderViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 「下一本」快捷（IOS-210 控制层重设计：⤓ 下一本 chip）
+ // MARK: - 「下一本」快捷
 
     /// 立即查找同目录下一本漫画（不等待翻完）；结果仍走 NextMediaTip 提示条，点击才打开
     func requestNextComic() {
@@ -724,7 +690,7 @@ final class ComicReaderViewModel: ObservableObject {
         }
     }
 
-    // MARK: - 工具
+ // MARK: - 工具
 
     private func showToast(_ message: String) {
         toastTask?.cancel()

@@ -4,15 +4,6 @@ import UIKit
 // MARK: - 按压视觉闸门
 
 /// 按压视觉闸门：保证「快速单点」也能看到完整的按下 → 回弹动画。
-///
-/// 问题（TODO 402）：无论是 SwiftUI `Button` 的 `configuration.isPressed`，还是 UIKit
-/// `touchesBegan/touchesEnded`，快速单点时「按下」与「抬起」可能落进同一次渲染事务
-/// （手指停留不足一帧，或被 `UIScrollView.delaysContentTouches` 攒成一批投递），
-/// 两次状态变更互相抵消 → 按压态一帧都没渲染出来；而稍微按住一会儿就超过了这个窗口，
-/// 于是出现「快点没动画、轻按一下才有动画」。
-///
-/// 方案：按下立即点亮（无动画，保证跟手）；抬起时若点亮时长不足 `minimumDuration`，
-/// 则把回弹推迟到补满为止——每次点击都至少完整播放一遍按压反馈。
 struct PressVisualGate<Content: View>: View {
     /// 外部真实按压信号
     let isPressed: Bool
@@ -69,10 +60,8 @@ enum PressFeedback {
 
 // MARK: - UIKit 触摸驱动的按压状态
 
-/// 按压阶段：
+/// 按压阶段
 /// - `began` 手指落下 → 立即点亮（跟手）
-/// - `ended` 手指抬起 → 补足最短可见时长后回弹（快速单点也能看到动画）
-/// - `cancelled` 触摸被取消（滚动接管 / 长按菜单弹出）→ 立即复位，避免滑动时留下高亮残影
 enum PressPhase {
     case began
     case ended
@@ -121,12 +110,6 @@ final class PressStateHolder: ObservableObject {
 // MARK: - 滚动容器触摸延迟
 
 /// 关闭最近祖先 `UIScrollView` 的 `delaysContentTouches`。
-///
-/// UIScrollView 默认会攒约 150ms 再把 `touchesBegan` 下发给内容视图（用来判定这一下
-/// 是点击还是滚动）。快速单点时按下/抬起被压缩在同一批事件里投递，按压态来不及渲染；
-/// 按住超过该延迟才会出现动画——这正是「快点没动画、轻按一会儿才有动画」的根因之一。
-/// 关闭后触摸立即下发，按压反馈跟手；滚动仍由 `canCancelContentTouches` 接管
-/// （滚动开始会给内容视图发 `touchesCancelled`，按压态随即复位）。
 struct ScrollTouchDelayDisabler: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView { TouchDelayDisablerView() }
     func updateUIView(_ uiView: UIView, context: Context) {}

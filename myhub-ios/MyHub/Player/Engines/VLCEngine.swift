@@ -1,8 +1,7 @@
 import Foundation
 import MobileVLCKit
 
-/// VLC delegate 回调跨线程触发的线程安全时间节流器：
-/// 软解时间回报回调可达数十次/秒，若全部派发到主线程会放大发热，限制到约 4 次/秒。
+/// VLC delegate 回调跨线程触发的线程安全时间节流器
 private final class VLCTimeThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var last: TimeInterval = 0
@@ -19,22 +18,21 @@ private final class VLCTimeThrottle: @unchecked Sendable {
 private let vlcTimeThrottle = VLCTimeThrottle()
 
 /// 软解引擎：MobileVLCKit 兜底全格式（mkv/rmvb/avi/flv/wmv/ts…）。
-/// 状态/时间经 VLCMediaPlayerDelegate 回报；UI 将 `player.drawable` 指向宿主视图渲染（TODO §4.3）。
 @MainActor
 final class VLCEngine: NSObject, PlaybackEngine {
     let kind: PlayerEngineKind = .software
     var onEvent: ((PlayerEngineEvent) -> Void)?
 
-    /// 经工厂创建：libvlc 实例携带字幕字体选项（`--ssa-fontsdir` / `--freetype-font`，TODO 412）
+    /// 经工厂创建：libvlc 实例携带字幕字体选项（`--ssa-fontsdir` / `--freetype-font`）
     private let player: VLCMediaPlayer
 
     private var desiredRate: Float = 1
     private var pendingStartAt: TimeInterval?
     private var didApplyStartAt = false
     private var didEmitReady = false
-    /// 最近一次记录过的 VLC 状态名（去重，避免重复状态刷日志，TODO 380）
+    /// 最近一次记录过的 VLC 状态名（去重，避免重复状态刷日志）
     private var lastStateLog: String?
-    /// 最近一次上报给上层的状态：用于「时间在走却仍标记 buffering」的兜底纠正（TODO 353）
+    /// 最近一次上报给上层的状态：用于「时间在走却仍标记 buffering」的兜底纠正
     private var lastReportedState: PlaybackState = .idle
 
     override init() {
@@ -78,7 +76,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         }
     }
 
-    // MARK: - 加载
+ // MARK: - 加载
 
     func load(url: URL, startAt: TimeInterval?) async throws {
         pendingStartAt = startAt
@@ -88,17 +86,15 @@ final class VLCEngine: NSObject, PlaybackEngine {
         let media = VLCMedia(url: url)
         // 优先硬件解码（VideoToolbox）降低软解 CPU 发热；不支持的编码由 avcodec 自动回退软解
         media.addOption(":avcodec-hw=videotoolbox")
-        // 弱网抗抖动（TODO 356）：加大解复用前的网络缓冲。VLC 默认 network-caching 仅 1000ms，
-        // 弱网下极易耗尽卡顿；用预加载秒数换算并限制在 3~5s，对齐 nPlayer 软解平滑度，兼顾起播速度。
+        // 弱网抗抖动：加大解复用前的网络缓冲。VLC 默认 network-caching 仅 1000ms
         let networkCachingMs = Int(min(max(AppSettings.Player.preloadSeconds, 3), 5) * 1000)
         media.addOption(":network-caching=\(networkCachingMs)")
-        // 内嵌文本字幕编码（TODO 412）：动漫内嵌 srt 常见 GBK/Big5，VLC 自动探测偶有误判成乱码，
-        // 「播放器偏好 → 字幕 → 内嵌字幕编码」可强制指定。subsdec 是解码器模块，媒体级选项即可继承。
+        // 内嵌文本字幕编码：动漫内嵌 srt 常见 GBK/Big5，VLC 自动探测偶有误判成乱码
         if let encoding = AppSettings.Player.embeddedSubtitleEncoding.vlcEncodingName {
             media.addOption(":subsdec-encoding=\(encoding)")
         }
         player.media = media
-        // 加载面包屑（TODO 380）：记录起播 URL 与网络缓存策略，配合后续状态日志定位熄屏后卡点
+        // 加载面包屑：记录起播 URL 与网络缓存策略，配合后续状态日志定位熄屏后卡点
         AppLogger.shared.log(
             "软解加载开始 url=\(url.absoluteString) startAt=\(startAt.map { String(Int($0)) } ?? "nil") network-caching=\(networkCachingMs)ms 网络=\(NetworkPathMonitor.shared.snapshot())",
             level: .info, module: "player-audio"
@@ -107,7 +103,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         // VLCKit 异步起播：opening/buffering/playing 状态经 delegate 回报
     }
 
-    // MARK: - 控制
+ // MARK: - 控制
 
     func play() {
         // 播放完成后再次播放：VLC 停在结尾（.ended）时 play() 不会回到开头重启，先把位置复位到起点
@@ -140,7 +136,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         player.rate = rate
     }
 
-    // MARK: - 轨道
+ // MARK: - 轨道
 
     var availableAudioTracks: [TrackOption] {
         zipTracks(names: player.audioTrackNames, indexes: player.audioTrackIndexes)
@@ -177,12 +173,11 @@ final class VLCEngine: NSObject, PlaybackEngine {
         }
     }
 
-    // MARK: - delegate 状态处理
+ // MARK: - delegate 状态处理
 
     /// 统一状态上报出口：记录最近状态，供时间回调兜底纠正
     private func emit(_ state: PlaybackState) {
-        // 已播完：VLC 在播放结束后还会补发 stopped（→ idle）/ buffering 等尾随状态，
-        // 短时长片源几乎必然走到这条路径，放行会把「已结束」改写成菊花或空状态
+        // 已播完：VLC 在播放结束后还会补发 stopped（→ idle）/ buffering 等尾随状态
         if lastReportedState == .ended, state == .idle || state == .buffering || state == .loading || state == .ready {
             return
         }
@@ -191,7 +186,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
     }
 
     fileprivate func handleStateChanged() {
-        // 状态变化面包屑（TODO 380）：去重记录，软解卡 opening / error 时可直接定位
+        // 状态变化面包屑：去重记录，软解卡 opening / error 时可直接定位
         let stateName = vlcStateName()
         if lastStateLog != stateName {
             lastStateLog = stateName
@@ -237,12 +232,12 @@ final class VLCEngine: NSObject, PlaybackEngine {
         }
     }
 
-    /// 引擎内部状态快照（诊断日志用，TODO 380）
+    /// 引擎内部状态快照（诊断日志用）
     var diagnosticSnapshot: String {
         "vlcState=\(vlcStateName()) playing=\(player.isPlaying) time=\(Int(currentTime))s"
     }
 
-    /// VLC 状态可读名（诊断日志用，TODO 380）
+    /// VLC 状态可读名（诊断日志用）
     private func vlcStateName() -> String {
         switch player.state {
         case .opening: return "opening"
@@ -258,9 +253,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
 
     fileprivate func handleTimeChanged() {
         applyPendingStartIfNeeded()
-        // 兜底：时间在推进说明实际已在播放，但 VLCKit 的 buffering→playing 状态变更有时不触发，
-        // 导致卡在 buffering 菊花不消失（TODO 353）。此处主动纠正为 playing。
-        // 限已发过 ready（首帧就绪、轨道已解析）后再纠正，避免抢在 ready/tracksChanged 之前。
+        // 兜底：时间在推进说明实际已在播放，但 VLCKit 的 buffering→playing 状态变更有时不触发
         if didEmitReady, lastReportedState == .buffering, player.isPlaying {
             emit(.playing)
         }
@@ -276,7 +269,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         player.rate = desiredRate
     }
 
-    /// 记录软解音轨信息，定位「有画面无声」——音轨是否被识别/选中（TODO 358）
+    /// 记录软解音轨信息，定位「有画面无声」——音轨是否被识别/选中
     private func logAudioDiagnostics() {
         let names = (player.audioTrackNames as? [String]) ?? []
         let indexes = (player.audioTrackIndexes as? [NSNumber]) ?? []
@@ -286,7 +279,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         )
     }
 
-    /// 记录软解字幕轨与字体供给情况，定位「内嵌字幕显示为方框 / 乱码」（TODO 412）
+    /// 记录软解字幕轨与字体供给情况，定位「内嵌字幕显示为方框 / 乱码」
     private func logSubtitleDiagnostics() {
         let names = (player.videoSubTitlesNames as? [String]) ?? []
         let encoding = AppSettings.Player.embeddedSubtitleEncoding

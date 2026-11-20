@@ -2,11 +2,7 @@ import CryptoKit
 import Foundation
 import UIKit
 
-/// epub 书籍（IOS-206）：epub 即 zip，经 `RangeZipReader` 按需 Range 解包（网络源不整包下载）。
-/// - 解析 container.xml → OPF（manifest / spine / metadata）→ NCX 或 NAV 目录；
-/// - 章节 XHTML 按需解析为「段落流」（排版无关锚点：spine 序号 + 段落序号 + 段内字符偏移）；
-/// - **图集型（漫画）判断**：spine 正文图片占比高且文本稀少 → 提示/一键转漫画阅读器；
-/// - 封面提取（manifest cover-image / meta cover），供「正在阅读」封面。
+/// epub 书籍：epub 即 zip，经 `RangeZipReader` 按需 Range 解包（网络源不整包下载）。
 final class EpubBook {
 
     struct ManifestItem: Codable {
@@ -24,7 +20,7 @@ final class EpubBook {
         case missingContainer
         case missingOPF
         case emptySpine
-        /// 离线模式：章节内容未缓存（IOS-605）
+        /// 离线模式：章节内容未缓存
         case offlineUncached
 
         var errorDescription: String? {
@@ -49,7 +45,7 @@ final class EpubBook {
     private let entryMap: [String: RangeZipReader.Entry]   // 归一化名 → 条目
     private let imageDataCache = NSCache<NSString, NSData>()
 
-    // MARK: - 解包
+ // MARK: - 解包
 
     init(adapter: StorageAdapter, entry: FileEntry) async throws {
         let zip = RangeZipReader(totalSize: entry.size) { range in
@@ -68,7 +64,7 @@ final class EpubBook {
         let entriesCost = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         AppLogger.shared.log(
             String(format: "epub 中央目录: 条目=%d 耗时=%.0fms", entries.count, entriesCost),
-            module: "comic-reader"
+            level: .debug, module: "comic-reader"
         )
         var map: [String: RangeZipReader.Entry] = [:]
         for item in entries where !item.isDirectory {
@@ -123,7 +119,7 @@ final class EpubBook {
         self.isComicLike = await Self.isComicSpine(spine, map: map, zip: zip)
     }
 
-    /// 离线构造（IOS-605）：元数据来自磁盘缓存，内容经章节磁盘缓存读取（zip 为 nil）
+    /// 离线构造：元数据来自磁盘缓存，内容经章节磁盘缓存读取（zip 为 nil）
     init(offline meta: CachedEpubMeta) {
         self.title = meta.title
         self.spine = meta.spine
@@ -142,7 +138,7 @@ final class EpubBook {
         )
     }
 
-    // MARK: - 图集型（漫画）判定
+ // MARK: - 图集型（漫画）判定
 
     /// 抽样 spine 前 5 个 XHTML —— 文本稀少（<120）且含插图 → 漫画，占比 ≥ 80% 判定为图集型
     private static func isComicSpine(
@@ -164,9 +160,7 @@ final class EpubBook {
         return sampled > 0 && Double(comicPages) / Double(sampled) >= 0.8
     }
 
-    /// 目录预判用：只读 container.xml + OPF + 前 5 个 spine XHTML，判定是否图集型（漫画），
-    /// 不构造完整 `EpubBook`（跳过 toc / 封面解析），供浏览目录把漫画 epub 直接归为漫画类型。
-    /// 返回 nil 表示读取或解析失败，无法判定（由调用方按默认小说处理，留待下次重试）。
+    /// 目录预判用：只读 container.xml + OPF + 前 5 个 spine XHTML，判定是否图集型（漫画）
     static func detectComicLike(adapter: StorageAdapter, entry: FileEntry) async -> Bool? {
         guard let meta = try? await openMetadata(adapter: adapter, entry: entry) else { return nil }
         let spine: [ManifestItem] = meta.raw.spineIds.compactMap { id in
@@ -181,8 +175,7 @@ final class EpubBook {
         return await isComicSpine(spine, map: meta.map, zip: meta.zip)
     }
 
-    /// 轻量打开 epub 元数据（container.xml + OPF）：漫画判定与封面提取共用，
-    /// 避免重复 Range 解包样板。返回 zip 读取器、归一化条目映射、RawOPF 与 OPF 所在目录。
+    /// 轻量打开 epub 元数据（container.xml + OPF）：漫画判定与封面提取共用
     private static func openMetadata(
         adapter: StorageAdapter, entry: FileEntry
     ) async throws -> (zip: RangeZipReader, map: [String: RangeZipReader.Entry], raw: RawOPF, baseDir: String) {
@@ -211,8 +204,7 @@ final class EpubBook {
         return (zip, map, raw, baseDir)
     }
 
-    /// 目录封面用：轻量提取 epub 封面（manifest cover-image / meta cover），
-    /// 只读 container.xml + OPF + 封面条目，不做完整解包（跳过 toc / spine）。
+    /// 目录封面用：轻量提取 epub 封面（manifest cover-image / meta cover）
     static func extractCover(adapter: StorageAdapter, entry: FileEntry) async -> UIImage? {
         guard let meta = try? await openMetadata(adapter: adapter, entry: entry),
               let coverHref = meta.raw.coverHref else { return nil }
@@ -222,7 +214,7 @@ final class EpubBook {
         return await Task.detached { ImageDownsampler.downsample(data: data) }.value
     }
 
-    // MARK: - 章节内容（按需解析为段落流）
+ // MARK: - 章节内容（按需解析为段落流）
 
     /// 解析 spine 章为内容块（文本段 + 插图），插图数据一并预取
     func blocks(forSpine index: Int) async throws -> [ReaderBlock] {
@@ -261,7 +253,7 @@ final class EpubBook {
         let cost = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         AppLogger.shared.log(
             String(format: "comicPageNames: spine=%d extract=%d 图集页=%d 耗时=%.0fms", spine.count, extractCount, names.count, cost),
-            module: "comic-reader"
+            level: .debug, module: "comic-reader"
         )
         return names
     }
@@ -271,17 +263,10 @@ final class EpubBook {
         guard let zip else { return nil }
         let key = Self.normalizeName(name)
         if let cached = imageDataCache.object(forKey: key as NSString) {
-            AppLogger.shared.log("imageData 内存缓存命中: \(name)", module: "comic-reader")
             return cached as Data
         }
         guard let entry = entryMap[key] else { return nil }
-        let t0 = CFAbsoluteTimeGetCurrent()
         let data = try await zip.extract(entry)
-        let cost = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        AppLogger.shared.log(
-            String(format: "imageData 内存缓存未命中(解压): %@ size=%d 耗时=%.0fms", name, data.count, cost),
-            module: "comic-reader"
-        )
         imageDataCache.setObject(data as NSData, forKey: key as NSString)
         return data
     }
@@ -304,7 +289,7 @@ final class EpubBook {
         return key
     }
 
-    // MARK: - 路径工具
+ // MARK: - 路径工具
 
     static func normalizeName(_ name: String) -> String {
         var path = name.replacingOccurrences(of: "\\", with: "/")
@@ -331,7 +316,7 @@ final class EpubBook {
         return String(path[..<index])
     }
 
-    // MARK: - container.xml / OPF / NCX / NAV 解析
+ // MARK: - container.xml / OPF / NCX / NAV 解析
 
     private static func parseContainer(_ data: Data) -> String? {
         let delegate = ContainerParser()

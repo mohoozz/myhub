@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 系统分享表（保存到「文件」App 等，IOS-103）
+/// 系统分享表（保存到「文件」App 等）
 struct ActivityView: UIViewControllerRepresentable {
     let url: URL
 

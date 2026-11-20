@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// 点击/长按选中态高亮（IOS-702）：按压浅蓝高亮 + 缩放 0.975（与文件 cell 的按压表现对齐，TODO 375）。
-/// 高亮以半透明 overlay 叠加，避免被卡片不透明背景遮住。
-///
-/// 按压态经 `PressVisualGate` 过闸（按下瞬时 + 抬起补足最短可见时长），并关闭所在
-/// 滚动容器的 `delaysContentTouches`，解决「快速单点没动画、按住一会儿才有动画」（TODO 402）。
+/// 点击/长按选中态高亮：按压浅蓝高亮 + 缩放 0.975（与文件 cell 的按压表现对齐）。
 struct SelectableCellStyle: ButtonStyle {
     var cornerRadius: CGFloat = 12
 
@@ -37,7 +33,6 @@ struct SelectionCheckmark: View {
 // MARK: - 网格单元格
 
 /// 网格视图单元格：封面/图标、文件名、视频时长角标、漫画徽标。
-/// 长按（iOS，底部抽屉）/ 指针右键（iPad/PC，锚点卡片）弹出操作菜单；多选经菜单「多选」或右上角「…」→「选择」进入。
 struct FileGridCell: View {
     let entry: FileEntry
     let connection: Connection
@@ -52,7 +47,7 @@ struct FileGridCell: View {
     let isPlaying: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
-    /// 目录层预判：epub 内容为图集型（漫画）时按漫画显示徽标（IOS-207 策略 5）
+    /// 目录层预判：epub 内容为图集型（漫画）时按漫画显示徽标（策略 5）
     var isComicEpub: Bool = false
 
     @State private var duration: Double?
@@ -87,12 +82,12 @@ struct FileGridCell: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+                .stroke(AppColors.cardBorder, lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .hoverEffect(.highlight)                // iPad/PC 指针 hover（自定义淡填充由高亮层统一渲染）
         .breathingHighlight(highlighted)        // 「定位到原路径」呼吸灯（约 10s，不常亮）
-        // 点击 / 长按 / 指针右键弹出操作菜单；选中态浮起抬升（TODO 375 方案 D）
+        // 点击 / 长按 / 指针右键弹出操作菜单；选中态浮起抬升
         .cellPressableMenu(
             selectedScale: 1.03,
             isSelected: isSelected,
@@ -110,7 +105,7 @@ struct FileGridCell: View {
         .aspectRatio(1.35, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .topLeading) {
-            // 类型徽标（漫画 / 压缩包）；多选态该角让给进度环/播放动画（右上角被勾选标记占用，TODO 371）
+            // 类型徽标（漫画 / 压缩包）；多选态该角让给进度环/播放动画（右上角被勾选标记占用）
             if showsTypeBadge, !isSelecting {
                 MediaTypeBadge(type: mediaType).padding(6)
             } else if isSelecting, hasStatus {
@@ -151,7 +146,7 @@ struct FileGridCell: View {
 
 // MARK: - 列表行
 
-/// 列表视图行（与网格切换，IOS-102 新增列表视图）
+/// 列表视图行（与网格切换， 新增列表视图）
 struct FileListRow: View {
     let entry: FileEntry
     let connection: Connection
@@ -166,11 +161,9 @@ struct FileListRow: View {
     let isPlaying: Bool
     let menuItems: [PopupMenuItem]
     let onTap: () -> Void
-    /// 目录层预判：epub 内容为图集型（漫画）时按漫画显示徽标（IOS-207 策略 5）
+    /// 目录层预判：epub 内容为图集型（漫画）时按漫画显示徽标（策略 5）
     var isComicEpub: Bool = false
-    /// 左滑删除（TODO 408 方案 A）：左滑只露出按钮、点按才删除；空数组即关闭左滑。
-    /// 不叫 `swipeActions`——具体类型的属性会遮蔽 `View.swipeActions(...)` 协议扩展方法，
-    /// 日后若对 `self` 调用该修饰器会报极难懂的「cannot call value of non-function type」
+    /// 左滑删除：左滑只露出按钮、点按才删除；空数组即关闭左滑。
     var trailingSwipeActions: [SwipeAction] = []
 
     @State private var duration: Double?
@@ -212,7 +205,7 @@ struct FileListRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
-                // 多选态仍保留进度环/播放动画（勾选标记并排在其右侧，TODO 371）
+                // 多选态仍保留进度环/播放动画（勾选标记并排在其右侧）
                 if isPlaying || progress != nil {
                     FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
                 }
@@ -232,7 +225,7 @@ struct FileListRow: View {
             .contentShape(Rectangle())
             .hoverEffect(.highlight)
             .breathingHighlight(highlighted, cornerRadius: 0)
-            // 通栏列表行：高亮块内缩 4/6 收边成悬浮片，选中浮起（TODO 375 方案 D）
+            // 通栏列表行：高亮块内缩 4/6 收边成悬浮片，选中浮起
             .cellPressableMenu(
                 cornerRadius: 0,
                 highlightInset: EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6),
@@ -241,7 +234,7 @@ struct FileListRow: View {
                 onTap: onTap
             )
         }
-        // 左滑删除（TODO 408 方案 A）：行内容带页面底色随行左移，露出底下的红色按钮
+        // 左滑删除：行内容带页面底色随行左移，露出底下的红色按钮
         .swipeActions(enabled: !isSelecting, rowBackground: AppColors.pageBackground, trailingSwipeActions)
     }
 

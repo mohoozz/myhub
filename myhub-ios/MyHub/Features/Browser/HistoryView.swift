@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 浏览历史页（TODO §8.3，IOS-403）：按日分组 / 搜索 / 单条删除 / 清空。
+/// 浏览历史页：按日分组 / 搜索 / 单条删除 / 清空。
 struct HistoryView: View {
     @EnvironmentObject private var dataStore: BrowserDataStore
     @Environment(\.dismiss) private var dismiss

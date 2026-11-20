@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// 起始页（TODO §8.3，IOS-402）：搜索框 + 快捷入口网格。
-/// 快捷入口支持增删改 + 拖拽排序（编辑模式切换为 List），首启预置在 `BrowserDataStore` 完成。
+/// 起始页：搜索框 + 快捷入口网格。
 struct StartPage: View {
     @EnvironmentObject private var dataStore: BrowserDataStore
     var onNavigate: (URL) -> Void
@@ -11,8 +10,7 @@ struct StartPage: View {
     @State private var showingAdd = false
     @State private var editingShortcut: BrowserShortcut?
     @FocusState private var searchFocused: Bool
-    /// 基准可视高度：用来算顶部留白。键盘弹起会把可视高度临时压小，
-    /// 跟着它算会让搜索框在输入时往上跳，所以只记住「变大」的那次
+    /// 基准可视高度：用来算顶部留白。键盘弹起会把可视高度临时压小
     @State private var layoutHeight: CGFloat = 0
 
     private let columns = [GridItem(.adaptive(minimum: 72), spacing: 16)]
@@ -22,8 +20,6 @@ struct StartPage: View {
             ScrollView {
                 ZStack(alignment: .top) {
                     // 点击空白处收键盘。这层**垫在内容之下**：输入框、快捷入口的点击仍然先命中它们自己。
-                    // 旧实现是把 `contentShape(Rectangle()) + onTapGesture` 挂在内容 VStack 上，
-                    // 那层手势与 `TextField` 在同一命中链上抢第一下点击，表现为「点一下只收了键盘、没进输入态」。
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture { Keyboard.dismiss() }
@@ -36,8 +32,7 @@ struct StartPage: View {
                             .padding(.top, 28)
                     }
                     .padding(.horizontal, 16)
-                    // 底部让出操作栏高度：操作栏已改为浮在网页之上的浮层（F1），
-                    // 起始页滑到底时最后一行快捷入口不该被它盖住
+                    // 底部让出操作栏高度：操作栏已改为浮在网页之上的浮层
                     .padding(.bottom, BrowserToolbar.barHeight)
                     .frame(maxWidth: .infinity)
                 }
@@ -66,10 +61,9 @@ struct StartPage: View {
         }
     }
 
-    // MARK: - 顶部留白 + 搜索框（方案 C：输入框居中偏上）
+ // MARK: - 顶部留白 + 搜索框
 
-    /// 顶部留白高度：把输入框压到屏幕约 30% 处（拇指自然抬起就能碰到），
-    /// 上方空出来的区域承载站点标识，避免整块空白。
+    /// 顶部留白高度：把输入框压到屏幕约 30% 处（拇指自然抬起就能碰到）
     private func headerHeight(for available: CGFloat) -> CGFloat {
         guard available > 1 else { return 56 }
         return min(max(available * 0.26, 56), 220)
@@ -93,8 +87,7 @@ struct StartPage: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 17, weight: .regular))
                 .foregroundStyle(AppColors.textSecondary)
-                // 点图标也能进输入态（图标不参与 TextField 的命中区域）；
-                // 不在整个 HStack 上挂 tap —— 那层手势会把 TextField 的第一下点击抢走，键盘反而不弹
+                // 点图标也能进输入态（图标不参与 TextField 的命中区域）
                 .onTapGesture { searchFocused = true }
             TextField("搜索或输入网址", text: $query)
                 .textFieldStyle(.plain)
@@ -114,8 +107,7 @@ struct StartPage: View {
                 .buttonStyle(.plain)
             }
         }
-        // 高度约 52pt（17pt 正文 + 上下 16pt）：比旧版 46pt 更好按，
-        // 圆角同步放大到 16，与「大搜索框」的视觉一致
+        // 高度约 52pt（17pt 正文 + 上下 16pt）：比旧版 46pt 更好按
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
         .background(AppColors.cardBackground)
@@ -133,7 +125,7 @@ struct StartPage: View {
         onNavigate(url)
     }
 
-    // MARK: - 快捷入口
+ // MARK: - 快捷入口
 
     private var shortcutSection: some View {
         VStack(spacing: 12) {
@@ -247,11 +239,11 @@ struct StartPage: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+                .stroke(AppColors.cardBorder, lineWidth: 1)
         )
     }
 
-    // MARK: - 图标
+ // MARK: - 图标
 
     @ViewBuilder
     private func shortcutIcon(_ shortcut: BrowserShortcut) -> some View {
@@ -281,7 +273,7 @@ struct StartPage: View {
     }
 }
 
-/// 快捷入口添加 / 编辑表单（TODO §8.3）
+/// 快捷入口添加 / 编辑表单
 private struct ShortcutEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let title: String

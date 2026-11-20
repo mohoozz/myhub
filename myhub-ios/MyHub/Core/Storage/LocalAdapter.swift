@@ -54,14 +54,13 @@ final class LocalAdapter: StorageAdapter {
         return url
     }
 
-    // MARK: - StorageAdapter
+ // MARK: - StorageAdapter
 
     func list(_ dir: String) async throws -> [FileEntry] {
         try await withAccess {
             let url = try fileURL(for: dir)
             let base = StoragePath.normalize(dir)
-            // FileManager 同步遍历（尤其大目录逐项 resourceValues）可能耗时数百毫秒，
-            // 必须移到后台线程执行，否则会在调用者（MainActor）上阻塞主线程导致界面卡死。
+            // FileManager 同步遍历（尤其大目录逐项 resourceValues）可能耗时数百毫秒
             return try await Task.detached(priority: .utility) {
                 let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .nameKey]
                 let urls = try FileManager.default.contentsOfDirectory(

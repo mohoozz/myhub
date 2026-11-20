@@ -12,9 +12,8 @@ struct TrashItem: Identifiable {
     var id: String { trashPath }
 }
 
-/// 回收站服务（IOS-106）：
-/// 回收站为挂载点下 `.trash` 目录；删除时由浏览页写入 `<name>.meta.json`（原路径/删除时间），
-/// 本服务负责列表、还原（冲突自动重名）、彻底删除、清空与过期自动清理（默认 30 天）。
+/// 回收站服务
+/// 回收站为挂载点下 `.trash` 目录；删除时由浏览页写入 `<name>.meta.json`（原路径/删除时间）
 final class TrashService {
     static let trashRoot = "/.trash"
 
@@ -27,7 +26,7 @@ final class TrashService {
         self.adapter = adapter
     }
 
-    // MARK: - 列表（meta 配对，删除时间倒序）
+ // MARK: - 列表（meta 配对，删除时间倒序）
 
     func listItems() async throws -> [TrashItem] {
         let entries: [FileEntry]
@@ -61,7 +60,7 @@ final class TrashService {
             .sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
     }
 
-    // MARK: - 还原（原路径冲突时自动追加序号）
+ // MARK: - 还原（原路径冲突时自动追加序号）
 
     func restore(_ item: TrashItem) async throws {
         guard let originalPath = item.originalPath else {
@@ -81,7 +80,7 @@ final class TrashService {
         try? await adapter.delete(item.trashPath + ".meta.json")
     }
 
-    // MARK: - 彻底删除 / 清空 / 过期清理
+ // MARK: - 彻底删除 / 清空 / 过期清理
 
     func deletePermanently(_ item: TrashItem) async throws {
         try await adapter.delete(item.trashPath)
@@ -110,7 +109,7 @@ final class TrashService {
         return removed
     }
 
-    // MARK: - 内部
+ // MARK: - 内部
 
     /// 与浏览页删除时写入的 TrashMeta 对应
     private struct TrashMeta: Codable {

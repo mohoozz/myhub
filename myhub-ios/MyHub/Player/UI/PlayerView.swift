@@ -1,14 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// 全屏播放器（TODO §4.3，沉浸纯黑）：
-/// - 渲染层：视频画面（VideoRenderView）/ 纯音频唱片封面（AudioCoverView）；
-/// - 手势层（GestureHandler）+ 中央悬浮数值胶囊；字幕 SwiftUI 浮层；
-/// - 控制栏 3s 自动隐藏（播放中），点击切换；
-/// - 中央「加载圈」与「大播放键」互斥不重叠；暂停/播放图标方向正确；
-/// - 「退出」直接退出，「进入 mini」为独立按钮（IOS-701）；
-/// - 下拉进 mini：固定黑底 + 内容层跟随手指（无透明度渐变）；过阈值封面瞬消（无系统滑出动画），
-///   避免拖动中透出下层界面、松手时画面跳回与 mini 滑入叠加产生残影。
+/// 全屏播放器
+/// - 渲染层：视频画面（VideoRenderView）/ 纯音频唱片封面（AudioCoverView）
 struct PlayerView: View {
     @EnvironmentObject private var player: PlayerPresenter
     @StateObject private var core = PlayerCore.shared
@@ -24,7 +18,7 @@ struct PlayerView: View {
     @State private var hideTask: Task<Void, Never>?
     /// 中央下拉进入 mini 的跟随偏移
     @State private var miniDragOffset: CGFloat = 0
-    /// 播完推荐下一个（IOS-204）
+    /// 播完推荐下一个
     @State private var nextCandidate: (connection: Connection, entry: FileEntry)?
     @State private var nextTask: Task<Void, Never>?
     /// 画中画失败等操作提示（短暂胶囊，自动消失）
@@ -64,10 +58,7 @@ struct PlayerView: View {
             hideTask?.cancel()
             nextTask?.cancel()
             pipNoticeTask?.cancel()
-            AppLogger.shared.log("PlayerView onDisappear isLandscape=\(orientation.isLandscape)", module: "player")
             // 方向恢复移到 RootView 的 fullScreenCover(onDismiss:)。
-            // onDisappear 在 dismiss 转场「进行中」触发，此刻调用 requestGeometryUpdate
-            // 会与全屏封面 dismiss 并发，导致 iOS 16 崩溃（横屏退出/进 mini 都会闪退）。
         }
         .onChange(of: core.state) { newState in
             if newState == .playing { resetHideTimer() }
@@ -163,7 +154,6 @@ struct PlayerView: View {
             }
 
             // 屏幕左中：横竖屏切换按钮（手动模式 + 控制层可见时显示；自动模式/锁定不显示）
-            // 纯音频同样提供：从横屏视频进入音频后可能沿用缓存的横屏偏好，需要能手动切回竖屏
             if showControls, !isInterfaceLocked, orientation.isManualMode {
                 HStack {
                     Button {
@@ -207,7 +197,6 @@ struct PlayerView: View {
             }
 
             // 界面锁定（长按进入）：中央显示锁图标，点击解锁。
-            // 锁图标跟随 showControls 自动隐藏（3s 无操作）；锁定态点击屏幕唤醒重新显示。
             if isInterfaceLocked, showControls {
                 Button {
                     unlockInterface()
@@ -248,10 +237,9 @@ struct PlayerView: View {
         }
     }
 
-    // MARK: - 播完推荐下一个（IOS-204）
+ // MARK: - 播完推荐下一个
 
     /// 播放结束：查找同目录下一个同类型文件，弹提示（不自动播放，等用户点击）。
-    /// 设置里关闭「播完提示下一个」后直接跳过，省掉一次远端目录列举。
     private func prepareNext() {
         nextTask?.cancel()
         guard AppSettings.Player.showNextMediaTip, let item = player.current else { return }
@@ -273,7 +261,7 @@ struct PlayerView: View {
         withAnimation(.appQuick) { nextCandidate = nil }
     }
 
-    // MARK: - 中央状态层
+ // MARK: - 中央状态层
 
     @ViewBuilder
     private var centerOverlay: some View {
@@ -326,7 +314,7 @@ struct PlayerView: View {
         }
     }
 
-    // MARK: - 控制层自动隐藏
+ // MARK: - 控制层自动隐藏
 
     private func toggleControls() {
         AppLogger.shared.log("toggleControls showControls=\(showControls) isInterfaceLocked=\(isInterfaceLocked)", module: "player")
@@ -373,7 +361,6 @@ struct PlayerView: View {
     }
 
     /// 外挂字幕与内嵌轨互斥：外挂已命中时关闭引擎内嵌轨（内嵌由解码器绘制，与浮层叠加会重影）。
-    /// 用户手动选内嵌轨时 `PlayerControls` 会先 `subtitles.clearSelection()`，故不会与手动选择打架。
     private func dedupeSubtitleTracks() {
         guard subtitles.activeExternalPath != nil, core.selectedSubtitleTrackID != nil else { return }
         core.selectSubtitleTrack(nil)

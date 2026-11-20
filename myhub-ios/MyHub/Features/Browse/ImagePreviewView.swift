@@ -15,8 +15,7 @@ extension StorageAdapter {
     }
 }
 
-/// 纯图片预览（IOS-706）：独立界面，与漫画阅读器区分。
-/// 切换方式：左右滑动 / 点击左右分区 / 外接键盘 ← → / 底部浮动按钮；点击图片区显隐工具层。
+/// 纯图片预览：独立界面，与漫画阅读器区分。
 struct ImagePreviewView: View {
     let images: [FileEntry]          // 同目录全部图片（自然序）
     let initialIndex: Int
@@ -41,8 +40,7 @@ struct ImagePreviewView: View {
                 // 左右滑动翻页
                 TabView(selection: $index) {
                     ForEach(Array(images.enumerated()), id: \.element.path) { i, entry in
-                        // 仅当前页与相邻页发起下载：TabView 会保留已访问页的视图、`.task` 不会自动取消，
-                        // 快速浏览大图目录时会累积多个全尺寸下载（单张上限 48MB）占满连接与带宽（TODO 372）
+                        // 仅当前页与相邻页发起下载：TabView 会保留已访问页的视图、`.task` 不会自动取消
                         RemoteImagePage(entry: entry, adapter: adapter, shouldLoad: abs(i - index) <= 1)
                             .tag(i)
                     }
@@ -63,7 +61,6 @@ struct ImagePreviewView: View {
                 }
             }
             // 分区点击：左 25% 上一张 / 右 25% 下一张 / 中间显隐工具层
-            // simultaneousGesture 不拦截 TabView 的翻页拖拽
             .simultaneousGesture(
                 SpatialTapGesture().onEnded { value in
                     let ratio = value.location.x / max(geo.size.width, 1)
@@ -81,7 +78,7 @@ struct ImagePreviewView: View {
         .animation(.appQuick, value: chromeVisible)
     }
 
-    // MARK: - 工具层
+ // MARK: - 工具层
 
     private var topBar: some View {
         VStack {
@@ -164,8 +161,7 @@ struct ImagePreviewView: View {
 private struct RemoteImagePage: View {
     let entry: FileEntry
     let adapter: StorageAdapter
-    /// 是否需要下载（仅当前页与相邻页为 true）：值翻转会取消/启动下载任务，
-    /// 翻页离开后立即停止该页下载，避免多张大图并发占满连接（TODO 372）
+    /// 是否需要下载（仅当前页与相邻页为 true）：值翻转会取消/启动下载任务
     let shouldLoad: Bool
 
     @State private var image: UIImage?

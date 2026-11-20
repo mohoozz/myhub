@@ -2,11 +2,11 @@ import Foundation
 import GRDB
 
 extension Notification.Name {
-    /// 播放进度落库后广播（「正在阅读」列表自动刷新，TODO §7 订阅）
+    /// 播放进度落库后广播（「正在阅读」列表自动刷新， 订阅）
     static let playbackProgressDidChange = Notification.Name("playbackProgressDidChange")
 }
 
-/// 播放进度上报落库（IOS-209）：
+/// 播放进度上报落库
 /// PlayerCore.onProgressReport（5s 节流 + 暂停/seek/结束/退出强制）→ ReadingProgress upsert。
 final class PlaybackProgressStore {
     static let shared = PlaybackProgressStore()

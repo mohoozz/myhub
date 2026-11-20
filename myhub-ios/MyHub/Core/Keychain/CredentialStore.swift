@@ -5,13 +5,11 @@ enum CredentialError: Error {
     case keychain(OSStatus)
 }
 
-/// 连接源凭据的 Keychain 存取（kSecClassGenericPassword，IOS-002）。
-/// key 约定："conn.<connectionID>"（《需求分析文档》§5.3）；
-/// 生物识别（Face ID / Touch ID）保护可后续叠加 SecAccessControl。
+/// 连接源凭据的 Keychain 存取（kSecClassGenericPassword）。
 struct CredentialStore {
     private let service = "com.myhub.MyHub.credentials"
 
-    // MARK: - 连接源便捷接口
+ // MARK: - 连接源便捷接口
 
     static func key(for connectionID: Int64) -> String { "conn.\(connectionID)" }
 
@@ -27,7 +25,7 @@ struct CredentialStore {
         delete(for: Self.key(for: connectionID))
     }
 
-    // MARK: - 通用接口
+ // MARK: - 通用接口
 
     func save(_ password: String, for key: String) throws {
         let base: [String: Any] = [

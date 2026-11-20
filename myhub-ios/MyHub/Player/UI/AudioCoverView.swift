@@ -1,12 +1,7 @@
 import AVFoundation
 import SwiftUI
 
-/// 音频唱片封面模式（IOS-201 播放能力 / 纯音频模式 UI）：
-/// - 播放时封面旋转、暂停停止（30fps 计时器驱动，暂停即冻结角度）；
-/// - 封面来源统一走 `CoverService`（内存 + 磁盘缓存，与浏览页/锁屏同源，命中免重复网络拉取）：
-///   同目录同名图片 / cover / folder / front → ID3 内嵌 albumart（兜底占位图标）；
-/// - 加载完成后回填锁屏封面（`NowPlaying`），避免锁屏重复加载；
-/// - 标题/作者按「作者 - 标题」文件名解析。
+/// 音频唱片封面模式（播放能力 / 纯音频模式 UI）
 struct AudioCoverView: View {
     let item: PlayableItem
     let isPlaying: Bool
@@ -65,7 +60,7 @@ struct AudioCoverView: View {
         .task(id: item.path) { await loadCover() }
     }
 
-    // MARK: - 封面加载（统一 CoverService 缓存 + 回填锁屏）
+ // MARK: - 封面加载（统一 CoverService 缓存 + 回填锁屏）
 
     private func loadCover() async {
         let result = await CoverService.shared.cover(forItem: item)

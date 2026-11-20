@@ -1,8 +1,7 @@
 import SwiftUI
 import GRDB
 
-/// 收藏页（IOS-107）：网格/列表切换，封面 + 类型徽标，卡片整体可点击；
-/// 点击进入对应播放器/阅读器（文件夹经「定位到原路径」跳浏览页）；与浏览页星标经 FavoritesStore 双向同步。
+/// 收藏页：网格/列表切换，封面 + 类型徽标，卡片整体可点击
 struct FavoritesView: View {
     @EnvironmentObject private var favoritesStore: FavoritesStore
     @EnvironmentObject private var player: PlayerPresenter
@@ -59,9 +58,9 @@ struct FavoritesView: View {
         .onReceive(favoritesStore.$favorites) { _ in resolveAll() }
     }
 
-    // MARK: - 工具栏
+ // MARK: - 工具栏
 
-    /// 右上角 … 菜单（圆角 + 弹出动画，IOS-704）
+    /// 右上角 … 菜单（圆角 + 弹出动画）
     private var overflowItems: [PopupMenuItem] {
         [
             PopupMenuItem(
@@ -73,7 +72,7 @@ struct FavoritesView: View {
         ]
     }
 
-    // MARK: - 内容
+ // MARK: - 内容
 
     @ViewBuilder
     private var content: some View {
@@ -111,12 +110,12 @@ struct FavoritesView: View {
                     .padding(.vertical, 8)
                 }
             }
-            // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一项停在胶囊上方
+            // 方案 A：末尾预留悬浮胶囊 + 12pt，滚到底时最后一项停在胶囊上方
             .reservedBottomChrome()
         }
     }
 
-    // MARK: - 单元格
+ // MARK: - 单元格
 
     private func gridCell(_ favorite: Favorite) -> some View {
         let entry = entry(for: favorite)
@@ -143,7 +142,7 @@ struct FavoritesView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+                .stroke(AppColors.cardBorder, lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .hoverEffect(.highlight)
@@ -178,11 +177,11 @@ struct FavoritesView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下行块描边界定（TODO 376）
+                .stroke(AppColors.cardBorder, lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .hoverEffect(.highlight)
-        // 通栏列表行：高亮块内缩 4/6 收边成悬浮片（TODO 375 方案 D）
+        // 通栏列表行：高亮块内缩 4/6 收边成悬浮片
         .cellPressableMenu(
             cornerRadius: 10,
             highlightInset: EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6),
@@ -218,7 +217,7 @@ struct FavoritesView: View {
         ]
     }
 
-    // MARK: - 打开路由
+ // MARK: - 打开路由
 
     private func open(_ favorite: Favorite) {
         let entry = entry(for: favorite)
@@ -233,7 +232,7 @@ struct FavoritesView: View {
         }
         switch favorite.mediaType {
         case .video, .audio:
-            // 解析数据源（本地 file:// / 边下边播代理）+ 历史进度恢复（TODO §4.2）
+            // 解析数据源（本地 file:// / 边下边播代理）+ 历史进度恢复
             player.play(connection: connection, entry: entry)
         case .image:
             // 同目录图片自然序，定位当前张
@@ -257,7 +256,7 @@ struct FavoritesView: View {
                 novelReader.open(connection: connection, entry: entry)
             }
         case .comic:
-            // 漫画阅读器（TODO §6）：直接恢复上次页码
+            // 漫画阅读器：直接恢复上次页码
             comicReader.open(connection: connection, entry: entry)
         case .archive:
             // 压缩包：zip/rar 交给漫画阅读器（内容嗅探校验）；其余格式无阅读入口，回浏览页定位
@@ -271,13 +270,13 @@ struct FavoritesView: View {
         }
     }
 
-    /// 文件夹 / 未识别类型：跳浏览页并呼吸灯定位（IOS-704）
+    /// 文件夹 / 未识别类型：跳浏览页并呼吸灯定位
     private func locate(_ favorite: Favorite) {
         locator.locate(connectionID: favorite.connectionID, filePath: favorite.filePath)
         router.selectedTab = .browse
     }
 
-    // MARK: - 数据解析
+ // MARK: - 数据解析
 
     /// Favorite 记录 → FileEntry（stat 成功用真实值；否则按记录构造兜底）
     private func entry(for favorite: Favorite) -> FileEntry {

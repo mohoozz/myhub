@@ -1,19 +1,6 @@
 import Foundation
 
 /// txt 分章规则表（移植/归纳自 Legado 默认目录规则与 calibre 常见章节标记）。
-///
-/// 说明：规则正文按「Legado 默认规则的写法风格」重写，并补充 calibre 常用的西文标记，
-/// **不是逐字拷贝**（其规则文件仅存在于 App 资产中，无法随包分发）。
-///
-/// 设计要点：
-/// - **数据驱动**：一行一条规则（`pattern` + `firstChars` 预筛集 + 说明），便于按书增删；
-/// - **两级匹配**：先用 `firstChars` 做 O(1) 首字符预筛（正文行绝大多数被直接跳过），
-///   只对候选行跑正则。否则「N 条规则 × 数十万行」在 20MB 文本上会退化成数十秒；
-/// - **选规则而非并集**：每条规则各自收集候选章节，扫描结束后按 Legado 的校验思路
-///   （条数、相邻间隔、平均章长、标题重复度）过滤，再取「通过校验且章节数最多」的一条。
-///   章节数最多的通常就是真正的目标规则，而正文里偶然出现的「第一章」数量远少于真规则，
-///   自然落选；同时避免了「多规则取并集」把书切成碎片的旧问题；
-/// - **兜底**：无规则通过校验时沿用首条规则的候选（等价历史行为），仍为空则整本单章。
 enum ChapterRuleTable {
 
     struct Rule {
@@ -22,7 +9,6 @@ enum ChapterRuleTable {
         /// 规则正则（与行文本做 `firstMatch`，规则内自带 `^`/`$` 锚定）
         let pattern: String
         /// 首字符预筛集（nil = 不做预筛，所有候选行都要跑正则）。
-        /// 必须覆盖规则可能匹配的全部首字符，宁多勿少：漏字符会导致章节漏检。
         let firstChars: String?
         let regex: NSRegularExpression?
 
@@ -47,9 +33,8 @@ enum ChapterRuleTable {
     }
 
     /// 规则表：**顺序即可信度**（越靠前越可信，章节数相同时优先取胜）。
-    /// 历史内置的 3 条排在最前，保证已索引书籍的分章结果不会因本次改动大幅变化。
     static let rules: [Rule] = [
-        // MARK: 中文（历史内置，优先级最高）
+ // MARK: 中文（历史内置，优先级最高）
         Rule(
             id: "zh_di_zhang",
             name: "第x章/节/回/卷（历史内置）",
@@ -69,7 +54,7 @@ enum ChapterRuleTable {
             firstChars: "cC"
         ),
 
-        // MARK: 中文扩展（Legado 默认规则风格）
+ // MARK: 中文扩展（Legado 默认规则风格）
         Rule(
             id: "zh_di_zhang_loose",
             name: "第 x 章（允许空格/全角数字/较长标题）",
@@ -95,7 +80,7 @@ enum ChapterRuleTable {
             firstChars: "上中下终第"
         ),
 
-        // MARK: 西文（calibre 常见章节标记）
+ // MARK: 西文（calibre 常见章节标记）
         Rule(
             id: "en_chapter_loose",
             name: "Chapter/Ch./Section/Part/Book n（数字·罗马数字·英文数词）",
@@ -144,7 +129,6 @@ enum ChapterRuleTable {
     }
 
     /// 规则选择：通过校验者中取章节数最多的；并列时按规则表顺序（越靠前越可信）。
-    /// 全部不通过校验时返回 nil，由调用方退回首条规则的候选 / 整本单章。
     static func selectBest(
         candidatesByRule: [String: [ChapterInfo]], fileSize: Int64
     ) -> (rule: Rule, chapters: [ChapterInfo])? {

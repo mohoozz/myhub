@@ -1,6 +1,6 @@
 import Foundation
 
-/// 引擎类型（《需求分析文档》§4.3 双引擎解码策略）
+/// 引擎类型（双引擎解码策略）
 enum PlayerEngineKind: String, Equatable {
     case hardware   // AVPlayer / VideoToolbox 硬解（H.264/HEVC 等）
     case software   // MobileVLCKit 软解兜底（mkv/rmvb/avi/flv/wmv/ts…）
@@ -29,7 +29,7 @@ enum PlaybackState: Equatable {
         return false
     }
 
-    /// 可读状态名（诊断日志用，TODO 380）
+    /// 可读状态名（诊断日志用）
     var logDescription: String {
         switch self {
         case .idle: return "idle"
@@ -65,14 +65,12 @@ enum PlayerEngineEvent {
 }
 
 /// 双引擎统一接口（PlayerCore 之下的引擎层，参考 nPlayer 架构）。
-/// 实现：AVPlayerEngine（硬解）/ VLCEngine（软解）；切换对上层透明。
 @MainActor
 protocol PlaybackEngine: AnyObject {
     var kind: PlayerEngineKind { get }
     var onEvent: ((PlayerEngineEvent) -> Void)? { get set }
 
     /// 渲染输出：AVPlayer（硬解，供 AVPlayerLayer/AVPlayerViewController）/
-    /// VLCMediaPlayer（软解，UI 将 drawable 指向宿主视图）——TODO §4.3 渲染层接管
     var videoOutput: Any? { get }
 
     var duration: TimeInterval { get }
@@ -100,12 +98,10 @@ protocol PlaybackEngine: AnyObject {
     /// 选择字幕轨；nil = 关闭字幕
     func selectSubtitleTrack(_ id: Int?)
 
-    /// 引擎内部状态快照（诊断日志用，TODO 380）：回前台 / 失败时记录，
-    /// 用于区分「卡在等待态」「已停滞」「播放器已释放」等熄屏后异常
+    /// 引擎内部状态快照（诊断日志用）：回前台 / 失败时记录
     var diagnosticSnapshot: String { get }
 
     /// 视频画面尺寸（像素，已应用旋转）；未知（音频/未就绪）时返回 .zero。
-    /// 字幕层据此把 ASS 坐标映射到视频实际显示区域，保证竖屏 letterbox 下也贴着画面底部
     var videoNaturalSize: CGSize { get }
 }
 

@@ -5,11 +5,11 @@ struct MyHubApp: App {
     // 界面方向回调宿主：播放页横竖屏切换依赖动态方向掩码（App 平时锁竖屏）
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() {
-        _ = AppLogger.shared   // 尽早初始化日志 + 安装崩溃捕获（避免启动早期崩溃漏捕获）
-        GlobalAppearance.apply()   // 导航栏返回箭头用主色（iOS 26 系统返回按钮不再吃 tint，TODO 404）
+        _ = AppLogger.shared
+        GlobalAppearance.apply()
         AppSettings.Reader.migrateReaderThemeToAutoIfNeeded()   // 旧版固定主题 → 跟随系统（一次性迁移）
         AppSettings.Player.migratePreloadWindowIfNeeded()   // 旧默认预读 30s → 10s（发热优化）
-        NetworkPathMonitor.shared.start()   // 网络路径变化监测（TODO 380：熄屏后播放失败诊断）
+        NetworkPathMonitor.shared.start()
     }
 
     /// scenePhase 可读名称（日志用）
@@ -21,22 +21,22 @@ struct MyHubApp: App {
         @unknown default: return "unknown"
         }
     }
-    // 全局状态：主题 / 启动 / 播放呈现 / 弹出菜单 / 浏览器会话（§2.2.2 全局持有）
+    // 全局状态：主题 / 启动 / 播放呈现 / 弹出菜单 / 浏览器会话（全局持有）
     @StateObject private var themeManager = ThemeManager()
     @StateObject private var appState = AppState()
     @StateObject private var playerPresenter = PlayerPresenter()
     @StateObject private var popupPresenter = PopupMenuPresenter()
     @StateObject private var browserSession = BrowserSessionStore()
-    @StateObject private var browseLocator = BrowseLocator()   // 「定位到原路径」全局触发（IOS-704）
+    @StateObject private var browseLocator = BrowseLocator()
     @StateObject private var router = AppRouter()              // 全局路由（跨 Tab 跳转）
     @StateObject private var favoritesStore = FavoritesStore.shared   // 收藏唯一数据源（双向同步）
-    @StateObject private var readingHistory = ReadingHistoryStore.shared   // 正在阅读进度（上报后自动刷新，TODO §7）
-    @StateObject private var novelReader = NovelReaderPresenter()     // 小说阅读器全屏路由（TODO §5）
-    @StateObject private var comicReader = ComicReaderPresenter()     // 漫画阅读器全屏路由（TODO §6）
+    @StateObject private var readingHistory = ReadingHistoryStore.shared
+    @StateObject private var novelReader = NovelReaderPresenter()
+    @StateObject private var comicReader = ComicReaderPresenter()
     @StateObject private var txtReader = TxtReaderPresenter()         // 纯 txt 阅读器全屏路由（txt 默认打开）
-    @StateObject private var appLock = AppLockManager.shared          // 应用锁（TODO §10 安全）
-    @StateObject private var browserDataStore = BrowserDataStore.shared   // 浏览器书签/历史/快捷入口唯一数据源（TODO §8.3）
-    @StateObject private var browseDisplaySettings = BrowseDisplaySettings.shared   // 浏览显示偏好（文件名行数等，IOS-102）
+    @StateObject private var appLock = AppLockManager.shared
+    @StateObject private var browserDataStore = BrowserDataStore.shared
+    @StateObject private var browseDisplaySettings = BrowseDisplaySettings.shared
     @StateObject private var connectionStore = ConnectionStore()   // 连接源唯一数据源（浏览页/设置页/回收站共享，测试结果实时同步）
     @Environment(\.scenePhase) private var scenePhase
 
@@ -46,7 +46,7 @@ struct MyHubApp: App {
                 .onAppear {
                     PlaybackProgressStore.shared.attach()   // 播放进度上报落库（§4.2）
                     NowPlaying.shared.attach()              // 后台音频 + 锁屏/控制中心（§4.3）
-                    // epub 图集型「以漫画阅读器打开」→ 漫画阅读器接管（TODO §6）
+                    // epub 图集型「以漫画阅读器打开」→ 漫画阅读器接管
                     novelReader.onOpenComic = { context in
                         comicReader.open(connection: context.connection, entry: context.entry)
                     }
@@ -68,12 +68,9 @@ struct MyHubApp: App {
                 .environmentObject(browserDataStore)
                 .environmentObject(browseDisplaySettings)
                 .environmentObject(connectionStore)
-                // 进入后台时按设置上锁，返回前台显示锁定遮罩（TODO §10 安全）；
-                // 同时兜底落盘浏览器会话，确保导航后立即退出也不丢失；
-                // 长时间后台（熄屏）回到前台时执行网络自愈，避免「音视频加载失败只能重启 App」（TODO 366）
+                // 进入后台时按设置上锁，返回前台显示锁定遮罩
                 .onChange(of: scenePhase) { phase in
-                    // 全相位面包屑（TODO 380）：熄屏→亮屏的 inactive/background/active 时序与
-                    // 当时播放/网络/路由状态，定位「熄屏一段时间后视频无法播放」
+                    // 全相位面包屑：熄屏→亮屏的 inactive/background/active 时序
                     let core = PlayerCore.shared
                     AppLogger.shared.log(
                         "scenePhase -> \(Self.describe(phase)) 播放=\(core.state.logDescription) 引擎=\(core.engineDiagnostics) item=\(core.currentItem?.title ?? "nil") 锁定=[\(RoutedWebDAVAdapter.lockSnapshot())] 代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot())",
@@ -82,14 +79,13 @@ struct MyHubApp: App {
                     if phase == .background {
                         appLock.lockForBackground()
                         browserSession.persistNow()
-                        // 网页媒体兜底暂停（TODO 418）：标签常驻保活且允许自动播放，
-                        // 不暂停会在锁屏/切后台后继续出声、占用音频会话并耗流量
+                        // 网页媒体兜底暂停：标签常驻保活且允许自动播放
                         browserSession.suspendAllMediaPlayback()
                         NetworkRecovery.shared.noteDidEnterBackground()
                         Task { await SegmentCache.shared.flushIndexNow() }   // 分片索引合并落盘的兜底落盘
                     } else if phase == .active {
                         NetworkRecovery.shared.recoverAfterReturningToForeground()
-                        // 回到前台重算浏览器可见性：可见才解除媒体暂停（TODO 418）
+                        // 回到前台重算浏览器可见性：可见才解除媒体暂停
                         browserSession.setBrowserVisible(router.selectedTab == .browser)
                     }
                 }

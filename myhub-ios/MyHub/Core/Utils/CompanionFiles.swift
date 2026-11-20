@@ -1,19 +1,6 @@
 import Foundation
 
-/// 删除时的「关联文件」判定（设置 → 文件操作「删除时移除同名文件」；
-/// 浏览页删除与阅读页「删除源文件」共用同一口径，避免两处规则漂移）。
-///
-/// 两组规则：
-/// 1. **主名精确相同**：`movie.mkv` → `movie.srt` / `movie.jpg` / `movie.nfo`
-///    （只认文件；主名区分大小写，扩展名不区分大小写且必须不同——`movie.MKV` 视为同类型，不会互相牵连）
-/// 2. **语言后缀字幕**：`movie.mkv` → `movie.zh.srt` / `movie.en.ass` / `movie.zh-Hans.srt`
-///    （此前主名不同 → 不被联动删除，删掉视频后语言后缀字幕残留）
-///
-/// 语言后缀规则会**多删文件**，因此逐条收紧：
-/// - 只对字幕扩展名生效：`movie.part2.rar` 这类分卷包不会被牵连；
-/// - 后缀 1~2 段，每段 2~12 位字母/数字/`-`/`_`（`zh`、`en-US`、`zh_Hans`、`chs`），
-///   或常见中文标签（中字/简中/繁中/中英/双语…）；
-/// - 分卷/分片语义（`part1`/`cd2`/`disc1`/`vol3`/`dvd1`）不算语言标签——它们通常不是「同一个文件的字幕」。
+/// 删除时的「关联文件」判定
 enum CompanionFiles {
     /// 参与语言后缀规则的字幕扩展名（与播放器外挂字幕识别保持一致）
     static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "idx", "smi", "lrc"]
@@ -27,8 +14,6 @@ enum CompanionFiles {
     private static let volumePrefixes = ["part", "cd", "disc", "disk", "vol", "dvd", "v"]
 
     /// 与 `entry` 同目录、可随它一起删除的关联文件。
-    ///
-    /// 只比对传入的目录列表，不额外发起请求（浏览页传当前 `entries`，阅读页传预取的目录列表）。
     static func sameStemSiblings(of entry: FileEntry, in listing: [FileEntry]) -> [FileEntry] {
         guard !entry.isDir else { return [] }
         let sourceName = entry.name as NSString

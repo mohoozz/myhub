@@ -1,9 +1,7 @@
 import Foundation
 import GRDB
 
-/// 小说阅读进度落库（IOS-209 / IOS-205/206）：
-/// progressJSON 存 `NovelAnchor`（txt 全局字节偏移 / epub spine+段内偏移，排版无关锚点），
-/// 落库后广播 `playbackProgressDidChange` 供「正在阅读」列表自动刷新（与播放进度共用通道）。
+/// 小说阅读进度落库（/ /206）
 enum NovelProgressStore {
 
     /// 查询历史进度锚点
@@ -18,7 +16,6 @@ enum NovelProgressStore {
                       .fetchOne(database)
               }) else { return nil }
         // 已读完（finished）不再丢弃锚点：清零会让“每次打开都回到开头”，表现为最刺眼的假漂移。
-        // 恢复到最后阅读位置，用户可自行回看；《正在阅读》列表仍以 record.percent/finished 展示
         return NovelAnchor.parse(record.progressJSON, fileSize: fileSize, modTime: modTime, isEpub: isEpub)
     }
 

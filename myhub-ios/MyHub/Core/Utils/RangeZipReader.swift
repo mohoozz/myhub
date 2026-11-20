@@ -1,9 +1,7 @@
 import Foundation
 import Compression
 
-/// 基于 Range 读取的 ZIP 解析器（漫画封面 / 后续漫画阅读器复用）：
-/// 只对归档做 3 次左右 Range 请求（尾部 EOCD → 中央目录 → 目标条目），不整包下载。
-/// 支持存储（stored）与 deflate 压缩条目的解压。
+/// 基于 Range 读取的 ZIP 解析器（漫画封面 / 后续漫画阅读器复用）
 struct RangeZipReader {
     typealias RangeReader = (Range<Int64>) async throws -> Data
 
@@ -20,15 +18,13 @@ struct RangeZipReader {
     private let read: RangeReader
     private let totalSize: Int64
 
-    /// - Parameters:
-    ///   - totalSize: 归档总字节数（FileEntry.size）
-    ///   - reader: 按字节区间读取数据的闭包（适配器 readStream 收集）
+    /// - Parameters
     init(totalSize: Int64, reader: @escaping RangeReader) {
         self.totalSize = totalSize
         self.read = reader
     }
 
-    // MARK: - 中央目录
+ // MARK: - 中央目录
 
     /// 读取全部条目（EOCD → 中央目录）
     func entries() async throws -> [Entry] {
@@ -44,7 +40,6 @@ struct RangeZipReader {
         var cdOffset = Int64(Self.uint32(eocd, at: 16))
 
         // ZIP64（>4GB 或 >65535 条目）：常规字段为哨兵值时改读 ZIP64 EOCD
-        //（locator 位于 EOCD 前 20 字节；仅大小/偏移为哨兵却缺记录时才算损坏）
         if entryCount == 0xFFFF || cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF {
             if let zip64 = try await readZip64EOCD(
                 eocdGlobalOffset: totalSize - window + Int64(eocdOffset)
@@ -139,7 +134,7 @@ struct RangeZipReader {
         return images.sorted { $0.name.naturalCompare($1.name) == .orderedAscending }.first
     }
 
-    // MARK: - 内部
+ // MARK: - 内部
 
     enum ZipError: Error {
         case malformed
@@ -147,7 +142,7 @@ struct RangeZipReader {
         case unsupportedMethod(UInt16)
     }
 
-    // MARK: - ZIP64
+ // MARK: - ZIP64
 
     private struct Zip64EOCD {
         let entryCount: Int64
@@ -161,8 +156,7 @@ struct RangeZipReader {
         var localOffset: Int64?
     }
 
-    /// 读取 ZIP64 EOCD 记录：locator（签名 0x07064B50）位于 EOCD 前 20 字节，
-    /// 记录（签名 0x06064B50）携带 64 位条目数与中央目录偏移/大小；不存在则返回 nil。
+    /// 读取 ZIP64 EOCD 记录：locator（签名 0x07064B50）位于 EOCD 前 20 字节
     private func readZip64EOCD(eocdGlobalOffset: Int64) async throws -> Zip64EOCD? {
         guard eocdGlobalOffset >= 20 else { return nil }
         let locator = try await read((eocdGlobalOffset - 20)..<eocdGlobalOffset)
@@ -178,8 +172,7 @@ struct RangeZipReader {
         )
     }
 
-    /// 解析中央目录条目的 ZIP64 扩展字段（header id 0x0001）：按需依次为
-    /// 原始大小 / 压缩大小 / 本地头偏移（各 8 字节，仅哨兵字段才有对应值）。
+    /// 解析中央目录条目的 ZIP64 扩展字段（header id 0x0001）：按需依次
     private static func zip64ExtraValues(
         _ data: Data, start: Int, end: Int,
         needUncompressed: Bool, needCompressed: Bool, needOffset: Bool

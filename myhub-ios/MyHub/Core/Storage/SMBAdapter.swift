@@ -36,7 +36,7 @@ final class SMBAdapter: StorageAdapter {
         return client
     }
 
-    // MARK: - StorageAdapter
+ // MARK: - StorageAdapter
 
     func list(_ dir: String) async throws -> [FileEntry] {
         let client = try await connected()

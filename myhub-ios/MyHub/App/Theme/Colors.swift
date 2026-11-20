@@ -17,36 +17,35 @@ extension Color {
     }
 }
 
-/// 色板常量（《需求分析文档》§2.10）
+/// 色板常量
 enum AppColors {
     static let primary = Color(light: Color(hex: 0x2563EB), dark: Color(hex: 0x3B82F6))
     /// 主色的 UIKit 形态：UIKit 侧取色用（导航栏返回指示图、栏内自定义图标等），跟随明暗主题
     static let primaryUIColor = UIColor { traits in
         UIColor(primary).resolvedColor(with: traits)
     }
-    /// 主界面背景：纯白（TODO 376，原浅蓝灰 #EEF4FB）；白底下卡片靠 `cardBorder` 1pt 描边界定
+    /// 主界面背景：纯白；白底下卡片靠 `cardBorder` 1pt 描边界定
     static let pageBackground = Color(light: Color(hex: 0xFFFFFF), dark: Color(hex: 0x000000))
     static let cardBackground = Color(light: Color(hex: 0xFFFFFF), dark: Color(hex: 0x121212))
-    /// 白底卡片极浅描边：页面背景改白后用于区分卡片与背景（TODO 376）
+    /// 白底卡片极浅描边：页面背景改白后用于区分卡片与背景
     static let cardBorder = Color(light: Color(hex: 0xEDF0F3), dark: Color(hex: 0x262626))
-    /// 底部页签栏灰边框：与白色主界面分割（TODO 376 方案 C 悬浮圆角胶囊）
+    /// 底部页签栏灰边框：与白色主界面分割
     static let tabBarBorder = Color(light: Color(hex: 0xD1D5DB), dark: Color(hex: 0x3A3A3C))
-    /// 胶囊内浅灰填充块（地址栏 / 标签数 chip，TODO 377 方案 A 悬浮单胶囊操作栏）
+    /// 胶囊内浅灰填充块（地址栏 / 标签数 chip， 方案 A 悬浮单胶囊操作栏）
     static let fieldFill = Color(light: Color(hex: 0xF3F4F6), dark: Color(hex: 0x2C2C2E))
     static let sidebarBackground = Color(light: Color(hex: 0xFFFFFF), dark: Color(hex: 0x0A0A0A))
     static let textPrimary = Color(light: Color(hex: 0x1A1A2E), dark: Color(hex: 0xE0E0E0))
     static let textSecondary = Color(light: Color(hex: 0x6B7280), dark: Color(hex: 0x888888))
     static let separator = Color(light: Color(hex: 0xE5E7EB), dark: Color(hex: 0x1E1E1E))
     static let highlightBackground = Color(light: Color(hex: 0xEEF4FB), dark: Color(hex: 0x1A2744))
-    /// 破坏性操作语义色（删除等）：长按菜单项文字、左滑按钮底色、多选操作栏统一用此色，
-    /// 保证「同一操作同一语义色」（TODO 408 需求 ③）
+    /// 破坏性操作语义色（删除等）：长按菜单项文字、左滑按钮底色、多选操作栏统一用此色
     static let destructive = Color(uiColor: .systemRed)
     /// 次级左滑按钮底色（如「更多」）
     static let destructiveSecondary = Color(uiColor: .systemGray)
     /// 播放器/阅读器等沉浸场景统一纯黑
     static let immersiveBackground = Color.black
 
-    // MARK: - 标签页网格（缩略图卡片，方案 A）
+ // MARK: - 标签页网格
 
     /// 网格画布：浅灰底让白色卡片浮起（仅本页，主界面仍纯白；暗色下压到近黑）
     static let gridCanvas = Color(light: Color(hex: 0xF5F6F8), dark: Color(hex: 0x08080B))

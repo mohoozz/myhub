@@ -3,9 +3,7 @@ import MediaPlayer
 import SwiftUI
 import UIKit
 
-/// 系统音量联动（IOS-201）：读经 AVAudioSession，写经 MPVolumeView 隐藏滑杆（步进 5% 由手势层量化）。
-/// 持久持有 MPVolumeView，避免「新建即取 slider」时 slider 尚未加载导致写系统音量失败，
-/// 从而出现播放器显示音量与系统音量不同步的问题。
+/// 系统音量联动：读经 AVAudioSession，写经 MPVolumeView 隐藏滑杆（步进 5% 由手势层量化）。
 enum SystemVolume {
     /// 常驻隐藏 MPVolumeView（挂到 keyWindow 保持引用，确保内部 UISlider 完成加载）
     private static var volumeView: MPVolumeView?
@@ -53,11 +51,7 @@ enum GestureFeedback: Equatable {
     case speed(rate: Float)
 }
 
-/// 播放器手势层（IOS-201 / IOS-701，iPhone）：
-/// - 水平滑动调节进度（松手 seek）；右侧 1/3 竖滑调音量（系统联动，步进 5%）；左侧 1/3 竖滑调亮度；
-/// - **画面中央 1/3 向下拖动进入 mini（跟随手指偏移，松手过阈值进入，带过渡动画）**；
-/// - 双击播放/暂停；
-/// - 单击切换控制层；长按进入界面锁定。
+/// 播放器手势层（iPhone）
 struct PlayerGestureLayer: View {
     @ObservedObject var core: PlayerCore
     @Binding var feedback: GestureFeedback?
@@ -95,17 +89,9 @@ struct PlayerGestureLayer: View {
                         handleTap()
                     }
                     // 长按 0.5s 立即锁定（按住满阈值即触发，不等松手）；与拖拽/单击/双击共存，不拦截其它手势。
-                    // onChanged 的 value 在手指「按下瞬间」即为 true（并非按住满 0.5s 才变 true），
-                    // 故不能用 onChanged 触发锁定（否则单击也会误触发）。正确做法：用 onEnded——
-                    // 它只在按住满 minimumDuration(0.5s) 时触发，且无需松手；单击/双击提前松手不会触发。
-                    // 用 simultaneousGesture 共存，避免覆盖前面的拖拽手势。震动在 lockInterface 内触发。
                     .simultaneousGesture(
                         LongPressGesture(minimumDuration: 0.5)
-                            .onChanged { value in
-                                AppLogger.shared.log("gesture longPress changed value=\(value)", module: "player-gesture")
-                            }
                             .onEnded { _ in
-                                AppLogger.shared.log("gesture longPress ended → onLock", module: "player-gesture")
                                 onLock()
                             }
                     )
@@ -123,12 +109,9 @@ struct PlayerGestureLayer: View {
         }
     }
 
-    // MARK: - 单击 / 双击（单击立即响应）
+ // MARK: - 单击 / 双击（单击立即响应）
 
     /// 单击立即切换控制层；短时间内第二次点击视为双击（播放/暂停）。
-    /// 不能同时用 onTapGesture(count: 1) 与 onTapGesture(count: 2)：SwiftUI 会让
-    /// 单击等待双击手势超时（约 0.3s）才触发，导致「点击后控制层延迟显示」。
-    /// 这里改用单击 + 时间戳自行区分，保证单击零延迟。
     private func handleTap() {
         let now = Date()
         if let last = lastTapAt, now.timeIntervalSince(last) < 0.3 {
@@ -142,19 +125,15 @@ struct PlayerGestureLayer: View {
         }
     }
 
-    // MARK: - 拖动手势（进度 / 音量 / 亮度）
+ // MARK: - 拖动手势（进度 / 音量 / 亮度）
 
     /// 下拉进入 mini 的距离阈值（pt）：拉过此距离松手即进入，不必拖过屏幕 1/6。
     private let miniTriggerDistance: CGFloat = 56
-    /// 轻扫判定阈值（pt）：短距离但松手速度够快（按速度外推的终点位移）同样进入，
-    /// 让用户「轻轻一拉」就能切换。
+    /// 轻扫判定阈值（pt）：短距离但松手速度够快（按速度外推的终点位移）同样进入
     private let miniFlickDistance: CGFloat = 110
 
     private func dragGesture(in geometry: GeometryProxy) -> some Gesture {
-        // 必须用 .global 坐标空间：miniDragOffset 让包含手势层的整个内容层跟随手指偏移，
-        // 若用默认 .local 坐标空间，视图自身的移动会反过来改变 translation 的换算基准
-        // （translation ≈ 手指位移 - 视图位移），与 offset 形成正反馈回路 → 拖动中画面上下抖动、
-        // 跟随距离减半。全局坐标下 translation 恒为手指真实位移，跟随 1:1 且稳定。
+        // 必须用 .global 坐标空间：miniDragOffset 让包含手势层的整个内容层跟随手指偏移
         let frame = geometry.frame(in: .global)
         return DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { value in
@@ -183,7 +162,6 @@ struct PlayerGestureLayer: View {
                     guard core.duration > 0 else { return }
                     let ratio = value.translation.width / max(frame.width, 1)
                     // 固定跨度（随滑动距离 5s~60s）：满屏滑动对应 60s，不再随视频总时长放大。
-                    // 限制 ratio 在 [-1, 1] 内，避免滑出屏幕范围导致跨度超过 60s。
                     let maxDelta: TimeInterval = 60
                     let delta = maxDelta * Double(min(max(ratio, -1), 1))
                     seekTarget = min(max(0, seekBase + delta), core.duration)
@@ -224,7 +202,7 @@ struct PlayerGestureLayer: View {
             }
     }
 
-    // MARK: - 反馈显示
+ // MARK: - 反馈显示
 
     private func show(_ newFeedback: GestureFeedback) {
         hideTask?.cancel()
@@ -286,5 +264,3 @@ struct GestureFeedbackCapsule: View {
         }
     }
 }
-
-

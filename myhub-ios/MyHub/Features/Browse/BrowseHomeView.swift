@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// 文件浏览主页（TODO §3.1，IOS-102）：
+/// 文件浏览主页
 /// 连接源选择器（启用状态 / 绿·红点）+ 目录导航栈（NavigationStack 自带左侧边缘交互式 pop 返回上一级）。
-/// 处理「定位到原路径」（BrowseLocator）：重建目录栈直达目标所在目录，
-/// 目录页自取全局高亮状态完成滚动定位 + 呼吸灯高亮约 10s。
 struct BrowseHomeView: View {
     @EnvironmentObject private var store: ConnectionStore
     @EnvironmentObject private var locator: BrowseLocator
@@ -22,13 +20,7 @@ struct BrowseHomeView: View {
                             navPath: $navPath,
                             connections: store.connections.filter(\.enabled)
                         )
-                        // 视图身份必须绑定「位置值」本身（修复定位到错误目录）：
-                        // 定位到原路径是一次性整体替换 navPath，同一深度上的位置值随之改变，
-                        // 但 SwiftUI 对同类型目的页会按「栈中位置」复用视图身份，@StateObject
-                        // （BrowseDirectoryViewModel，path 是 let）不重建 → 新页面沿用旧目录的数据源，
-                        // 于是页面停在旧目录（最常见就是目标文件的上一级目录），目标文件不在其列表中，
-                        // 滚动定位与呼吸灯都无处可去，表现为「只定位到上一级目录」。
-                        // 手动退回连接源列表（栈清空、所有页面被销毁）再定位就正常，正是同一原因。
+                        // 视图身份必须绑定「位置值」本身（修复定位到错误目录）
                         .id(location)
                     } else {
                         VStack(spacing: 12) {
@@ -57,7 +49,7 @@ struct BrowseHomeView: View {
         }
     }
 
-    // MARK: - 连接源选择器
+ // MARK: - 连接源选择器
 
     private var sourceList: some View {
         ScrollView {
@@ -68,7 +60,7 @@ struct BrowseHomeView: View {
             }
             .padding(12)
         }
-        // 方案 A（TODO 425）：末尾预留悬浮胶囊 + 12pt，滚到底时最后一张连接源卡停在胶囊上方
+        // 方案 A：末尾预留悬浮胶囊 + 12pt，滚到底时最后一张连接源卡停在胶囊上方
         .reservedBottomChrome()
         .background(AppColors.pageBackground)
         .leadingNavTitle("浏览")
@@ -121,7 +113,7 @@ struct BrowseHomeView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(AppColors.cardBorder, lineWidth: 1)   // 白底主界面下卡片描边界定（TODO 376）
+                    .stroke(AppColors.cardBorder, lineWidth: 1)
             )
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
@@ -129,7 +121,6 @@ struct BrowseHomeView: View {
     }
 
     /// 连接状态点（绿/红，复用连接测试体系）；成功后旁侧显示（内网）/（外网）路径提示。
-    /// 仅首次自动测试；点击状态点可手动重新测试（不进入目录）
     @ViewBuilder
     private func statusDot(_ connection: Connection) -> some View {
         let state = connection.id.flatMap { store.testStates[$0] } ?? .unknown
@@ -157,7 +148,7 @@ struct BrowseHomeView: View {
         .task { await store.testIfNeeded(connection) }
     }
 
-    // MARK: - 导航
+ // MARK: - 导航
 
     private func connection(for id: Int64) -> Connection? {
         store.connections.first { $0.id == id }
@@ -183,16 +174,15 @@ struct BrowseHomeView: View {
         return locations
     }
 
-    // MARK: - 重复点击「浏览」页签：回到路径源选择（起始界面）
+ // MARK: - 重复点击「浏览」页签：回到路径源选择（起始界面）
 
     /// 底栏再次点击已选中的「浏览」图标：清空目录导航栈，回到连接源（路径源）选择列表。
-    /// 已在起始界面时不做处理（保留原地无变化），避免无意义的状态变更。
     private func handleReselect() {
         guard !navPath.isEmpty else { return }
         navPath = NavigationPath()
     }
 
-    // MARK: - 定位到原路径（重建目录栈；滚动定位与呼吸灯由 BrowseLocator + 目录页完成）
+ // MARK: - 定位到原路径（重建目录栈；滚动定位与呼吸灯由 BrowseLocator + 目录页完成）
 
     private func handleLocate(_ request: BrowseLocator.Request) {
         defer { locator.consume() }

@@ -13,8 +13,7 @@ struct PlaybackProgressReport {
 }
 
 /// 打开播放的请求。
-/// - url：本地文件直接给 file://；网络源由 §4.2 数据源层（ResourceLoaderProxy 边下边播）解析提供。
-/// - startAt：历史进度恢复位置，引擎在首帧就绪后一次性精准 seek（精准续播见 TODO §4.2）。
+/// - url：本地文件直接给 file://；网络源由数据源层（ResourceLoaderProxy 边下边播）解析提供。
 struct PlaybackRequest {
     let item: PlayableItem
     /// 本地串流代理被重建后可换新端口重用同一会话（`LocalStreamProxy.revivedURL`），故为 var
@@ -25,14 +24,12 @@ struct PlaybackRequest {
     var decodePreference: DecodePreference? = nil
 }
 
-/// 统一播放门面（《需求分析文档》§4.3，参考 nPlayer）。
-/// 播放/暂停/seek/倍速/音轨/字幕/进度上报 —— 面向 UI 的统一接口；
-/// 内部按格式路由硬解（AVPlayer）/软解（MobileVLCKit）引擎，切换对上层透明。
+/// 统一播放门面（，参考 nPlayer）。
 @MainActor
 final class PlayerCore: ObservableObject {
     static let shared = PlayerCore()
 
-    // MARK: - 发布状态（UI 订阅）
+ // MARK: - 发布状态（UI 订阅）
 
     @Published private(set) var state: PlaybackState = .idle
     @Published private(set) var engineKind: PlayerEngineKind?
@@ -42,7 +39,6 @@ final class PlayerCore: ObservableObject {
     @Published private(set) var bufferedTime: TimeInterval = 0
     @Published private(set) var rate: Float = 1
     /// 视频画面尺寸（像素）；.zero = 未知（纯音频 / 未就绪）。
-    /// 字幕层据此把 ASS 坐标映射到视频实际显示区域（竖屏 letterbox 也能贴画面底部）
     @Published private(set) var videoSize: CGSize = .zero
     /// 纯音频播放模式（视频可切仅音频，关闭画面解码节电）
     @Published private(set) var isAudioOnly = false
@@ -50,8 +46,7 @@ final class PlayerCore: ObservableObject {
     @Published private(set) var subtitleTracks: [TrackOption] = []
     @Published private(set) var selectedAudioTrackID: Int?
     @Published private(set) var selectedSubtitleTrackID: Int?
-    /// 进行中的 seek 目标（秒）。网络差时 seek 到未缓冲位置引擎会进入缓冲等待，
-    /// 期间引擎时间回调仍回报旧位置；UI 进度条吸附在目标值不回跳，待引擎实际到达后解除
+    /// 进行中的 seek 目标（秒）。网络差时 seek 到未缓冲位置引擎会进入缓冲等待
     @Published private(set) var seekTarget: TimeInterval?
 
     /// 进度上报回调：播放中每 5s 节流上报，暂停 / seek / 结束 / 退出强制上报
@@ -63,24 +58,18 @@ final class PlayerCore: ObservableObject {
     /// 本地串流代理连接被拒后是否已做过「换端口重建重试」（同一会话只重试一次，避免死循环）
     private var didRetryAfterProxyRebuild = false
     /// 会话代次：每次打开 / 关闭自增。异步解析与引擎加载完成后据此判断自己是否已过期
-    /// （用户连点下一个视频、中途退出）。过期的一方必须停掉自己的引擎并丢弃结果，
-    /// 否则悬挂的加载会一直占着串流连接与 AVPlayer，把下一次起播拖成永久黑屏加载
     private var sessionGeneration = 0
-    /// 起播超时看门狗：引擎加载迟迟不就绪（媒体探测 / 等待 item 就绪无响应）时按失败处理，
-    /// 避免「一直黑屏加载、只能杀 App 重开」
+    /// 起播超时看门狗：引擎加载迟迟不就绪（媒体探测 / 等待 item 就绪无响应）时按失败处理
     private var loadWatchdog: Task<Void, Never>?
     /// 起播超时（秒）：从 startEngine 到首个 ready / playing 的上限
-    /// （远端大文件 moov 在尾部时需要回读，留足余量；真正的「卡死」永不返回）
     private static let startupTimeout: TimeInterval = 30
     private var lastReportAt: TimeInterval = 0
     /// 时间刷新节流：软解引擎（VLC）时间回调可达数十次/秒，限制 UI 时间刷新到约 4 次/秒，避免高频重绘发热
     private var lastTimeRefreshAt: TimeInterval = 0
-    /// 状态自愈兜底（TODO 353）：上一次时间回调的播放位置与系统时刻，
-    /// 用于判断「播放时间确实在推进」从而纠正卡住的 loading/buffering 状态
+    /// 状态自愈兜底：上一次时间回调的播放位置与系统时刻
     private var lastProgressTime: TimeInterval = 0
     private var lastProgressUptime: TimeInterval = 0
     /// 跳转到「尚未缓冲」的位置时：先停住旧画面并进入缓冲态，待 seek 完成后自动续播。
-    /// 置位期间忽略引擎因这次主动暂停而回报的 paused，状态保持 buffering（显示加载动画）
     private var pendingResumeAfterSeek = false
     /// seek 等待看门狗代数：每次进入/取消等待自增，超时任务据此判断自己是否已过期
     private var seekWaitGeneration = 0
@@ -94,33 +83,30 @@ final class PlayerCore: ObservableObject {
     var isPlaying: Bool { state == .playing }
 
     /// 用户主动暂停时间（UI / 控制中心调用 pause() 时记录）。
-    /// 系统自动暂停（退后台、VLCKit 自动暂停、音频中断）不经过 pause()，保持 nil，
-    /// 后台保活据此区分「用户不想播」与「系统误暂停」。
     private(set) var pausedAt: Date?
 
     /// 是否处于 seek 等待（目标位置尚未缓冲到），UI 据此显示加载菊花
     var isSeeking: Bool { seekTarget != nil }
 
-    /// 渲染输出（AVPlayer / VLCMediaPlayer），§4.3 渲染层接管
+    /// 渲染输出（AVPlayer / VLCMediaPlayer）， 渲染层接管
     var videoOutput: Any? { engine?.videoOutput }
 
     /// 当前播放请求（字幕/封面等周边模块读取连接与来源信息）
     var request: PlaybackRequest? { pendingRequest }
 
-    /// 引擎内部状态快照（诊断日志用，TODO 380）：如 AVPlayer 等待原因 / VLC 状态
+    /// 引擎内部状态快照（诊断日志用）：如 AVPlayer 等待原因 / VLC 状态
     var engineDiagnostics: String {
         "\(engineKind?.rawValue ?? "nil") \(engine?.diagnosticSnapshot ?? "engine=nil")"
     }
 
-    // MARK: - 打开 / 关闭
+ // MARK: - 打开 / 关闭
 
     func open(_ request: PlaybackRequest) async {
         var request = request
         if request.decodePreference == nil {
             request.decodePreference = AppSettings.Player.decodePreference
         }
-        // 打开上下文（TODO 380）：起播时的完整环境快照，复现「熄屏一段时间后无法播放」时
-        // 对照同刻 lifecycle / network-route / stream 日志定位是地址锁定、代理端口还是媒体探测卡住
+        // 打开上下文：起播时的完整环境快照，复现「熄屏一段时间后无法播放」时
         AppLogger.shared.log(
             "open file=\(request.item.title) mediaType=\(request.mediaType.rawValue) decode=\(request.decodePreference?.rawValue ?? "nil") startAt=\(request.startAt.map { String(Int($0)) } ?? "nil") url=\(request.url.absoluteString) 锁定=[\(RoutedWebDAVAdapter.lockSnapshot())] 代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot())",
             level: .info, module: "player-audio"
@@ -160,8 +146,7 @@ final class PlayerCore: ObservableObject {
 
     /// 直接退出播放（不进入 mini，mini 路由由 PlayerPresenter 管理）
     func close() {
-        // 已播完退出时仍按「已完成」上报：否则 100% 的进度会被写成未完成，
-        // 下次进入直接从片尾起播（一进去就结束）
+        // 已播完退出时仍按「已完成」上报：否则 100% 的进度会被写成未完成
         let atEnd = state == .ended || (duration > 0 && currentTime >= duration - 0.5)
         report(finished: atEnd, force: true)
         teardownSession()
@@ -171,7 +156,7 @@ final class PlayerCore: ObservableObject {
         state = .idle
     }
 
-    // MARK: - 播放控制
+ // MARK: - 播放控制
 
     func play() {
         pausedAt = nil
@@ -179,7 +164,6 @@ final class PlayerCore: ObservableObject {
         pendingResumeAfterSeek = false
         seekWaitGeneration += 1
         // 播放完成后再次播放：引擎已停在结尾，仅 play() 不会回到开头重启。
-        // 先 seek 回 0 重置位置（顺带把「已完成」进度复位为 0 / 未完成，下次从历史记录也从头起播），再播放
         if state == .ended {
             AppLogger.shared.log("播放已结束，从头重新播放", module: "player-audio")
             seek(to: 0)
@@ -187,8 +171,7 @@ final class PlayerCore: ObservableObject {
         engine?.play()
     }
 
-    /// 从历史记录重新进入同一媒体：若已播放结束则自动从头重播；
-    /// 播放中 / 暂停中保持原状态，仅由 UI 展开，避免打断正在进行或用户暂停的播放
+    /// 从历史记录重新进入同一媒体：若已播放结束则自动从头重播
     func replayIfFinished() {
         guard state == .ended else { return }
         play()
@@ -200,8 +183,7 @@ final class PlayerCore: ObservableObject {
         pendingResumeAfterSeek = false
         seekWaitGeneration += 1
         engine?.pause()
-        // seek 等待期间引擎已经被我们停过一次，再 pause() 不会有新的 paused 回调，
-        // 这里主动落到暂停态，否则会一直停在 buffering（菊花不消失）
+        // seek 等待期间引擎已经被我们停过一次，再 pause() 不会有新的 paused 回调
         if state == .buffering || state == .playing { state = .paused }
         if seekTarget != nil {
             // 与引擎回报 paused 的处理保持一致：解除吸附，进度条跟随实际位置
@@ -219,14 +201,9 @@ final class PlayerCore: ObservableObject {
         guard let engine else { return }
         let upperBound = duration > 0 ? max(0, duration - 0.2) : seconds
         let target = min(max(0, seconds), upperBound)
-        // 拖到片尾（末尾 0.3s 内）单独处理：AVPlayer 对「片尾附近的精准 seek」经常不再回调完成，
-        // 位置停在旧处、界面一直显示播放中，而且这次 seek 会一直悬挂在播放器里（下次起播的隐患）。
-        // 这里不做 seek 等待，直接按「播放结束」落定，见 settleEndedAtTail。
+        // 拖到片尾（末尾 0.3s 内）单独处理：AVPlayer 对「片尾附近的精准 seek」经常不再回调完成
         let isTailSeek = duration > 0 && target >= duration - 0.3
         // 目标落在已缓冲区间之外（进度条灰色缓冲段没覆盖到）时，AVPlayer 会把旧位置的画面
-        // 继续播到它自己「想停下」为止，然后才暂停并等数据——表现为进度条已经跳了、画面还在
-        // 放旧内容，过一会才出菊花。这里主动先暂停并切到缓冲态，让画面切换与进度条同步发生，
-        // seek 到达目标后（timeUpdated 解除吸附时）自动续播。
         let buffered = engine.bufferedTime
         let notBuffered = buffered > 0 && target > buffered - 1
         let wasPlaying = state == .playing || state == .buffering
@@ -242,16 +219,12 @@ final class PlayerCore: ObservableObject {
             return
         }
         if !notBuffered, pendingResumeAfterSeek {
-            // 新目标已在缓冲区内，无需等待：立刻把之前为等待而暂停的播放恢复回去
             leaveSeekWait()
         }
         report(force: true)
     }
 
     /// 片尾落定：媒体时间到达片尾时主动切到 ended（不允许停在「播放中」）。
-    /// 短时长片源（十余秒）在片尾附近 seek 后 `AVPlayerItemDidPlayToEndTime` 常常不再投递，
-    /// 引擎时间也不再推进，界面便会永远停在「播放中」；更糟的是这次 seek 一直悬挂在
-    /// AVPlayer 内部，下一次起播时新旧寻址互相阻塞，表现为黑屏加载卡死（只能杀 App 重启）。
     private func settleEndedAtTail() {
         guard duration > 0, state != .ended, !state.isFailed else { return }
         seekTarget = nil
@@ -275,10 +248,9 @@ final class PlayerCore: ObservableObject {
         seek(to: currentTime + delta)
     }
 
-    // MARK: - seek 等待（跳转到未缓冲位置）
+ // MARK: - seek 等待（跳转到未缓冲位置）
 
-    /// 进入 seek 等待：立刻停住旧画面并切换到缓冲态（菊花与进度条同一帧生效），
-    /// seek 到达目标或看门狗超时后由 `leaveSeekWait()` 自动续播
+    /// 进入 seek 等待：立刻停住旧画面并切换到缓冲态（菊花与进度条同一帧生效）
     private func enterSeekWait() {
         pendingResumeAfterSeek = true
         engine?.pause()
@@ -294,13 +266,11 @@ final class PlayerCore: ObservableObject {
         // 已播完（例如直接拖到片尾）：不续播，否则引擎会按「重播」把位置跳回 0
         guard state != .ended else { return }
         engine?.play()
-        // 目标帧已就绪（或已超时放弃等待）：立即按播放态呈现，避免菊花多留一拍；
-        // 若随后真的缺数据，引擎会再回报 buffering
+        // 目标帧已就绪（或已超时放弃等待）：立即按播放态呈现，避免菊花多留一拍
         if state == .buffering { state = .playing }
     }
 
-    /// seek 等待超时保护：目标位置长时间不就绪（弱网 / 空响应）时不再干等，
-    /// 解除吸附并交给引擎自身的缓冲策略继续，避免菊花无限转
+    /// seek 等待超时保护：目标位置长时间不就绪（弱网 / 空响应）时不再干等
     private func scheduleSeekResumeWatchdog() {
         seekWaitGeneration += 1
         let generation = seekWaitGeneration
@@ -335,21 +305,17 @@ final class PlayerCore: ObservableObject {
         selectedAudioTrackID = id
     }
 
-    /// 选择字幕轨；nil = 关闭字幕（外挂字幕匹配见 §4.3 SubtitleManager）
+    /// 选择字幕轨；nil = 关闭字幕（外挂字幕匹配见 SubtitleManager）
     func selectSubtitleTrack(_ id: Int?) {
         engine?.selectSubtitleTrack(id)
         selectedSubtitleTrackID = id
     }
 
-    // MARK: - 引擎生命周期
+ // MARK: - 引擎生命周期
 
     private func startEngine(kind: PlayerEngineKind) {
         guard let request = pendingRequest else { return }
         engine?.stop()
-        AppLogger.shared.log(
-            "startEngine kind=\(kind.rawValue) url=\(request.url.lastPathComponent) ext=\(request.url.pathExtension) mediaType=\(request.mediaType.rawValue)",
-            module: "player-audio"
-        )
 
         let engine: PlaybackEngine = kind == .hardware ? AVPlayerEngine() : VLCEngine()
         engine.onEvent = { [weak self] event in self?.handle(event: event, from: kind) }
@@ -364,13 +330,8 @@ final class PlayerCore: ObservableObject {
         scheduleStartupWatchdog(generation: generation, kind: kind)
 
         Task {
-            // load 两级面包屑（TODO 380）：外层「开始/返回/抛错 + 耗时」，内层引擎各自明细，
-            // 定位熄屏后卡在「媒体探测 / 轨道加载 / 起播」哪一步
+            // load 两级面包屑：外层「开始/返回/抛错 + 耗时」，内层引擎各自明细
             let loadStart = ProcessInfo.processInfo.systemUptime
-            AppLogger.shared.log(
-                "engine.load 开始 kind=\(kind.rawValue) url=\(request.url.absoluteString)",
-                level: .debug, module: "player-audio"
-            )
             do {
                 try await engine.load(url: request.url, startAt: request.startAt)
                 AppLogger.shared.log(
@@ -378,8 +339,7 @@ final class PlayerCore: ObservableObject {
                     level: .info, module: "player-audio"
                 )
                 guard isCurrentSession(generation, engine: engine) else {
-                    // 会话已切走（用户打开了别的视频 / 已退出）：本次加载作废并释放引擎，
-                    // 否则残留的 AVPlayer 会继续占用串流连接与解码资源
+                    // 会话已切走（用户打开了别的视频 / 已退出）：本次加载作废并释放引擎
                     AppLogger.shared.log(
                         "engine.load 返回但会话已过期，停止该引擎 kind=\(kind.rawValue)", level: .warn, module: "player-audio"
                     )
@@ -409,8 +369,7 @@ final class PlayerCore: ObservableObject {
         generation == sessionGeneration && self.engine === engine
     }
 
-    /// 起播超时看门狗：引擎加载迟迟不就绪（媒体探测无响应 / 等待 item 就绪卡住）时按失败处理，
-    /// 让硬解回退软解或直接呈现失败态，避免「一直黑屏加载、只能杀 App 重开」
+    /// 起播超时看门狗：引擎加载迟迟不就绪（媒体探测无响应 / 等待 item 就绪卡住）时按失败处理
     private func scheduleStartupWatchdog(generation: Int, kind: PlayerEngineKind) {
         loadWatchdog?.cancel()
         loadWatchdog = Task { [weak self] in
@@ -431,8 +390,7 @@ final class PlayerCore: ObservableObject {
     }
 
     private func handle(event: PlayerEngineEvent, from kind: PlayerEngineKind) {
-        // 引擎切换（硬解失败回退软解）或重载后，旧引擎的迟到事件不得污染新会话状态：
-        // 旧引擎的 buffering / paused 若晚到一步，会让画面在播却停在菊花或播放键上
+        // 引擎切换（硬解失败回退软解）或重载后，旧引擎的迟到事件不得污染新会话状态
         guard kind == engineKind else { return }
         switch event {
         case .stateChanged(let newState):
@@ -440,14 +398,11 @@ final class PlayerCore: ObservableObject {
                 handleFailure(PlayerPlaybackError(message), from: kind)
                 return
             }
-            // 已结束不允许被迟到事件降级：片尾主动 pause 引擎会回报 paused，
-            // 若放行会让「已播完」退回到暂停态，播放键 / 下一个提示随之丢失
-            // （buffering 放行：重播时的缓冲态需要如实呈现）
+            // 已结束不允许被迟到事件降级：片尾主动 pause 引擎会回报 paused
             if state == .ended, newState == .paused || newState == .ready {
                 return
             }
-            // seek 等待期间是我们自己让引擎暂停的：这次 paused 不是用户意图，
-            // 若放行会把状态从 buffering 改成 paused（菊花消失、进度条回弹到旧位置）
+            // seek 等待期间是我们自己让引擎暂停的：这次 paused 不是用户意图
             if newState == .paused, pendingResumeAfterSeek { return }
             if (newState == .ready || newState == .playing), !didBecomeReady {
                 didBecomeReady = true
@@ -457,7 +412,7 @@ final class PlayerCore: ObservableObject {
                 engine?.setVideoEnabled(!isAudioOnly)
             }
             if state != newState {
-                // 状态迁移面包屑（TODO 380）：loading/buffering 卡住或回跳时定位卡点
+                // 状态迁移面包屑：loading/buffering 卡住或回跳时定位卡点
                 AppLogger.shared.log(
                     "播放状态 \(state.logDescription) -> \(newState.logDescription) kind=\(kind.rawValue) 时间=\(Int(currentTime))s",
                     level: .debug, module: "player-audio"
@@ -482,16 +437,12 @@ final class PlayerCore: ObservableObject {
         case .timeUpdated(let current, let duration):
             if duration > 0 { self.duration = duration }
             // 节流：仅约每 0.25s 刷新一次 currentTime，避免软解引擎高频回调驱动整棵视图树重绘
-            // seek 吸附期间不节流：等待新位置时引擎通常处于暂停态，只会在 seek 完成时回调一次，
-            // 若被节流丢掉就只能等 8s 看门狗，表现为「菊花多转几秒」
             let now = ProcessInfo.processInfo.systemUptime
             if seekTarget == nil, now - lastTimeRefreshAt < 0.25 { return }
             lastTimeRefreshAt = now
-            // seek 吸附：目标位置尚未缓冲到时引擎回调仍回报旧位置，进度条保持在目标值，
-            // 待引擎实际播放到达目标附近（或越过）后解除并跟随真实位置
+            // seek 吸附：目标位置尚未缓冲到时引擎回调仍回报旧位置，进度条保持在目标值
             if let target = seekTarget {
                 // 前跳：越过目标附近即算到达；后退：必须真的落到目标附近才解除吸附
-                // （后退时 seek 未完成前引擎仍回调旧的大位置，用 >= 判断会立刻误判为到达）
                 let landed = target >= seekOrigin ? current >= target - 0.5 : abs(current - target) <= 0.5
                 if landed {
                     seekTarget = nil
@@ -509,7 +460,6 @@ final class PlayerCore: ObservableObject {
             refreshVideoSize()
             healStateIfActuallyPlaying(now: now)
             // 片尾兜底（本次修复）：引擎真实时间已到片尾却既没收到结束通知、时间也不再推进
-            // （短时长片源在片尾 seek 后最容易发生）→ 主动落 ended，不允许停在「播放中」
             if seekTarget == nil, duration > 0, current >= duration - 0.2 {
                 settleEndedAtTail()
             }
@@ -519,9 +469,7 @@ final class PlayerCore: ObservableObject {
         }
     }
 
-    /// 状态自愈兜底（TODO 353）：媒体时间在两次回调间只前进了一点点（排除 seek 跳变），
-    /// 说明确实在播放；此时若状态仍停在 loading/buffering，就是引擎的状态事件缺失或乱序
-    /// （短时长片源在首帧与结尾附近最容易发生），主动纠正为 playing，避免画面在动却一直转菊花。
+    /// 状态自愈兜底：媒体时间在两次回调间只前进了一点点（排除 seek 跳变）
     private func healStateIfActuallyPlaying(now: TimeInterval) {
         let previousTime = lastProgressTime
         let previousAt = lastProgressUptime
@@ -553,9 +501,7 @@ final class PlayerCore: ObservableObject {
     private func handleFailure(_ error: Error, from kind: PlayerEngineKind) {
         let preference = pendingRequest?.decodePreference ?? .auto
 
-        // 本地串流代理端口已失效（App 挂起后回环监听被系统回收，且被动标记不会翻转）：
-        // 硬解与软解都会以 -1004 立即失败，回退软解毫无意义。
-        // 此时重建代理、用新端口复用同一会话重试一次（TODO 366）
+        // 本地串流代理端口已失效（App 挂起后回环监听被系统回收，且被动标记不会翻转）
         if !didRetryAfterProxyRebuild, isLoopbackConnectFailure(error), let request = pendingRequest {
             didRetryAfterProxyRebuild = true
             AppLogger.shared.log(
@@ -576,7 +522,7 @@ final class PlayerCore: ObservableObject {
         }
 
         if kind == .hardware, preference == .auto, !didBecomeReady {
-            // 回退面包屑（TODO 380）：同时出现「硬解失败 + 软解失败」才最终失败，缺此条会误判卡点
+            // 回退面包屑：同时出现「硬解失败 + 软解失败」才最终失败，缺此条会误判卡点
             AppLogger.shared.log(
                 "硬解起播失败，自动回退软解 error=\(error.localizedDescription) 引擎=\(engineDiagnostics)",
                 level: .warn, module: "player-audio"
@@ -584,8 +530,7 @@ final class PlayerCore: ObservableObject {
             startEngine(kind: .software)
             return
         }
-        // 记录失败时的完整环境快照（TODO 366/380）：配合 network-route / stream / lifecycle 日志定位
-        // 「熄屏后无法播放」的根因是网络/路由、串流代理还是媒体本身
+        // 记录失败时的完整环境快照：配合 network-route / stream / lifecycle 日志定位
         AppLogger.shared.log(
             "播放失败 kind=\(kind.rawValue) error=\(error.localizedDescription) item=\(currentItem?.title ?? "nil") startAt=\(pendingRequest?.startAt.map { String(Int($0)) } ?? "nil") 引擎=\(engineDiagnostics) 锁定=[\(RoutedWebDAVAdapter.lockSnapshot())] 代理=\(LocalStreamProxy.shared.healthSnapshot()) 网络=\(NetworkPathMonitor.shared.snapshot()) state=\(state.logDescription)",
             level: .error, module: "player-audio"
@@ -596,8 +541,6 @@ final class PlayerCore: ObservableObject {
     }
 
     /// 判断错误是否为「本地串流代理回环连接被拒」：目标地址是回环且属于连接失败。
-    /// 仅连接被拒（NSURLErrorCannotConnectToHost）才说明端口无人监听；
-    /// 其余失败（网络不可达、媒体损坏）不在此列，避免误触发重建重试。
     private func isLoopbackConnectFailure(_ error: Error) -> Bool {
         guard let host = pendingRequest?.url.host,
               host == "127.0.0.1" || host == "localhost" else { return false }
@@ -616,7 +559,7 @@ final class PlayerCore: ObservableObject {
         selectedSubtitleTrackID = engine?.currentSubtitleTrackID
         refreshVideoSize()
 
-        // 记录音轨解析结果与系统音频环境，定位「有画面无声」（TODO 358）
+        // 记录音轨解析结果与系统音频环境，定位「有画面无声」
         let session = AVAudioSession.sharedInstance()
         AppLogger.shared.log(
             "refreshTracks kind=\(engineKind?.rawValue ?? "nil") count=\(audioTracks.count) audio=\(audioTracks.map { "\($0.id):\($0.name)" }.joined(separator: ",")) selected=\(selectedAudioTrackID.map(String.init) ?? "nil") audioOnly=\(isAudioOnly) volume=\(String(format: "%.2f", session.outputVolume)) category=\(session.category.rawValue)",
@@ -641,8 +584,7 @@ final class PlayerCore: ObservableObject {
         sessionGeneration += 1
         loadWatchdog?.cancel()
         loadWatchdog = nil
-        // 注销边下边播串流会话：释放 CachedRangeReader 并取消其 in-flight / 预取任务，
-        // 避免播放器关闭后后台预取继续占用 NAS 连接，拖垮后续封面抽帧
+        // 注销边下边播串流会话：释放 CachedRangeReader 并取消其 in-flight / 预取任务
         if let url = pendingRequest?.url {
             LocalStreamProxy.shared.unregister(url)
         }
@@ -664,7 +606,7 @@ final class PlayerCore: ObservableObject {
         seekOrigin = 0
     }
 
-    // MARK: - 进度上报
+ // MARK: - 进度上报
 
     private func report(finished: Bool = false, force: Bool = false) {
         guard let item = currentItem, let request = pendingRequest else { return }

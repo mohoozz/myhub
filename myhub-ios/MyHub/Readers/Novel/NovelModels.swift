@@ -17,14 +17,9 @@ struct NovelTocEntry: Identifiable, Equatable {
     let title: String
 }
 
-// MARK: - 统一进度锚点（IOS-205/206，排版无关）
+// MARK: - 统一进度锚点（/206，排版无关）
 
-/// 排版无关进度锚点（方案 C：结构锚点 + 片段重定位）：
-/// - 结构锚点：章序号 + 章标题 + 段落序号 + 段内 UTF-16 偏移（与排版解耦，不依赖字节换编码）；
-/// - 内容校验：锚点位置的后续文本片段（textAfter），恢复时按内容搜索重定位，
-///   编码变化、字号重排、分章规则微调、文件轻微编辑都不再漂移；
-/// - 兜底：全书百分比 percent；
-/// - 兼容：`offset`（txt 全局字节偏移）仅为读取历史进度保留，新写入恒为 0，读取时经索引换算一次。
+/// 排版无关进度锚点（方案 C：结构锚点 + 片段重定位）
 struct NovelAnchor: Codable {
     var kind: Kind
     /// txt 旧版字段：全局字节偏移（只读兼容，新写入恒 0）
@@ -138,7 +133,7 @@ struct NovelAnchor: Codable {
     }
 }
 
-// MARK: - 阅读器主题配色（IOS-502：跟随系统 / 日间 / 夜间 / 护眼）
+// MARK: - 阅读器主题配色（跟随系统 / 日间 / 夜间 / 护眼）
 
 struct ReaderThemeSpec {
     let background: Color
@@ -171,7 +166,7 @@ struct ReaderThemeSpec {
                 controlBackground: Color(hex: 0xE3F3E6)
             )
         case .night:
-            // 沉浸式场景统一纯黑背景（§2.2.3）
+            // 沉浸式场景统一纯黑背景
             return ReaderThemeSpec(
                 background: Color.black,
                 text: Color(hex: 0xB3B3B3),

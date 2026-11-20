@@ -1,10 +1,8 @@
 import AVKit
 import SwiftUI
 
-/// 播放控制栏（IOS-201 / IOS-701）：
-/// 顶栏——圆形悬浮按钮：退出 / PiP / 音量（多音轨时面板内附带音轨切换）/ 更多（纯音频、小窗、解码方式）；
-/// 底栏——标题 + 深色圆角控制卡片：进度条（含缓冲段 + 拖动）+ 倍速、当前/剩余时间、
-///       AirPlay、快退/快进、播放暂停、字幕（内嵌 + 外挂）。
+/// 播放控制栏
+/// 顶栏——圆形悬浮按钮：退出 / PiP / 音量（多音轨时面板内附带音轨切换）/ 更多（纯音频、小窗、解码方式）
 struct PlayerControls: View {
     @ObservedObject var core: PlayerCore
     @ObservedObject var subtitles: SubtitleManager
@@ -48,7 +46,7 @@ struct PlayerControls: View {
         }
     }
 
-    // MARK: - 顶栏（圆形悬浮按钮）
+ // MARK: - 顶栏（圆形悬浮按钮）
 
     private var topBar: some View {
         HStack(spacing: 12) {
@@ -92,7 +90,7 @@ struct PlayerControls: View {
             .clipShape(Circle())
     }
 
-    // MARK: - 底栏（标题 + 圆角控制卡片）
+ // MARK: - 底栏（标题 + 圆角控制卡片）
 
     private var bottomSection: some View {
         VStack(spacing: 10) {
@@ -233,7 +231,7 @@ struct PlayerControls: View {
         return min(max(x / width, 0), 1) * core.duration
     }
 
-    // MARK: - 倍速 / 字幕 / 音轨 / 更多
+ // MARK: - 倍速 / 字幕 / 音轨 / 更多
 
     private var rateMenu: some View {
         Menu {
@@ -308,7 +306,7 @@ struct PlayerControls: View {
         .opacity(core.subtitleTracks.isEmpty && subtitles.externalTracks.isEmpty ? 0.35 : 1)
     }
 
-    // MARK: - 音量按钮与音量面板
+ // MARK: - 音量按钮与音量面板
 
     private var volumeButton: some View {
         Button {

@@ -9,11 +9,7 @@ struct CachedEpubMeta: Codable {
     var isComicLike: Bool
 }
 
-/// 小说章节磁盘缓存（IOS-605 内容缓存本地化 / TODO §11）：
-/// - txt：按章缓存解码产物（原始字节 + 行字节范围表），键 = 文件指纹 + 章下标；
-/// - epub：按 spine 缓存内容块（文本段 + 插图数据）+ 元数据快照 → **已缓存章节支持离线阅读**；
-/// - 指纹与索引/进度同源（txt 用章节索引的 fileSize/modTime，epub 用打开时 entry 指纹），文件替换键即失效；
-/// - 目录粒度 LRU + 分区配额（`CacheManager.limitBytes(for: .novelChapters)`），受「内容缓存本地化」开关约束。
+/// 小说章节磁盘缓存（内容缓存本地化 /）
 enum NovelChapterCache {
     private static let store = FingerprintDiskCache(partition: .novelChapters)
 
@@ -24,7 +20,7 @@ enum NovelChapterCache {
         await store.identity(connectionID: connectionID, path: path)
     }
 
-    // MARK: - txt 章节
+ // MARK: - txt 章节
 
     private struct CachedChapterText: Codable {
         struct CachedLine: Codable {
@@ -68,7 +64,7 @@ enum NovelChapterCache {
         await store.store(named: "ch_\(chapter).json", data: data, for: file)
     }
 
-    // MARK: - epub 章节内容块
+ // MARK: - epub 章节内容块
 
     private struct CachedBlock: Codable {
         var text: String?
@@ -109,7 +105,7 @@ enum NovelChapterCache {
         await store.store(named: "sp_\(spine).json", data: data, for: file)
     }
 
-    // MARK: - epub 元数据（离线打开重建用）
+ // MARK: - epub 元数据（离线打开重建用）
 
     static func meta(file: SegmentCache.FileIdentity) async -> CachedEpubMeta? {
         guard let data = await store.data(named: "meta.json", for: file) else { return nil }

@@ -1,13 +1,6 @@
 import SwiftUI
 
-/// 移动/复制目标目录选择器（IOS-104）：可切换连接源（同源走适配器 move/copy，跨源由调用方流式中转）。
-///
-/// 改版（对齐浏览页列表观感，原型见 `prototype/move-destination-picker-options.html` 方案 B 变体）：
-/// - 导航栏只留居中标题：「取消」下沉到底部操作栏，右上角不再放「新建文件夹 / 选择此处」；
-/// - 顶部改为可点击面包屑，任意层级直达（长路径横向滚动，当前层级高亮）；
-/// - 列表行高 72pt（图标 44pt + 上下 14pt），首行固定「上一级」，回到根目录即隐藏；
-/// - 底部为毛玻璃悬浮三键栏：取消 / 新建文件夹 / 移动到此，外壳与浏览页多选操作栏
-///   （`BrowseDirectoryView.selectionBar`）同款：14pt 圆角 + `.ultraThinMaterial` + 1pt 描边 + 阴影。
+/// 移动/复制目标目录选择器：可切换连接源（同源走适配器 move/copy，跨源由调用方流式中转）。
 struct DestinationPickerView: View {
     let title: String                  // 「移动到」「复制到」
     let connections: [Connection]      // 已启用连接源
@@ -23,8 +16,7 @@ struct DestinationPickerView: View {
     @State private var newFolderName = ""
     @State private var showNewFolder = false
 
-    /// 底部操作栏为列表预留的高度（栏本体由 overlay 绘制，与多选操作栏同一套做法）：
-    /// 栏高 56（8+8 内边距 + 24 图标槽 + 3 间距 + caption2）+ 8 底部间距 + 4 呼吸位
+    /// 底部操作栏为列表预留的高度（栏本体由 overlay 绘制，与多选操作栏同一套做法）
     private static let actionBarReserve: CGFloat = 76
 
     init(
@@ -67,7 +59,7 @@ struct DestinationPickerView: View {
         "\(connection?.id ?? -1)|\(path)"
     }
 
-    // MARK: - 连接源切换
+ // MARK: - 连接源切换
 
     private var connectionMenu: some View {
         HStack {
@@ -100,7 +92,7 @@ struct DestinationPickerView: View {
         .padding(.bottom, 4)
     }
 
-    // MARK: - 面包屑（任意层级直达）
+ // MARK: - 面包屑（任意层级直达）
 
     /// 路径层级：根固定显示「根目录」，其余按 / 切分逐级累计
     private var segments: [PathSegment] {
@@ -158,7 +150,7 @@ struct DestinationPickerView: View {
         .id(segment.path)
     }
 
-    // MARK: - 目录列表
+ // MARK: - 目录列表
 
     @ViewBuilder
     private var content: some View {
@@ -286,7 +278,7 @@ struct DestinationPickerView: View {
         .buttonStyle(PickerRowButtonStyle())
     }
 
-    // MARK: - 底部操作栏（毛玻璃悬浮三键）
+ // MARK: - 底部操作栏（毛玻璃悬浮三键）
 
     /// 确认键文案随动作变化：移动/复制共用同一个选择器
     private var confirmTitle: String {
@@ -353,7 +345,7 @@ struct DestinationPickerView: View {
         .disabled(!enabled)
     }
 
-    // MARK: - 数据
+ // MARK: - 数据
 
     private func switchConnection(_ item: Connection) {
         guard item.id != connection?.id else { return }

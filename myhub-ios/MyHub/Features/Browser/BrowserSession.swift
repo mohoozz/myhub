@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// 浏览器标签会话全局持有（TODO §1.1 页面保活 / §8.1 `TabManager` 落地处）：
-/// 由 App 层以 `@StateObject` 持有并注入环境，切换页签不销毁会话；
-/// 标签列表 + 激活标签本地持久化，退出保存、启动恢复（无痕标签不落盘）。
+/// 浏览器标签会话全局持有
+/// 由 App 层以 `@StateObject` 持有并注入环境，切换页签不销毁会话
 @MainActor
 final class BrowserSessionStore: ObservableObject {
     @Published private(set) var tabs: [BrowserTab] = []
@@ -17,17 +16,16 @@ final class BrowserSessionStore: ObservableObject {
         restoreSession()
     }
 
-    // MARK: - 派生
+ // MARK: - 派生
 
     /// 当前模式（普通/无痕）下可见的标签
     var visibleTabs: [BrowserTab] { tabs.filter { $0.isIncognito == isIncognito } }
 
     var activeTab: BrowserTab? { tabs.first { $0.id == activeTabID } }
 
-    // MARK: - 标签操作
+ // MARK: - 标签操作
 
     /// 新建标签；`url` 为空表示空白起始页。
-    /// `activate` 为 false 时只把标签追加到列表、**不切换**当前页面（后台新开，TODO 408）。
     @discardableResult
     func newTab(url: URL? = nil, activate: Bool = true) -> BrowserTab {
         let tab = BrowserTab(url: url, isIncognito: isIncognito)
@@ -40,8 +38,7 @@ final class BrowserSessionStore: ObservableObject {
 
     /// 统一配置标签回调（新窗口 + 历史记录 + 会话持久化）
     private func configure(_ tab: BrowserTab) {
-        // 长按链接「在新标签页中打开」/ `target=_blank` / `window.open` 统一走这里：
-        // 是否立即跳转由设置项决定（关闭即后台新开，停留在当前页，TODO 408）
+        // 长按链接「在新标签页中打开」/ `target=_blank` / `window.open` 统一走这里
         tab.onOpenNewTab = { [weak self] url in
             self?.newTab(url: url, activate: AppSettings.Browser.openNewTabInForeground)
         }
@@ -62,8 +59,6 @@ final class BrowserSessionStore: ObservableObject {
         guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
         let closing = tabs[idx]
         // 同模式（普通 / 无痕）的标签：`tabs` 里两种模式混存，回退目标只能从这里挑。
-        // 否则「关掉当前标签」可能把另一模式里被 `visibleTabs` 过滤掉的标签设为激活，
-        // 界面表现为网格里没有一张卡是「当前」，背后却已经换成了看不见的页面。
         let siblings = tabs.filter { $0.isIncognito == closing.isIncognito }
         let siblingIndex = siblings.firstIndex(where: { $0.id == id })
 
@@ -87,7 +82,7 @@ final class BrowserSessionStore: ObservableObject {
         } else {
             persist()
         }
-        // 切到的标签可能是「会话恢复但尚未加载」的：补加载并解除媒体暂停（TODO 418）
+        // 切到的标签可能是「会话恢复但尚未加载」的：补加载并解除媒体暂停
         syncActiveTab()
     }
 
@@ -95,7 +90,7 @@ final class BrowserSessionStore: ObservableObject {
         guard tabs.contains(where: { $0.id == id }) else { return }
         activeTabID = id
         persist()
-        // 切到另一个标签：仅新激活标签补加载/恢复媒体，旧标签暂停（TODO 418）
+        // 切到另一个标签：仅新激活标签补加载/恢复媒体，旧标签暂停
         syncActiveTab()
     }
 
@@ -106,7 +101,6 @@ final class BrowserSessionStore: ObservableObject {
               let to = tabs.firstIndex(where: { $0.id == toID })
         else { return }
         let moved = tabs.remove(at: from)
-        // 移除后重新定位目标：向下拖插到目标之后，向上拖插到目标之前
         let target = tabs.firstIndex(where: { $0.id == toID }) ?? to
         let insertAt = from < to ? target + 1 : target
         tabs.insert(moved, at: min(insertAt, tabs.count))
@@ -133,18 +127,16 @@ final class BrowserSessionStore: ObservableObject {
             newTab()
         }
         persist()
-        // 切换模式后激活标签可能变化：同步补加载 / 媒体暂停（TODO 418）
+        // 切换模式后激活标签可能变化：同步补加载 / 媒体暂停
         syncActiveTab()
     }
 
-    // MARK: - 可见性与媒体播放（TODO 418）
+ // MARK: - 可见性与媒体播放
 
     /// 浏览器页签当前是否真正显示（默认否：启动时本对象即已构建，但用户可能停在别的页签）
     private var isBrowserVisible = false
 
-    /// 由浏览器视图 / App 生命周期汇报可见性：
-    /// - 可见：只加载**激活标签**并解除它的媒体暂停，其余标签保持暂停（不联网、不出声）；
-    /// - 不可见：暂停所有页面媒体，避免切到别的页签或播放器全屏后网页继续播放。
+    /// 由浏览器视图 / App 生命周期汇报可见性
     func setBrowserVisible(_ visible: Bool) {
         isBrowserVisible = visible
         if visible {
@@ -172,7 +164,7 @@ final class BrowserSessionStore: ObservableObject {
         }
     }
 
-    // MARK: - 会话持久化（退出保存 + 启动恢复）
+ // MARK: - 会话持久化（退出保存 + 启动恢复）
 
     /// App 进入后台/即将终止时兜底落盘（由 App 层 `scenePhase` 回调调用）
     func persistNow() {
@@ -201,12 +193,7 @@ final class BrowserSessionStore: ObservableObject {
 
         let restored: [BrowserTab] = snapshots.map { snapshot in
             let url = snapshot.urlString.flatMap(URL.init(string:))
-            // autoload: false —— 只恢复地址与标题，**不在启动时联网**（TODO 418）。
-            // 本对象由 App 层 @StateObject 持有，启动即构建；若在此加载，上次开过的所有网页
-            // 会在用户还没进入浏览器时一起加载/渲染/出声（`RootView` 的 ZStack 保活会让它们
-            // 全部挂在视图树里），表现为「在别的页面突然出现网页内容」。
-            // 历史栈一并恢复：WKWebView 重启后 backForwardList 必然为空，
-            // 只恢复当前 URL 会让「回退」永久置灰（跨重启丢失上一页）
+            // autoload: false —— 只恢复地址与标题，**不在启动时联网**。
             let tab = BrowserTab(
                 id: snapshot.id,
                 url: url,

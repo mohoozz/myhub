@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// txt 在线编辑（IOS-103）：加载 → 编辑 → 保存回源。
-/// 编码自动检测；保存优先沿用原编码（无法表示新内容时回退 UTF-8）。
+/// txt 在线编辑：加载 → 编辑 → 保存回源。
 struct TextFileEditorView: View {
     let entry: FileEntry
     let adapter: StorageAdapter

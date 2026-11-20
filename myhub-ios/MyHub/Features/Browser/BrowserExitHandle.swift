@@ -2,22 +2,6 @@ import SwiftUI
 import UIKit
 
 /// 内置浏览器沉浸态左下角悬浮控件
-/// （原型 `prototype/browser-exit-handle-collapse-options.html` 确认组合：
-/// 形态 **C**「悬浮圆钮 + 播放微件」· 策略 **S1**「进入浏览器页签即隐藏页签栏与 mini 播放器」·
-/// 图标 **E9-b** `arrow.uturn.down` · 收缩 **R1**「整体半隐贴边」· 触发 **T1**「跟随操作栏联动」·
-/// 点击 **K1**「收缩态一点即退」）。
-///
-/// 两种形态：
-/// - 无播放会话：单颗 38pt 圆钮（仅退出键）；
-/// - 有 mini 播放会话：竖向双联胶囊（上格播放微件 / 下格退出键）。沉浸态下全局 mini 播放器被一并隐藏，
-///   上格是沉浸期间**唯一**的播放控制入口（点击暂停/继续、长按展开回全屏播放器）。
-///
-/// 两种状态（R1）：展开态距屏幕左缘 `leadingInset`；收缩态整体左移、屏内仅留 `collapsedReveal` 宽的一道圆弧
-/// 并降至半透明，左侧圆角被屏幕边缘自然裁切，形成贴边半胶囊。
-///
-/// 图标取 `arrow.uturn.down`（掉头箭头朝下，指向底栏将要出现的位置）而非 `arrow.uturn.left`：
-/// 后者与操作栏左侧的网页后退键 `chevron.left` 同为「水平向左的返回」，同屏易混淆；朝下即错开方向维度。
-/// 再叠一道区分：本控件图标上主题蓝，操作栏导航键为黑灰单色。
 struct BrowserExitHandle: View {
     /// 是否收缩为贴边半隐态：与底部操作栏的 `toolbarMini` 同源联动（T1，滚动页面即一起收起）
     let collapsed: Bool
@@ -36,7 +20,7 @@ struct BrowserExitHandle: View {
     private let diameter: CGFloat = 38
     /// 展开态距屏幕左缘：与底部操作栏胶囊的左右内缩 12pt 对齐
     private let leadingInset: CGFloat = 12
-    /// 收缩态屏内露出宽度（R1）
+    /// 收缩态屏内露出宽度
     private let collapsedReveal: CGFloat = 14
     /// 收缩态命中区外扩量：露出仅 14pt，不外扩难以点中（仅扩命中区，不影响布局与观感）
     private let hitExpand: CGFloat = 10
@@ -69,7 +53,7 @@ struct BrowserExitHandle: View {
         .onAppear { presentTipIfNeeded() }
     }
 
-    // MARK: - 胶囊本体
+ // MARK: - 胶囊本体
 
     private var capsuleBody: some View {
         VStack(spacing: 0) {
@@ -107,13 +91,6 @@ struct BrowserExitHandle: View {
     }
 
     /// 播放微件格：点击暂停 / 继续。
-    ///
-    /// 封面只取静态图（音频走 `CoverService`，视频回落图标）而非实时画面：
-    /// 38pt 下实时预览无意义，且会与全局 mini 播放器来回争夺 `videoOutput` 的渲染宿主。
-    ///
-    /// 不叠加「长按展开全屏播放器」：`Button` 与长按手势共存会双触发（项目为此在
-    /// `PopupMenu` 另造了 `PressBridge` 做 `require(toFail:)` 互斥），而 38pt 小格上
-    /// 的长按属次要路径——需要全屏播放器时先点退出钮回到原页签，mini 播放器即恢复可点。
     private var playbackCell: some View {
         Button {
             core.togglePlayPause()
@@ -179,16 +156,14 @@ struct BrowserExitHandle: View {
             .allowsHitTesting(false)
     }
 
-    // MARK: - 命中区
+ // MARK: - 命中区
 
     /// 命中形状：收缩态仅**向右**外扩 `hitExpand`，补偿仅 `collapsedReveal` 的屏内露出宽度。
-    /// 刻意不作四周等距外扩——双联形态下上下外扩会让两格命中区相互重叠（点播放格下缘会误触退出）；
-    /// 也不宜扩得过宽，本控件浮在 `WKWebView` 之上，扩出的区域会吃掉该范围内的网页点击。
     private var hitShape: TrailingExpandedRect {
         TrailingExpandedRect(expand: collapsed ? hitExpand : 0)
     }
 
-    // MARK: - 行为
+ // MARK: - 行为
 
     private func handleExit() {
         // prepare 预唤醒触觉引擎，确保即时可靠触发（与播放页长按锁定、弹出菜单长按一致）
@@ -208,7 +183,7 @@ struct BrowserExitHandle: View {
         }
     }
 
-    // MARK: - 封面
+ // MARK: - 封面
 
     /// 音频模式（含用户强制仅音频）→ 取内嵌/同目录封面；视频模式保持图标占位
     private var isAudio: Bool {
@@ -221,7 +196,7 @@ struct BrowserExitHandle: View {
     }
 
     private func loadAudioCover() async {
-        audioCover = nil   // 切歌先清空，避免残留上一首封面
+        audioCover = nil
         guard hasPlaybackWidget, isAudio, let item = player.current else { return }
         let result = await CoverService.shared.cover(forItem: item)
         // 加载期间可能已切歌，回填前确认仍是当前条目
