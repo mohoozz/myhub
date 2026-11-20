@@ -96,6 +96,7 @@ private slots:
     void seekAfterEndedStaysPaused();
     void speedIsClamped();
     void volumeIsClampedAndPersisted();
+    void followSystemVolumePinsEngineButKeepsSlider();
     void audioOnlyHidesVideo();
     void tracksAreForwarded();
     void errorSurfacesMessage();
@@ -279,6 +280,27 @@ void TestPlayerCore::volumeIsClampedAndPersisted()
 
     m_core->adjustVolume(0.25);
     QCOMPARE(m_core->volume(), 0.25);
+}
+
+void TestPlayerCore::followSystemVolumePinsEngineButKeepsSlider()
+{
+    m_core->setVolume(0.4);
+    QCOMPARE(m_engine->lastVolume, 0.4);
+
+    // §14.6：跟随系统 = 引擎钉满，滑条上的值原样留着，切回来不用重调
+    m_core->setFollowSystemVolume(true);
+    QVERIFY(m_core->followSystemVolume());
+    QCOMPARE(m_engine->lastVolume, 1.0);
+    QCOMPARE(m_core->volume(), 0.4);
+    QVERIFY(AppSettings::instance().value(QStringLiteral("player.followSystemVolume")).toBool());
+
+    // 跟随期间动滑条只记值、不推引擎，否则两个旋钮会互相抵消
+    m_core->setVolume(0.8);
+    QCOMPARE(m_core->volume(), 0.8);
+    QCOMPARE(m_engine->lastVolume, 1.0);
+
+    m_core->setFollowSystemVolume(false);
+    QCOMPARE(m_engine->lastVolume, 0.8);
 }
 
 void TestPlayerCore::audioOnlyHidesVideo()

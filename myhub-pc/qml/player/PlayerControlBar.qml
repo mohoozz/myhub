@@ -95,6 +95,97 @@ Item {
         anchors.verticalCenterOffset: 10
         spacing: AppTheme.spacingXs
 
+        // 音量（§14.6）：图标按钮管静音，右侧滑条管大小；拖动时中央胶囊报百分比。
+        // 滑条常驻而不是悬停展开 —— 播放器底部本来就有留白，常驻少一次悬停动作
+        PlayerButton {
+            id: volumeButton
+            iconName: Player.muted || Player.volume <= 0.001 ? "volume-x"
+                      : (Player.volume < 0.5 ? "volume-1" : "volume")
+            tooltip: Player.followSystemVolume
+                     ? qsTr("跟随系统音量（用系统音量键调）")
+                     : (Player.muted ? qsTr("取消静音 (M)") : qsTr("静音 (M)"))
+            onClicked: {
+                if (Player.followSystemVolume) {
+                    root.osdRequested("volume", qsTr("音量跟随系统"))
+                    return
+                }
+                Player.toggleMute()
+                root.osdRequested(Player.muted ? "volume-x" : "volume",
+                                  Player.muted ? qsTr("静音")
+                                               : qsTr("音量 %1%").arg(Math.round(Player.volume * 100)))
+            }
+        }
+
+        Item {
+            id: volumeSlider
+            width: 84
+            height: 26
+            // 窄窗口先让位给播放/字幕/全屏那几个按钮；静音按钮始终在，功能不丢
+            visible: root.width >= 760
+            anchors.verticalCenter: parent.verticalCenter
+            opacity: Player.followSystemVolume ? 0.35 : 1
+
+            readonly property real value: Math.max(0, Math.min(1, Player.volume))
+
+            Behavior on opacity { NumberAnimation { duration: Motion.fast } }
+
+            Rectangle {
+                id: volumeTrack
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 3
+                radius: height / 2
+                color: Qt.rgba(1, 1, 1, 0.26)
+            }
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                width: volumeTrack.width * volumeSlider.value
+                height: volumeTrack.height
+                radius: volumeTrack.radius
+                color: Qt.rgba(1, 1, 1, 0.92)
+            }
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                x: Math.max(0, Math.min(volumeTrack.width - width,
+                                         volumeTrack.width * volumeSlider.value - width / 2))
+                width: 12
+                height: 12
+                radius: 6
+                color: "#FFFFFF"
+                border.width: AppTheme.borderWidth
+                border.color: Qt.rgba(0, 0, 0, 0.18)
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                enabled: !Player.followSystemVolume
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                hoverEnabled: true
+
+                function applyAt(x) {
+                    const ratio = volumeTrack.width > 0
+                                  ? Math.max(0, Math.min(1, x / volumeTrack.width)) : 0
+                    Player.volume = ratio
+                    root.osdRequested(ratio <= 0.001 ? "volume-x" : "volume",
+                                      qsTr("音量 %1%").arg(Math.round(ratio * 100)))
+                }
+
+                onPressed: function(mouse) { applyAt(mouse.x) }
+                onPositionChanged: function(mouse) {
+                    if (pressed)
+                        applyAt(mouse.x)
+                }
+                onDoubleClicked: {
+                    Player.volume = 1.0
+                    root.osdRequested("volume", qsTr("音量 100%"))
+                }
+            }
+        }
+
         PlayerButton {
             id: speedButton
             text: root.formatSpeed(Player.speed)

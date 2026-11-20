@@ -684,6 +684,17 @@ Item {
             })
         }
         appendSeparator(moreMenu)
+        // 音量归属（§14.6）：默认播放器滑条为主、与系统音量相乘；
+        // 勾上就把引擎钉满，响度只认系统音量键，避免两个旋钮互相抵消
+        appendAction(moreMenu,
+                     (Player.followSystemVolume ? "✓ " : "") + qsTr("音量跟随系统"),
+                     function() {
+            Player.followSystemVolume = !Player.followSystemVolume
+            view.flash("volume", Player.followSystemVolume
+                                 ? qsTr("音量跟随系统")
+                                 : qsTr("音量 %1%").arg(Math.round(Player.volume * 100)))
+        })
+        appendSeparator(moreMenu)
         appendAction(moreMenu, qsTr("重置亮度"), function() {
             Player.brightness = 1
             view.flash("sun", qsTr("亮度 100%"))

@@ -47,6 +47,9 @@ class PlayerBridge : public QObject
     Q_PROPERTY(bool audioOnly READ audioOnly WRITE setAudioOnly NOTIFY audioOnlyChanged)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY mutedChanged)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
+    /// 音量交给系统（§14.6）：开时播放器滑条置灰、引擎音量钉满
+    Q_PROPERTY(bool followSystemVolume READ followSystemVolume WRITE setFollowSystemVolume NOTIFY
+                   followSystemVolumeChanged)
     Q_PROPERTY(double speed READ speed WRITE setSpeed NOTIFY speedChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
     Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY audioTracksChanged)
@@ -112,6 +115,7 @@ public:
     bool audioOnly() const;
     bool muted() const;
     double volume() const;
+    bool followSystemVolume() const;
     double speed() const;
     QString errorText() const;
     QVariantList audioTracks() const;
@@ -126,6 +130,7 @@ public:
     void setAudioOnly(bool audioOnly);
     void setMuted(bool muted);
     void setVolume(double volume);
+    void setFollowSystemVolume(bool followSystemVolume);
     void setSpeed(double speed);
     void setBrightness(qreal brightness);
 
@@ -159,6 +164,8 @@ public:
                                 const QString &fingerprint = QString(), qint64 startMs = -1);
     Q_INVOKABLE void close();
     Q_INVOKABLE void togglePause();
+    /// 从头上重播当前文件（播完后再点 mini / 重播按钮都走这里）
+    Q_INVOKABLE void replay();
     Q_INVOKABLE void toggleMute();
     Q_INVOKABLE void adjustVolume(double delta);
     Q_INVOKABLE void seekTo(qint64 positionMs);
@@ -209,6 +216,7 @@ signals:
     void audioOnlyChanged();
     void mutedChanged();
     void volumeChanged();
+    void followSystemVolumeChanged();
     void speedChanged();
     void errorTextChanged();
     void audioTracksChanged();

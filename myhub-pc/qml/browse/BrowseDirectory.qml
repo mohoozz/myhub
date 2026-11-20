@@ -1100,6 +1100,17 @@ Item {
             onTriggered: root.requestDelete(contextMenu.targetIndex)
         }
         C.MenuSeparator {}
+        // 定位到原路径（§14.4）：在「最近访问 / 阅读记录」里看的是跨目录的条目，
+        // 先跳回它所在的目录再选中，不改变任何数据
+        C.Action {
+            text: qsTr("定位到原路径")
+            onTriggered: {
+                const info = dirModel.get(contextMenu.targetIndex)
+                if (!info || Object.keys(info).length === 0)
+                    return
+                root.requestReveal(dirModel.connectionId, info.filePath, info.isDir)
+            }
+        }
         C.Action {
             text: qsTr("属性")
             onTriggered: propertiesDialog.showFor(contextMenu.targetIndex)

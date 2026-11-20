@@ -11,6 +11,7 @@ namespace {
 
 // 播放相关偏好键（§5.4，与 iOS UserDefaults 对齐）
 constexpr auto kVolumeKey = "player.volume";
+constexpr auto kFollowSystemVolumeKey = "player.followSystemVolume";
 constexpr auto kAudioOnlyKey = "player.audioOnlyByDefault";
 
 constexpr double kMinSpeed = 0.5;
@@ -29,6 +30,8 @@ PlayerCore::PlayerCore(QObject *parent)
 {
     const auto &settings = AppSettings::instance();
     m_volume = qBound(0.0, settings.value(QString::fromLatin1(kVolumeKey), 1.0).toDouble(), 1.0);
+    m_followSystemVolume =
+        settings.value(QString::fromLatin1(kFollowSystemVolumeKey), false).toBool();
     m_audioOnly = settings.value(QString::fromLatin1(kAudioOnlyKey), false).toBool();
 }
 
@@ -45,7 +48,7 @@ void PlayerCore::setEngine(PlaybackEngine *engine)
     m_engine = engine;
     if (m_engine) {
         attachEngineSignals();
-        m_engine->setVolume(m_volume);
+        applyVolume();
         m_engine->setMuted(m_muted);
         m_engine->setSpeed(m_speed);
         m_engine->setAudioOnly(m_audioOnly);
@@ -110,7 +113,7 @@ void PlayerCore::open(const PlaybackRequest &request)
     }
 
     // 每次起播都完整下发会话参数，避免上一个文件的状态泄漏
-    m_engine->setVolume(m_volume);
+    applyVolume();
     m_engine->setMuted(m_muted);
     m_engine->setSpeed(m_speed);
     m_engine->setAudioOnly(m_audioOnly);
@@ -210,13 +213,33 @@ void PlayerCore::setVolumeInternal(double volume, bool persist)
         return;
     }
     m_volume = clamped;
-    if (m_engine) {
-        m_engine->setVolume(m_volume);
-    }
+    applyVolume();
     if (persist) {
         AppSettings::instance().setValue(QString::fromLatin1(kVolumeKey), m_volume);
     }
     emit volumeChanged(m_volume);
+}
+
+void PlayerCore::setFollowSystemVolume(bool followSystemVolume)
+{
+    if (m_followSystemVolume == followSystemVolume) {
+        return;
+    }
+    m_followSystemVolume = followSystemVolume;
+    AppSettings::instance().setValue(QString::fromLatin1(kFollowSystemVolumeKey),
+                                     m_followSystemVolume);
+    applyVolume();
+    emit followSystemVolumeChanged(m_followSystemVolume);
+}
+
+void PlayerCore::applyVolume()
+{
+    if (!m_engine) {
+        return;
+    }
+    // 跟随系统时把引擎音量钉满，响度只由系统音量键决定；
+    // 滑条上的 m_volume 仍然保留，切回「内部音量」立刻恢复，不用重调。
+    m_engine->setVolume(m_followSystemVolume ? 1.0 : m_volume);
 }
 
 void PlayerCore::setMuted(bool muted)

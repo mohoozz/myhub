@@ -129,6 +129,8 @@ PlayerBridge::PlayerBridge(QObject *parent)
     connect(&core, &PlayerCore::audioOnlyChanged, this, &PlayerBridge::audioOnlyChanged);
     connect(&core, &PlayerCore::mutedChanged, this, &PlayerBridge::mutedChanged);
     connect(&core, &PlayerCore::volumeChanged, this, &PlayerBridge::volumeChanged);
+    connect(&core, &PlayerCore::followSystemVolumeChanged, this,
+            &PlayerBridge::followSystemVolumeChanged);
     connect(&core, &PlayerCore::speedChanged, this, &PlayerBridge::speedChanged);
     connect(&core, &PlayerCore::audioTracksChanged, this,
             [this](const QList<PlaybackTrack> &tracks) {
@@ -261,6 +263,11 @@ double PlayerBridge::volume() const
     return PlayerCore::instance().volume();
 }
 
+bool PlayerBridge::followSystemVolume() const
+{
+    return PlayerCore::instance().followSystemVolume();
+}
+
 double PlayerBridge::speed() const
 {
     return PlayerCore::instance().speed();
@@ -319,6 +326,11 @@ void PlayerBridge::setMuted(bool muted)
 void PlayerBridge::setVolume(double volume)
 {
     PlayerCore::instance().setVolume(volume);
+}
+
+void PlayerBridge::setFollowSystemVolume(bool followSystemVolume)
+{
+    PlayerCore::instance().setFollowSystemVolume(followSystemVolume);
 }
 
 void PlayerBridge::setSpeed(double speed)
@@ -655,6 +667,11 @@ void PlayerBridge::close()
 void PlayerBridge::togglePause()
 {
     PlayerCore::instance().togglePause();
+}
+
+void PlayerBridge::replay()
+{
+    PlayerCore::instance().replay();
 }
 
 void PlayerBridge::toggleMute()

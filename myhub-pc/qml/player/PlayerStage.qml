@@ -44,6 +44,10 @@ QtObject {
         if (Player.state !== Player.Idle) {
             if (floating)
                 WindowController.exitFloating()
+            // 播完后再点 mini / 小窗回来：从头上重播（§14.7）。
+            // 否则进去只有一帧定格，用户还得自己找一次重播按钮
+            if (Player.state === Player.Ended)
+                Player.replay()
             mode = "full"
         }
     }

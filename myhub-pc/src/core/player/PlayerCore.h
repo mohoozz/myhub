@@ -51,6 +51,14 @@ public:
     bool muted() const { return m_muted; }
     double speed() const { return m_speed; }
 
+    /**
+     * 跟随系统音量（§14.6「内部音量为主 + 可选联动」）。
+     *
+     * 关（默认）：播放器滑条为主，最终响度 = 播放器音量 × 系统音量（引擎只做前者）。
+     * 开：引擎音量钉在 100%，响度完全交给系统音量键；播放器滑条置灰，避免两个旋钮互相抵消。
+     */
+    bool followSystemVolume() const { return m_followSystemVolume; }
+
     // ---- 轨道 ----
     QList<PlaybackTrack> audioTracks() const { return m_audioTracks; }
     QList<PlaybackTrack> subtitleTracks() const { return m_subtitleTracks; }
@@ -68,6 +76,7 @@ public:
     void adjustVolume(double delta);
     void setMuted(bool muted);
     void toggleMute();
+    void setFollowSystemVolume(bool followSystemVolume);
 
     void setSpeed(double speed);
 
@@ -110,6 +119,7 @@ signals:
     void subtitleTracksChanged(const QList<myhub::PlaybackTrack> &tracks);
     void volumeChanged(double volume);
     void mutedChanged(bool muted);
+    void followSystemVolumeChanged(bool followSystemVolume);
     void speedChanged(double speed);
     void audioOnlyChanged(bool audioOnly);
     /// 截图结果（§4.3）；失败原因已是用户可读文案，UI 直接展示
@@ -126,6 +136,8 @@ private:
     void setBuffering(bool buffering);
     void setHasVideo(bool hasVideo);
     void setVolumeInternal(double volume, bool persist);
+    /// 按 followSystemVolume 把音量推给引擎（滑条值本身不受影响）
+    void applyVolume();
     void setSpeedInternal(double speed);
     void applyAudioOnly();
 
@@ -150,6 +162,7 @@ private:
     bool m_audioOnly = false;
     double m_volume = 1.0;
     bool m_muted = false;
+    bool m_followSystemVolume = false;
     double m_speed = 1.0;
     QList<PlaybackTrack> m_audioTracks;
     QList<PlaybackTrack> m_subtitleTracks;
