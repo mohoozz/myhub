@@ -825,6 +825,14 @@
        `tst_comicbook` rar 2 例、`tst_comicbridge` cbr 1 例，用 `tests/RarTestBuilder.h` 现场搓 RAR4 归档）
 - [ ] `ComicDetector`：① 扩展名优先（cbz/cbr）② 内容嗅探（图片占比 ≥90% 且自然序列）③ **epub 图集目录层预判并缓存**（列目录即显示漫画徽标）④ 右键手动「以漫画阅读打开」⑤ 目录级「漫画库」标记
   - [x] ① 扩展名（`MediaType::isComicArchive`：cbz/zip/cbr/rar）与 ④ 右键「以漫画阅读器打开」
+  - [x] ③ 图集 epub 的判定结论缓存（`core/comic/ComicDetector`，表 `comicVerdict` 随 v6 迁移）：
+        **列目录绝不开文件** —— `known()` 只查内存，结论由三处已经付过账的地方回写：
+        `CoverService::readEpubCover`（取封面本就跑过同一个 `load()`，零额外请求）、`NovelBridge::openEpub`、
+        `ComicBridge::probeEpubCollection`。`prime()` 每目录预热一次，`BrowseDirectoryModel::data()` 据此把
+        epub 归成 `comic` 挂徽标。结论带指纹（size + 秒级 mtime），文件换过即失效，不会挂错。
+        测试：`tst_comicdetector` 8 例（正/负结论、重启后靠库、指纹失效、forget、同名目录不算漫画）
+  - [ ] ② 内容嗅探、⑤ 目录级「漫画库」标记仍未做：② 只在扩展名判不出时才有意义（zip/rar 已算漫画，
+        收益低）；⑤ 需要新增用户操作入口与持久化，另开一条做
   - [x] 非漫画文件报「不是漫画文件」：扩展名先挡（明确支持 cbz/zip/cbr/rar），
         压缩包里没有图片页由 `ComicBook` 报同一句话；测试 `tst_comicbridge` 两例覆盖
 - [x] 阅读模式：单页 / 双页（RTL·LTR 切换持久化，默认日漫 RTL）/ 条漫（纵向连续滚动）
@@ -1115,8 +1123,11 @@
         文字书 epub 走这条路会直接报「这本 epub 是文字书，不是图集（请用小说阅读器打开）」
   - [x] 手动覆盖（小说方向）**故意不做**（已定案）：图集 epub 没有正文可读，硬回小说阅读器只有空白页；
         「以小说阅读器打开」对图集 epub 仍按自动判定转交漫画阅读器
-  - [ ] 读完图集 epub 后的「下一本」建议仍只从 cbz/zip 里挑（浏览页把 epub 归小说），
-        图集 epub 之间不会互相推荐
+  - [x] 读完图集 epub 后的「下一本」能互推了：`ComicBridge::scanNextCandidates` 按阅读顺序逐项确认 ——
+        cbz/cbr 看扩展名（免费），**没人读过 OPF 的 epub 当场读一次**（`kMaxNextProbes = 3` 限次），
+        探测结论回写 `ComicDetector`，下次不再付这笔请求。不能只信缓存：隔壁那卷通常没人打开过，
+        缓存里是未知，光问缓存等于永远推不出来。预算用尽时宁可这次不推荐，也不隔着未知的卷去推后面那本（漏卷）。
+        测试：`tst_comicbridge::suggestsNextImageEpubWhenFinished`（01 图集 → 02 图集，跳过文字书 03）
 - [x] 漫画文件（zip/cbz/rar/cbr）默认漫画阅读器，**打开不得崩溃**
       （zip/cbz 走 Range 只读条目；rar/cbr 走 libarchive，本地直读、远程先整包落地再开，
        均不崩溃；非漫画文件报错文案见 `ComicDetector` 一条）

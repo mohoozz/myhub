@@ -29,6 +29,8 @@ bool Migrations::migrate(AppDatabase &db)
         ok = v4_comic_page_list(db);
     if (ok && current < 5)
         ok = v5_epub_meta(db);
+    if (ok && current < 6)
+        ok = v6_comic_verdict(db);
 
     if (!ok) {
         db.rollback();
@@ -309,6 +311,42 @@ bool Migrations::v5_epub_meta(AppDatabase &db)
         }
     }
     MH_INFO(Database, QStringLiteral("v5_epub_meta applied"));
+    return true;
+}
+
+bool Migrations::v6_comic_verdict(AppDatabase &db)
+{
+    // 「这个文件是不是漫画」的判定结论缓存（§6 `ComicDetector` ③）。
+    //
+    // 单独一张表而不是塞进 `epubMeta`：图集 epub 的章节表可能是空的，
+    // 而 `EpubMeta::isValid()` 要求 chapters 非空 —— 结论会被那条约束连坐丢掉。
+    // 判定结论对文字书同样有价值（`isComic = 0` 说明「查过了，不是图集」），
+    // 与目录快照的生命周期也不一致，故独立存放。
+    //
+    // 指纹（fileSize + modTime，秒）冗余在这一行上：文件被换过，旧结论不再成立，
+    // 读取方一比对指纹就能发现，不需要额外的失效逻辑。
+    const QStringList statements = {
+        QStringLiteral(R"(
+            CREATE TABLE IF NOT EXISTS comicVerdict (
+                id           TEXT PRIMARY KEY,
+                connectionID TEXT NOT NULL,
+                filePath     TEXT NOT NULL,
+                isComic      INTEGER NOT NULL DEFAULT 0,
+                fileSize     INTEGER NOT NULL DEFAULT 0,
+                modTime      INTEGER NOT NULL DEFAULT 0,
+                updatedAt    INTEGER NOT NULL
+            ))"),
+        QStringLiteral("CREATE UNIQUE INDEX IF NOT EXISTS idx_comicverdict_unique "
+                       "ON comicVerdict(connectionID, filePath)"),
+    };
+
+    for (const QString &sql : statements) {
+        if (!db.execute(sql)) {
+            MH_ERROR(Database, QStringLiteral("v6_comic_verdict failed: %1").arg(db.lastError()));
+            return false;
+        }
+    }
+    MH_INFO(Database, QStringLiteral("v6_comic_verdict applied"));
     return true;
 }
 

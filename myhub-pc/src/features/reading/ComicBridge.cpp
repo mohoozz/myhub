@@ -2,6 +2,7 @@
 
 #include "core/archive/ArchiveFetcher.h"
 #include "core/comic/ComicBook.h"
+#include "core/comic/ComicDetector.h"
 #include "core/comic/ComicPageStore.h"
 #include "core/files/DirectorySort.h"
 #include "core/history/ProgressRepository.h"
@@ -385,6 +386,11 @@ void ComicBridge::probeEpubCollection()
                                                : error.userMessage());
             return;
         }
+        // 判定结论回写：列目录时靠它给 epub 挂漫画徽标，
+        // 「下一本」靠它把图集 epub 与 cbz/cbr 算成同类（负结论同样有用）
+        ComicDetector::remember(m_connectionId, m_path, metadata.imageOnly, m_fileSize,
+                                ComicDetector::secondsFromMillis(m_modTime));
+
         // 手动「以漫画阅读器打开」被用在文字书上：直说该换哪个阅读器，
         // 别让 `ComicBook` 去报「压缩包里没有图片页」——那句话对 epub 不成立
         if (!metadata.imageOnly || metadata.imageEntries.isEmpty()) {
@@ -1172,8 +1178,107 @@ void ComicBridge::resolveNextSuggestion()
         if (StoragePath::normalize(m_path) != currentPath) {
             return; // 期间已经换书
         }
-        setNextSuggestion(DirectorySort::nextComic(result.value, currentPath, sortKey, ascending));
+        // 候选要按阅读顺序一个个确认，不能只靠「已有的结论」：
+        // 隔壁那卷 epub 没人打开过，缓存里是未知 —— 直接问缓存等于永远推不出来。
+        FileEntryList sorted = result.value;
+        DirectorySort::sort(sorted, sortKey, ascending);
+        int index = -1;
+        for (int i = 0; i < sorted.size(); ++i) {
+            if (sorted.at(i).path == currentPath) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            clearNextSuggestion();
+            return;
+        }
+        scanNextCandidates(sorted, index + 1, kMaxNextProbes, queryId);
     });
+}
+
+void ComicBridge::scanNextCandidates(const FileEntryList &sorted, int fromIndex, int probesLeft,
+                                     int queryId)
+{
+    for (int i = fromIndex; i < sorted.size(); ++i) {
+        if (queryId != m_nextQueryId) {
+            return; // 又读到底一轮，或已经换书
+        }
+        const FileEntry &entry = sorted.at(i);
+        if (entry.isDir) {
+            continue;
+        }
+
+        bool comic = false;
+        if (ComicDetector::known(m_connectionId, entry, &comic)) {
+            if (comic) {
+                setNextSuggestion(entry);
+                return;
+            }
+            continue; // 判过了：文字书 / 普通文件，跳过
+        }
+
+        // 到这里只剩下「没人读过 OPF 的 epub」：要真读一次才知道是不是图集
+        if (probesLeft <= 0) {
+            // 预算用尽。此时后面还夹着没判过的 epub，隔着它们去推更靠后的 cbz 会漏卷，
+            // 所以宁可这次不给建议
+            MH_INFO(ComicReader, QStringLiteral("下一卷候选：探测预算用尽，暂不推荐"));
+            clearNextSuggestion();
+            return;
+        }
+        probeNextCandidate(entry, sorted, i + 1, probesLeft - 1, queryId);
+        return;
+    }
+    clearNextSuggestion();
+}
+
+void ComicBridge::probeNextCandidate(const FileEntry &entry, const FileEntryList &sorted,
+                                     int nextIndex, int probesLeft, int queryId)
+{
+    if (!m_adapter) {
+        clearNextSuggestion();
+        return;
+    }
+
+    const int serial = ++m_nextProbeSerial;
+    const QPointer<ComicBridge> guard(this);
+    m_adapter->stat(
+        entry.path,
+        [this, guard, serial, queryId, entry, sorted, nextIndex, probesLeft](StatResult stat) {
+            if (!guard || serial != m_nextProbeSerial || queryId != m_nextQueryId) {
+                return;
+            }
+            if (!stat.ok() || stat.value.size <= 0) {
+                // 够不着（离线 / 没权限）：跳过这一本继续往后，不让一个坏文件毁掉整条链
+                scanNextCandidates(sorted, nextIndex, probesLeft, queryId);
+                return;
+            }
+
+            const qint64 size = stat.value.size;
+            const qint64 modSecs =
+                stat.value.modTime.isValid() ? stat.value.modTime.toSecsSinceEpoch() : 0;
+            m_nextProbeSource = std::make_unique<AdapterRangeSource>(m_adapter, entry.path, size);
+            m_nextProbe = std::make_unique<EpubBook>(m_nextProbeSource.get());
+            m_nextProbe->load([this, guard, serial, queryId, entry, sorted, nextIndex, probesLeft,
+                               size, modSecs](EpubMetadata metadata, StorageError error) {
+                if (!guard || serial != m_nextProbeSerial || queryId != m_nextQueryId) {
+                    return;
+                }
+                m_nextProbe.reset();
+                m_nextProbeSource.reset();
+
+                if (error.isNull()) {
+                    // 探测结论一律回写：下次列目录 / 再读到底就不用再付这笔请求
+                    ComicDetector::remember(m_connectionId, entry.path, metadata.imageOnly, size,
+                                            modSecs);
+                    if (metadata.imageOnly && !metadata.imageEntries.isEmpty()) {
+                        setNextSuggestion(entry);
+                        return;
+                    }
+                }
+                scanNextCandidates(sorted, nextIndex, probesLeft, queryId);
+            });
+        });
 }
 
 void ComicBridge::setNextSuggestion(const FileEntry &entry)
@@ -1256,6 +1361,10 @@ void ComicBridge::teardown()
     m_book.reset();
     // 探测句柄持有 RangeSource 的读：必须排在 source 之前释放
     m_epubProbe.reset();
+    // 「下一本」的探测也要作废：先让回调失效，再释放（同样排在 source 之前）
+    ++m_nextProbeSerial;
+    m_nextProbe.reset();
+    m_nextProbeSource.reset();
     m_pageOrderHint.clear();
     m_sourceOwner.reset();
     m_source = nullptr;

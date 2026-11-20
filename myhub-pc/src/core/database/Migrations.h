@@ -16,12 +16,13 @@ class AppDatabase;
  *   v3 v3_novel_chapter_cache  —— novelChapter 章节解码产物缓存表
  *   v4 v4_comic_page_list      —— comicPages 漫画页名清单
  *   v5 v5_epub_meta            —— epubMeta 的 epub 目录 / 元数据快照
+ *   v6 v6_comic_verdict        —— comicVerdict「这个文件是不是漫画」的判定缓存
  */
 class Migrations
 {
 public:
     /// 目标 schema 版本
-    static constexpr int kTargetVersion = 5;
+    static constexpr int kTargetVersion = 6;
 
     /// 执行迁移至最新版本；返回是否成功
     static bool migrate(AppDatabase &db);
@@ -34,6 +35,8 @@ private:
     static bool v4_comic_page_list(AppDatabase &db);
     /// v5：epub 目录 / 元数据快照（`epubMeta`），支撑离线打开
     static bool v5_epub_meta(AppDatabase &db);
+    /// v6：漫画判定结论缓存（`comicVerdict`），支撑列目录时零请求挂徽标
+    static bool v6_comic_verdict(AppDatabase &db);
 };
 
 } // namespace myhub

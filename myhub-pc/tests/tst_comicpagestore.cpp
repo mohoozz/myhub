@@ -14,6 +14,7 @@
 
 #include "core/comic/ComicPageStore.h"
 #include "core/database/AppDatabase.h"
+#include "core/database/Migrations.h"
 #include "core/preferences/AppSettings.h"
 #include "core/utils/AppPaths.h"
 
@@ -71,7 +72,8 @@ void TestComicPageStore::initTestCase()
     QVERIFY(m_dir.isValid());
     QVERIFY(AppDatabase::instance().open(m_dir.filePath(QStringLiteral("myhub.sqlite"))));
     // 迁移到最新版本时 comicPages 表必须已经建好，否则后面的读写全无意义
-    QCOMPARE(AppDatabase::instance().schemaVersion(), 5);
+    // 断言「迁移跑到了目标版本」而不是写死 5：否则每加一次迁移都要改这四个测试
+    QCOMPARE(AppDatabase::instance().schemaVersion(), Migrations::kTargetVersion);
 }
 
 void TestComicPageStore::cleanupTestCase()

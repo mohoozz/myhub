@@ -12,6 +12,7 @@
 
 #include "core/cache/DirectoryCache.h"
 #include "core/database/AppDatabase.h"
+#include "core/database/Migrations.h"
 #include "core/preferences/AppSettings.h"
 #include "core/storage/LocalAdapter.h"
 #include "core/storage/StorageAdapterFactory.h"
@@ -78,7 +79,7 @@ void TestE2EBrowse::databaseMigratesToTargetVersion()
 
     QVERIFY2(db.open(), qPrintable(db.lastError()));
     QCOMPARE(readySpy.count(), 1);
-    QCOMPARE(db.schemaVersion(), 5);
+    QCOMPARE(db.schemaVersion(), Migrations::kTargetVersion);
 
     // 12 张表齐备（§5.3 + v3 的章节缓存 + v4 的漫画页名清单 + v5 的 epub 目录快照）
     const QStringList expected = {

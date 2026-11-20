@@ -54,6 +54,7 @@ add_library(myhub_core STATIC
     novel/NovelImageStore.h            novel/NovelImageStore.cpp
 
     comic/ComicBook.h                  comic/ComicBook.cpp
+    comic/ComicDetector.h              comic/ComicDetector.cpp
     comic/ComicPageStore.h             comic/ComicPageStore.cpp
     comic/ComicDirection.h             comic/ComicDirection.cpp
 

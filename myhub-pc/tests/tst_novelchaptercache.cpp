@@ -14,6 +14,7 @@
 #include <QtTest>
 
 #include "core/database/AppDatabase.h"
+#include "core/database/Migrations.h"
 #include "core/novel/NovelChapterCache.h"
 #include "core/preferences/AppSettings.h"
 #include "core/utils/AppPaths.h"
@@ -107,7 +108,7 @@ void TestNovelChapterCache::initTestCase()
     QVERIFY(m_dir.isValid());
     QVERIFY(AppDatabase::instance().open(m_dir.filePath(QStringLiteral("myhub.sqlite"))));
     // 迁移到最新版本时 novelChapter 表必须已经建好，否则后面的读写全无意义
-    QCOMPARE(AppDatabase::instance().schemaVersion(), 5);
+    QCOMPARE(AppDatabase::instance().schemaVersion(), Migrations::kTargetVersion);
 }
 
 void TestNovelChapterCache::cleanupTestCase()

@@ -6,6 +6,7 @@
 
 #include "RarTestBuilder.h"
 
+#include "core/comic/ComicDetector.h"
 #include "core/comic/ComicPageStore.h"
 #include "core/database/AppDatabase.h"
 #include "core/history/ProgressRepository.h"
@@ -208,6 +209,7 @@ private slots:
     void opensLocalCbrAndShowsPage();
     void prefetchesNeighborPages();
     void suggestsNextComicWhenFinished();
+    void suggestsNextImageEpubWhenFinished();
     void storesPageListOnOpen();
     void opensOfflineFromPageCache();
     void opensImageEpubInSpineOrder();
@@ -267,6 +269,9 @@ void TestComicBridge::init()
     ComicBridge::instance()->close();
     QVERIFY(AppDatabase::instance().execute(QStringLiteral("DELETE FROM readingProgress")));
     QVERIFY(AppDatabase::instance().execute(QStringLiteral("DELETE FROM comicPages")));
+    // 判定缓存也要清干净：上一个用例写下的 epub 结论不能漏进这一个
+    QVERIFY(AppDatabase::instance().execute(QStringLiteral("DELETE FROM comicVerdict")));
+    ComicDetector::resetMemory();
 }
 
 void TestComicBridge::cleanupTestCase()
@@ -810,6 +815,40 @@ void TestComicBridge::opensOfflineFromPageCache()
     QVERIFY(comic.nextSuggestion().isEmpty());
 
     QVERIFY(QFile::rename(real + QStringLiteral(".moved"), real));
+}
+
+void TestComicBridge::suggestsNextImageEpubWhenFinished()
+{
+    // 图集 epub 要能和 cbz 一样互推。
+    // 浏览页把 .epub 一律归成小说，光看扩展名推不出来 —— 这里验证的是
+    // 「打开时把判定结论写进 `ComicDetector`，读到底后靠它认出下一本图集」这条链。
+    QVERIFY(QDir(m_root.path()).mkpath(QStringLiteral("漫画/图集连载")));
+    const auto writeEpub = [this](const QString &name, const QByteArray &payload) {
+        QFile file(m_root.filePath(QStringLiteral("漫画/图集连载/%1").arg(name)));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(payload);
+        file.close();
+    };
+    // 用数字前缀固定顺序，避开中文排序的歧义
+    writeEpub(QStringLiteral("01-第1卷.epub"), imageEpub());
+    writeEpub(QStringLiteral("02-第2卷.epub"), imageEpub());
+    writeEpub(QStringLiteral("03-番外.epub"), textEpub()); // 文字书不该被推上来
+
+    ComicBridge &comic = *ComicBridge::instance();
+    comic.open(m_connectionId, QStringLiteral("/漫画/图集连载/01-第1卷.epub"), QString());
+    QTRY_VERIFY_WITH_TIMEOUT(comic.opened() || !comic.errorText().isEmpty(), 5000);
+    QVERIFY2(comic.errorText().isEmpty(), qPrintable(comic.errorText()));
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.pageUrl().isEmpty(), 5000);
+
+    QVERIFY(comic.nextSuggestion().isEmpty());
+
+    comic.setAtBookEnd(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!comic.nextSuggestion().isEmpty(), 5000);
+    // 关键断言：图集 epub 之间的互推成立
+    QCOMPARE(comic.nextSuggestion().value(QStringLiteral("name")).toString(),
+             QStringLiteral("02-第2卷.epub"));
+    QCOMPARE(comic.nextSuggestion().value(QStringLiteral("path")).toString(),
+             QStringLiteral("/漫画/图集连载/02-第2卷.epub"));
 }
 
 QTEST_MAIN(TestComicBridge)

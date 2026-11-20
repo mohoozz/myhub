@@ -3,6 +3,7 @@
 #include "features/connections/ConnectionStore.h"
 
 #include "core/cache/DirectoryCache.h"
+#include "core/comic/ComicDetector.h"
 #include "core/files/DirectorySort.h"
 #include "core/preferences/AppSettings.h"
 #include "core/storage/StorageAdapter.h"
@@ -64,7 +65,14 @@ QVariant BrowseDirectoryModel::data(const QModelIndex &index, int role) const
         return {};
 
     const FileEntry &e = m_visible.at(index.row());
-    const MediaType::Kind kind = MediaType::fromPath(e.path, e.isDir);
+    MediaType::Kind kind = MediaType::fromPath(e.path, e.isDir);
+    // 图集 epub 与文字书在扩展名上没有区别，类型得问判定缓存（`prime()` 已预热，这里只查内存）
+    if (kind == MediaType::Novel) {
+        bool comic = false;
+        if (ComicDetector::known(m_connectionId, e, &comic) && comic) {
+            kind = MediaType::Comic;
+        }
+    }
 
     switch (role) {
     case NameRole:
@@ -324,6 +332,8 @@ void BrowseDirectoryModel::loadDirectory(const QString &path, bool useCache)
 void BrowseDirectoryModel::applyEntries(const FileEntryList &entries, bool fromCache)
 {
     Q_UNUSED(fromCache)
+    // 徽标要在首帧就对：先把该目录的判定结论预热进内存，再重建可见行
+    ComicDetector::prime(m_connectionId, entries);
     m_all = entries;
     rebuildVisible();
 }

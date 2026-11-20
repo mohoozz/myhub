@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/comic/ComicDirection.h"
+#include "core/storage/FileEntry.h"
 
 #include <QList>
 #include <QObject>
@@ -16,6 +17,7 @@
 namespace myhub {
 
 class ComicBook;
+class AdapterRangeSource;
 class EpubBook;
 class RangeSource;
 class StorageAdapter;
@@ -245,6 +247,19 @@ private:
     void markFinished();
     /// 查同目录下一卷：排序跟随该目录偏好，与浏览页所见顺序一致
     void resolveNextSuggestion();
+    /**
+     * 从 `fromIndex` 起按顺序确认「下一本」。
+     *
+     * 不能只看 `ComicDetector` 的缓存：隔壁那卷 epub 通常没人打开过，缓存里是未知，
+     * 光问缓存等于读完一本图集 epub 永远推不出下一本。所以这里边走边判 ——
+     * cbz/cbr 看扩展名（免费），未知的 epub 真读一次 OPF 确认（`probesLeft` 限次）。
+     */
+    void scanNextCandidates(const FileEntryList &sorted, int fromIndex, int probesLeft,
+                            int queryId);
+    void probeNextCandidate(const FileEntry &entry, const FileEntryList &sorted, int nextIndex,
+                            int probesLeft, int queryId);
+    /// 一次「下一本」最多为几本未知 epub 付 OPF 探测的代价
+    static constexpr int kMaxNextProbes = 3;
     void setNextSuggestion(const FileEntry &entry);
     void clearNextSuggestion();
 
@@ -328,6 +343,11 @@ private:
     bool m_nextDismissed = false;
     /// 换书/离开末尾时作废在途的目录查询
     int m_nextQueryId = 0;
+    /// 「下一本」的候选探测：同样在换书时作废
+    int m_nextProbeSerial = 0;
+    /// 探测用的读句柄（必须排在它的 source 之前释放）
+    std::unique_ptr<EpubBook> m_nextProbe;
+    std::unique_ptr<AdapterRangeSource> m_nextProbeSource;
 };
 
 } // namespace myhub

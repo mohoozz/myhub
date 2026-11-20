@@ -4,6 +4,7 @@
 #include "core/cache/CachePartition.h"
 #include "core/cache/CacheStore.h"
 #include "core/comic/ComicBook.h"
+#include "core/comic/ComicDetector.h"
 #include "core/cover/EmbeddedCoverExtractor.h"
 #include "core/novel/EpubBook.h"
 #include "core/storage/StorageAdapter.h"
@@ -357,10 +358,16 @@ void CoverService::readEpubCover(const Job &job, StorageAdapter *adapter)
         state->source = std::make_shared<AdapterRangeSource>(guard.data(), sized.path, sized.size);
         state->book = std::make_shared<EpubBook>(state->source.get());
 
-        state->book->load([this, sized, guard, state](EpubMetadata, StorageError error) {
+        state->book->load([this, sized, guard, state](EpubMetadata metadata, StorageError error) {
             if (!guard) {
                 completeFailure(sized);
                 return;
+            }
+            // 取封面已经付过这次 `load()` 的账（尾部 + 中央目录 + container + OPF），
+            // 顺手把「图集还是文字书」的结论记下来：列目录时就零额外请求能挂徽标
+            if (error.isNull() && sized.size >= 0 && sized.modSecs >= 0) {
+                ComicDetector::remember(sized.connectionId, sized.path, metadata.imageOnly,
+                                        sized.size, sized.modSecs);
             }
             if (!error.isNull() || state->book->coverHref().isEmpty()) {
                 completeFailure(sized);

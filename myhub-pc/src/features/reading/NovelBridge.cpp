@@ -1,5 +1,6 @@
 #include "NovelBridge.h"
 
+#include "core/comic/ComicDetector.h"
 #include "core/files/DirectorySort.h"
 #include "core/history/ProgressRepository.h"
 #include "core/novel/EpubBook.h"
@@ -537,6 +538,11 @@ void NovelBridge::openEpub()
             fail(QStringLiteral("epub 里没有可读的章节"));
             return;
         }
+        // 判定结论回写：列目录时靠它给 epub 挂漫画徽标，「下一本」靠它认出图集 epub。
+        // 两条路都要记 —— 「查过了，不是图集」也是结论，记下来才好给文字书省掉重判
+        ComicDetector::remember(m_connectionId, m_path, metadata.imageOnly, m_fileSize,
+                                ComicDetector::secondsFromMillis(m_modTime));
+
         // 整本都是整页图片（漫画打包成的 epub）：这里只能解出空段落，
         // 交给漫画阅读器按页看才是正解
         if (metadata.imageOnly) {
