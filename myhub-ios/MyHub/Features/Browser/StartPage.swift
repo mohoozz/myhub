@@ -11,25 +11,45 @@ struct StartPage: View {
     @State private var showingAdd = false
     @State private var editingShortcut: BrowserShortcut?
     @FocusState private var searchFocused: Bool
+    /// 基准可视高度：用来算顶部留白。键盘弹起会把可视高度临时压小，
+    /// 跟着它算会让搜索框在输入时往上跳，所以只记住「变大」的那次
+    @State private var layoutHeight: CGFloat = 0
 
     private let columns = [GridItem(.adaptive(minimum: 72), spacing: 16)]
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                searchBar
-                shortcutSection
+        GeometryReader { proxy in
+            ScrollView {
+                ZStack(alignment: .top) {
+                    // 点击空白处收键盘。这层**垫在内容之下**：输入框、快捷入口的点击仍然先命中它们自己。
+                    // 旧实现是把 `contentShape(Rectangle()) + onTapGesture` 挂在内容 VStack 上，
+                    // 那层手势与 `TextField` 在同一命中链上抢第一下点击，表现为「点一下只收了键盘、没进输入态」。
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { Keyboard.dismiss() }
+
+                    VStack(spacing: 0) {
+                        header
+                            .frame(height: headerHeight(for: layoutHeight > 1 ? layoutHeight : proxy.size.height))
+                        searchBar
+                        shortcutSection
+                            .padding(.top, 28)
+                    }
+                    .padding(.horizontal, 16)
+                    // 底部让出操作栏高度：操作栏已改为浮在网页之上的浮层（F1），
+                    // 起始页滑到底时最后一行快捷入口不该被它盖住
+                    .padding(.bottom, BrowserToolbar.barHeight)
+                    .frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: .infinity)
             }
-            .padding(16)
-            // 底部让出操作栏高度：操作栏已改为浮在网页之上的浮层（F1），
-            // 起始页滑到底时最后一行快捷入口不该被它盖住
-            .padding(.bottom, BrowserToolbar.barHeight)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture { Keyboard.dismiss() }
+            .scrollDismissesKeyboard(.immediately)
+            .onAppear { layoutHeight = proxy.size.height }
+            .onChange(of: proxy.size.height) { newValue in
+                // 只在变大时更新：键盘弹起会让高度临时变小，跟随它算会让搜索框在输入时上下跳
+                if newValue > layoutHeight { layoutHeight = newValue }
+            }
         }
-        .scrollDismissesKeyboard(.immediately)
-        .onTapGesture { Keyboard.dismiss() }
         .background(AppColors.pageBackground)
         .sheet(isPresented: $showingAdd) {
             ShortcutEditorView(title: "", url: "") { title, url in
@@ -46,14 +66,39 @@ struct StartPage: View {
         }
     }
 
-    // MARK: - 搜索框
+    // MARK: - 顶部留白 + 搜索框（方案 C：输入框居中偏上）
+
+    /// 顶部留白高度：把输入框压到屏幕约 30% 处（拇指自然抬起就能碰到），
+    /// 上方空出来的区域承载站点标识，避免整块空白。
+    private func headerHeight(for available: CGFloat) -> CGFloat {
+        guard available > 1 else { return 56 }
+        return min(max(available * 0.26, 56), 220)
+    }
+
+    private var header: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "globe")
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(AppColors.separator)
+            Text("新标签页")
+                .font(.footnote)
+                .foregroundStyle(AppColors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
 
     private var searchBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
+                .font(.system(size: 17, weight: .regular))
                 .foregroundStyle(AppColors.textSecondary)
+                // 点图标也能进输入态（图标不参与 TextField 的命中区域）；
+                // 不在整个 HStack 上挂 tap —— 那层手势会把 TextField 的第一下点击抢走，键盘反而不弹
+                .onTapGesture { searchFocused = true }
             TextField("搜索或输入网址", text: $query)
                 .textFieldStyle(.plain)
+                .font(.system(size: 17))
                 .keyboardType(.webSearch)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
@@ -69,12 +114,14 @@ struct StartPage: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        // 高度约 52pt（17pt 正文 + 上下 16pt）：比旧版 46pt 更好按，
+        // 圆角同步放大到 16，与「大搜索框」的视觉一致
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
         .background(AppColors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(AppColors.separator, lineWidth: 0.5)
         )
     }

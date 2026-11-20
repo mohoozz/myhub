@@ -139,8 +139,12 @@ struct BrowserHomeView: View {
         .animation(Self.chromeMorph, value: toolbarMini)
         .animation(.appFast, value: addressEditing)
         .onChange(of: session.activeTabID) { _ in
-            // 打开/切换到网页标签 → 收为胶囊；起始页（需输入网址）→ 展开地址栏
-            toolbarMini = !(session.activeTab?.isShowingStartPage ?? true)
+            // 切换标签**不再**自动收起为胶囊（用户反馈：从标签网格点进任一网页标签，
+            // 操作栏会立刻缩成小胶囊，刚点完就失去落点）。
+            // 原实现按 `isShowingStartPage` 重算 `toolbarMini`，而标签网格里几乎全是真实网页，
+            // 于是「一次切换 = 一次强制收起」。收起只应由「滑动页面」触发（`scrollTick`）。
+            // 起始页那一支不必在此处理：`bottomChrome` 的 `toolbarMini && !isShowingStartPage`
+            // 已保证起始页一定显示展开的操作栏（自带的地址栏空白态）。
             // 切标签时地址栏内容已换页，留在编辑态会继续编辑上一个页面的 URL
             addressEditing = false
         }

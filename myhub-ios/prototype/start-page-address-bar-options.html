@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内置浏览器 · 空白页地址栏位置优化方案</title>
+<style>
+:root{--primary:#2563EB;--tb-line:#D1D5DB;--card-line:#EDF0F3;--sep:#E5E7EB;--tp:#1A1A2E;--ts:#6B7280;--fill:#F3F4F6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 64px}
+h1{font-size:22px;margin-bottom:6px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:26px;line-height:1.8;max-width:1100px}
+.subtitle code,.d-code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.board{width:340px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.before{background:#FEF3C7;color:#92400E}
+.tag.new{background:#D1FAE5;color:#047857}
+.desc{font-size:12px;color:var(--ts);line-height:1.75;min-height:150px;margin-bottom:10px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.phone{width:340px;height:680px;border:8px solid #111827;border-radius:40px;overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:0 12px 28px rgba(17,24,39,.18);background:#fff}
+.statusbar{height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11px;font-weight:600;background:#fff}
+.start{flex:1;overflow:hidden;padding:16px;background:#fff;position:relative;display:flex;flex-direction:column}
+/* 搜索框 */
+.sbar{display:flex;align-items:center;gap:8px;height:46px;border-radius:12px;background:var(--fill);border:1px solid var(--sep);padding:0 12px;font-size:13px;color:#9CA3AF}
+.sbar.big{height:52px;border-radius:14px}
+.sbar.capsule{border-radius:23px}
+/* 快捷入口 */
+.sec-h{display:flex;align-items:center;justify-content:space-between;margin:22px 0 14px}
+.sec-h .t{font-size:14px;font-weight:700}
+.sec-h .e{font-size:12px;color:var(--primary)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px 8px}
+.cell{display:flex;flex-direction:column;align-items:center;gap:6px}
+.cell .ic{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;background:#EEF2F7}
+.cell .nm{font-size:10.5px;color:var(--ts);white-space:nowrap}
+/* 底部浮层胶囊（浏览器操作栏） */
+.chrome{flex:none;margin:0 12px 12px;height:60px;background:#fff;border:1px solid var(--tb-line);border-radius:30px;box-shadow:0 8px 18px rgba(0,0,0,.10);display:flex;align-items:center;padding:0 6px;gap:4px}
+.nb{width:38px;height:48px;display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--tp);border-radius:24px}
+.nb.dim{color:#C3C7CE}
+.addr{flex:1;height:46px;border-radius:23px;background:var(--fill);display:flex;align-items:center;gap:6px;padding:0 14px;font-size:12px;color:#9CA3AF;min-width:0}
+.addr .u{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{display:flex;align-items:center;gap:3px;height:46px;padding:0 10px;border-radius:23px;background:var(--fill);font-size:13px;font-weight:600}
+.blank{flex:1}
+/* 高亮环：示意「拇指可达 / 点击热区」 */
+.ring{position:relative}
+.ring:after{content:"";position:absolute;inset:-7px;border:2px dashed #2563EB;border-radius:20px;pointer-events:none}
+.ring.r23:after{border-radius:26px}
+.reach{position:absolute;left:8px;right:8px;bottom:58px;height:210px;border:2px dashed #34D399;border-radius:26px;pointer-events:none;display:flex;align-items:flex-end;justify-content:center}
+.reach span{font-size:10px;color:#047857;background:#D1FAE5;border-radius:8px;padding:1px 6px;transform:translateY(9px)}
+.hint{position:absolute;right:12px;font-size:10px;color:#B45309;background:#FEF3C7;border-radius:8px;padding:2px 6px}
+table{border-collapse:collapse;margin-top:38px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06);max-width:1100px}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E5E7EB;vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:20px;font-size:12px;color:var(--ts);line-height:1.9;max-width:1100px}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>内置浏览器 · 空白页（起始页）地址栏位置优化</h1>
+<p class="subtitle">
+  现状：空白标签的输入框是 <code>StartPage.searchBar</code>，贴在<b>安全区顶部 + 16pt</b>（单手拇指基本够不到），
+  且它外面套了 <code>.contentShape(Rectangle())</code> + <code>.onTapGesture { Keyboard.dismiss() }</code>，
+  <b>点击很容易被这层手势吃掉</b>（点了没反应、要连点几次）——两个问题叠加成「在最上面不好点击」。<br>
+  下列 4 个方案都顺带修掉「手势吞点击」（改成 <code>simultaneousGesture</code> / 只挂背景层）。
+  蓝色虚线框 = 建议的点击热区，绿色虚线框 = 单手拇指自然可达区。
+</p>
+<div class="boards">
+
+<!-- ============ 现状 ============ -->
+<div class="board">
+  <h2>现状<span class="tag before">Before</span></h2>
+  <div class="desc">
+    输入框距屏幕顶边约 <b>75pt</b>（状态栏 47 + 16 + 卡片），46pt 高。<br>
+    底部操作栏在起始页把中区地址栏换成了 <code>Spacer</code>，只剩三个导航键和标签/菜单，
+    中间一段空着——<b>离拇指最近的位置反而不可点</b>。<br>
+    <span class="cons">问题：①位置过高；②点击被外层手势吞掉；③底部空占一条 60pt 的胶囊却不承担输入。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="start">
+      <div class="sbar ring">🔍 搜索或输入网址</div>
+      <div class="sec-h"><span class="t">快捷入口</span><span class="e">编辑</span></div>
+      <div class="grid">
+        <div class="cell"><div class="ic">🐙</div><div class="nm">GitHub</div></div>
+        <div class="cell"><div class="ic">📺</div><div class="nm">B 站</div></div>
+        <div class="cell"><div class="ic">🔍</div><div class="nm">Google</div></div>
+        <div class="cell"><div class="ic">📰</div><div class="nm">知乎</div></div>
+        <div class="cell"><div class="ic">➕</div><div class="nm">添加</div></div>
+      </div>
+      <div class="hint" style="top:74px">⚠️ 点击易被吞</div>
+    </div>
+    <div class="chrome">
+      <div class="nb dim">‹</div><div class="nb dim">›</div><div class="nb dim">↻</div>
+      <div class="blank"></div>
+      <div class="chip">⧉ 1</div><div class="nb">⋯</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 方案 A ============ -->
+<div class="board">
+  <h2>方案 A · 下移加大<span class="tag">最小改动</span></h2>
+  <div class="desc">
+    输入框从安全区顶部 16pt 下移到 <b>72pt</b>（落在拇指向下扫的第一落点），高度 46 → <b>52pt</b>，
+    圆角同步放大；顶部空出来的区域放一行极简的「无痕 / 标签数」状态，避免空荡。<br>
+    <span class="pros">优点：只改 <code>StartPage</code> 的 padding 与输入框高度，零结构风险；顺带修点击手势。</span><br>
+    <span class="cons">缺点：仍在屏幕上半区，大手 / 单手握持时仍需要换手；对「不好点」只解决一半。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="start">
+      <div style="height:40px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#9CA3AF">
+        <span>🌐 新标签页</span><span>共 1 个</span>
+      </div>
+      <div class="sbar big ring">🔍 搜索或输入网址</div>
+      <div class="sec-h"><span class="t">快捷入口</span><span class="e">编辑</span></div>
+      <div class="grid">
+        <div class="cell"><div class="ic">🐙</div><div class="nm">GitHub</div></div>
+        <div class="cell"><div class="ic">📺</div><div class="nm">B 站</div></div>
+        <div class="cell"><div class="ic">🔍</div><div class="nm">Google</div></div>
+        <div class="cell"><div class="ic">📰</div><div class="nm">知乎</div></div>
+        <div class="cell"><div class="ic">➕</div><div class="nm">添加</div></div>
+      </div>
+    </div>
+    <div class="chrome">
+      <div class="nb dim">‹</div><div class="nb dim">›</div><div class="nb dim">↻</div>
+      <div class="blank"></div>
+      <div class="chip">⧉ 1</div><div class="nb">⋯</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 方案 B ============ -->
+<div class="board">
+  <h2>方案 B · 输入框吸底<span class="tag rec">推荐</span></h2>
+  <div class="desc">
+    起始页<b>不再画独立搜索框</b>，改为底部操作栏在空白页也显示可点的地址栏（<code>BrowserToolbar</code>
+    去掉 <code>Spacer</code> 分支）。点它即进入编辑态、键盘弹起，内容区只剩快捷入口。<br>
+    <span class="pros">优点：输入框直接落在拇指区（Chrome iOS 同款）；消除了「底部一条 60pt 胶囊中间空着」的浪费；
+    起始页与网页页的操作栏形态完全一致，切换时不再有形变跳变。</span><br>
+    <span class="cons">缺点：视觉上少了一个「大搜索框」的引导，首次使用需要认出胶囊里的地址栏（可用占位文案「搜索或输入网址」弥补）。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="start">
+      <div class="sec-h" style="margin-top:6px"><span class="t">快捷入口</span><span class="e">编辑</span></div>
+      <div class="grid">
+        <div class="cell"><div class="ic">🐙</div><div class="nm">GitHub</div></div>
+        <div class="cell"><div class="ic">📺</div><div class="nm">B 站</div></div>
+        <div class="cell"><div class="ic">🔍</div><div class="nm">Google</div></div>
+        <div class="cell"><div class="ic">📰</div><div class="nm">知乎</div></div>
+        <div class="cell"><div class="ic">➕</div><div class="nm">添加</div></div>
+        <div class="cell"><div class="ic">🎬</div><div class="nm">YouTube</div></div>
+        <div class="cell"><div class="ic">📖</div><div class="nm">豆瓣</div></div>
+        <div class="cell"><div class="ic">🛒</div><div class="nm">淘宝</div></div>
+      </div>
+      <div class="reach"><span>拇指可达区</span></div>
+    </div>
+    <div class="chrome">
+      <div class="nb dim">‹</div><div class="nb dim">›</div><div class="nb dim">↻</div>
+      <div class="addr ring r23">🔍 <span class="u">搜索或输入网址</span></div>
+      <div class="chip">⧉ 1</div><div class="nb">⋯</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 方案 C ============ -->
+<div class="board">
+  <h2>方案 C · 居中大搜索<span class="tag">搜索优先</span></h2>
+  <div class="desc">
+    输入框垂直居中偏上（约屏高 32% 处），字号 17、高度 56，视觉上像 Spotlight；
+    上方留白承载站点统计，快捷入口整体下移到输入框之下。<br>
+    <span class="pros">优点：可点性明显改善（落在手自然抬起的位置）；「空白页」的空白被利用，搜索意图最强。</span><br>
+    <span class="cons">缺点：快捷入口被挤到下半屏，需要滚动才能看全；与常见浏览器起始页布局差异较大，学习成本高。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="start">
+      <div style="height:120px;display:flex;align-items:center;justify-content:center;color:#D1D5DB;font-size:44px">🌐</div>
+      <div class="sbar big ring" style="height:56px;font-size:15px">🔍 搜索或输入网址</div>
+      <div class="sec-h"><span class="t">快捷入口</span><span class="e">编辑</span></div>
+      <div class="grid">
+        <div class="cell"><div class="ic">🐙</div><div class="nm">GitHub</div></div>
+        <div class="cell"><div class="ic">📺</div><div class="nm">B 站</div></div>
+        <div class="cell"><div class="ic">🔍</div><div class="nm">Google</div></div>
+        <div class="cell"><div class="ic">📰</div><div class="nm">知乎</div></div>
+        <div class="cell"><div class="ic">➕</div><div class="nm">添加</div></div>
+      </div>
+    </div>
+    <div class="chrome">
+      <div class="nb dim">‹</div><div class="nb dim">›</div><div class="nb dim">↻</div>
+      <div class="blank"></div>
+      <div class="chip">⧉ 1</div><div class="nb">⋯</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 方案 D ============ -->
+<div class="board">
+  <h2>方案 D · 双入口<span class="tag">兼容并包</span></h2>
+  <div class="desc">
+    顶部搜索框保留（仅下移到 56pt、加高到 50pt），<b>同时</b>让底部操作栏在起始页显示地址栏：
+    爱用哪一个都行，两条入口共用同一个编辑态与同一个输入框组件。<br>
+    <span class="pros">优点：不需要用户改习惯；顶部留给「看着舒服」，底部负责「单手够得到」；两者都修好点击热区。</span><br>
+    <span class="cons">缺点：同屏两个输入入口，信息重复；底部胶囊与顶部搜索框并存的视觉密度偏高。</span>
+  </div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+    <div class="start">
+      <div style="height:32px;display:flex;align-items:center;font-size:12px;color:#9CA3AF">🌐 新标签页</div>
+      <div class="sbar big ring" style="height:50px">🔍 搜索或输入网址</div>
+      <div class="sec-h"><span class="t">快捷入口</span><span class="e">编辑</span></div>
+      <div class="grid">
+        <div class="cell"><div class="ic">🐙</div><div class="nm">GitHub</div></div>
+        <div class="cell"><div class="ic">📺</div><div class="nm">B 站</div></div>
+        <div class="cell"><div class="ic">🔍</div><div class="nm">Google</div></div>
+        <div class="cell"><div class="ic">📰</div><div class="nm">知乎</div></div>
+        <div class="cell"><div class="ic">➕</div><div class="nm">添加</div></div>
+      </div>
+    </div>
+    <div class="chrome">
+      <div class="nb dim">‹</div><div class="nb dim">›</div><div class="nb dim">↻</div>
+      <div class="addr ring r23">🔍 <span class="u">搜索或输入网址</span></div>
+      <div class="chip">⧉ 1</div><div class="nb">⋯</div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<table>
+  <tr><th>方案</th><th>可点性</th><th>改动范围</th><th>视觉风险</th><th>备注</th></tr>
+  <tr><td>现状</td><td>差（距顶 75pt + 手势吞点击）</td><td>—</td><td>—</td><td>底部胶囊中区空占</td></tr>
+  <tr><td>A 下移加大</td><td>中</td><td>仅 <code>StartPage</code> 布局</td><td>低</td><td>改动最小，可先上线</td></tr>
+  <tr><td><b>B 输入框吸底</b></td><td><b>好</b></td><td><code>StartPage</code> + <code>BrowserToolbar</code>（去掉起始页 Spacer 分支）</td><td>中（少了大搜索框引导）</td><td>推荐，与 Chrome iOS 一致</td></tr>
+  <tr><td>C 居中大搜索</td><td>好</td><td>仅 <code>StartPage</code> 布局</td><td>高（快捷入口被挤）</td><td>视觉变化最大</td></tr>
+  <tr><td>D 双入口</td><td>好</td><td><code>StartPage</code> + <code>BrowserToolbar</code></td><td>中（重复入口）</td><td>不改用户习惯</td></tr>
+</table>
+
+<p class="footnote">
+  <b>关于「点击被吞」的实现修复（4 个方案都需要）：</b>
+  现在 <code>StartPage</code> 在 <code>VStack</code> 上挂了 <code>.contentShape(Rectangle())</code> + <code>.onTapGesture { Keyboard.dismiss() }</code>，
+  这层手势与 <code>TextField</code> 的点击在同一链路上竞争，容易出现「第一下只收起键盘、没进入输入态」。
+  改法：收键盘的手势只挂在<b>背景层</b>（<code>Color.clear.contentShape(Rectangle()).onTapGesture</code> 垫在内容之下），
+  或把 <code>onTapGesture</code> 换成 <code>simultaneousGesture</code>，不再吃掉输入框与快捷入口的点击。<br>
+  <b>方案 B 的额外好处：</b>起始页与网页页共用同一条操作栏，切标签时的「展开 ⇄ 小胶囊」形变也不再出现（与本次另一处修复呼应）。
+  确认方案后我再改 <code>StartPage.swift</code> / <code>BrowserToolbar.swift</code>。
+</p>
+</body>
+</html>

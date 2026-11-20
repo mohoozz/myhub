@@ -462,6 +462,74 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
     }
 
+    // MARK: - 侧滑返回背景（上一页画面，Safari 风格）
+
+    /// 页面画面缓存，key 为 URL 绝对字符串。
+    ///
+    /// 侧滑返回时它铺在网页层之下：网页跟着手指右移，露出来的是**上一页真实画面**，
+    /// 而不是主题底色——旧实现下层是透明的，暗色模式下露出的是纯黑 `pageBackground`，
+    /// 读起来就是「滑进一块黑屏，松手后再刷一下才出画面」。
+    /// 首次打开浏览器（或该页从未加载完成）没有缓存，调用方回落到纯白底。
+    private var pageSnapshots: [String: UIImage] = [:]
+    /// 缓存淘汰顺序（先进先出）：只保留最近若干页，避免长会话里图片越积越多
+    private var pageSnapshotOrder: [String] = []
+    private static let maxPageSnapshots = 6
+    /// 抓取进行中标记：同一标签只允许一张在途快照
+    private var isCapturingPageSnapshot = false
+
+    /// 下一次回退的目标页画面：无缓存返回 `nil`（调用方用白底）。
+    ///
+    /// 读 `backForwardList` 是安全的：`isWebViewCreated` 已先行短路，
+    /// 不会在会话恢复的占位标签上触发 lazy 创建。
+    var backTargetSnapshot: UIImage? {
+        if usesRestoredHistory {
+            guard historyIndex > 0, historyURLs.indices.contains(historyIndex - 1) else { return nil }
+            return pageSnapshots[historyURLs[historyIndex - 1]]
+        }
+        guard isWebViewCreated, let item = webView.backForwardList.backItem else { return nil }
+        return pageSnapshots[item.url.absoluteString]
+    }
+
+    /// 抓取当前页画面，供下次侧滑返回当背景用（`didFinish` 时调用，可安全重复调用）。
+    ///
+    /// 与 `captureThumbnailIfNeeded` 分开：那张图给标签网格的卡片用（窄、只看顶部），
+    /// 这张给侧滑背景用（宽一点、要能铺满一屏），生命周期与用途都不同。
+    /// 无痕标签同样**不抓**：图像留在内存里与「无痕不落盘」的承诺冲突。
+    func capturePageSnapshot(targetWidth: CGFloat = 600) {
+        guard !isIncognito else { return }
+        guard isWebViewCreated, !isPendingRestore else { return }
+        guard let key = currentURL?.absoluteString, !isShowingStartPage else { return }
+        guard !isCapturingPageSnapshot else { return }
+
+        let size = webView.bounds.size
+        // 页面还没布局（从未显示）时抓不到有效画面，等这次 `didFinish` 之后的下次加载再试
+        guard size.width > 1, size.height > 1 else { return }
+
+        isCapturingPageSnapshot = true
+        let configuration = WKSnapshotConfiguration()
+        configuration.snapshotWidth = NSNumber(value: Double(targetWidth))
+        configuration.rect = CGRect(origin: .zero, size: size)
+
+        webView.takeSnapshot(with: configuration) { [weak self] image, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isCapturingPageSnapshot = false
+                guard let image else { return }
+                // 抓取期间页面可能已经跳走：过期帧直接丢弃，否则侧滑会露出错误的页面
+                guard key == self.currentURL?.absoluteString else { return }
+                self.storePageSnapshot(image, for: key)
+            }
+        }
+    }
+
+    private func storePageSnapshot(_ image: UIImage, for key: String) {
+        if pageSnapshots[key] == nil { pageSnapshotOrder.append(key) }
+        pageSnapshots[key] = image
+        while pageSnapshotOrder.count > Self.maxPageSnapshots {
+            pageSnapshots.removeValue(forKey: pageSnapshotOrder.removeFirst())
+        }
+    }
+
     /// 展示标签卡片网格所需的快照（用于持久化）
     var snapshot: BrowserTabSnapshot {
         // 先与原生历史栈对齐，保证落盘的是「最后一次导航后」的真实历史
@@ -681,6 +749,8 @@ extension BrowserTab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         clearError()
         extractFavicon()
+        // 留一张当前页画面：下次侧滑返回时作为下层的「上一页」背景（Safari 风格）
+        capturePageSnapshot()
         // 记录浏览历史（无痕不记录）
         if !isIncognito, let url = webView.url {
             onDidFinishVisit?(url, webView.title ?? "")
@@ -811,6 +881,26 @@ struct BrowserWebView: UIViewRepresentable {
         // 下层的起始页预览（`BrowserView.showsStartPagePreview`）会被整块遮住
         container.backgroundColor = .clear
 
+        // 侧滑背景（Safari 风格）：铺在网页层之下、宿主之上的「上一页」画面。
+        // 旧实现这一层是缺的，网页右移后露出的是 SwiftUI 的 `pageBackground`——
+        // 暗色模式下它就是纯黑，回退到未缓存页面时同样是一片黑。
+        // 现在：恒为白底（首次打开 / 该页无缓存），有上一页快照时铺快照；
+        // 只在侧滑手势期间显示，平时隐藏，避免盖住下层的起始页预览。
+        let backdrop = UIImageView()
+        backdrop.backgroundColor = .white
+        backdrop.contentMode = .scaleAspectFill
+        backdrop.clipsToBounds = true
+        backdrop.isHidden = true
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(backdrop)
+        NSLayoutConstraint.activate([
+            backdrop.topAnchor.constraint(equalTo: container.topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        ])
+        context.coordinator.backdropView = backdrop
+
         let moving = UIView()
         moving.backgroundColor = .white
         moving.translatesAutoresizingMaskIntoConstraints = false
@@ -893,6 +983,11 @@ struct BrowserWebView: UIViewRepresentable {
            let moving = context.coordinator.movingView {
             if moving.transform != .identity { moving.transform = .identity }
             if moving.alpha != 1 { moving.alpha = 1 }
+            // 背景层同样复位：手势被系统打断时不会走 completion，残留的白底 / 快照会
+            // 一直盖在下层（有起始页预览时整块起始页都看不见）
+            if let backdrop = context.coordinator.backdropView, !backdrop.isHidden {
+                context.coordinator.resetBackdrop()
+            }
         }
     }
 
@@ -901,6 +996,8 @@ struct BrowserWebView: UIViewRepresentable {
         weak var edgeGesture: UIScreenEdgePanGestureRecognizer?
         /// 侧滑位移层：手势只移动它，绝不移动挂手势的宿主（见 `makeUIView` 的两层结构）
         weak var movingView: UIView?
+        /// 侧滑背景层（白底 + 上一页快照），躲在 `movingView` 之下，只在手势期间显示
+        weak var backdropView: UIImageView?
         /// 侧滑返回的收尾动画（回弹 / 「滑出 → 滑入」）是否仍在进行。
         /// 是 `updateUIView` 归位兜底的唯一豁免依据：动画进行中若被兜底把 `transform` 归零，
         /// 就会退化成「一帧瞬移」，回弹的阻尼与滑入的位移全部失效。
@@ -937,6 +1034,8 @@ struct BrowserWebView: UIViewRepresentable {
                 moving.layer.removeAllAnimations()
                 moving.transform = .identity
                 moving.alpha = 1
+                // 下层背景就位：白底 or 上一页画面（见方法注释）
+                prepareBackdrop()
             case .changed:
                 // 夹在 [0, width]：只允许向右滑出，且最多移出一屏（回拖到负值时归零，
                 // 避免松手前出现「反向也跟手」）
@@ -958,6 +1057,31 @@ struct BrowserWebView: UIViewRepresentable {
             }
         }
 
+        /// 侧滑起手时准备下层背景（Safari 风格：白底 / 上一页画面）。
+        ///
+        /// - 下一步回退是起始页：下层已有常驻的起始页预览（`BrowserView.showsStartPagePreview`），
+        ///   再铺一层白底会把整块起始页盖掉，故保持隐藏，让预览直接露出来；
+        /// - 页面间回退：白底 + 回退目标页的快照。**没有缓存就是纯白**——
+        ///   这是「首次打开内置浏览器」的默认底色，不再是暗色模式下的纯黑。
+        private func prepareBackdrop() {
+            guard let backdrop = backdropView else { return }
+            let tab = parent.tab
+            guard !tab.backLeadsToStartPage else {
+                backdrop.isHidden = true
+                return
+            }
+            backdrop.image = tab.backTargetSnapshot
+            backdrop.isHidden = false
+        }
+
+        /// 收尾结束：隐藏背景层并释放图片，避免长会话里一直占着整屏位图。
+        /// 非 private：`updateUIView` 的归位兜底也要用它（手势被打断时 completion 不会回调）
+        func resetBackdrop() {
+            guard let backdrop = backdropView else { return }
+            backdrop.isHidden = true
+            backdrop.image = nil
+        }
+
         /// 未过阈值：带阻尼弹回原位（`beginFromCurrentState` 保证从当前手势位移处接着动，不跳帧）
         private func springBack(_ moving: UIView) {
             guard !isCompletingBack else { return }
@@ -975,10 +1099,11 @@ struct BrowserWebView: UIViewRepresentable {
                 // 代号不符说明手势已重新起手，新一轮自己管自己的状态
                 guard let self, generation == self.swipeGeneration else { return }
                 self.isCompletingBack = false
+                self.resetBackdrop()
             }
         }
 
-        /// 过阈值：先让当前页整块滑出，再在新页面上做入场，把「内容替换」藏进不可见的那一帧。
+        /// 过阈值：当前页整块滑出，露出下层背景，然后换页、就绪后原位淡入。
         ///
         /// 旧实现的两个问题（用户反馈：滑动中画面不跟手、松手后闪一下才回到上一页）：
         /// 1. 页面间回退走的是系统 `allowsBackForwardNavigationGestures`，其跟手动画在本结构下失效，
@@ -986,11 +1111,12 @@ struct BrowserWebView: UIViewRepresentable {
         /// 2. 收尾时一边淡出当前页、一边 `goBack()` 后立刻滑入，而 WebKit 换页要几帧到几百毫秒——
         ///    滑进来的还是旧页面/白底，中途被替换，读起来就是「闪一下」。
         ///
-        /// 现在收尾只做纯位移（不淡出，避免露出底色再淡回来），且位移层在屏外**等新页面就绪**
-        /// （`slideInWhenPageReady`）才滑入：
+        /// 现在：滑出阶段只做纯位移（不淡出），露出的下层是白底 / 上一页画面（`prepareBackdrop`）；
+        /// 位移层在屏外等新页面就绪后**原位淡入**（`revealWhenPageReady`），
+        /// 观感是「页面就地换成上一页」，而不是「再刷一次才出画面」。
         /// - **回到起始页**：下层常驻起始页预览（`BrowserView.showsStartPagePreview`），
         ///   位移层留在屏外，等起始页插入后的那次 SwiftUI 更新由 `updateUIView` 兜底归位；
-        /// - **页面间回退**：等 `isLoading` 落下来再滑入，入场帧里已经是上一页。
+        /// - **页面间回退**：等页面就绪后归位 + 淡入。
         private func completeBack(on moving: UIView) {
             guard !isCompletingBack else { return }
             isCompletingBack = true
@@ -999,8 +1125,9 @@ struct BrowserWebView: UIViewRepresentable {
             let generation = swipeGeneration
             moving.layer.removeAllAnimations()
 
+            // 0.22s：比旧的 0.18s 略长，滑出末段更能「收住」，与 Safari 的松手收尾接近
             UIView.animate(
-                withDuration: 0.18,
+                withDuration: 0.22,
                 delay: 0,
                 options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
             ) {
@@ -1017,23 +1144,24 @@ struct BrowserWebView: UIViewRepresentable {
                     self.isCompletingBack = false
                     // 保底归位：正常路径是「起始页插入后的那次 SwiftUI 更新」由 `updateUIView` 兜底归位；
                     // 这里只防「此后没有任何状态变化、`updateUIView` 不再被调用」时位移层卡在屏外
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak moving] in
-                        guard let moving, generation == self.swipeGeneration else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak moving] in
+                        guard let moving, let self, generation == self.swipeGeneration else { return }
                         moving.transform = .identity
+                        self.resetBackdrop()
                     }
                     return
                 }
 
-                self.slideInWhenPageReady(on: moving, width: width, generation: generation, attempt: 0)
+                self.revealWhenPageReady(on: moving, width: width, generation: generation, attempt: 0)
             }
         }
 
-        /// 等回退后的页面真正就绪（`isLoading` 落下，最多约 0.6s）再从左侧滑入。
+        /// 等回退后的页面真正就绪（`isLoading` 落下，最多约 0.4s）后**原位淡入**。
         ///
-        /// 回退是异步导航：`goBack()` 返回时 WebKit 往往还没换完页。若此刻就滑入，
-        /// 动画播的是旧页面，换页发生在众目睽睽之下（闪屏）。这里让位移层先在屏外等着，
-        /// 就绪后从左侧 30% 处弹入，与离场方向构成一次连贯的左右推进。
-        private func slideInWhenPageReady(
+        /// 旧实现从左侧 `-30%` 宽度弹入：页面在屏外等 loading，就绪后整块横推进来，
+        /// 读起来是「松手 → 画面飞进来 → 又刷一下」。Safari 的手感是「松手后直接落在上一页」，
+        /// 这里改成归位 + 0.16s 淡入：下层始终垫着上一页快照，淡入几乎不可察觉。
+        private func revealWhenPageReady(
             on moving: UIView,
             width: CGFloat,
             generation: Int,
@@ -1042,28 +1170,27 @@ struct BrowserWebView: UIViewRepresentable {
             guard generation == swipeGeneration else { return }
             let tab = parent.tab
             // 首轮先让出一帧多：`goBack()` 触发的是 next runloop 的导航状态更新，
-            // 立刻读 `isLoading` 永远是旧值（false），会当场滑入
-            let delay: TimeInterval = attempt == 0 ? 0.06 : 0.03
+            // 立刻读 `isLoading` 永远是旧值（false），会当场归位
+            let delay: TimeInterval = attempt == 0 ? 0.05 : 0.02
             if (attempt == 0 || tab.isLoading), attempt < 20 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    self?.slideInWhenPageReady(on: moving, width: width, generation: generation, attempt: attempt + 1)
+                    self?.revealWhenPageReady(on: moving, width: width, generation: generation, attempt: attempt + 1)
                 }
                 return
             }
 
-            moving.transform = CGAffineTransform(translationX: -width * 0.3, y: 0)
+            moving.transform = .identity
+            moving.alpha = 0
             UIView.animate(
-                withDuration: 0.26,
+                withDuration: 0.16,
                 delay: 0,
-                usingSpringWithDamping: 0.92,
-                initialSpringVelocity: 0,
                 options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
             ) {
-                moving.transform = .identity
                 moving.alpha = 1
             } completion: { [weak self] _ in
                 guard let self, generation == self.swipeGeneration else { return }
                 self.isCompletingBack = false
+                self.resetBackdrop()
             }
         }
 
