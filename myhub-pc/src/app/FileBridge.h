@@ -6,6 +6,8 @@
 #include <QStringList>
 #include <QVariantMap>
 
+#include <functional>
+
 namespace myhub {
 
 class StorageAdapter;
@@ -29,6 +31,7 @@ class FileBridge : public QObject
 public:
     explicit FileBridge(QObject *parent = nullptr);
 
+    /// 含「等串流注销」的过渡期：这段时间也在忙，但尚未真正开始文件操作
     bool busy() const;
 
     Q_INVOKABLE void createFolder(const QString &connectionId, const QString &parentPath,
@@ -118,8 +121,26 @@ private:
      *
      * Windows 下被解码器占用的文件会删除失败（共享冲突），
      * 与其让用户看到「删除失败：文件被占用」，不如先停播（§3.3 占用处理）。
+     *
+     * @return true 表示确实停了一个正在播放的条目，调用方需等待串流会话注销后再删
      */
-    void stopPlaybackFor(const QString &connectionId, const QStringList &paths);
+    bool stopPlaybackFor(const QString &connectionId, const QStringList &paths);
+
+    /// 删除前关掉正在阅读该条目的阅读器（漫画 / 小说 / 纯文本各一份会话）
+    void stopReadingFor(const QString &connectionId, const QStringList &paths);
+
+    /**
+     * 等回环代流连接全部关闭，再执行 `then`（§3.3）。
+     *
+     * `PlayerCore::close()` 只保证「不再播」，mpv 收尾、socket 断开是异步的，
+     * 这期间源文件仍被占着。这里以 25ms 轮询等它松手，**最长 1s**：
+     * 到点即便还占着也放行 —— 残余占用交给 FileOperations 的退避重试去碰运气，
+     * 删不掉才有具体原因报给用户，不能因为一个僵死的连接把删除无限挂起。
+     */
+    void waitForStreamsIdle(const std::function<void()> &then);
+
+    /// 等待串流注销中（算进 busy，避免用户重复提交删除）
+    bool m_waitingForStreams = false;
 };
 
 } // namespace myhub

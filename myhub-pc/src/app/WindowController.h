@@ -30,6 +30,19 @@ class WindowController : public QObject
     Q_PROPERTY(bool minimizeToFloating READ minimizeToFloating WRITE setMinimizeToFloating NOTIFY
                    minimizeToFloatingChanged)
 
+    /// 当前是否全屏（只读，跟窗口 visibility 走）
+    Q_PROPERTY(bool fullScreen READ fullScreen NOTIFY fullScreenChanged)
+
+    /**
+     * 播放器全屏偏好（§14.6「窗口/全屏偏好缓存」）。
+     *
+     * 只记「用户在播放器里主动切全屏」这件事：下次进入播放器照办，
+     * 退出播放器时自动退回窗口态 —— 偏好不接管主界面。
+     * F11 之类与播放器无关的切换不写这里。
+     */
+    Q_PROPERTY(bool playerFullScreen READ playerFullScreen WRITE setPlayerFullScreen NOTIFY
+                   playerFullScreenChanged)
+
 public:
     explicit WindowController(QObject *parent = nullptr);
 
@@ -47,6 +60,17 @@ public:
     void setSidebarCollapsed(bool v);
 
     Q_INVOKABLE void toggleFullScreen();
+
+    /// 播放器语境下的全屏切换：切完顺手把结果记成偏好
+    Q_INVOKABLE void togglePlayerFullScreen();
+
+    /// 幂等的进 / 退全屏（不碰偏好），供程序性切换用（关播放器、恢复偏好）
+    Q_INVOKABLE void enterFullScreen();
+    Q_INVOKABLE void exitFullScreen();
+
+    bool fullScreen() const;
+    bool playerFullScreen() const;
+    void setPlayerFullScreen(bool v);
 
     /**
      * 进入 / 退出置顶悬浮小窗（§4.4）。
@@ -84,6 +108,8 @@ signals:
     void sidebarCollapsedChanged();
     void floatingChanged();
     void minimizeToFloatingChanged();
+    void fullScreenChanged();
+    void playerFullScreenChanged();
 
 private:
     /// 确保窗口矩形至少部分落在某个屏幕内，避免显示器变更后窗口「消失」

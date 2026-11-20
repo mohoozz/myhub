@@ -39,8 +39,9 @@ enum NextMediaFinder {
     }
 }
 
-/// 「下一个：xxx」底部提示（IOS-204 / IOS-208）：播完 / 翻完推荐同目录下一个（视频 / 音频 / 漫画），
+/// 「下一个：xxx」提示（IOS-204 / IOS-208）：播完 / 翻完推荐同目录下一个（视频 / 音频 / 漫画），
 /// 不自动播放、不自动切换，由用户点击提示条才播放 / 打开，或点 × 取消。
+/// 位置由播放页固定在中央按钮正下方，不随控制栏显隐移动。
 struct NextMediaTip: View {
     let entry: FileEntry
     let onPlay: () -> Void
@@ -89,6 +90,5 @@ struct NextMediaTip: View {
         }
         .padding(.horizontal, 24)
         .frame(maxWidth: 480)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }

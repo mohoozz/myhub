@@ -63,6 +63,15 @@ public:
     void clearStreams();
     int streamCount() const { return m_streams.size(); }
 
+    /**
+     * 当前未关闭的流连接数（§3.3 占用处理）。
+     *
+     * 播放器 stop() 只是「告诉 mpv 别播了」，它到真正关闭回环连接之间还有一段收尾；
+     * 这段时间里源文件仍被占着，Windows 上直接删会报共享冲突。
+     * 上层（删除流程）据此等待，非 0 就再等一会儿。
+     */
+    int activeConnections() const { return m_activeConnections; }
+
     /// 非阻塞探活（300ms）；僵死则换端口重建监听
     void verifyHealth();
     /// 探活超时（毫秒），供测试缩短
@@ -74,6 +83,8 @@ signals:
     /// 监听换端口了：旧 URL 全部失效，上层需用新 baseUrl 重开正在播的流
     void listenerRebuilt(quint16 oldPort, quint16 newPort);
     void healthChecked(bool ok);
+    /// 活跃流连接数变化（开 / 关一条回环连接都发）
+    void connectionsChanged();
 
 private:
     friend class StreamHttpConnection;
@@ -81,10 +92,13 @@ private:
     void onNewConnection();
     void rebuildListener();
     QString urlFor(const QString &id, const QString &fileName) const;
+    /// 连接建立 / 关闭时记账；变化才发 signals
+    void trackConnection(bool opened);
 
     QTcpServer *m_server = nullptr;
     quint16 m_port = 0;
     QHash<QString, Stream> m_streams;
+    int m_activeConnections = 0;
 
     int m_healthTimeoutMs = 300;
     bool m_healthInFlight = false;

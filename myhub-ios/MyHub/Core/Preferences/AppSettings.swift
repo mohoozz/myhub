@@ -167,6 +167,8 @@ enum AppSettings {
         @RawUserDefault("player.orientationMode", default: .manual) static var orientationMode: PlayerOrientationMode
         /// 手动模式下缓存的方向偏好（true = 横屏）：退出播放页不重置，下次播放沿用
         @UserDefault("player.landscapePreferred", default: false) static var landscapePreferred: Bool
+        /// 播放完成后是否显示「下一个」提示条（默认开启；关闭则不查询、不弹出）
+        @UserDefault("player.showNextMediaTip", default: true) static var showNextMediaTip: Bool
 
         /// 一次性迁移（发热优化）：旧默认预读窗口 30s 会让播放器与代理持续满速下载并写盘。
         /// 只下调「从未改过」的旧默认值（== 30），用户手动调过的值保持不动。

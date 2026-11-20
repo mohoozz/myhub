@@ -164,9 +164,14 @@ StreamHttpConnection::StreamHttpConnection(LocalStreamProxy *proxy, QTcpSocket *
             pump();
     });
     connect(m_socket, &QTcpSocket::disconnected, this, &QObject::deleteLater);
+
+    m_proxy->trackConnection(true);
 }
 
-StreamHttpConnection::~StreamHttpConnection() = default;
+StreamHttpConnection::~StreamHttpConnection()
+{
+    m_proxy->trackConnection(false);
+}
 
 void StreamHttpConnection::onReadyRead()
 {
@@ -386,6 +391,16 @@ LocalStreamProxy::LocalStreamProxy(QObject *parent)
 LocalStreamProxy::~LocalStreamProxy()
 {
     m_streams.clear();
+}
+
+void LocalStreamProxy::trackConnection(bool opened)
+{
+    const int before = m_activeConnections;
+    m_activeConnections += opened ? 1 : -1;
+    if (m_activeConnections < 0)
+        m_activeConnections = 0;
+    if (m_activeConnections != before)
+        emit connectionsChanged();
 }
 
 void LocalStreamProxy::onNewConnection()

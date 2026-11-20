@@ -62,12 +62,26 @@ final class SubtitleRenderView: UIView {
     private var clockBase: TimeInterval = 0
     private var clockAnchor: CFTimeInterval = CACurrentMediaTime()
     private var clockPlaying = false
+    /// 追赶修正（-0.25…0.25）：校准时只微调推进速率、不改位置，滚动弹幕才不会一跳一跳
+    private var clockRateCorrection: Double = 0
 
     private struct CachedText {
-        let string: NSAttributedString
-        let size: CGSize
+        /// 已经按字号/描边预渲染好的位图（含描边留白）
+        let image: UIImage
+        /// 文字块尺寸（点，不含留白），用于对齐定位
+        let textSize: CGSize
+        /// 位图四周的留白（描边/阴影外扩）
+        let padding: CGFloat
     }
-    private var textCache: [String: CachedText] = [:]
+    private struct TextKey: Hashable {
+        let id: Int
+        let fontBucket: Int      // 字号 ×2，避免浮点抖动造成缓存失效
+        let outlineBucket: Int   // 描边 ×10
+        let shadowBucket: Int    // 阴影 ×10
+    }
+    private var textCache: [TextKey: CachedText] = [:]
+    /// 当前帧在屏 cue 的 id（缓存溢出时只保留这些，避免整片清空导致下一帧集中重绘）
+    private var visibleCueIDs: Set<Int> = []
     private var fontCache: [String: UIFont] = [:]
     private var displayLink: CADisplayLink?
     private let linkProxy = SubtitleDisplayLinkProxy()
@@ -104,7 +118,7 @@ final class SubtitleRenderView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        textCache.removeAll()
+        // 位图尺寸只与字号/描边有关（点为单位），布局变化不必丢弃缓存
         setNeedsDisplay()
     }
 
@@ -114,11 +128,15 @@ final class SubtitleRenderView: UIView {
         let target = time - subtitleDelay
         let predicted = currentTime()
         let delta = target - predicted
-        // 暂停 / seek 直接对齐；正常播放缓慢收敛，避免 4Hz 校准造成抖动
-        if !clockPlaying || abs(delta) > 0.5 || abs(delta) < 0.001 {
+        if !clockPlaying || abs(delta) > 0.6 {
+            // 暂停 / seek / 大跳变：直接对齐
             clockBase = target
+            clockRateCorrection = 0
         } else {
-            clockBase = predicted + delta * 0.35
+            // 正常播放：位置保持连续，只把误差摊进推进速率（±25%）慢慢追平。
+            // 以前直接改位置，4Hz 校准一次就跳一下——滚动弹幕看起来一卡一卡的。
+            clockBase = predicted
+            clockRateCorrection = abs(delta) < 0.02 ? 0 : max(-0.2, min(0.2, delta * 2.5))
         }
         clockAnchor = CACurrentMediaTime()
         if !timelineHasAnimation { setNeedsDisplay() }
@@ -127,7 +145,8 @@ final class SubtitleRenderView: UIView {
     private func currentTime() -> TimeInterval {
         guard clockPlaying else { return clockBase }
         let elapsed = CACurrentMediaTime() - clockAnchor
-        return clockBase + elapsed * Double(max(0.1, playbackRate))
+        let rate = Double(max(0.1, playbackRate)) * (1 + clockRateCorrection)
+        return clockBase + elapsed * rate
     }
 
     private func updateDisplayLink() {
@@ -135,7 +154,7 @@ final class SubtitleRenderView: UIView {
         if needed {
             guard displayLink == nil else { return }
             let link = CADisplayLink(target: linkProxy, selector: #selector(SubtitleDisplayLinkProxy.tick))
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 60, preferred: 60)
             link.add(to: .main, forMode: .common)
             displayLink = link
         } else if let link = displayLink {
@@ -154,6 +173,7 @@ final class SubtitleRenderView: UIView {
         let videoRect = resolvedVideoRect()
         let time = currentTime()
         let active = activeCues(at: time)
+        visibleCueIDs = Set(active.map(\.id))
         guard !active.isEmpty else { return }
         let metrics = resolveMetrics(videoRect: videoRect)
         for cue in active {
@@ -243,22 +263,18 @@ final class SubtitleRenderView: UIView {
             ? cue.style.outlineWidth * metrics.fontScale
             : max(1.2, simpleFontSize * 0.09)
         // ASS 的 Outline 是 PlayRes 单位，弹幕/字幕文件里常出现「小字号配大描边」（如 25 号字配 2 描边）。
-        // CoreText 描边是**居中**绘制的，描边越宽字形填充被吃掉越多——白字会被描边糊成深色一团。
-        // 按字号单边限幅 5%，既保留原来的粗细比例，又保证填充始终可见（SRT 的描边是调过的，不动）。
-        let outlineWidth = metrics.isAss ? min(rawOutline, fontSize * 0.05) : rawOutline
+        // 描边由 renderedImage 以「外描边」方式绘制（不会吃掉字形填充），此处仅做异常值限幅。
+        let outlineWidth = metrics.isAss ? min(rawOutline, fontSize * 0.12) : rawOutline
         let shadowOffset = metrics.isAss ? cue.style.shadow * metrics.fontScale : 0
-        let cached = attributedText(
+        let cached = renderedImage(
             for: cue,
             fontSize: fontSize,
             outlineWidth: outlineWidth,
             shadowOffset: shadowOffset
         )
         let anchor = anchorPoint(for: cue, at: time, videoRect: videoRect, metrics: metrics)
-        let origin = blockOrigin(blockSize: cached.size, anchor: anchor, alignment: cue.style.alignment)
-        cached.string.draw(in: CGRect(
-            origin: origin,
-            size: CGSize(width: cached.size.width + 2, height: cached.size.height + 2)
-        ))
+        let origin = blockOrigin(blockSize: cached.textSize, anchor: anchor, alignment: cue.style.alignment)
+        cached.image.draw(at: CGPoint(x: origin.x - cached.padding, y: origin.y - cached.padding))
     }
 
     /// 锚点（视图坐标）
@@ -342,13 +358,22 @@ final class SubtitleRenderView: UIView {
 
     // MARK: - 文本构建
 
-    private func attributedText(
+    /// 把一条字幕预渲染成位图（按文字 + 样式缓存）。
+    /// 描边分两遍画：先画「空心描边」打底，再用纯填充盖住描边内半圈 —— 等效于 libass 的外描边。
+    /// 之前用负值 strokeWidth 一遍画完，CoreText 的描边是**居中**的，会吃掉字形填充；
+    /// 弹幕这种「25 号字 + 2 描边」的小字场景下白字会被黑色描边糊成深色一团。
+    private func renderedImage(
         for cue: SubtitleCue,
         fontSize: CGFloat,
         outlineWidth: CGFloat,
         shadowOffset: CGFloat
     ) -> CachedText {
-        let key = "\(cue.id)|\(Int(fontSize * 2))|\(Int(outlineWidth * 10))|\(Int(shadowOffset * 10))"
+        let key = TextKey(
+            id: cue.id,
+            fontBucket: Int(fontSize * 2),
+            outlineBucket: Int(outlineWidth * 10),
+            shadowBucket: Int(shadowOffset * 10)
+        )
         if let cached = textCache[key] { return cached }
 
         let style = cue.style
@@ -360,32 +385,58 @@ final class SubtitleRenderView: UIView {
         default: paragraph.alignment = .center
         }
 
-        var attributes: [NSAttributedString.Key: Any] = [
+        let fillAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: readableFill(for: style),
             .paragraphStyle: paragraph
         ]
-        // 描边：strokeWidth 为字号百分比，负值 = 填充 + 描边（外描边宽度按一半折算）
-        if outlineWidth > 0.01 {
-            attributes[.strokeColor] = style.outlineColor
-            attributes[.strokeWidth] = -(200 * outlineWidth / fontSize)
-        }
-        if shadowOffset > 0.01 {
-            let shadow = NSShadow()
-            shadow.shadowColor = UIColor.black.withAlphaComponent(0.8)
-            shadow.shadowOffset = CGSize(width: shadowOffset, height: shadowOffset)
-            shadow.shadowBlurRadius = 0
-            attributes[.shadow] = shadow
-        }
-
-        let string = NSAttributedString(string: cue.text, attributes: attributes)
-        let measured = string.boundingRect(
+        let fillText = NSAttributedString(string: cue.text, attributes: fillAttributes)
+        let measured = fillText.boundingRect(
             with: CGSize(width: 10000, height: 10000),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil
         ).size
-        let result = CachedText(string: string, size: measured)
-        if textCache.count > 800 { textCache.removeAll() }
+        guard measured.width > 0.5, measured.height > 0.5 else {
+            let empty = CachedText(image: UIImage(), textSize: .zero, padding: 0)
+            textCache[key] = empty
+            return empty
+        }
+
+        // 位图四周留出描边/阴影外扩的空间，避免被裁掉
+        let padding = ceil(outlineWidth + shadowOffset) + 1
+        let canvas = CGSize(
+            width: ceil(measured.width) + padding * 2,
+            height: ceil(measured.height) + padding * 2
+        )
+        let drawRect = CGRect(x: padding, y: padding, width: measured.width, height: measured.height)
+
+        let renderer = UIGraphicsImageRenderer(size: canvas)
+        let image = renderer.image { _ in
+            if shadowOffset > 0.01 {
+                let shadow = NSShadow()
+                shadow.shadowColor = UIColor.black.withAlphaComponent(0.8)
+                shadow.shadowOffset = CGSize(width: shadowOffset, height: shadowOffset)
+                shadow.shadowBlurRadius = 0
+                var attributes = fillAttributes
+                attributes[.shadow] = shadow
+                NSAttributedString(string: cue.text, attributes: attributes).draw(in: drawRect)
+            }
+            if outlineWidth > 0.01 {
+                var attributes = fillAttributes
+                attributes[.foregroundColor] = style.outlineColor
+                attributes[.strokeColor] = style.outlineColor
+                // 正值 = 只描边、不填充；取 2 倍外扩宽度，内半圈随后被填充盖掉
+                attributes[.strokeWidth] = 200 * outlineWidth / fontSize
+                NSAttributedString(string: cue.text, attributes: attributes).draw(in: drawRect)
+            }
+            fillText.draw(in: drawRect)
+        }
+
+        let result = CachedText(image: image, textSize: measured, padding: padding)
+        // 超量时只淘汰已经离屏的字幕，避免播放中突然整体清空造成集中重绘（一帧掉帧）
+        if textCache.count > 400 {
+            textCache = textCache.filter { visibleCueIDs.contains($0.key.id) }
+        }
         textCache[key] = result
         return result
     }

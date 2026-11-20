@@ -48,6 +48,9 @@ QtObject {
             // 否则进去只有一帧定格，用户还得自己找一次重播按钮
             if (Player.state === Player.Ended)
                 Player.replay()
+            // 上次在播放器里主动开的是全屏，这次进来照办（§14.6 偏好缓存）
+            if (WindowController.playerFullScreen)
+                WindowController.enterFullScreen()
             mode = "full"
         }
     }
@@ -86,6 +89,8 @@ QtObject {
     function hide() {
         if (floating)
             WindowController.exitFloating()
+        // 偏好只管「下次进来」，播放器收起就退回窗口态，别把浏览界面困在全屏里
+        WindowController.exitFullScreen()
         mode = "hidden"
     }
 

@@ -13,6 +13,7 @@ struct PlayerPreferencesView: View {
     @State private var seekStepSeconds = AppSettings.Player.seekStepSeconds
     @State private var autoPiPOnBackground = AppSettings.Player.autoPiPOnBackground
     @State private var orientationMode = AppSettings.Player.orientationMode
+    @State private var showNextMediaTip = AppSettings.Player.showNextMediaTip
 
     private static let speedOptions: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]
     private static let seekStepOptions: [Double] = [5, 10, 15, 30]
@@ -37,10 +38,11 @@ struct PlayerPreferencesView: View {
                 }
                 Toggle("默认纯音频模式", isOn: $audioOnlyByDefault)
                 Toggle("退后台自动画中画", isOn: $autoPiPOnBackground)
+                Toggle("播完提示下一个", isOn: $showNextMediaTip)
             } header: {
                 Text("播放")
             } footer: {
-                Text("横竖屏切换：手动模式点播放页左侧按钮切换，并记住方向供下次播放沿用；自动模式跟随手机横放/竖放。退后台自动画中画：开启后，播放视频时 App 切换到后台将自动进入画中画；默认关闭，仍可通过播放页的画中画按钮手动开启。")
+                Text("横竖屏切换：手动模式点播放页左侧按钮切换，并记住方向供下次播放沿用；自动模式跟随手机横放/竖放。退后台自动画中画：开启后，播放视频时 App 切换到后台将自动进入画中画；默认关闭，仍可通过播放页的画中画按钮手动开启。播完提示下一个：播放结束后在中央按钮下方显示同目录的下一个视频/音频，点击才播放；关闭后不再显示该提示条。")
             }
             Section {
                 Picker("解码偏好", selection: $decodePreference) {
@@ -98,6 +100,7 @@ struct PlayerPreferencesView: View {
         .onChange(of: volumeStep) { AppSettings.Player.volumeStep = $0 }
         .onChange(of: seekStepSeconds) { AppSettings.Player.seekStepSeconds = $0 }
         .onChange(of: orientationMode) { AppSettings.Player.orientationMode = $0 }
+        .onChange(of: showNextMediaTip) { AppSettings.Player.showNextMediaTip = $0 }
     }
 
     private func valueRow<Content: View>(

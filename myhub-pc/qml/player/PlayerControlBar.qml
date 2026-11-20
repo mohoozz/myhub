@@ -17,6 +17,9 @@ Item {
     signal subtitleMenuRequested(var anchor)
     signal audioMenuRequested(var anchor)
     signal lockRequested()
+
+    /// 有按钮正在长按（锁按钮）：控制层别在这时自动隐藏，否则长按被打断
+    readonly property bool holdActive: lockButton.holdProgress > 0
     signal fullScreenRequested()
 
     implicitHeight: 92
@@ -208,10 +211,31 @@ Item {
             onClicked: root.audioMenuRequested(audioButton)
         }
 
-        PlayerButton {
-            iconName: "lock"
-            tooltip: qsTr("锁定界面 (L)")
-            onClicked: root.lockRequested()
+        // 界面锁定（§14.6）：长按 0.65s 触发，环跟着按住时长走；
+        // 短按只提示「长按」，避免想点全屏却把界面锁了
+        Item {
+            width: 40
+            height: 40
+
+            PlayerButton {
+                id: lockButton
+                anchors.fill: parent
+                iconName: "lock"
+                tooltip: qsTr("长按锁定界面（或按 L）")
+                holdDuration: 650
+                onHeld: root.lockRequested()
+                onClicked: root.osdRequested("lock", qsTr("长按 0.6 秒锁定界面"))
+            }
+
+            ProgressRing {
+                anchors.fill: parent
+                anchors.margins: 1
+                visible: lockButton.holdProgress > 0.001
+                progress: lockButton.holdProgress
+                strokeWidth: 2.2
+                trackColor: Qt.rgba(1, 1, 1, 0.18)
+                indicatorColor: "#FFFFFF"
+            }
         }
 
         PlayerButton {

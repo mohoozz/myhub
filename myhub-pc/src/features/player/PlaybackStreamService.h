@@ -75,6 +75,9 @@ public:
     QString activeStreamId() const { return m_activeStream; }
     QVariantMap snapshot() const;
 
+    /// 回环代理上是否还有未关闭的连接：非 0 说明 mpv 还没松手，源文件仍被占用
+    bool hasLiveConnections() const;
+
 signals:
     /// 回环监听换端口：`streamId` 的 URL 变了，正在播的会话需按新地址重开
     void streamUrlRebuilt(const QString &streamId, const QUrl &url);

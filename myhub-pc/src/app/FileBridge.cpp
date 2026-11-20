@@ -7,15 +7,40 @@
 #include "core/storage/StoragePath.h"
 #include "core/transfer/TransferManager.h"
 #include "features/connections/ConnectionStore.h"
+#include "features/player/PlaybackStreamService.h"
+#include "features/reading/ComicBridge.h"
+#include "features/reading/NovelBridge.h"
+#include "features/reading/PlainTextBridge.h"
 
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QFileInfo>
+#include <QTimer>
 #include <QUrl>
 
+#include <memory>
+
 namespace myhub {
+namespace {
+
+/// 待删路径是否命中某个正在使用的条目（删文件夹时连带其下所有内容）
+bool hitsAnyPath(const QString &target, const QStringList &paths)
+{
+    if (target.isEmpty())
+        return false;
+    const QString normalized = StoragePath::normalize(target);
+    for (const QString &path : paths) {
+        const QString candidate = StoragePath::normalize(path);
+        if (normalized == candidate || StoragePath::isDescendantOf(normalized, candidate))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
 
 FileBridge::FileBridge(QObject *parent)
     : QObject(parent)
@@ -65,7 +90,7 @@ FileBridge::FileBridge(QObject *parent)
 
 bool FileBridge::busy() const
 {
-    return FileOperations::instance().busy();
+    return m_waitingForStreams || FileOperations::instance().busy();
 }
 
 void FileBridge::createFolder(const QString &connectionId, const QString &parentPath,
@@ -93,7 +118,14 @@ void FileBridge::removeToTrash(const QString &connectionId, const QStringList &p
     if (!adapter) {
         return;
     }
-    stopPlaybackFor(connectionId, paths);
+    stopReadingFor(connectionId, paths);
+    // 正在播这个文件：先停，再等 mpv 松开回环连接，否则 Windows 上必报共享冲突
+    if (stopPlaybackFor(connectionId, paths)) {
+        waitForStreamsIdle([adapter, connectionId, paths] {
+            FileOperations::instance().removeToTrash(adapter, connectionId, paths);
+        });
+        return;
+    }
     FileOperations::instance().removeToTrash(adapter, connectionId, paths);
 }
 
@@ -103,7 +135,15 @@ void FileBridge::removePermanently(const QString &connectionId, const QStringLis
     if (!adapter) {
         return;
     }
-    stopPlaybackFor(connectionId, paths);
+    stopReadingFor(connectionId, paths);
+    const bool stopped = stopPlaybackFor(connectionId, paths);
+    // 彻底删除是最后一道关：即便这次没停播，也确认一次回环连接已清干净
+    if (stopped || PlaybackStreamService::instance().hasLiveConnections()) {
+        waitForStreamsIdle([adapter, connectionId, paths] {
+            FileOperations::instance().removePermanently(adapter, connectionId, paths);
+        });
+        return;
+    }
     FileOperations::instance().removePermanently(adapter, connectionId, paths);
 }
 
@@ -248,22 +288,67 @@ StorageAdapter *FileBridge::resolve(const QString &connectionId, const QString &
     return adapter;
 }
 
-void FileBridge::stopPlaybackFor(const QString &connectionId, const QStringList &paths)
+bool FileBridge::stopPlaybackFor(const QString &connectionId, const QStringList &paths)
 {
     PlayerCore &core = PlayerCore::instance();
     const PlaybackRequest &request = core.currentRequest();
     if (request.path.isEmpty()) {
-        return;
+        return false;
     }
     if (!request.connectionId.isEmpty() && request.connectionId != connectionId) {
+        return false;
+    }
+    if (!hitsAnyPath(request.path, paths)) {
+        return false;
+    }
+    core.close();
+    return true;
+}
+
+void FileBridge::stopReadingFor(const QString &connectionId, const QStringList &paths)
+{
+    if (auto *comic = ComicBridge::instance(); comic->opened()
+        && comic->connectionId() == connectionId && hitsAnyPath(comic->path(), paths)) {
+        comic->close();
+    }
+    if (auto *novel = NovelBridge::instance(); novel->opened()
+        && novel->connectionId() == connectionId && hitsAnyPath(novel->path(), paths)) {
+        novel->close();
+    }
+    if (auto *text = PlainTextBridge::instance(); text->active()
+        && text->connectionId() == connectionId && hitsAnyPath(text->path(), paths)) {
+        text->close();
+    }
+}
+
+void FileBridge::waitForStreamsIdle(const std::function<void()> &then)
+{
+    if (!PlaybackStreamService::instance().hasLiveConnections()) {
+        then();
         return;
     }
-    for (const QString &path : paths) {
-        if (request.path == path || StoragePath::isDescendantOf(request.path, path)) {
-            core.close();
+
+    m_waitingForStreams = true;
+    emit busyChanged();
+
+    auto *timer = new QTimer(this);
+    timer->setInterval(25);
+    auto elapsed = std::make_shared<QElapsedTimer>();
+    elapsed->start();
+
+    connect(timer, &QTimer::timeout, this, [this, timer, elapsed, then]() {
+        const bool idle = !PlaybackStreamService::instance().hasLiveConnections();
+        // 1s 到点也放行：残余占用交给 FileOperations 的退避重试，不能无限挂着
+        if (!idle && elapsed->elapsed() < 1000) {
             return;
         }
-    }
+        timer->stop();
+        timer->deleteLater();
+        m_waitingForStreams = false;
+        emit busyChanged();
+        then();
+    });
+    timer->start();
 }
 
 } // namespace myhub

@@ -224,28 +224,37 @@ struct PlayerView: View {
                 .transition(.opacity)
             }
 
-            // 播完推荐下一个（底部提示，点击才播放）
-            if let nextCandidate {
-                VStack {
-                    Spacer()
-                    NextMediaTip(
-                        entry: nextCandidate.entry,
-                        onPlay: { playNext() },
-                        onCancel: { cancelNext() }
+            // 播完推荐下一个（固定在中央按钮正下方，不随控制栏显隐移动；点击才播放）
+            if let nextCandidate, AppSettings.Player.showNextMediaTip {
+                GeometryReader { geo in
+                    // 中央按钮（64pt）下沿 + 28pt 间距；横屏矮屏时上移，避免压住底部控制卡片
+                    let top = min(
+                        geo.size.height / 2 + 60,
+                        max(96, geo.size.height - 230)
                     )
-                    .padding(.bottom, showControls ? 262 : 96)
+                    VStack(spacing: 0) {
+                        NextMediaTip(
+                            entry: nextCandidate.entry,
+                            onPlay: { playNext() },
+                            onCancel: { cancelNext() }
+                        )
+                        .padding(.top, top)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
                 }
-                .animation(.appQuick, value: showControls)
+                .transition(.opacity)
             }
         }
     }
 
     // MARK: - 播完推荐下一个（IOS-204）
 
-    /// 播放结束：查找同目录下一个同类型文件，底部弹出提示（不自动播放，等用户点击）
+    /// 播放结束：查找同目录下一个同类型文件，弹提示（不自动播放，等用户点击）。
+    /// 设置里关闭「播完提示下一个」后直接跳过，省掉一次远端目录列举。
     private func prepareNext() {
         nextTask?.cancel()
-        guard let item = player.current else { return }
+        guard AppSettings.Player.showNextMediaTip, let item = player.current else { return }
         nextTask = Task { @MainActor in
             guard let candidate = await NextMediaFinder.find(after: item), !Task.isCancelled else { return }
             withAnimation(.appQuick) { nextCandidate = candidate }

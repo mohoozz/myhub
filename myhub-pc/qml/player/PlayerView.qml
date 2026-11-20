@@ -30,9 +30,9 @@ Item {
     readonly property bool loading: Player.state === Player.Loading || Player.buffering
     readonly property bool ended: Player.state === Player.Ended
     readonly property bool failed: Player.state === Player.Error
-    readonly property bool fullScreen: view.Window.window
-                                      ? view.Window.window.visibility === Window.FullScreen
-                                      : false
+    // 窗口全屏态统一由 WindowController 反映（附 fullScreenChanged），
+    // 这样按钮图标、偏好缓存、系统改窗口状态三处不会各判各的
+    readonly property bool fullScreen: WindowController.fullScreen
 
     property bool controlsVisible: true
     property bool locked: false
@@ -76,8 +76,9 @@ Item {
     }
 
     function closePlayer() {
+        // 关播放器引起的退全屏不算「用户不要全屏了」，偏好保持不动
         if (fullScreen)
-            WindowController.toggleFullScreen()
+            WindowController.exitFullScreen()
         speedMenu.dismiss()
         subtitleMenu.dismiss()
         audioMenu.dismiss()
@@ -177,7 +178,7 @@ Item {
         }
         onDoubleClicked: function(mouse) {
             if (mouse.button === Qt.LeftButton)
-                WindowController.toggleFullScreen()
+                WindowController.togglePlayerFullScreen()
         }
         onWheel: function(wheel) {
             view.setVolume(wheel.angleDelta.y > 0 ? Player.volumeStep : -Player.volumeStep)
@@ -248,7 +249,7 @@ Item {
         onSubtitleMenuRequested: function(anchor) { view.openMenu(subtitleMenu, anchor) }
         onAudioMenuRequested: function(anchor) { view.openMenu(audioMenu, anchor) }
         onLockRequested: view.setLocked(true)
-        onFullScreenRequested: WindowController.toggleFullScreen()
+        onFullScreenRequested: WindowController.togglePlayerFullScreen()
     }
 
     // ---------------------------------------------------------------- 中央状态
@@ -736,7 +737,7 @@ Item {
         }
         if (event.key === Qt.Key_Escape) {
             if (view.fullScreen)
-                WindowController.toggleFullScreen()
+                WindowController.togglePlayerFullScreen()
             else
                 view.closePlayer()
             event.accepted = true
@@ -783,7 +784,7 @@ Item {
             view.revealControls()
             break
         case Qt.Key_F:
-            WindowController.toggleFullScreen()
+            WindowController.togglePlayerFullScreen()
             break
         case Qt.Key_A:
             view.cycleAudioTrack()
@@ -882,7 +883,8 @@ Item {
         id: hideTimer
         interval: Motion.controlsHideDelay
         onTriggered: {
-            if (view.playing && !view.locked)
+            // 长按进行中就别收：控制层一收，按钮销毁，长按被拦腰截断
+            if (view.playing && !view.locked && !controlBar.holdActive)
                 view.controlsVisible = false
         }
     }

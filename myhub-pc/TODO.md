@@ -378,7 +378,14 @@
   - **元数据丢失的条目不可还原**（不猜原路径，只允许彻底删除）；原目录已不存在时还原前自动重建
   - 验证：`tests/tst_trash`（6 例：还原、同名顺延不覆盖、重建父目录、拒绝无 meta、单条彻底删除、清空全部）
 - [ ] 不支持回收站时降级真实删除（二次确认 + **展示移动失败的具体原因**）（已先落地：适配器不支持回收站时明确报「该连接源暂不支持回收站」并中止，不做静默真删）
-- [ ] **占用处理**：删除前若待删项正在播放/阅读，先停播并等待串流会话注销（最长 1s）；彻底删除前兜底再释放一次
+- [x] **占用处理**：删除前若待删项正在播放/阅读，先停播并等待串流会话注销（最长 1s）；彻底删除前兜底再释放一次
+      （停播：`FileBridge::stopPlaybackFor` 命中待删路径 → `PlayerCore::close()`，返回是否停过；
+      阅读：`stopReadingFor` 关掉命中该条目的 `ComicBridge` / `NovelBridge` / `PlainTextBridge` 会话；
+      等注销：`FileBridge::waitForStreamsIdle` 以 25ms 轮询 `LocalStreamProxy::activeConnections()`，
+      **1s 到点即便还占着也放行**（残余占用交给退避重试，不能无限挂起）；
+      兜底：`removePermanently` 无论本次是否停播，只要还有活跃连接就再等一轮；
+      等待期算进 `Files.busy`，避免用户重复提交；
+      计数来源 `LocalStreamProxy::trackConnection()`，`connectionsChanged()` 对外可见，单测 `tst_streamproxy`）
 - [x] **占用/瞬时错误自动退避重试 2 次**（0.6s / 1.2s）
 - [x] **失败提示携带具体原因**（首错原因 + 未完成项清单，避免部分成功后重复删）／「稍后重试」文案建议待补
 - [ ] **回收站降级真删只针对未成功的剩余项**（不得对已移走文件重复删除而误报失败）
@@ -1155,12 +1162,15 @@
 - [x] **确认框居中 + 完全圆角矩形**（删除确认等全部统一）
       （`ConfirmDialog.qml:22` `anchors.centerIn`、`31` `radiusCard`，各页共用同一组件）
 - [ ] 各页签 ⋯ 菜单收纳次要按钮（浏览 / 阅读已有 `moreMenu`，收藏页仍是一排平铺按钮）
+      （现状已核对：收藏页工具栏只有「刷新」「列表/网格」两个图标按钮 `FavoritesHome.qml:111-120`，
+      并非一排带文字的平铺按钮；次要动作已由右键菜单覆盖。是否仍增设 ⋯ 待定：两个按钮收进 ⋯
+      反而多一次点击）
 - [x] 右键菜单**「多选」置于首位**
       （`BrowseDirectory.qml:1020-1024`：第一项即「多选」，其后才是分隔线与「打开」）
-- [ ] 右键菜单含：定位到原路径、属性、删除源文件
-      （已做：定位到原路径 `BrowseDirectory.qml:1103`（走 `requestReveal`）、属性 `1115`、
-      阅读记录页删除源文件 `ReadingHome.qml:584`；
-      **缺**：浏览页右键的「删除源文件」—— 多选栏与右键都只有「删除」（进回收站））
+- [x] 右键菜单含：定位到原路径、属性、删除源文件
+      （定位到原路径 `BrowseDirectory.qml:1103`（走 `requestReveal`）、属性 `1116`、
+      删除源文件 `1098`（文案「删除源文件…」）；阅读记录页另有「删除源文件…」`ReadingHome.qml:478`。
+      浏览页没有「只删索引」这回事，删除即 `Files.removeToTrash` 删真文件，故文案统一叫「删除源文件」）
 
 ### 14.5 搜索框与导航
 
@@ -1182,19 +1192,39 @@
 
 - [x] 点击画面**立刻显示控制层**（不得延迟）
       （`PlayerView.qml:167-176` 点击直接 `revealControls()` 置 true，无延迟定时器）
-- [ ] 点击画面不得误触发锁定；锁定为长按（带反馈），中央锁图标自动消失、点击画面重现、点击锁图标解锁
-      （现状：锁按钮在控制栏点击切换（`PlayerControlBar.qml:121-123`），长按是「2x 快进」
-      `beginHoldBoost()`，**不是锁定**；锁定态下点击画面重现锁图标也未实现，`setLocked` 只闪提示）
-- [ ] 进度拖动跨度随拖动距离分级（5s~60s 量级），**不得一拖 40 分钟**
-      （现状：`PlayerProgressBar` 是绝对定位拖动 —— 拖到哪就 seek 到哪，没有分级步长）
-- [ ] **弱网点击进度条立即跳到目标位置**，未缓冲时显示加载指示
+- [x] 点击画面不得误触发锁定；锁定为长按（带反馈），中央锁图标自动消失、点击画面重现、点击锁图标解锁
+      （点击画面只 `revealControls()`，从不碰锁定 `PlayerView.qml:167-176`；
+      长按：锁按钮 `holdDuration: 650` + `ProgressRing` 环形反馈 `PlayerControlBar.qml:216-244`，
+      短按只 flash「长按 0.6 秒锁定界面」，不锁；长按计时逻辑在 `PlayerButton.qml` 的 `holdDuration`/`held()`；
+      按住期间控制层不自动隐藏（`PlayerControlBar.holdActive` → `PlayerView.qml:886`）；
+      中央锁图标 `lockHintTimer` 自动消失 `PlayerView.qml:503-507`，锁定态点击画面重现 `478-488`，
+      点锁图标解锁 `496-501`）
+- [x] 进度拖动跨度随拖动距离分级（5s~60s 量级），**不得一拖 40 分钟**
+      （`PlayerProgressBar.qml:42-60` `dragDeltaMs()`：拖动改为**相对位移**，按下时记
+      `pressMs`，按位移分三档 —— 0~24px 0.08s/px（≈2s 精调）、24~96px 0.25s/px、
+      >96px 1.0s/px，总跨度封顶 60s（短片按片长 3/4 收窄）。位移 <3px 仍按点击处理，
+      释放时绝对跳到点击位置，**远跳走点击而不是拖**；拖动期间把手与时间气泡跟随目标时间）
+- [x] **弱网点击进度条立即跳到目标位置**，未缓冲时显示加载指示
+      （点击 → `onReleased` 立即 `seekRequested` → `Player.seekTo`，不等任何定时器；
+      未缓冲：`Player.buffering` 并入 `PlayerView.loading`（`PlayerView.qml:30`），
+      中央加载圈 `257-283` 随之显示，且与暂停键互斥 `297`）
 - [x] 音量与系统音量关系明确（内部音量为主 + 可选联动）；亮度为窗口蒙层
       （内部音量：`PlayerControlBar` 音量按钮 + 滑条 → `Player.volume`；最终响度仍是
       「播放器音量 × 系统音量」。可选联动：更多菜单「音量跟随系统」写 `player.followSystemVolume`，
       开时 `PlayerCore::applyVolume()` 把引擎钉在 100%、滑条置灰，响度只认系统音量键。
       亮度：`PlayerView.qml:139-144` 全屏蒙层，与小说 / 漫画共用 `reader.brightness`）
-- [ ] **调节时中央胶囊显示数值**（`PlayerCapsule` 有 `text` 通道，但目前只用来提示状态文案）
-- [ ] 全屏/窗口切换按钮常驻可见（**纯音频模式下同样可见**）；**窗口/全屏偏好缓存**
+- [x] **调节时中央胶囊显示数值**
+      （原描述已过时：`PlayerCapsule` 早就在报数值。逐条核对：进度拖动 / ←→
+      `PlayerControlBar.qml:39`、`PlayerView.qml:105`；音量滑条 / ↑↓ / M 键 / 静音按钮
+      `PlayerView.qml:110`、`781`、`PlayerControlBar.qml:113`；亮度 Shift+↑↓ `PlayerView.qml:116`；
+      倍速菜单 / [ ] / 长按 2x `PlayerView.qml:596`、`878`、`863`；字幕与音轨切换 `626`、`607`）
+- [x] 全屏/窗口切换按钮常驻可见（**纯音频模式下同样可见**）；**窗口/全屏偏好缓存**
+      （常驻：控制栏无 `visible` 条件，纯音频的 `AudioCoverView` 铺在底层 `PlayerView.qml:133-136`，
+      控制栏在其上方 `235`；纯音频靠顶栏按钮切换，控制栏照常可用。
+      偏好缓存：`WindowController.playerFullScreen` 写 `player.fullScreen`，
+      播放器内主动切换走 `togglePlayerFullScreen()`（双击 / F / Esc / 按钮），
+      进播放器时 `PlayerStage.showFull()` 恢复，收起时 `hide()` 退回窗口态；
+      关播放器引起的退全屏走 `exitFullScreen()`，不污染偏好；F11 仍走 `toggleFullScreen()` 不受影响）
 - [ ] 播放器与音频播放器的控制入口一致
 - [x] 画中画（悬浮小窗）与音量按钮**必须有实际功能**，不得是空按钮
       （悬浮小窗：`PlayerStage.showFloating/restoreFromFloating` + `FloatingPlayerOverlay`；
@@ -1227,8 +1257,10 @@
 - [ ] **休眠/挂起唤醒后仍可播放**（地址锁定清除 + 回环代理探活重建 + 换端口重试），不得只能重启应用
 - [ ] 最小化/托盘常驻继续播放，不得自动暂停
       （现状：最小化可转悬浮小窗；**托盘常驻未做**，见 §1.1）
-- [ ] 播放中/播放后**可立即删除源文件**（占用等待 + 退避重试 + 具体原因提示）
-      （现状：阅读记录页有「删除源文件」对话框 `ReadingHome.qml:584`；占用等待与退避重试未做）
+- [x] 播放中/播放后**可立即删除源文件**（占用等待 + 退避重试 + 具体原因提示）
+      （入口：阅读记录页「删除源文件」`ReadingHome.qml:478`、浏览页右键与多选栏；
+      占用等待见 §3.3 同名条目（`FileBridge::waitForStreamsIdle`，1s 上限）；
+      退避重试 0.6s/1.2s 两次；失败提示带首错原因与未完成清单）
 - [ ] 播放发热/CPU 异常排查（打开 txt 与播放视频同时进行时）
 
 ### 14.9 网络与路由
@@ -1260,9 +1292,9 @@
       （现状：`ConnectionStore` 增删改都 emit `connectionsChanged`，浏览侧是否整体重订还需实测）
 - [x] 删除/移动/重命名**联动阅读记录**
       （`FileOperations.cpp:285` `renamePath`、`501` `removeSubtree`、`1419` 移动目标改记录）
-- [ ] 多选操作栏含删除源文件；阅读页右键菜单含属性与删除源文件
-      （已做：阅读记录页有删除源文件 `ReadingHome.qml:584`；**多选操作栏只有「删除」（回收站），
-      没有「删除源文件」**）
+- [x] 多选操作栏含删除源文件；阅读页右键菜单含属性与删除源文件
+      （多选栏：浏览页 `BrowseDirectory.qml:819`「删除源文件」、阅读记录页 `ReadingHome.qml:295`；
+      阅读页右键：属性 `ReadingHome.qml:457` + 删除源文件… `478`）
 - [ ] 下载文件（图片、txt 等）到本地并可在文件管理器中显示
       （下载链路已有 `TransferManager`；缺「下载完成后在文件管理器中定位」）
 
@@ -1278,6 +1310,10 @@
 - [x] `Esc` 可退出阅读器（`NovelReaderView.qml:170-171` `Keys.onPressed` 判断 `Qt.Key_Escape`）
 - [x] 滚动时**内容不与标题栏重叠**（标题带 `titleBand` + 正文 `anchors.topMargin: titleBand.height`）
 - [ ] 文本**可选中复制**（正文委托是 `Text`，无选择能力；跨段落选择需另行设计）
+      （**暂缓**：2026-11-20 决定先不做。难点：滚动模式（`NovelReaderView.qml:382` 一段一 `Text`）
+      与翻页模式（`NovelPager` 逐行切 Item）是两套渲染，换 `TextEdit` + `selectByMouse` 会吃掉
+      按下事件、击穿点击翻页，需额外「选择模式」开关隔离。若将来要做，优先段落级
+      「复制本段 / 复制本章」，成本最低且两种排版通吃）
 - [x] 阅读主题支持跟随系统（`NovelReaderView.qml:24`：`theme === 0` 时按 `AppTheme.dark` 取暗/纸）
 
 ### 14.12 漫画阅读器

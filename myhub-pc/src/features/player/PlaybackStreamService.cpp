@@ -302,6 +302,11 @@ void PlaybackStreamService::onListenerRebuilt(quint16 oldPort, quint16 newPort)
     }
 }
 
+bool PlaybackStreamService::hasLiveConnections() const
+{
+    return m_proxy && m_proxy->activeConnections() > 0;
+}
+
 QVariantMap PlaybackStreamService::snapshot() const
 {
     QVariantMap result = m_proxy->healthSnapshot();

@@ -22,7 +22,20 @@ Item {
     property color color: "#FFFFFF"
     property string tooltip: ""
 
+    /**
+     * 长按触发（§14.6「锁定为长按」）：> 0 时按住这么多毫秒才 emit `held()`，
+     * 短按改走 `clicked()`（调用方用来提示「要长按」）。
+     * 反馈不进本组件：进度从 `holdProgress` 读，环/条由调用方画，通用按钮不背 Shape 开销。
+     */
+    property int holdDuration: 0
+    /// 0~1，长按进度；松手或触发后回 0
+    property real holdProgress: 0
+
     signal clicked()
+    signal held()
+
+    /// 本轮按下是否已经走完长按（决定松手时别再补一次点击）
+    property bool _holdFired: false
 
     implicitWidth: text !== "" ? 58 : 40
     implicitHeight: 40
@@ -61,7 +74,37 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.clicked()
+
+        onPressed: {
+            root._holdFired = false
+            if (root.holdDuration > 0)
+                holdAnim.restart()
+        }
+        onReleased: root.resetHold()
+        onCanceled: root.resetHold()
+        onClicked: {
+            // 长按已经触发过就不要再补一次点击；短按则明确告诉用户要按住
+            if (root.holdDuration <= 0 || !root._holdFired)
+                root.clicked()
+        }
+    }
+
+    NumberAnimation {
+        id: holdAnim
+        target: root
+        property: "holdProgress"
+        from: 0
+        to: 1
+        duration: Math.max(1, root.holdDuration)
+        onFinished: {
+            root._holdFired = true
+            root.held()
+        }
+    }
+
+    function resetHold() {
+        holdAnim.stop()
+        root.holdProgress = 0
     }
 
     scale: mouse.pressed ? AppTheme.pressScale : 1

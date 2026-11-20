@@ -816,13 +816,15 @@ Item {
                 C.ToolTip.visible: root.compactBar && hovered
             }
             PrimaryButton {
-                text: root.compactBar ? "" : qsTr("删除")
+                // §14.10：浏览页没有「只删索引」这回事，删除即删真文件（进回收站），
+                // 所以文案直接叫「删除源文件」，别让用户以为是隐藏条目
+                text: root.compactBar ? "" : qsTr("删除源文件")
                 iconName: "trash"
                 variant: PrimaryButton.Secondary
                 destructive: true
                 enabled: !Files.busy
                 onClicked: root.requestDelete()
-                C.ToolTip.text: qsTr("删除")
+                C.ToolTip.text: qsTr("删除源文件")
                 C.ToolTip.visible: root.compactBar && hovered
             }
             PrimaryButton {
@@ -1095,7 +1097,7 @@ Item {
             onTriggered: root.requestTransfer(contextMenu.targetIndex, true)
         }
         C.Action {
-            text: qsTr("删除")
+            text: qsTr("删除源文件…")
             enabled: !Files.busy
             onTriggered: root.requestDelete(contextMenu.targetIndex)
         }
@@ -1430,7 +1432,7 @@ Item {
 
     ConfirmDialog {
         id: deleteDialog
-        title: qsTr("删除")
+        title: qsTr("删除源文件？")
         confirmText: qsTr("删除")
         destructive: true
         onAccepted: Files.removeToTrash(dirModel.connectionId, root.pendingPaths)

@@ -235,6 +235,10 @@ public:
     bool offline() const { return m_offline; }
     QVariantMap nextSuggestion() const { return m_nextSuggestion; }
 
+    /// 当前打开的书（删除源文件前由 app 层判断是否正被占用；空串表示未打开）
+    QString path() const { return m_path; }
+    QString connectionId() const { return m_connectionId; }
+
     int fontSize() const { return m_fontSize; }
     void setFontSize(int px);
     double lineSpacing() const { return m_lineSpacing; }

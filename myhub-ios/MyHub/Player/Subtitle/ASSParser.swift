@@ -344,6 +344,11 @@ enum ASSParser {
             if let color = assColor(String(tag.dropFirst(2))) { style.primaryColor = color }
             return
         }
+        // \3c = 描边色（弹幕常用它把描边压成纯黑/纯白）
+        if tag.hasPrefix("3c") {
+            if let color = assColor(String(tag.dropFirst(2))) { style.outlineColor = color }
+            return
+        }
         if tag.hasPrefix("c") {
             if let color = assColor(String(tag.dropFirst())) { style.primaryColor = color }
             return

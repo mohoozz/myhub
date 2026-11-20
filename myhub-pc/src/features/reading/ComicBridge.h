@@ -125,6 +125,10 @@ public:
 
     QVariantMap nextSuggestion() const { return m_nextSuggestion; }
 
+    /// 当前打开的包（删除源文件前由 app 层判断是否正被占用；空串表示未打开）
+    QString path() const { return m_path; }
+    QString connectionId() const { return m_connectionId; }
+
     /// 打开一本 cbz / zip / cbr / rar（`title` 空则用文件名）
     Q_INVOKABLE void open(QString connectionId, QString path, const QString &title);
     Q_INVOKABLE void goToPage(int index);

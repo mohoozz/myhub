@@ -97,6 +97,7 @@ private slots:
     void unknownStreamReturns404();
     void healthProbeSucceeds();
     void verifyHealthRebuildsAfterListenerStop();
+    void activeConnectionsTrackOpenSockets();
 
 private:
     LocalStreamProxy m_proxy;
@@ -210,6 +211,25 @@ void TestStreamProxy::verifyHealthRebuildsAfterListenerStop()
         request(m_proxy.port(), "GET", "/stream/s1/movie.mkv", "bytes=0-9");
     QCOMPARE(response.status, 206);
     QCOMPARE(response.body, m_payload.left(10));
+}
+
+void TestStreamProxy::activeConnectionsTrackOpenSockets()
+{
+    QVERIFY(m_proxy.start(0));
+    QCOMPARE(m_proxy.activeConnections(), 0);
+
+    QTcpSocket socket;
+    socket.connectToHost(QHostAddress::LocalHost, m_proxy.port());
+    QVERIFY(socket.waitForConnected(3000));
+    // 连接建立即计数：删除源文件前靠它判断 mpv 是否已经松手（§3.3 占用处理）
+    QTRY_VERIFY_WITH_TIMEOUT(m_proxy.activeConnections() > 0, 3000);
+
+    socket.disconnectFromHost();
+    if (socket.state() != QAbstractSocket::UnconnectedState)
+        QVERIFY(socket.waitForDisconnected(3000));
+    // 断开是异步的（socket 侧 deleteLater），计数必须自己回落到 0，
+    // 否则删除流程会让用户白等满 1 秒
+    QTRY_COMPARE_WITH_TIMEOUT(m_proxy.activeConnections(), 0, 3000);
 }
 
 QTEST_GUILESS_MAIN(TestStreamProxy)

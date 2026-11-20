@@ -28,6 +28,7 @@ constexpr int kFloatingMargin = 24;
 
 constexpr auto kFloatingSizeKey = "window.floatingSize";
 constexpr auto kMinimizeToFloatingKey = "player.minimizeToFloating";
+constexpr auto kPlayerFullScreenKey = "player.fullScreen";
 } // namespace
 
 WindowController::WindowController(QObject *parent)
@@ -44,6 +45,9 @@ void WindowController::attach(QQuickWindow *window)
 
     // 窗口关闭前兜底保存几何
     connect(m_window, &QQuickWindow::closing, this, [this] { saveGeometry(); });
+
+    // 全屏态也可能被系统（Win+↑ / 双击标题栏）改掉，统一从这里对外广播
+    connect(m_window, &QQuickWindow::visibilityChanged, this, [this] { emit fullScreenChanged(); });
 }
 
 QRect WindowController::sanitizeGeometry(const QRect &r) const
@@ -127,10 +131,47 @@ void WindowController::toggleFullScreen()
 {
     if (!m_window)
         return;
-    if (m_window->visibility() == QQuickWindow::FullScreen)
-        m_window->showNormal();
+    if (fullScreen())
+        exitFullScreen();
     else
+        enterFullScreen();
+}
+
+void WindowController::togglePlayerFullScreen()
+{
+    toggleFullScreen();
+    // 用户主动切换才写偏好；程序性进出（关播放器、恢复偏好）不写
+    setPlayerFullScreen(fullScreen());
+}
+
+void WindowController::enterFullScreen()
+{
+    if (m_window && !fullScreen())
         m_window->showFullScreen();
+}
+
+void WindowController::exitFullScreen()
+{
+    if (m_window && fullScreen())
+        m_window->showNormal();
+}
+
+bool WindowController::fullScreen() const
+{
+    return m_window && m_window->visibility() == QQuickWindow::FullScreen;
+}
+
+bool WindowController::playerFullScreen() const
+{
+    return AppSettings::instance().value(QString::fromLatin1(kPlayerFullScreenKey), false).toBool();
+}
+
+void WindowController::setPlayerFullScreen(bool v)
+{
+    if (playerFullScreen() == v)
+        return;
+    AppSettings::instance().setValue(QString::fromLatin1(kPlayerFullScreenKey), v);
+    emit playerFullScreenChanged();
 }
 
 QSize WindowController::floatingSize() const
