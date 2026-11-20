@@ -102,11 +102,16 @@ struct ReadingHomeView: View {
         ) {
             Button("移入回收站", role: .destructive) {
                 if let ids = deletingSourceIDs {
+                    // 方案 D：弹窗收起前先把「正在删除」挂到吐司上。
+                    // 源文件是逐个 stat + MOVE（含占用重试），弱网下可达数秒，此前完全无反馈
+                    undoToast.beginWorking("正在删除 \(ids.count) 个源文件…")
                     Task {
                         do {
                             let result = try await deleteSourceFiles(ids: ids)
-                            message = sourceDeleteMessage(ids: ids, result: result)
+                            undoToast.finish(sourceDeleteMessage(ids: ids, result: result))
                         } catch {
+                            // 回收站不可用 → 由降级弹窗接管提示，先收掉进行中吐司
+                            undoToast.dismiss()
                             forceDeletingSourceIDs = ids   // 回收站不可用 → 降级为彻底删除确认
                         }
                     }
@@ -126,7 +131,11 @@ struct ReadingHomeView: View {
         ) {
             Button("彻底删除", role: .destructive) {
                 if let ids = forceDeletingSourceIDs {
-                    Task { await forceDeleteSourceFiles(ids: ids) }
+                    undoToast.beginWorking("正在彻底删除 \(ids.count) 个源文件…")
+                    Task {
+                        let text = await forceDeleteSourceFiles(ids: ids)
+                        undoToast.finish(text)
+                    }
                 }
                 forceDeletingSourceIDs = nil
             }
@@ -841,7 +850,9 @@ struct ReadingHomeView: View {
 
     /// 彻底删除源文件（回收站不可用时的降级路径）：按连接分组直接删除，已不存在的文件忽略。
     /// 开启「删除时移除同名文件」时，同目录下主名相同、扩展名不同的文件一并删除（尽力而为）。
-    private func forceDeleteSourceFiles(ids: [Int64]) async {
+    /// - Returns: 结果提示文案（由调用方放进吐司，替代原先的阻塞式「提示」弹窗）
+    @discardableResult
+    private func forceDeleteSourceFiles(ids: [Int64]) async -> String {
         let records = history.records.filter { ids.contains($0.id ?? -1) }
         let expandSameName = AppSettings.Browse.deleteSameNameFiles
         var companions = 0
@@ -872,7 +883,7 @@ struct ReadingHomeView: View {
         selection = nil
         // 批量移除后重建列表，避免残留滚动偏移（详见 listEpoch）
         listEpoch += 1
-        message = companions > 0
+        return companions > 0
             ? "已彻底删除 \(ids.count) 个源文件及 \(companions) 个同名/语言后缀文件，并清理阅读记录"
             : "已彻底删除 \(ids.count) 个源文件，并清理阅读记录"
     }

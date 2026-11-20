@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>删除中反馈 · 方案原型（阅读页 / 浏览页）</title>
+<style>
+:root{--primary:#2563EB;--page-bg:#EEF4FB;--card:#FFF;--tp:#1A1A2E;--ts:#6B7280;--sep:#E5E7EB;--hl:#EEF4FB;--red:#FF3B30;--green:#34C759}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#F3F4F6;color:var(--tp);padding:32px 24px 72px;-webkit-user-select:none;user-select:none}
+h1{font-size:22px;margin-bottom:6px}
+h3{font-size:16px;margin:44px 0 10px}
+.subtitle{color:var(--ts);font-size:13px;margin-bottom:12px;line-height:1.8;max-width:1120px}
+code{background:#E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px;font-family:ui-monospace,Menlo,monospace}
+.tipbar{display:inline-flex;align-items:center;gap:8px;background:#DBEAFE;color:#1D4ED8;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;margin:0 8px 8px 0}
+.tipbar.warn{background:#FEF3C7;color:#92400E}
+.boards{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start;margin-top:18px}
+.board{width:300px}
+.board h2{font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:500;padding:1px 8px;border-radius:10px;background:#E5E7EB;color:var(--ts)}
+.tag.rec{background:#DBEAFE;color:#1D4ED8}.tag.warn{background:#FEF3C7;color:#92400E}
+.desc{font-size:12px;color:var(--ts);line-height:1.75;min-height:148px}
+.desc b{color:var(--tp)}.pros{color:#047857}.cons{color:#B45309}
+.replay{display:inline-block;margin-top:8px;font-size:11.5px;font-weight:600;color:var(--primary);cursor:pointer;background:#DBEAFE;border-radius:7px;padding:5px 11px}
+.phone{width:300px;background:var(--page-bg);border:8px solid #111827;border-radius:38px;overflow:hidden;box-shadow:0 12px 28px rgba(17,24,39,.18);position:relative;min-height:430px;display:flex;flex-direction:column}
+.statusbar{height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:11px;font-weight:600}
+.navbar{height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:rgba(255,255,255,.76)}
+.back{color:var(--primary);font-size:21px;font-weight:600;line-height:1}
+.nav-title{font-size:16px;font-weight:700;flex:1}
+.nav-right{color:var(--primary);font-size:13px;flex:none}
+.seclabel{font-size:10px;font-weight:700;color:var(--ts);letter-spacing:.4px;padding:8px 14px 5px;background:rgba(255,255,255,.45);flex:none}
+.list{background:var(--card);flex:none}
+.row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--sep);transition:opacity .25s,transform .25s,max-height .25s,padding .25s,background .2s;position:relative;max-height:70px;overflow:hidden}
+.row .thumb{width:42px;height:42px;border-radius:9px;background:var(--hl);display:flex;align-items:center;justify-content:center;font-size:20px;flex:none}
+.row .meta{flex:1;min-width:0}
+.row .n{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .s{font-size:10.5px;color:var(--ts);margin-top:2px}
+.row .ck{width:21px;height:21px;border-radius:50%;background:var(--primary);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;flex:none}
+.row.gone{opacity:0;transform:translateX(-24px);max-height:0;padding-top:0;padding-bottom:0;border-bottom-color:transparent}
+.row.pending{background:#FFF8F0}
+.row.pending .n,.row.pending .s{opacity:.45}
+.selbar{flex:none;margin:auto 10px 10px;height:52px;display:flex;align-items:center;background:rgba(255,255,255,.9);border:1px solid var(--sep);border-radius:13px;box-shadow:0 4px 12px rgba(17,24,39,.10)}
+.sb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:9.5px}
+.sb .el{width:17px;height:17px;font-size:15px;display:flex;align-items:center;justify-content:center;color:var(--tp)}
+.sb.del{color:var(--red)}.sb.del .el{color:var(--red)}
+.appbar{flex:none;margin:0 10px 10px;height:44px;border:1px solid #D1D5DB;border-radius:22px;display:flex;align-items:center;background:#fff;box-shadow:0 3px 8px rgba(0,0,0,.07)}
+.appbar span{flex:1;text-align:center;font-size:16px;opacity:.32}
+.appbar span.on{opacity:1}
+.spin{width:16px;height:16px;border-radius:50%;border:2px solid rgba(107,114,128,.25);border-top-color:var(--primary);animation:sp .8s linear infinite;display:inline-block;flex:none}
+.spin.lg{width:26px;height:26px;border-width:2.6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.dim{position:absolute;inset:0;background:rgba(0,0,0,.32);display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .18s;z-index:40}
+.dim.on{opacity:1;pointer-events:auto}
+.alert{width:212px;background:rgba(250,250,250,.97);border-radius:14px;overflow:hidden;text-align:center}
+.alert .t{font-size:13px;font-weight:700;padding:14px 14px 4px}
+.alert .m{font-size:11px;color:var(--ts);padding:0 14px 12px;line-height:1.5}
+.alert .btns{display:flex;border-top:.5px solid #C6C6C8}
+.alert .btns div{flex:1;padding:10px;font-size:13px;color:var(--primary);cursor:pointer}
+.alert .btns div.del{color:var(--red);font-weight:700;border-left:.5px solid #C6C6C8}
+.hud{position:absolute;inset:0;background:rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .18s;z-index:35}
+.hud.on{opacity:1;pointer-events:auto}
+.hud .box{width:152px;background:rgba(38,38,42,.94);border-radius:16px;padding:20px 14px 16px;color:#fff;display:flex;flex-direction:column;align-items:center;gap:9px;box-shadow:0 10px 26px rgba(0,0,0,.3)}
+.hud .msg{font-size:12.5px;font-weight:600;text-align:center;line-height:1.4}
+.hud .sub{font-size:10px;color:rgba(255,255,255,.6);margin-top:-3px;text-align:center;line-height:1.4}
+.hud .ok{width:30px;height:30px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:17px}
+.banner{position:absolute;left:10px;right:10px;bottom:64px;background:rgba(28,28,30,.95);color:#fff;border-radius:14px;padding:10px 12px 11px;display:flex;flex-direction:column;gap:7px;opacity:0;transform:translateY(12px);transition:all .22s;pointer-events:none;z-index:22}
+.banner.on{opacity:1;transform:translateY(0);pointer-events:auto}
+.banner .top{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600}
+.banner .spin{width:14px;height:14px;border-width:1.8px}
+.banner .cancel{margin-left:auto;font-size:11px;color:#7FB2FF;font-weight:700;cursor:pointer}
+.banner .bar{height:4px;border-radius:2px;background:rgba(255,255,255,.18);overflow:hidden}
+.banner .bar i{display:block;height:100%;width:0;background:#7FB2FF;border-radius:2px;transition:width .25s linear}
+.banner .ft{font-size:10px;color:rgba(255,255,255,.55)}
+.toast{position:absolute;left:12px;right:12px;bottom:64px;background:rgba(28,28,30,.95);color:#fff;border-radius:12px;padding:10px 13px;font-size:11.5px;display:flex;align-items:center;gap:9px;opacity:0;transform:translateY(12px);transition:all .22s;pointer-events:none;z-index:24}
+.toast.on{opacity:1;transform:translateY(0)}
+.toast .undo{margin-left:auto;color:#7FB2FF;font-weight:700;white-space:nowrap;font-size:11px}
+.toast .spin{width:14px;height:14px;border-width:1.8px}
+.toast .dot{width:15px;height:15px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:10px;flex:none}
+.tlwrap{background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 2px 10px rgba(17,24,39,.06);margin-top:12px;max-width:1120px}
+.tl{display:flex;align-items:center;gap:10px;margin-bottom:11px;font-size:12px}
+.tl:last-child{margin-bottom:0}
+.tl .nm{width:92px;flex:none;font-weight:700;font-size:11.5px}
+.tl .track{flex:1;display:flex;height:26px;border-radius:7px;overflow:hidden;font-size:10px;color:#fff;font-weight:600}
+.tl .seg{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;padding:0 6px}
+.seg.gap{background:repeating-linear-gradient(45deg,#E5E7EB,#E5E7EB 5px,#F3F4F6 5px,#F3F4F6 10px);color:#9CA3AF}
+.seg.run{background:var(--primary)}
+.seg.ok{background:var(--green)}
+.seg.toast{background:#6B7280}
+.tl .tick{width:70px;flex:none;font-size:10.5px;color:var(--ts);text-align:right}
+table{border-collapse:collapse;margin-top:8px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--sep);vertical-align:top;line-height:1.6}
+th{background:#F9FAFB;font-size:12px;color:var(--ts)}
+td:first-child{font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.footnote{margin-top:22px;font-size:12.5px;color:var(--ts);line-height:1.95;max-width:1120px;background:#fff;border-radius:12px;padding:16px 18px;box-shadow:0 2px 10px rgba(17,24,39,.06)}
+.footnote b{color:var(--tp)}
+</style>
+</head>
+<body>
+<h1>删除操作反馈 · 方案原型</h1>
+<p class="subtitle">
+问题：<b>阅读界面</b>（删除阅读记录 / 删除源文件）与<b>浏览界面</b>（删除文件 / 文件夹）在确认弹窗点下「移入回收站」后，弹窗立即关闭，
+<b>界面没有任何变化</b>，直到后台真正删完才突然冒出「已移入回收站」/「已删除」提示。走 WebDAV/SMB 时每个文件都是一次网络 MOVE，
+叠加占用重试（0.6s / 1.2s 退避，最多 3 次），批量删除或大目录可能要<b>几秒到十几秒</b>——这段空白就是「点了没反应」的来源。<br>
+以下为「现状 + 4 个候选方案」，每块手机都可独立操作：点底部 <b>删除 → 移入回收站</b>，模拟 2.5s 慢速网络，观察删除期间的表现。
+</p>
+<div class="tipbar">👉 每个方案都能点「重播」反复体验</div>
+<div class="tipbar warn">⚠️ 现状板故意保留「无反馈空档」用于对比</div>
+
+<div class="boards" id="boards"></div>
+
+<h3>时序对比（一次耗时 2.5 秒的批量删除）</h3>
+<div class="tlwrap" id="timeline"></div>
+
+<h3>方案对比</h3>
+<table id="cmp"></table>
+
+<div class="footnote" id="foot"></div>
+
+<script>
+const ROWS=[
+  {e:'🎬',n:'星际穿越.mkv',s:'视频 · 4.1 GB'},
+  {e:'📁',n:'2024 合集',s:'目录 · 12 项'},
+  {e:'📖',n:'三体 Ⅱ.epub',s:'小说 · 1.2 MB'}
+];
+const DUR=2500;
+
+const PLANS=[
+  {k:'cur',t:'现状',tag:'Before',tagc:'warn',
+   d:'点「移入回收站」→ 弹窗关闭 → <b>界面毫无变化</b>，3 项仍是选中态 → 约 2.5s 后底部突然出现「已移入回收站」。<br><span class="cons">问题：① 慢网下用户以为没点上，会重复点；② 无法判断是否在执行、进行到第几项；③ 提示与动作隔太久，因果断开。</span>'},
+  {k:'a',t:'方案 A · 居中阻塞 HUD',tag:'最直观',tagc:'rec',
+   d:'确认后立即清弹窗，中央压半透明遮罩 + 深色 HUD：菊花 + <b>「正在删除 3 项…」</b>（慢时可补当前文件名），完成后同一 HUD 内换成绿色 ✓「已移入回收站」约 0.8s 再消失。<br><span class="pros">优点：反馈最强、实现最省（一个全屏层 + 一个状态）；用户不会重复触发。</span><br><span class="cons">缺点：<b>阻塞</b>，删除期间整页不可操作，超过 8s 焦虑且无法取消；与现有 toast 需要互斥。</span>'},
+  {k:'b',t:'方案 B · 底部进度横幅',tag:'可取消',tagc:'rec',
+   d:'点删除后<b>行立即乐观移除</b>，底部浮出横幅：菊花 +「正在删除 3 项 · 2/3」+ 进度条 + 「取消」；完成后横幅变「已移入回收站」再淡出。<br><span class="pros">优点：不遮挡内容、可显示真实进度、可取消；和现有 <code>transfer</code> 传输横幅同一套视觉与位置，代码可复用。</span><br><span class="cons">缺点：进度需要底层支持；乐观移除在失败时要回滚；底部若同时有 mini 播放器/页签会叠层。</span>'},
+  {k:'c',t:'方案 C · 目标行内联状态',tag:'最克制',tagc:'rec',
+   d:'被删的行<b>留在原位</b>，变浅橙底 + 文字淡化 + 右侧菊花，行尾小字「删除中」；多选操作栏的「删除」按钮同时变成菊花 + 计数。每删完一项该行再淡出移除，全部完成后给吐司。<br><span class="pros">优点：反馈落在<b>被删对象本身</b>，语义最准；不遮挡、不打断；天然表达「逐项进行」。</span><br><span class="cons">缺点：需要 ViewModel 暴露「删除中路径集合」，SwiftUI 行状态改动最大；单文件时反馈较轻，弱网下仍会显得安静。</span>'},
+  {k:'d',t:'方案 D · 吐司状态机',tag:'改动最小',tagc:'rec',
+   d:'点删除后<b>立刻</b>在底部弹出吐司，带菊花：「正在删除 3 项…」且不自动消失；完成后<b>同一位置</b>替换为「已移入回收站 · 撤销」，失败替换为红字「删除失败：文件名（原因）」。<br><span class="pros">优点：复用现有 toast / UndoToast，几乎不动布局；彻底消除空档，失败也有明确出口。</span><br><span class="cons">缺点：只有一行字，弱网时看不出「还在动」的进展；与多选操作栏、传输横幅共用底部，需排队。</span>'}
+];
+
+const tl=[
+  {n:'现状',   segs:[[8,'g','点击'],['2.5','gap','无任何反馈（2.5s）'],['2.4','toast','toast 已移入回收站']]},
+  {n:'A 阻塞HUD', segs:[[8,'g','点击'],['2.5','run','遮罩 + 正在删除 3 项…'],['0.8','ok','✓ 已移入回收站'],['1.2','g','消失']]},
+  {n:'B 进度横幅', segs:[[8,'g','点击'],['2.5','run','横幅 + 进度 1/3→3/3 + 取消'],['0.9','ok','已移入回收站'],['1.2','g','淡出']]},
+  {n:'C 行内状态', segs:[[8,'g','点击'],['0.4','run','行内菊花 + 删除中'],['2.1','run','逐行移除'],['1.6','toast','已移入回收站 · 撤销']]},
+  {n:'D 吐司',    segs:[[8,'g','点击'],['2.5','run','吐司 + 菊花 正在删除 3 项…'],['2.6','ok','已移入回收站 · 撤销']]}
+];
+const CSSEL={g:'#94A3B8',gap:'',run:'',ok:'',toast:''};
+
+document.getElementById('timeline').innerHTML=tl.map(t=>{
+  const total=t.segs.reduce((a,s)=>a+ +s[1],0);
+  const segs=t.segs.map(s=>{
+    const w=(+s[1]/total*100).toFixed(2);
+    const cls=s[2]==='gap'?'gap':s[2]==='run'?'run':s[2]==='ok'?'ok':'toast';
+    return `<div class="seg ${cls}" style="width:${w}%">${s[2]}</div>`;
+  }).join('');
+  return `<div class="tl"><div class="nm">${t.n}</div><div class="track">${segs}</div><div class="tick">t≈0 → 3s</div></div>`;
+}).join('');
+
+document.getElementById('cmp').innerHTML=`
+  <tr><th>方案</th><th>删除期间界面</th><th>可取消</th><th>真实进度</th><th>改动量</th><th>适用判断</th></tr>
+  <tr style="background:#FFFBEB"><td>现状</td><td>无反馈，选中态保持</td><td>—</td><td>—</td><td>—</td><td>必须修掉</td></tr>
+  <tr><td>A 居中 HUD</td><td>全屏遮罩 + 菊花 + 文案</td><td>否</td><td>仅计数文案</td><td>小</td><td>删除普遍 &lt; 3s 时最划算</td></tr>
+  <tr><td>B 进度横幅</td><td>不遮挡，行先移除</td><td>是</td><td>可做 n/N + 百分比</td><td>中</td><td>批量大、需要取消</td></tr>
+  <tr><td>C 行内状态</td><td>行本身变「删除中」</td><td>否</td><td>逐项可见</td><td>较大</td><td>最贴合列表语义</td></tr>
+  <tr><td>D 吐司状态机</td><td>底部一行状态替换</td><td>否</td><td>仅计数文案</td><td>最小</td><td>先止血，成本最低</td></tr>`;
+
+document.getElementById('foot').innerHTML=`
+  <b>推荐组合：A（或 D）+ 复用现有 UndoToast</b><br>
+  · 单次/少量删除：点「移入回收站」→ 立即出现 <b>「正在删除 N 项…」菊花</b>（A 的 HUD 或 D 的吐司二选一），完成后原地换成带「撤销」的成功提示。<br>
+  · 批量/大目录：切到 <b>B 的底部横幅</b>，显示 <code>已完成 2/3</code> 并允许取消，避免长时间全屏阻塞。<br><br>
+  <b>代码接入点（两个界面同一套状态）：</b><br>
+  · 浏览页：<code>BrowseDirectoryViewModel</code> 增加 <code>@Published var deleteJob: DeleteJob?</code>，在 <code>delete(paths:)</code> / <code>forceDelete(paths:)</code> 进入时置位、<code>defer</code> 中清除；<code>BrowseDirectoryView</code> 的确认弹窗按钮改为「先置位再 Task」；渲染层塞进现有 <code>bottomOverlay</code>。<br>
+  · 阅读页：<code>ReadingHomeView</code> 的 <code>deleteSourceFiles(ids:)</code> / <code>forceDeleteSourceFiles(ids:)</code> 同样包一层状态（<code>@State private var deleteJob</code>），确认弹窗点下即显示。<br>
+  · 关键：<b>状态必须在弹窗 dismiss 之前同步置位</b>，且用 <code>defer</code> 保证异常/取消路径也会清除，否则会卡住遮罩。<br>
+  · 文案统一：进行中 <code>正在删除 N 项…</code>；成功 <code>已将 N 项移入回收站</code> + 撤销；降级真删 <code>已彻底删除 N 项</code>；部分失败 <code>N 项失败：原因</code>。<br>
+  · 阅读页「删除源文件」语义是「移入回收站 + 清理阅读记录」，进行中文案用 <code>正在删除 N 个源文件…</code>，避免与「删除记录」（纯本地、瞬时完成，不需要进度）混淆。`;
+
+function phone(k){return `<div class="phone" data-k="${k}">
+  <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ ▐</span></div>
+  <div class="navbar"><span class="back">‹</span><div class="nav-title">电影</div><div class="nav-right">取消</div></div>
+  <div class="seclabel">已选择 3 项 · 浏览界面（阅读界面同理）</div>
+  <div class="list">${ROWS.map(r=>`<div class="row"><div class="thumb">${r.e}</div><div class="meta"><div class="n">${r.n}</div><div class="s">${r.s}</div></div><div class="ck">✓</div><span class="st"></span></div>`).join('')}</div>
+  <div class="selbar">
+    <div class="sb"><div class="el">⇄</div>移动</div>
+    <div class="sb"><div class="el">⧉</div>复制</div>
+    <div class="sb"><div class="el">✎</div>重命名</div>
+    <div class="sb"><div class="el">↓</div>下载</div>
+    <div class="sb"><div class="el">☆</div>收藏</div>
+    <div class="sb del" data-opendel><div class="el">🗑</div>删除</div>
+  </div>
+  <div class="appbar"><span>📚</span><span>⚡</span><span class="on">📁</span><span>🌐</span><span>⚙️</span></div>
+  <div class="dim"><div class="alert">
+    <div class="t">删除确认</div><div class="m">将 3 个项目移入回收站（保留 30 天，可在回收站还原）</div>
+    <div class="btns"><div class="a-cancel">取消</div><div class="del a-ok">移入回收站</div></div>
+  </div></div>
+  <div class="hud"><div class="box"><span class="spin lg"></span><div class="msg">正在删除 3 项…</div><div class="sub">慢速网络 · 逐项移入回收站</div></div></div>
+  <div class="banner">
+    <div class="top"><span class="spin"></span><span class="msg">正在删除 3 项 · 0/3</span><span class="cancel b-cancel">取消</span></div>
+    <div class="bar"><i></i></div><div class="ft">正在移入回收站，可随时取消</div>
+  </div>
+  <div class="toast"><span class="spin"></span><span class="msg"></span><span class="undo">撤销</span></div>
+</div>`;}
+
+document.getElementById('boards').innerHTML=PLANS.map(p=>`
+  <div class="board">
+    <h2>${p.t}<span class="tag ${p.tagc}">${p.tag}</span></h2>
+    <div class="desc">${p.d}</div>
+    ${phone(p.k)}
+    <div class="replay">↻ 重播</div>
+  </div>`).join('');
+
+document.querySelectorAll('.board').forEach(b=>{
+  const el=b.querySelector('.phone'), k=el.dataset.k;
+  const q=s=>el.querySelector(s), qa=s=>[...el.querySelectorAll(s)];
+  const rows=qa('.row'), delBtn=q('[data-opendel]');
+  let timers=[];
+  const at=(fn,ms)=>timers.push(setTimeout(fn,ms));
+  const busy=()=>!!el.querySelector('.hud.on,.banner.on,.toast.on');
+  const toastOK=(msg,ms)=>{const t=q('.toast');t.innerHTML=`<span class="dot">✓</span><span class="msg">${msg}</span>`;t.classList.add('on');at(()=>t.classList.remove('on'),ms);};
+  const finishRemove=()=>rows.forEach((r,i)=>at(()=>r.classList.add('gone'),i*90));
+  const reset=()=>{
+    timers.forEach(clearTimeout);timers=[];
+    rows.forEach(r=>{r.className='row';r.querySelector('.ck').style.display='';r.querySelector('.st').innerHTML='';});
+    q('.dim').classList.remove('on');
+    const h=q('.hud');h.classList.remove('on');
+    h.querySelector('.box').innerHTML='<span class="spin lg"></span><div class="msg">正在删除 3 项…</div><div class="sub">慢速网络 · 逐项移入回收站</div>';
+    const bn=q('.banner');bn.classList.remove('on');
+    bn.querySelector('.bar i').style.width='0%';
+    bn.querySelector('.bar').style.display='';
+    bn.querySelector('.msg').textContent='正在删除 3 项 · 0/3';
+    bn.querySelector('.cancel').style.display='';
+    bn.querySelector('.ft').textContent='正在移入回收站，可随时取消';
+    const top=bn.querySelector('.top');
+    if(!top.querySelector('.spin')) top.querySelector('.dot').outerHTML='<span class="spin"></span>';
+    const t=q('.toast');t.classList.remove('on');
+    t.innerHTML='<span class="spin"></span><span class="msg"></span><span class="undo">撤销</span>';
+    delBtn.innerHTML='<div class="el">🗑</div>删除';
+  };
+  function run(){
+    if(k==='cur'){
+      at(()=>{
+        const t=q('.toast');t.innerHTML='<span class="msg">已移入回收站</span>';t.classList.add('on');
+        at(()=>t.classList.remove('on'),2400);
+        finishRemove();
+      },DUR);
+    }
+    if(k==='a'){
+      const h=q('.hud');h.classList.add('on');
+      at(()=>h.querySelector('.sub').textContent='正在删除：星际穿越.mkv',900);
+      at(()=>h.querySelector('.box').innerHTML='<div class="ok">✓</div><div class="msg">已移入回收站</div><div class="sub">3 项已删除</div>',DUR);
+      at(()=>{h.classList.remove('on');finishRemove();},DUR+900);
+    }
+    if(k==='b'){
+      const bn=q('.banner');bn.classList.add('on');
+      rows.forEach((r,i)=>at(()=>r.classList.add('gone'),i*80));
+      let n=0;
+      const step=()=>{
+        n++;
+        bn.querySelector('.msg').textContent=`正在删除 3 项 · ${n}/3`;
+        bn.querySelector('.bar i').style.width=(n/3*100)+'%';
+        if(n<3){at(step,(DUR-600)/3);return;}
+        at(()=>{
+          bn.querySelector('.top .spin').outerHTML='<span class="dot" style="width:15px;height:15px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:10px">✓</span>';
+          bn.querySelector('.msg').textContent='已移入回收站';
+          bn.querySelector('.cancel').style.display='none';
+          bn.querySelector('.bar').style.display='none';
+          bn.querySelector('.ft').textContent='3 项已移入回收站，可在回收站还原';
+          at(()=>bn.classList.remove('on'),1700);
+        },320);
+      };
+      at(step,500);
+      bn.querySelector('.b-cancel').onclick=()=>{
+        timers.forEach(clearTimeout);timers=[];
+        bn.querySelector('.msg').textContent='正在取消…';
+        at(()=>{bn.classList.remove('on');toastOK('已取消，已移入的项目可在回收站还原',2600);},700);
+      };
+    }
+    if(k==='c'){
+      delBtn.innerHTML='<div class="el"><span class="spin" style="width:15px;height:15px"></span></div>删除中';
+      rows.forEach(r=>at(()=>{r.classList.add('pending');r.querySelector('.ck').style.display='none';r.querySelector('.st').innerHTML='<span class="spin" style="width:14px;height:14px"></span>';},60));
+      rows.forEach((r,i)=>at(()=>{r.classList.remove('pending');r.classList.add('gone');},(DUR/3)*(i+1)));
+      at(()=>{delBtn.innerHTML='<div class="el">🗑</div>删除';toastOK('已移入回收站',2600);},DUR+120);
+    }
+    if(k==='d'){
+      const t=q('.toast');
+      t.innerHTML='<span class="spin"></span><span class="msg">正在删除 3 项…</span>';
+      t.classList.add('on');
+      at(()=>{
+        t.innerHTML='<span class="dot">✓</span><span class="msg">已移入回收站</span><span class="undo">撤销</span>';
+        finishRemove();
+        at(()=>t.classList.remove('on'),3200);
+      },DUR);
+    }
+  }
+  delBtn.onclick=()=>{
+    if(!busy()) reset();
+    q('.dim').classList.add('on');
+  };
+  q('.a-cancel').onclick=()=>q('.dim').classList.remove('on');
+  q('.a-ok').onclick=()=>{q('.dim').classList.remove('on');run();};
+  b.querySelector('.replay').onclick=reset;
+});
+</script>
+</body>
+</html>

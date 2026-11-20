@@ -14,6 +14,8 @@ import UIKit
 final class UndoToastState: ObservableObject {
     struct Item: Equatable {
         let message: String
+        /// 进行中（左侧菊花）：此时不显示撤销按钮，也不自动消失——由操作方显式 `finish` 收尾
+        var isWorking = false
         let id = UUID()
 
         static func == (lhs: Item, rhs: Item) -> Bool { lhs.id == rhs.id }
@@ -44,6 +46,38 @@ final class UndoToastState: ObservableObject {
             canUndo = !undoActions.isEmpty
         }
         // 每次新删除都顺延计时窗口
+        scheduleDismiss()
+    }
+
+    /// 开始一项耗时的破坏性操作（删除 / 移入回收站）：确认弹窗收起前调用，
+    /// 立刻在吐司位置显示「菊花 + 正在删除 N 项…」，填掉后台执行期间的无反馈空档。
+    ///
+    /// 与 `show` 的差异：**不动撤销栈**（此前左滑删除的 5 秒撤销窗口不能被抹掉），
+    /// 也不排队自动消失——必须由 `finish` / `dismiss` 显式收尾（调用方用 do/catch 保证）。
+    func beginWorking(_ message: String) {
+        dismissTask?.cancel()
+        dismissTask = nil
+        withAnimation(.appQuick) {
+            item = Item(message: message, isWorking: true)
+            canUndo = false
+        }
+    }
+
+    /// 结束进行中提示：原位置替换为结果文案，并恢复 5 秒撤销窗口。
+    ///
+    /// `undo` 传入时会把撤销动作压栈（与 `show` 一致）；进行中期间既有的撤销栈保持不变。
+    func finish(_ message: String, undo: (@MainActor () -> Void)? = nil) {
+        dismissTask?.cancel()
+        if let undo { undoActions.append(undo) }
+        let text = undoActions.count > 1 ? "已删除 \(undoActions.count) 项" : message
+        withAnimation(.appQuick) {
+            item = Item(message: text)
+            canUndo = !undoActions.isEmpty
+        }
+        scheduleDismiss()
+    }
+
+    private func scheduleDismiss() {
         dismissTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
             guard !Task.isCancelled else { return }
@@ -87,6 +121,12 @@ struct UndoToastBar: View {
     var body: some View {
         if let item = state.item {
             HStack(spacing: 12) {
+                // 进行中：菊花让「还在动」这件事有持续的视觉证据（弱网下文案不变但界面不死）
+                if item.isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                }
                 Text(item.message)
                     .font(.subheadline)
                     .foregroundStyle(.white)

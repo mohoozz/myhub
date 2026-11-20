@@ -407,21 +407,31 @@ struct BrowseDirectoryView: View {
                     // 开启「删除时移除同名文件」后，实际删除范围会大于选中项：
                     // 统一按展开后的目标集合做停播与降级删除，避免同名文件仍被占用导致 MOVE 失败
                     let targets = viewModel.deleteTargets(for: paths)
+                    // 方案 D：弹窗收起前先把「正在删除」挂到吐司上。
+                    // 弱网下 MOVE 可能耗时数秒（含占用重试），此前这段完全没有反馈
+                    undoToast.beginWorking("正在删除 \(targets.count) 项…")
                     Task {
                         // 删除前释放占用：被删文件正在播放（含 mini）时先停播并等待串流会话注销（TODO 373）
                         await releasePlaybackIfNeeded(targets)
                         do {
                             try await viewModel.delete(paths: targets)
+                            undoToast.finish("已将 \(targets.count) 项移入回收站")
                         } catch let trashError as BrowseDirectoryViewModel.TrashError {
-                            // 回收站不可用 → 仅对未成功的剩余项降级真删确认：
+                            // 仅对未成功的剩余项降级真删确认：
                             // 已移入回收站的项目不再重复删除，避免误报「删除失败」（TODO 369），
                             // 附带失败原因（占用/网络/不支持）供弹窗提示（TODO 373）
                             let remaining = targets.subtracting(trashError.movedToTrash)
-                            if !remaining.isEmpty {
+                            if remaining.isEmpty {
+                                // 全部都已在回收站（只是收尾步骤报错）：给结果，不让吐司空着消失
+                                undoToast.finish("已将 \(trashError.movedToTrash.count) 项移入回收站")
+                            } else {
+                                // 回收站不可用 → 由降级弹窗接管提示，跳过吐司避免与弹窗重复
+                                undoToast.dismiss()
                                 forceDeleteReason = trashError.reason
                                 forceDeletePaths = remaining
                             }
                         } catch {
+                            undoToast.dismiss()
                             forceDeleteReason = error.localizedDescription
                             forceDeletePaths = targets
                         }
@@ -442,10 +452,18 @@ struct BrowseDirectoryView: View {
         ) {
             Button("彻底删除", role: .destructive) {
                 if let paths = forceDeletePaths {
+                    undoToast.beginWorking("正在彻底删除 \(paths.count) 项…")
                     Task {
                         // 兜底再释放一次占用：首轮 MOVE 可能正因占用失败，此时文件可能仍在播放（TODO 373）
                         await releasePlaybackIfNeeded(paths)
+                        // forceDelete 不抛错：失败原因写在 operationError，据此决定吐司收尾方式
+                        viewModel.operationError = nil
                         await viewModel.forceDelete(paths: paths)
+                        if viewModel.operationError == nil {
+                            undoToast.finish("已彻底删除 \(paths.count) 项")
+                        } else {
+                            undoToast.dismiss()
+                        }
                     }
                 }
                 forceDeletePaths = nil
@@ -1148,6 +1166,8 @@ struct BrowseDirectoryView: View {
     /// 左滑删除：先释放播放占用（刚播放完的文件服务端句柄可能未释放，TODO 373），
     /// 再移入回收站；失败只提示不弹降级确认框
     private func swipeDelete(_ entry: FileEntry) async {
+        // 方案 D：左滑同样先亮「正在删除」，完成后原地换成带撤销的结果文案
+        undoToast.beginWorking("正在删除「\(entry.name)」…")
         // 开启「删除时移除同名文件」时，同名兄弟文件也会被移入回收站，需一并释放占用
         await releasePlaybackIfNeeded(viewModel.deleteTargets(for: [entry.path]))
         do {
@@ -1157,10 +1177,11 @@ struct BrowseDirectoryView: View {
             let message = count > 1
                 ? "已将「\(name)」等 \(count) 项移入回收站"
                 : "已将「\(name)」移入回收站"
-            undoToast.show(message) {
+            undoToast.finish(message) {
                 Task { await viewModel.undoDeleteToTrash(receipt) }
             }
         } catch {
+            undoToast.dismiss()
             viewModel.operationError = "删除失败：\(entry.name)（\(error.localizedDescription)）。请稍后重试"
         }
     }

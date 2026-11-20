@@ -535,7 +535,8 @@ final class BrowseDirectoryViewModel: ObservableObject {
         finishTrashMove(movedPaths, knownDirs: movedDirs)
         await invalidateAndRefresh()
         endSelection()
-        showToast("已移入回收站")
+        // 结果提示由视图层吐司承担（方案 D：进行中 → 原地替换为结果），此处不再重复 showToast，
+        // 否则同一次删除会在底部同时出现两条提示
     }
 
     /// 移入回收站收尾：清理阅读记录 + 本地列表立即移除并同步缓存（弱网下界面依然正确）。
@@ -701,10 +702,9 @@ final class BrowseDirectoryViewModel: ObservableObject {
         }
         await invalidateAndRefresh()
         endSelection()
-        if failed.isEmpty {
-            showToast("已删除")
-        } else {
+        if !failed.isEmpty {
             // 附具体失败原因与可操作建议（文件刚播放完时服务端句柄可能仍被占用，TODO 373）
+            // 成功提示由视图层吐司承担（方案 D），此处只报告失败
             operationError = "删除失败：\(failed.joined(separator: "、"))。文件可能仍被占用或网络异常，请稍后重试"
         }
     }
