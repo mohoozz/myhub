@@ -312,6 +312,7 @@ struct ReadingHomeView: View {
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
@@ -399,15 +400,14 @@ struct ReadingHomeView: View {
         record.title.isEmpty ? StoragePath.fileName(of: record.filePath) : record.title
     }
 
-    /// 副标题：源名 · 类型 · 日期（参照 Flutter iOS）
+    /// 副标题：路径源 · 文件所在目录（类型/时间与浏览界面重复，这里改显示源内路径位置）
     private func subtitle(for record: ReadingProgress) -> String {
-        var parts: [String] = []
-        if let name = connections[record.connectionID]?.name, !name.isEmpty {
-            parts.append(name)
+        let directory = StoragePath.parent(of: record.filePath)
+        let displayPath = directory == "/" ? "根目录" : directory
+        guard let name = connections[record.connectionID]?.name, !name.isEmpty else {
+            return displayPath
         }
-        parts.append(record.displayMediaType.label)
-        parts.append(DisplayFormatters.shortDate(record.updatedAt))
-        return parts.joined(separator: " · ")
+        return "\(name) · \(displayPath)"
     }
 
  // MARK: - 工具栏

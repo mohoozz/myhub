@@ -209,7 +209,7 @@ enum AppSettings {
         @RawUserDefault("browse.sortKey", default: .name) static var sortKey: BrowseSortKey
         @UserDefault("browse.sortAscending", default: true) static var sortAscending: Bool
         @RawUserDefault("browse.viewMode", default: .grid) static var viewMode: BrowseViewMode
-        /// 删除文件时，同一目录下「主名相同、扩展名不同」的其他文件（字幕/封面/元数据）一并删除。
+        /// 删除/移动文件时，同一目录下「主名相同、扩展名不同」的其他文件（字幕/封面/元数据）一并处理。
         @UserDefault("browse.deleteSameNameFiles", default: false) static var deleteSameNameFiles: Bool
     }
 
@@ -263,7 +263,7 @@ final class BrowseDisplaySettings: ObservableObject {
         }
     }
 
-    /// 删除文件时一并移除同目录下主名相同、扩展名不同的文件（设置页开关；实际保存在 AppSettings.Browse）
+    /// 删除/移动文件时一并处理同目录下主名相同、扩展名不同的文件（设置页开关；实际保存在 AppSettings.Browse）
     @Published var deleteSameNameFiles: Bool {
         didSet {
             guard deleteSameNameFiles != oldValue else { return }

@@ -185,6 +185,19 @@ struct BrowseDirectoryView: View {
             && playerCore.isPlaying
     }
 
+    /// 该文件项是否为播放器当前加载的条目（播放中每 5s 回写进度，暂停后退出播放也会回写一次）
+    private func isLoadedInPlayer(_ entry: FileEntry) -> Bool {
+        guard let current = player.current else { return false }
+        return current.connectionID == connection.id && current.path == entry.path
+    }
+
+    /// 该文件项对应的阅读进度记录（同连接 + 同路径）；无记录返回 nil
+    private func readingProgressRecord(for entry: FileEntry) -> ReadingProgress? {
+        readingHistory.records.first {
+            $0.connectionID == connectionID && $0.filePath == entry.path
+        }
+    }
+
     private enum SheetRoute: Identifiable {
         case move(Set<String>)
         case copy(Set<String>)
@@ -979,6 +992,13 @@ struct BrowseDirectoryView: View {
                 })
             }
         }
+        // 删除该文件的阅读进度（不影响源文件）：仅在有记录、且该文件未被播放器加载时提供
+        // —— 播放中进度每 5s 回写一次、暂停后退出播放也会回写一次，删掉会被重建，避免误导用户
+        if let record = readingProgressRecord(for: entry), !isLoadedInPlayer(entry) {
+            items.append(PopupMenuItem(title: "删除阅读进度", systemImage: "trash", destructive: true) {
+                deleteReadingProgress(record)
+            })
+        }
         items.append(PopupMenuItem(title: "删除", systemImage: "trash", destructive: true) {
             deletingPaths = [entry.path]
         })
@@ -996,7 +1016,19 @@ struct BrowseDirectoryView: View {
         }
     }
 
- // MARK: - 左滑删除
+ // MARK: - 删除阅读进度
+
+    /// 删除单个阅读进度（不影响源文件）：删前留快照，撤销即原样插回
+    private func deleteReadingProgress(_ record: ReadingProgress) {
+        guard let id = record.id else { return }
+        readingHistory.remove(ids: [id])
+        let name = record.title.isEmpty ? StoragePath.fileName(of: record.filePath) : record.title
+        undoToast.show("已删除「\(name)」的阅读进度") {
+            readingHistory.restore([record])
+        }
+    }
+
+// MARK: - 左滑删除
 
     /// 左滑「删除」：图标 / 文案 / 语义色与长按菜单的「删除」项完全一致（`trash` + 系统红）。
     private func deleteSwipeAction(_ entry: FileEntry) -> SwipeAction {
