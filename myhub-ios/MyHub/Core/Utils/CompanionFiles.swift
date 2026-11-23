@@ -1,6 +1,6 @@
 import Foundation
 
-/// 删除时的「关联文件」判定
+/// 删除/移动时的「关联文件」判定
 enum CompanionFiles {
     /// 参与语言后缀规则的字幕扩展名（与播放器外挂字幕识别保持一致）
     static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "idx", "smi", "lrc"]
@@ -13,7 +13,7 @@ enum CompanionFiles {
     /// 分卷/分片前缀：其后全是数字时不当作语言标签
     private static let volumePrefixes = ["part", "cd", "disc", "disk", "vol", "dvd", "v"]
 
-    /// 与 `entry` 同目录、可随它一起删除的关联文件。
+    /// 与 `entry` 同目录、可随它一起删除/移动的关联文件。
     static func sameStemSiblings(of entry: FileEntry, in listing: [FileEntry]) -> [FileEntry] {
         guard !entry.isDir else { return [] }
         let sourceName = entry.name as NSString

@@ -386,15 +386,23 @@ final class BrowseDirectoryViewModel: ObservableObject {
         await transfer(paths: paths, to: destination, at: destDir, isMove: false)
     }
 
+    /// 移动目标：开关开启时一并带上同目录下同名/语言后缀的关联文件（与删除共用同一开关）
+    func moveTargets(for paths: Set<String>) -> Set<String> {
+        companionTargets(for: paths)
+    }
+
     private func transfer(paths: Set<String>, to destination: Connection, at destDir: String, isMove: Bool) async {
         guard let adapter, let destAdapter = try? AdapterFactory.makeAdapter(for: destination) else {
             operationError = "目标连接不可用"
             return
         }
         let sameConnection = destination.id == connection.id
+        // 移动：与删除共用「同名文件」开关，关联文件（字幕/封面/元数据）一并移动
+        let targets = isMove ? moveTargets(for: paths) : paths
+        let companionCount = max(0, targets.count - paths.count)
         var failed: [String] = []
         var movedPaths: [String] = []
-        for sourcePath in paths.sorted() {
+        for sourcePath in targets.sorted() {
             guard let entry = entry(for: sourcePath) else { continue }
             let destPath = StoragePath.joining(destDir, entry.name)
             do {
@@ -424,7 +432,12 @@ final class BrowseDirectoryViewModel: ObservableObject {
         // 源目录刷新（不预删缓存：刷新成功会覆盖，失败保留旧缓存，避免弱网下目录空白）
         await refresh()
         if failed.isEmpty {
-            showToast(isMove ? "已移动 \(paths.count) 项" : "已复制 \(paths.count) 项")
+            if isMove {
+                let companionHint = companionCount > 0 ? "（含 \(companionCount) 个同名/语言后缀文件）" : ""
+                showToast("已移动 \(targets.count) 项\(companionHint)")
+            } else {
+                showToast("已复制 \(targets.count) 项")
+            }
         } else {
             operationError = "以下项目失败：\(failed.joined(separator: "、"))"
         }
@@ -453,13 +466,13 @@ final class BrowseDirectoryViewModel: ObservableObject {
 
  // MARK: - 删除（回收站机制：挂载点下 .trash；不支持时降级由 UI 确认真删）
 
-    /// 与条目同目录、可随它一起删除的关联文件（`movie.mp4` → `movie.srt` / `movie.zh.srt`）。
+    /// 与条目同目录、可随它一起处理的关联文件（`movie.mp4` → `movie.srt` / `movie.zh.srt`）。
     private func sameStemSiblings(of entry: FileEntry) -> [FileEntry] {
         CompanionFiles.sameStemSiblings(of: entry, in: entries)
     }
 
-    /// 实际删除目标
-    func deleteTargets(for paths: Set<String>) -> Set<String> {
+    /// 连同关联文件的目标集合（删除、移动共用；开关关闭时返回原集合）
+    private func companionTargets(for paths: Set<String>) -> Set<String> {
         guard AppSettings.Browse.deleteSameNameFiles else { return paths }
         var result = paths
         for path in paths {
@@ -469,6 +482,11 @@ final class BrowseDirectoryViewModel: ObservableObject {
             }
         }
         return result
+    }
+
+    /// 实际删除目标
+    func deleteTargets(for paths: Set<String>) -> Set<String> {
+        companionTargets(for: paths)
     }
 
     func delete(paths: Set<String>) async throws {

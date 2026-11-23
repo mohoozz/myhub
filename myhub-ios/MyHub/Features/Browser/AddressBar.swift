@@ -100,11 +100,14 @@ enum BrowserAddress {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        // 已带 http/https scheme
-        if let url = URL(string: trimmed),
-           let scheme = url.scheme?.lowercased(),
-           scheme == "http" || scheme == "https" {
-            return url
+        // 已带 scheme 的地址
+        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
+            if scheme == "http" || scheme == "https" { return url }
+            // 外部 scheme（itms-apps / tel / mailto 等）原样返回：由 `BrowserTab.load` 交给系统打开，
+            // 不要当成搜索词（否则手输 App Store 链接会变成搜索结果）
+            if trimmed.contains("://") || ["tel", "mailto", "sms", "itms", "itms-apps"].contains(scheme) {
+                return url
+            }
         }
 
         // 域名/IP（含点且无空格），或 localhost → 补全 https

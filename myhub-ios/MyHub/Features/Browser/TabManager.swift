@@ -133,7 +133,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var hasOnlySecureContent = false
     @Published var hasError = false
     @Published var isSSLError = false
+    /// 失败原因是「不支持的 URL scheme」（`NSURLErrorUnsupportedURL`，如 `itms-apps://` / `tel:`）：
+    /// 这类地址重试必然再次失败，错误页不该提供「重试」。
+    @Published private(set) var isUnsupportedURL = false
     @Published var errorMessage: String?
+
+    /// 页面里点到的外部 scheme（`itms-apps://` / `tel:` 等）：不自动弹系统 App，
+    /// 挂在这里由界面弹提示，用户确认后才调用 `UIApplication.shared.open`
+    @Published var pendingExternalURL: URL?
 
     /// 页面滚动计数：用户任意方向拖动页面均自增，用于将底部操作栏收起为胶囊
     @Published var scrollTick: Int = 0
@@ -174,6 +181,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// 最近一次**主动发起**导航的地址（`load` / 恢复补加载 / 历史回放）。
     private var requestedURL: URL?
 
+    /// 因「WebKit 不支持的 scheme」而失败的地址：错误页据此提供「用系统打开」
+    private var failedExternalURL: URL?
+
     /// - Parameter autoload: 是否立即加载 `url`。
     init(
         id: UUID = UUID(),
@@ -186,6 +196,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     ) {
         self.id = id
         self.isIncognito = isIncognito
+
+        // 外部 scheme（itms-apps:// 等）不是可加载的页面：不建地址、不发请求，退化为空白标签
+        let url = url.flatMap { Self.canHandleInWebView($0) ? $0 : nil }
 
         super.init()
 
@@ -220,6 +233,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
  // MARK: - 导航操作
 
     func load(_ url: URL) {
+        // 外部 scheme（App Store / 电话 / 邮件 / 其它 App）：不交给 WebView（否则会以
+        // `NSURLErrorUnsupportedURL` 失败并卡在错误页），也不静默弹 App，先提示用户确认
+        guard Self.canHandleInWebView(url) else {
+            requestOpenExternally(url)
+            return
+        }
         // 从起始页导航进入页面：起始页成为可回退的第一页（需在 currentURL 更新前判断）
         if isShowingStartPage {
             startedFromStartPage = true
@@ -233,6 +252,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         // 用户主动导航优先于会话恢复的延迟加载，避免之后又被旧 URL 覆盖
         pendingLoadURL = nil
         isPendingRestore = false
+        // 新导航不是回退/前进：作废上一轮遗留的位置恢复（新页面从顶部开始）
+        pendingScrollRestore = nil
+        suppressNextScrollSave = false
         requestedURL = url   // 供失败后的「重试」重新发起同一请求
         currentURL = url   // 立即更新：隐藏起始页、刷新地址栏
         webView.load(URLRequest(url: url))
@@ -265,6 +287,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func reload() {
         // 刷新是操作栏上的操作，**不**收起操作栏（只有滑动页面才收起，见 `scrollTick`）。
+        // 不支持的 scheme 刷新只会再失败一次（且会立刻弹系统 App），保持在错误页即可
+        guard !isUnsupportedURL else { return }
         if hasError, let url = requestedURL ?? currentURL {
             load(url)
             return
@@ -283,7 +307,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     /// 回退可用性：非起始页时总可回退（webView 历史栈可退，或可退回起始页）。
+    /// 错误页永远可以退出（回到起始页），否则失败页面会变成死路。
     var canGoBackOrStartPage: Bool {
+        if hasError { return true }
         guard !isShowingStartPage else { return false }
         if usesRestoredHistory { return historyIndex > 0 || startedFromStartPage }
         return webView.canGoBack || startedFromStartPage
@@ -310,21 +336,33 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         return !webView.canGoBack || reachedStartPageBoundary
     }
 
-    /// 回退：优先走 webView 历史栈；到达起始页边界（或栈空且从起始页进入）时回退到起始页
+    /// 回退：优先走 webView 历史栈；到达起始页边界（或栈空且从起始页进入）时回退到起始页。
+    /// 错误页上没有历史可退时回落到起始页（否则失败页面无法脱身）。
     func goBack() {
+        let escapingError = hasError
         if usesRestoredHistory {
             guard !isShowingStartPage else { return }
             if historyIndex > 0 {
+                if escapingError { clearError() }
+                // 先存下当前页的位置，再切到上一页取回它的位置
+                saveScrollOffsetForCurrentPage()
                 historyIndex -= 1
+                pendingScrollRestore = restoredScrollOffsets[historyIndex]
                 loadHistoryEntry()
-            } else if startedFromStartPage {
+                scheduleScrollRestoreFallback()
+            } else if startedFromStartPage || escapingError {
                 showStartPage()
             }
             return
         }
         if webView.canGoBack, !reachedStartPageBoundary {
+            // 先清错误：否则回退后错误页仍盖在上一页之上
+            if escapingError { clearError() }
+            saveScrollOffsetForCurrentPage()
+            prepareScrollRestore(for: webView.backForwardList.backItem)
             webView.goBack()
-        } else if startedFromStartPage, !isShowingStartPage {
+            scheduleScrollRestoreFallback()
+        } else if !isShowingStartPage, startedFromStartPage || escapingError {
             showStartPage()
         }
     }
@@ -332,20 +370,31 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     func goForward() {
         if usesRestoredHistory {
             guard historyIndex >= 0, historyIndex < historyURLs.count - 1 else { return }
+            saveScrollOffsetForCurrentPage()
             historyIndex += 1
+            pendingScrollRestore = restoredScrollOffsets[historyIndex]
             loadHistoryEntry()
+            scheduleScrollRestoreFallback()
             return
         }
+        saveScrollOffsetForCurrentPage()
+        prepareScrollRestore(for: webView.backForwardList.forwardItem)
         webView.goForward()
+        scheduleScrollRestoreFallback()
     }
 
     /// 回退到起始页：清空 URL 展示起始页（起始页始终是标签的逻辑第一页）
     private func showStartPage() {
+        // 错误页也能退到起始页：不清错误会让 `hasError` 继续盖住起始页
+        clearError()
         startedFromStartPage = false
         startPageBoundary = nil
         // 自定义历史栈同步清空：起始页是标签的第一页，之后从起始页出发重新累积
         historyURLs = []
         historyIndex = -1
+        restoredScrollOffsets = [:]
+        pendingScrollRestore = nil
+        suppressNextScrollSave = false
         currentURL = nil
         // 注：WKBackForwardList 无公开的清空历史栈 API；此处只重置 UI 状态，webView 历史栈保留。
     }
@@ -465,7 +514,84 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         currentURL == nil && !isLoading && !hasError
     }
 
- // MARK: - 历史栈维护
+// MARK: - 滚动位置记忆（回退 / 前进回到原位置）
+
+    /// 原生历史栈各页面的滚动偏移（`WKBackForwardListItem` 在列表内是稳定实例，可直接作键）
+    private var scrollOffsets: [WKBackForwardListItem: CGPoint] = [:]
+    /// 按 URL 记录的位置兜底：万一 WebKit 换发了新的条目实例，仍能取回上次位置
+    private var urlScrollOffsets: [String: CGFloat] = [:]
+    /// 重启恢复模式（自定义栈）下按历史下标记录的滚动偏移
+    private var restoredScrollOffsets: [Int: CGFloat] = [:]
+    /// 待应用的滚动目标：只在回退 / 前进时设置；`nil` 表示不干预（交给 WebKit 的 page cache）
+    private var pendingScrollRestore: CGFloat?
+    /// 自定义栈回放引发的那次导航不要回写位置（此时下标已指向目标页，不是被离开的那页）
+    private var suppressNextScrollSave = false
+
+    /// 是否正在等待滚动位置落位（侧滑收尾据此多等一拍，避免先露出顶部再跳）
+    var isRestoringScrollPosition: Bool { pendingScrollRestore != nil }
+
+    /// 离开当前页前记录滚动位置（新导航 / 回退 / 前进发起时调用）
+    private func saveScrollOffsetForCurrentPage() {
+        guard isWebViewCreated, !isPendingRestore else { return }
+        guard currentURL != nil, !isShowingStartPage, !hasError else { return }
+        let offset = webView.scrollView.contentOffset
+        guard offset.y.isFinite else { return }
+        if usesRestoredHistory {
+            guard historyIndex >= 0 else { return }
+            restoredScrollOffsets[historyIndex] = offset.y
+        } else if let item = webView.backForwardList.currentItem {
+            scrollOffsets[item] = offset
+            urlScrollOffsets[item.url.absoluteString] = offset.y
+        }
+    }
+
+    /// 准备回退 / 前进的目标位置：无记录则不干预（保持 `nil`）
+    private func prepareScrollRestore(for item: WKBackForwardListItem?) {
+        // 回退 / 前进前已手动存过位置：这次导航的 `didStart` 不要再写一次
+        //（此时 `currentItem` 可能已指向目标页，会把旧页偏移写到目标页头上）
+        suppressNextScrollSave = true
+        guard let item else {
+            pendingScrollRestore = nil
+            return
+        }
+        pendingScrollRestore = scrollOffsets[item]?.y ?? urlScrollOffsets[item.url.absoluteString]
+    }
+
+    /// 兜底：bfcache 命中时 `didFinish` 未必给出，超时后自己尝试一次落位
+    private func scheduleScrollRestoreFallback() {
+        guard pendingScrollRestore != nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.restorePendingScrollOffset()
+        }
+    }
+
+    /// 应用待恢复的滚动位置。页面（图片 / 懒加载 / 异步内容）可能尚未撑到目标高度，
+    /// 分档重试直到可达；用户重新拖动则放弃恢复，把位置交还手势。
+    private func restorePendingScrollOffset(attempt: Int = 0) {
+        guard let target = pendingScrollRestore, isWebViewCreated else { return }
+        let scrollView = webView.scrollView
+        // 用户已经接手滚动：不再纠正，避免和手指抢位置
+        guard !scrollView.isDragging, !scrollView.isTracking else {
+            pendingScrollRestore = nil
+            return
+        }
+        let maxY = max(scrollView.contentSize.height - scrollView.bounds.height, 0)
+        if maxY + 0.5 >= target || attempt >= 12 {
+            let y = min(max(target, 0), maxY)
+            if abs(scrollView.contentOffset.y - y) > 0.5 {
+                scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: false)
+            }
+            pendingScrollRestore = nil
+            return
+        }
+        // 前几档快（常见「首帧已够长」），之后放慢等图片 / 懒加载把页面撑高
+        let delay: TimeInterval = attempt < 3 ? 0.02 : 0.1
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.restorePendingScrollOffset(attempt: attempt + 1)
+        }
+    }
+
+// MARK: - 历史栈维护
 
     /// 从原生历史栈同步（正常运行时唯一来源）。
     private func refreshNativeHistory() {
@@ -480,6 +606,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let back = list.backList
         historyURLs = (back + [current] + list.forwardList).map(\.url.absoluteString)
         historyIndex = back.count
+        // 淘汰已不在历史栈里的页面位置（新导航截断前进项后，旧条目不再可达）
+        let live = Set(historyURLs)
+        scrollOffsets = scrollOffsets.filter { live.contains($0.key.url.absoluteString) }
+        urlScrollOffsets = urlScrollOffsets.filter { live.contains($0.key) }
     }
 
     /// 重启恢复模式下的历史记账：新导航丢弃前进项后追加当前页
@@ -497,6 +627,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
         historyURLs.append(url)
         historyIndex = historyURLs.count - 1
+        // 被丢弃的前进项不再可达：连带清掉它们的位置记录
+        restoredScrollOffsets = restoredScrollOffsets.filter { $0.key <= historyIndex }
     }
 
     /// 按自定义栈加载当前下标对应的页面（WebKit 无注入历史 API，只能重新发起导航）
@@ -506,6 +638,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         clearError()
         pendingLoadURL = nil
         isPendingRestore = false
+        // 历史回放：下标已指向目标页，别把「被离开页」的滚动位置写到它头上
+        suppressNextScrollSave = true
         requestedURL = url
         currentURL = url
         webView.load(URLRequest(url: url))
@@ -590,16 +724,25 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 || nsError.code == NSURLErrorServerCertificateNotYetValid
                 || nsError.code == NSURLErrorServerCertificateHasUnknownRoot
                 || nsError.code == NSURLErrorSecureConnectionFailed)
+        // -1002：WebKit 不支持该 URL scheme。这类失败重试必定再失败，标记出来让错误页不再提供「重试」
+        let isUnsupported = nsError.domain == NSURLErrorDomain
+            && nsError.code == NSURLErrorUnsupportedURL
         hasError = true
         isSSLError = isSSL
-        errorMessage = isSSL ? "连接不安全，证书校验失败" : (error.localizedDescription)
+        isUnsupportedURL = isUnsupported
+        errorMessage = isUnsupported
+            ? "这个链接需要交给系统 App 打开（如 App Store），内置浏览器无法直接加载"
+            : (isSSL ? "连接不安全，证书校验失败" : error.localizedDescription)
+        if isUnsupported { failedExternalURL = requestedURL ?? currentURL }
         AppLogger.shared.log("浏览器标签加载失败: \(nsError.domain) \(nsError.code) \(error.localizedDescription)", level: .warn, module: "browser")
     }
 
     private func clearError() {
         hasError = false
         isSSLError = false
+        isUnsupportedURL = false
         errorMessage = nil
+        failedExternalURL = nil
     }
 
  // MARK: - Favicon 提取
@@ -647,11 +790,67 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 }
 
+// MARK: - 外部 Scheme（App Store / 电话 / 邮件 / 其它 App）
+
+extension BrowserTab {
+    /// WebView 自己能加载的 scheme；其余（`itms-apps` / `itms` / `tel` / `mailto` / 自定义 App scheme）
+    /// 必须交给系统，否则 WebKit 会以 `NSURLErrorUnsupportedURL` 失败。
+    static func canHandleInWebView(_ url: URL) -> Bool {
+        switch url.scheme?.lowercased() ?? "" {
+        case "http", "https", "file", "about", "data", "blob", "javascript":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 把外部 scheme 交给系统打开（App Store / 电话 / 邮件 / 其它 App）。
+    /// **只在用户明确确认后调用**，不要在导航回调里直接调用。
+    func openExternally(_ url: URL) {
+        guard !Self.canHandleInWebView(url) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    /// 页面里点到了外部 scheme（`itms-apps://` 等）：不静默弹 App，先挂起等用户确认
+    func requestOpenExternally(_ url: URL) {
+        guard !Self.canHandleInWebView(url) else { return }
+        pendingExternalURL = url
+    }
+
+    /// 提示里的「打开」：真正交给系统。`url` 由提示直接带出，不依赖 `pendingExternalURL`
+    /// （提示关闭时绑定会先把状态清空）
+    func confirmOpenExternally(_ url: URL) {
+        pendingExternalURL = nil
+        openExternally(url)
+    }
+
+    func cancelPendingExternalURL() {
+        pendingExternalURL = nil
+    }
+
+    /// 错误页「用系统打开」：重新把导致失败的外部 scheme 交给系统（用户点按，属明确意图）
+    func openFailedURLExternally() {
+        guard let url = failedExternalURL ?? requestedURL ?? currentURL else { return }
+        openExternally(url)
+    }
+}
+
 // MARK: - WKNavigationDelegate
 
 extension BrowserTab: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // 离开当前页前记下滚动位置：回退 / 前进回到这一页时原样恢复
+        if suppressNextScrollSave {
+            suppressNextScrollSave = false
+            return
+        }
+        saveScrollOffsetForCurrentPage()
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         clearError()
+        // 回退 / 前进回到的旧页：恢复离开时的滚动位置（新导航无待恢复项，从顶部开始）
+        restorePendingScrollOffset()
         extractFavicon()
         // 留一张当前页画面：下次侧滑返回时作为下层的「上一页」背景（Safari 风格）
         capturePageSnapshot()
@@ -676,8 +875,25 @@ extension BrowserTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+
+        // 外部 scheme（App Store 的 itms-apps:// 等）：WebKit 无法加载。取消导航后由界面弹提示，
+        // 用户确认后才交给系统（不自动弹 App）。必须在 `target=_blank` 分支之前判断，
+        // 否则会被开成一个必然失败的新标签。
+        if !Self.canHandleInWebView(url) {
+            // 子 frame 里的外部 scheme 多为广告/落地页脚本，静默取消，连提示也不给
+            if navigationAction.targetFrame?.isMainFrame != false {
+                requestOpenExternally(url)
+            }
+            decisionHandler(.cancel)
+            return
+        }
+
         // `target=_blank`：无 targetFrame 表示新窗口请求 → 新标签打开
-        if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
+        if navigationAction.targetFrame == nil {
             onOpenNewTab?(url)
             decisionHandler(.cancel)
             return
@@ -690,10 +906,14 @@ extension BrowserTab: WKNavigationDelegate {
 
 extension BrowserTab: WKUIDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        // `window.open`：新标签打开
-        if let url = navigationAction.request.url {
-            onOpenNewTab?(url)
+        guard let url = navigationAction.request.url else { return nil }
+        // `window.open` 也可能带上 itms-apps:// 等外部 scheme：先提示用户，不要开成必然失败的新标签
+        guard Self.canHandleInWebView(url) else {
+            requestOpenExternally(url)
+            return nil
         }
+        // `window.open`：新标签打开
+        onOpenNewTab?(url)
         return nil
     }
 
@@ -1003,7 +1223,8 @@ struct BrowserWebView: UIViewRepresentable {
             let tab = parent.tab
             // 首轮先让出一帧多：`goBack()` 触发的是 next runloop 的导航状态更新
             let delay: TimeInterval = attempt == 0 ? 0.05 : 0.02
-            if (attempt == 0 || tab.isLoading), attempt < 20 {
+            // 同时等滚动位置落位：否则会先露出页面顶部，再跳到上次看的位置
+            if (attempt == 0 || tab.isLoading || tab.isRestoringScrollPosition), attempt < 30 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     self?.revealWhenPageReady(on: moving, width: width, generation: generation, attempt: attempt + 1)
                 }

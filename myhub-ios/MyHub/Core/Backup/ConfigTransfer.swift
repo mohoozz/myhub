@@ -34,7 +34,7 @@ struct PreferencesSnapshot: Codable {
     var playerOrientationMode: String?
     /// 内嵌字幕编码（auto / utf8 / gb18030 / big5 / shiftJIS）；可选以兼容旧快照
     var playerEmbeddedSubtitleEncoding: String?
-    /// 删除文件时连带删除同目录同名（不同扩展名）文件；可选以兼容旧快照
+    /// 删除/移动文件时连带处理同目录同名（不同扩展名）文件；可选以兼容旧快照
     var deleteSameNameFiles: Bool?
 
     static func capture() -> PreferencesSnapshot {
