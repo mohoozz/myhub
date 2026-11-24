@@ -108,10 +108,13 @@ struct BrowseDirectoryView: View {
 
     /// 待删项包含当前播放（含 mini）的文件时先停止播放并稍候
     private func releasePlaybackIfNeeded(_ paths: Set<String>) async {
-        guard let current = player.current,
-              (current.connectionID ?? 0) == connectionID,
-              paths.contains(current.path) else { return }
-        AppLogger.shared.log("删除前停止播放被删文件 path=\(current.path)", module: "browse")
+        // 同时看呈现态与播放内核：极端情况下呈现层已清空而内核仍持有会话，同样要停掉，
+        // 否则内核的周期上报/收尾上报会把已删文件的进度记录写回来
+        let candidates = [player.current, PlayerCore.shared.request?.item].compactMap { $0 }
+        guard let hit = candidates.first(where: {
+            ($0.connectionID ?? 0) == connectionID && paths.contains($0.path)
+        }) else { return }
+        AppLogger.shared.log("删除前停止播放被删文件 path=\(hit.path)", module: "browse")
         player.close()
         // 轮询等待 PlayerCore 注销串流会话（reader.cancel 立即置位并停止在途请求）
         for _ in 0..<10 {
@@ -183,12 +186,6 @@ struct BrowseDirectoryView: View {
         return current.connectionID == connection.id
             && current.path == entry.path
             && playerCore.isPlaying
-    }
-
-    /// 该文件项是否为播放器当前加载的条目（播放中每 5s 回写进度，暂停后退出播放也会回写一次）
-    private func isLoadedInPlayer(_ entry: FileEntry) -> Bool {
-        guard let current = player.current else { return false }
-        return current.connectionID == connection.id && current.path == entry.path
     }
 
     /// 该文件项对应的阅读进度记录（同连接 + 同路径）；无记录返回 nil
@@ -296,7 +293,12 @@ struct BrowseDirectoryView: View {
                 DestinationPickerView(
                     title: "移动到", connections: availableConnections, initialConnectionID: connectionID
                 ) { destination, dir in
-                    Task { await viewModel.move(paths: paths, to: destination, at: dir) }
+                    Task {
+                        // 移动前释放占用：待移动文件（含同名关联文件）正在播放时先停播，
+                        // 否则播放器的周期/收尾上报会把进度写到已经不存在的旧路径上
+                        await releasePlaybackIfNeeded(viewModel.moveTargets(for: paths))
+                        await viewModel.move(paths: paths, to: destination, at: dir)
+                    }
                 }
             case .copy(let paths):
                 DestinationPickerView(
@@ -992,9 +994,9 @@ struct BrowseDirectoryView: View {
                 })
             }
         }
-        // 删除该文件的阅读进度（不影响源文件）：仅在有记录、且该文件未被播放器加载时提供
-        // —— 播放中进度每 5s 回写一次、暂停后退出播放也会回写一次，删掉会被重建，避免误导用户
-        if let record = readingProgressRecord(for: entry), !isLoadedInPlayer(entry) {
+        // 删除该文件的阅读进度（不影响源文件）：有记录即提供（含已看完 100% / 暂停在 mini 的文件）
+        // —— 仅播放中不提供：进度每 5s 回写一次，删掉也立刻重建，没有意义
+        if let record = readingProgressRecord(for: entry), !isPlaying(entry) {
             items.append(PopupMenuItem(title: "删除阅读进度", systemImage: "trash", destructive: true) {
                 deleteReadingProgress(record)
             })

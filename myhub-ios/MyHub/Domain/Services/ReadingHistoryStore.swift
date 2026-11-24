@@ -50,6 +50,7 @@ final class ReadingHistoryStore: ObservableObject {
 
     func remove(ids: [Int64]) {
         guard let db = AppDatabase.shared.dbQueue, !ids.isEmpty else { return }
+        suppressProgressWrites(from: records.filter { ids.contains($0.id ?? -1) })
         _ = try? db.write { database in
             try database.execute(
                 sql: "DELETE FROM readingProgress WHERE id IN (\(ids.map { "\($0)" }.joined(separator: ",")))"
@@ -61,6 +62,11 @@ final class ReadingHistoryStore: ObservableObject {
     /// 撤销删除：把删除前缓存的记录原样插回。
     func restore(_ snapshots: [ReadingProgress]) {
         guard let db = AppDatabase.shared.dbQueue, !snapshots.isEmpty else { return }
+        for record in snapshots {
+            PlaybackProgressStore.shared.resume(
+                connectionID: record.connectionID, path: record.filePath
+            )
+        }
         _ = try? db.write { database in
             for record in snapshots {
                 // insert 失败（唯一约束冲突）不应中断其余记录的回插
@@ -70,11 +76,23 @@ final class ReadingHistoryStore: ObservableObject {
         reload()
     }
 
+    /// 记录删除后短时抑制播放器的进度回写（播放器收尾的强制上报可能晚于删除，会把记录复活）
+    private func suppressProgressWrites(from removed: [ReadingProgress]) {
+        guard !removed.isEmpty else { return }
+        let grouped = Dictionary(grouping: removed, by: \.connectionID)
+        for (connectionID, group) in grouped {
+            PlaybackProgressStore.shared.suppress(
+                connectionID: connectionID, paths: Set(group.map(\.filePath))
+            )
+        }
+    }
+
  // MARK: - 源文件同步（浏览界面删除 / 移动 / 重命名时）
 
     /// 删除某连接下指定路径的阅读记录（源文件被删除或移动后同步清理，避免残留失效记录）
     func remove(connectionID: Int64, filePaths: Set<String>) {
         guard let db = AppDatabase.shared.dbQueue, !filePaths.isEmpty else { return }
+        PlaybackProgressStore.shared.suppress(connectionID: connectionID, paths: filePaths)
         let placeholders = Array(repeating: "?", count: filePaths.count).joined(separator: ",")
         var arguments: [DatabaseValueConvertible?] = [connectionID]
         arguments.append(contentsOf: filePaths.sorted())
@@ -90,6 +108,14 @@ final class ReadingHistoryStore: ObservableObject {
     /// 删除某路径**及其子路径**下的阅读记录（删除/移走目录时用）。
     func removeTree(connectionID: Int64, path: String) {
         guard let db = AppDatabase.shared.dbQueue, !path.isEmpty else { return }
+        let prefix = path.hasSuffix("/") ? path : path + "/"
+        let affected = records.filter {
+            $0.connectionID == connectionID
+                && ($0.filePath == path || $0.filePath.hasPrefix(prefix))
+        }
+        PlaybackProgressStore.shared.suppress(
+            connectionID: connectionID, paths: Set(affected.map(\.filePath))
+        )
         _ = try? db.write { database in
             try database.execute(
                 sql: """

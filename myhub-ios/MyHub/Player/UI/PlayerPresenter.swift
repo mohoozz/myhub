@@ -23,6 +23,10 @@ final class PlayerPresenter: ObservableObject {
 
     /// 播放文件；若为 mini 中的同一文件 → 回到完整播放
     func play(_ item: PlayableItem) {
+        // 重新打开该文件：解除「已删进度」抑制，新会话的进度应正常落库
+        if let connectionID = item.connectionID {
+            PlaybackProgressStore.shared.resume(connectionID: connectionID, path: item.path)
+        }
         if current == item, isMini {
             expand()
             // 该媒体若已播放结束，从历史记录/列表重新进入时自动从头重播（未结束则不打断，保持原状态）

@@ -402,6 +402,8 @@ final class BrowseDirectoryViewModel: ObservableObject {
         let companionCount = max(0, targets.count - paths.count)
         var failed: [String] = []
         var movedPaths: [String] = []
+        /// 已移动项中的目录（循环内 entry 在手时记下，避免 await 后回查 entries 失准）
+        var movedDirs: Set<String> = []
         for sourcePath in targets.sorted() {
             guard let entry = entry(for: sourcePath) else { continue }
             let destPath = StoragePath.joining(destDir, entry.name)
@@ -410,6 +412,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
                     if isMove {
                         try await adapter.move(sourcePath, destPath)
                         movedPaths.append(sourcePath)
+                        if entry.isDir { movedDirs.insert(sourcePath) }
                     } else {
                         try await adapter.copy(sourcePath, destPath)
                     }
@@ -418,6 +421,7 @@ final class BrowseDirectoryViewModel: ObservableObject {
                     if isMove {
                         try await adapter.delete(sourcePath)
                         movedPaths.append(sourcePath)
+                        if entry.isDir { movedDirs.insert(sourcePath) }
                     }
                 }
             } catch {
@@ -425,8 +429,9 @@ final class BrowseDirectoryViewModel: ObservableObject {
             }
         }
         // 移动成功：同步删除源连接下的阅读记录 + 本地列表立即移除
+        // 目录需连带清理子路径下的记录（与删除同一套逻辑，否则目录内文件的进度会残留）
         if isMove, !movedPaths.isEmpty {
-            ReadingHistoryStore.shared.remove(connectionID: connection.id ?? 0, filePaths: Set(movedPaths))
+            removeReadingRecords(for: movedPaths, knownDirs: movedDirs)
             applyLocalRemoval(Set(movedPaths))
         }
         // 源目录刷新（不预删缓存：刷新成功会覆盖，失败保留旧缓存，避免弱网下目录空白）
@@ -534,9 +539,16 @@ final class BrowseDirectoryViewModel: ObservableObject {
     /// 移入回收站收尾：清理阅读记录 + 本地列表立即移除并同步缓存（弱网下界面依然正确）。
     private func finishTrashMove(_ movedPaths: [String], knownDirs: Set<String> = []) {
         guard !movedPaths.isEmpty else { return }
+        removeReadingRecords(for: movedPaths, knownDirs: knownDirs)
+        applyLocalRemoval(Set(movedPaths))
+    }
+
+    /// 源文件被移走（删除 / 移动）后清理阅读记录：目录连带子路径下的记录，文件按路径精确清理
+    private func removeReadingRecords(for paths: [String], knownDirs: Set<String> = []) {
+        guard !paths.isEmpty else { return }
         let id = connectionID
         var filePaths: Set<String> = []
-        for path in movedPaths {
+        for path in paths {
             if knownDirs.contains(path) || entry(for: path)?.isDir == true {
                 ReadingHistoryStore.shared.removeTree(connectionID: id, path: path)
             } else {
@@ -546,7 +558,6 @@ final class BrowseDirectoryViewModel: ObservableObject {
         if !filePaths.isEmpty {
             ReadingHistoryStore.shared.remove(connectionID: id, filePaths: filePaths)
         }
-        applyLocalRemoval(Set(movedPaths))
     }
 
  // MARK: - 左滑删除

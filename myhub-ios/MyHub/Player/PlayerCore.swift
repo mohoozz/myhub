@@ -159,6 +159,10 @@ final class PlayerCore: ObservableObject {
  // MARK: - 播放控制
 
     func play() {
+        // 用户主动起播：解除该文件的「已删进度」抑制窗口，新会话进度应正常落库
+        if let item = currentItem, let connectionID = item.connectionID {
+            PlaybackProgressStore.shared.resume(connectionID: connectionID, path: item.path)
+        }
         pausedAt = nil
         // 用户主动起播：取消「seek 等待后自动续播」的挂起意图，避免重复起播
         pendingResumeAfterSeek = false
