@@ -44,7 +44,7 @@ struct BrowseDirectoryView: View {
     @Environment(\.bottomTabBarHidden) private var bottomTabBarHidden
 
     @State private var sheet: SheetRoute?
-    @State private var imagePreview: ImagePreviewContext?
+    @State private var fullScreen: FullScreenRoute?
     @State private var renaming: FileEntry?
     @State private var renameText = ""
     @State private var showNewFolder = false
@@ -217,6 +217,19 @@ struct BrowseDirectoryView: View {
         var index: Int
     }
 
+    /// 全屏预览路由：图片预览与 HTML 网页预览共用一个 fullScreenCover（同一视图上叠多个会互相抢占）
+    private enum FullScreenRoute: Identifiable {
+        case images(ImagePreviewContext)
+        case html(FileEntry)
+
+        var id: String {
+            switch self {
+            case .images(let context): return "images-\(context.id.uuidString)"
+            case .html(let entry): return "html-\(entry.path)"
+            }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // 搜索框常驻视图树，仅用高度 + 透明度收起
@@ -317,9 +330,14 @@ struct BrowseDirectoryView: View {
                     .onDisappear { try? FileManager.default.removeItem(at: url) }
             }
         }
-        .fullScreenCover(item: $imagePreview) { context in
+        .fullScreenCover(item: $fullScreen) { route in
             if let adapter = viewModel.storageAdapter {
-                ImagePreviewView(images: context.images, initialIndex: context.index, adapter: adapter)
+                switch route {
+                case .images(let context):
+                    ImagePreviewView(images: context.images, initialIndex: context.index, adapter: adapter)
+                case .html(let entry):
+                    HTMLPreviewView(entry: entry, adapter: adapter)
+                }
             }
         }
         .alert(
@@ -1066,6 +1084,11 @@ struct BrowseDirectoryView: View {
             navPath.append(BrowseLocation(connectionID: connectionID, path: entry.path))
             return
         }
+        // 网页文件：直接弹全屏预览框渲染（不经内置浏览器页签）
+        if HTMLPreviewView.supports(entry) {
+            fullScreen = .html(entry)
+            return
+        }
         switch MediaType.detect(ext: entry.ext) {
         case .video, .audio:
             // 解析数据源（本地 file:// / 边下边播代理）+ 历史进度恢复
@@ -1076,7 +1099,7 @@ struct BrowseDirectoryView: View {
                 .filter { !$0.isDir && MediaType.detect(ext: $0.ext) == .image }
                 .sorted { $0.name.naturalCompare($1.name) == .orderedAscending }
             if let index = images.firstIndex(where: { $0.path == entry.path }) {
-                imagePreview = ImagePreviewContext(images: images, index: index)
+                fullScreen = .images(ImagePreviewContext(images: images, index: index))
             }
         case .novel:
             // txt 默认走纯 txt 阅读器（全文滚动）；epub 走小说阅读器（章节/进度）
