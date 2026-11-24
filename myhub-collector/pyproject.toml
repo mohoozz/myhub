@@ -5,7 +5,7 @@ description = "MyHub 采集服务：每天拉取关注列表，下载前一天�
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.28",
-    "sqlmodel>=0.0.22",
+    "sqlmodel>=0.0.49",  # 0.0.49 起才支持 NaiveDatetime 映射成 DateTime(timezone=False)
     "pydantic-settings>=2.5",
     "yt-dlp>=2026.8.19",
     # YouTube 的 JS 挑战求解脚本（配合 Deno 运行时；缺了只能拿到预览图）

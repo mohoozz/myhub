@@ -7,8 +7,10 @@ from pydantic import NaiveDatetime
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
-# 说明：sqlmodel >= 0.0.50 会把裸 datetime 映射成“必须带时区”的列（UTCDateTime），
-# 而本项目统一用本地朴素时间（与日报的按天过滤一致），因此显式标注 NaiveDatetime。
+# 说明：sqlmodel 新版会把裸 datetime 映射成“必须带时区”的列，而本项目统一用本地
+# 朴素时间（与日报的按天过滤一致），因此显式标注 NaiveDatetime。
+# 注意：NaiveDatetime 的映射支持从 sqlmodel 0.0.49 才开始有，旧版会直接抛
+# ValueError: NaiveDatetime has no matching SQLAlchemy type。
 
 
 class Subscription(SQLModel, table=True):
