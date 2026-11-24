@@ -1,0 +1,18 @@
+[project]
+name = "myhub-collector"
+version = "0.1.0"
+description = "MyHub 采集服务：每天拉取关注列表，下载前一天的内容并生成总结"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.28",
+    "sqlmodel>=0.0.22",
+    "pydantic-settings>=2.5",
+    "yt-dlp>=2026.8.19",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
