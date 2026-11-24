@@ -3,8 +3,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from pydantic import NaiveDatetime
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
+
+# 说明：sqlmodel >= 0.0.50 会把裸 datetime 映射成“必须带时区”的列（UTCDateTime），
+# 而本项目统一用本地朴素时间（与日报的按天过滤一致），因此显式标注 NaiveDatetime。
 
 
 class Subscription(SQLModel, table=True):
@@ -18,8 +22,8 @@ class Subscription(SQLModel, table=True):
     target: str = Field(max_length=128)
     name: str = Field(max_length=128)
     enabled: bool = Field(default=True)
-    last_synced_at: datetime | None = None
-    created_at: datetime = Field(default_factory=datetime.now)
+    last_synced_at: NaiveDatetime | None = None
+    created_at: NaiveDatetime = Field(default_factory=datetime.now)
 
 
 class Content(SQLModel, table=True):
@@ -38,13 +42,15 @@ class Content(SQLModel, table=True):
     media_type: str = Field(default="video", index=True, max_length=16)  # video/image/text
     url: str = Field(default="", max_length=1024)
     cover: str = Field(default="", max_length=1024)
+    media_url: str = Field(default="", max_length=1024)  # 可直接下载的媒体直链（抖音 mp4）
     description: str = Field(default="")
     duration: str = Field(default="", max_length=32)
     images_json: str = Field(default="")  # 图文动态的图片 URL 列表（JSON 字符串）
-    published_at: datetime = Field(index=True)
+    emotes_json: str = Field(default="")  # 正文表情：[名称] -> 图标 URL（JSON 字符串）
+    published_at: NaiveDatetime = Field(index=True)
     like_count: int = Field(default=0)
     comment_count: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: NaiveDatetime = Field(default_factory=datetime.now)
 
 
 class Download(SQLModel, table=True):
@@ -61,8 +67,8 @@ class Download(SQLModel, table=True):
     size: int = Field(default=0)
     error: str = Field(default="")
     attempts: int = Field(default=0)
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    started_at: NaiveDatetime | None = None
+    finished_at: NaiveDatetime | None = None
 
 
 class RunLog(SQLModel, table=True):
@@ -80,5 +86,5 @@ class RunLog(SQLModel, table=True):
     failed: int = Field(default=0)
     skipped: int = Field(default=0)
     message: str = Field(default="")
-    started_at: datetime
-    finished_at: datetime | None = None
+    started_at: NaiveDatetime
+    finished_at: NaiveDatetime | None = None

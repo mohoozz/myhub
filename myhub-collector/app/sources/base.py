@@ -21,8 +21,11 @@ class RawItem:
     description: str = ""
     duration: str = ""
     images: list[str] = field(default_factory=list)
+    media_url: str = ""                 # 媒体直链（抖音给的是现成 mp4，免去解析）
+    emotes: dict[str, str] = field(default_factory=dict)   # 正文表情：[名称] -> 图标 URL
     like_count: int = 0
     comment_count: int = 0
+    pinned: bool = False                # 置顶动态：时间很旧但不代表已翻到底
 
 
 @dataclass

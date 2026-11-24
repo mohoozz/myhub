@@ -1,15 +1,45 @@
-"""通用小工具：文件名清理、大小/时长格式化。"""
+"""通用小工具：文件名清理、统一命名、大小/时长格式化。"""
 from __future__ import annotations
 
 import re
 
 _ILLEGAL = re.compile(r'[\\/:*?"<>|%\x00-\x1f]')
 
+# 平台标识 → 文件名里的平台前缀
+PLATFORM_LABELS = {
+    "bilibili": "Bili",
+    "douyin": "DouYin",
+    "youtube": "Youtube",
+}
+
+
+def platform_label(platform: str) -> str:
+    return PLATFORM_LABELS.get(platform, platform)
+
 
 def safe_name(text: str, limit: int = 60) -> str:
     """把任意标题清成安全的目录/文件名（Windows 非法字符 + 结尾点号）。"""
     cleaned = _ILLEGAL.sub("_", str(text or "")).strip().rstrip(" .")
     return (cleaned[:limit].rstrip(" .")) or "_"
+
+
+def build_stem(
+    platform: str,
+    author: str,
+    title: str,
+    ident: str,
+    part: str | int | None = None,
+) -> str:
+    """统一文件名：平台-作者-文件名称-发布号-[Pn]（单 P 时省略末段 [Pn]）。"""
+    pieces = [
+        platform_label(platform),
+        safe_name(author, 40),
+        safe_name(title, 60),
+        safe_name(str(ident), 60),
+    ]
+    if part:
+        pieces.append(f"[P{part}]")
+    return "-".join(pieces)
 
 
 def fmt_duration(sec: float | int | None) -> str:

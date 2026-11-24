@@ -28,6 +28,7 @@ _UA = (
 _NAV = "https://api.bilibili.com/x/web-interface/nav"
 _FOLLOWINGS = "https://api.bilibili.com/x/relation/followings"
 _FEED_SPACE = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+_DETAIL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
 
 
 class BilibiliSource(Source):
@@ -100,7 +101,9 @@ class BilibiliSource(Source):
             reached_old = False
             for item in page:
                 if item.published_at < since:
-                    reached_old = True
+                    # 置顶动态的 pub_ts 往往是很久以前，不能用它判断「已翻到底」
+                    if not item.pinned:
+                        reached_old = True
                     continue
                 if item.published_at >= until:
                     continue
@@ -136,6 +139,22 @@ class BilibiliSource(Source):
                 items.append(item)
         return items, str(payload.get("offset") or ""), bool(payload.get("has_more"))
 
+    def fetch_detail(self, dyn_id: str) -> RawItem | None:
+        """按动态号取单条详情，用于补齐动态流里缺失的正文 / 图片。"""
+        try:
+            data = self._get(
+                _DETAIL,
+                {"id": dyn_id, "features": "itemOpusStyle"},
+                referer=f"https://t.bilibili.com/{dyn_id}",
+            )
+        except SourceError as e:
+            logger.debug("详情接口失败 %s: %s", dyn_id, e)
+            return None
+        if data.get("code") != 0:
+            return None
+        entry = (data.get("data") or {}).get("item") or {}
+        return parse_entry(entry)
+
     def _get(self, url: str, params: dict | None = None, referer: str | None = None) -> dict:
         last_error: Exception | None = None
         headers = {"Referer": referer} if referer else None
@@ -155,6 +174,22 @@ class BilibiliSource(Source):
 
 
 # ---------------- 解析 ----------------
+
+def emotes_of(*containers: dict | None) -> dict[str, str]:
+    """从 rich_text_nodes 抽出表情映射：[名称] -> 图标 URL（正文里只留了文字，图标要另取）。"""
+    found: dict[str, str] = {}
+    for container in containers:
+        nodes = (container or {}).get("rich_text_nodes") or []
+        for node in nodes:
+            if (node.get("type") or "") != "RICH_TEXT_NODE_TYPE_EMOJI":
+                continue
+            emoji = node.get("emoji") or {}
+            text = str(node.get("text") or emoji.get("text") or "").strip()
+            icon = str(emoji.get("icon_url") or node.get("icon_url") or "")
+            if text and icon:
+                found[text] = icon
+    return found
+
 
 def parse_entry(entry: dict) -> RawItem | None:
     """把动态流的一条 entry 解析成 RawItem；转发/无法识别的类型返回 None。"""
@@ -179,14 +214,22 @@ def parse_entry(entry: dict) -> RawItem | None:
     author = str(author_mod.get("name") or "")
     author_id = str(author_mod.get("mid") or "")
     desc = str((dynamic_mod.get("desc") or {}).get("text") or "").strip()
+    # 新版 opus 动态正文放在 major.opus.summary.text（此时 desc 为空），图文动态取这里
+    if not desc:
+        desc = str(
+            (((major.get("opus") or {}).get("summary") or {}).get("text")) or ""
+        ).strip()
     like = int(((stat.get("like") or {}).get("count") or 0))
     comment = int(((stat.get("comment") or {}).get("count") or 0))
+    tag_text = str((modules.get("module_tag") or {}).get("text") or "")
+    emotes = emotes_of(dynamic_mod.get("desc"), (major.get("opus") or {}).get("summary"))
     common = {
         "author": author,
         "author_id": author_id,
         "like_count": like,
         "comment_count": comment,
         "published_at": datetime.fromtimestamp(pub_ts),
+        "pinned": "置顶" in tag_text,
     }
 
     # 1) 视频投稿
@@ -217,6 +260,7 @@ def parse_entry(entry: dict) -> RawItem | None:
             url=f"https://t.bilibili.com/{dyn_id}",
             cover=images[0],
             images=images,
+            emotes=emotes,
             media_type="image",
             description=desc,
             **common,
@@ -230,6 +274,7 @@ def parse_entry(entry: dict) -> RawItem | None:
             title=str(article.get("title") or "专栏"),
             url=str(article.get("jump_url") or f"https://t.bilibili.com/{dyn_id}"),
             cover=str(covers[0]) if covers else "",
+            emotes=emotes,
             media_type="text",
             description=desc,
             **common,
@@ -241,6 +286,7 @@ def parse_entry(entry: dict) -> RawItem | None:
             content_id=dyn_id,
             title=desc[:60] or "文字动态",
             url=f"https://t.bilibili.com/{dyn_id}",
+            emotes=emotes,
             media_type="text",
             description=desc,
             **common,

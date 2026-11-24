@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -10,14 +11,18 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
+from app import credentials
 from app.config import get_settings
-from app.cookies import CookieError, bili_cookiefile
-from app.downloader import download, download_images
+from app.cookies import CookieError
+from app.downloader import download, download_direct, download_images, download_images_by_url, find_files
+from app.downloader.ytdlp import ffmpeg_available, find_deno
+from app.dynamic_html import image_data_uri, write_dynamic_html
+from app.filetime import touch_published
 from app.models import Content, Download, RunLog, Subscription
-from app.sources import build_source
+from app.sources import SourceError, build_source
 from app.sources.base import RawItem
 from app.summarize import day_range, write_reports
-from app.utils import safe_name
+from app.utils import build_stem
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +51,7 @@ class RunResult:
 # ---------------- 入库 ----------------
 
 def sync_subscriptions(session: Session, platform: str) -> dict:
-    """把账号关注列表同步为订阅源（新增/改名）。"""
+    """把账号关注列表同步为订阅源（新增 / 改名 / 重新关注恢复 / 取关停用）。"""
     source = build_source(platform)
     try:
         discovered = source.discover_sources()
@@ -57,31 +62,72 @@ def sync_subscriptions(session: Session, platform: str) -> dict:
         s.target: s
         for s in session.exec(select(Subscription).where(Subscription.platform == platform)).all()
     }
-    created = 0
+    created = disabled = 0
     now = datetime.now()
+    seen: set[str] = set()
     for item in discovered:
+        seen.add(item.target)
         sub = existing.get(item.target)
         if sub is None:
             session.add(Subscription(
                 platform=platform, target=item.target, name=item.name, last_synced_at=now
             ))
             created += 1
-        elif sub.name != item.name:
+        elif sub.name != item.name or not sub.enabled:
             sub.name = item.name
+            sub.enabled = True  # 重新关注后恢复采集
             sub.last_synced_at = now
             session.add(sub)
+
+    # 已取关的源停用；发现结果为空时不动，避免接口异常把全部订阅停掉
+    if seen:
+        for target, sub in existing.items():
+            if target not in seen and sub.enabled:
+                sub.enabled = False
+                sub.last_synced_at = now
+                session.add(sub)
+                disabled += 1
     session.commit()
-    return {"platform": platform, "discovered": len(discovered), "created": created}
+    return {
+        "platform": platform,
+        "discovered": len(discovered),
+        "created": created,
+        "disabled": disabled,
+    }
 
 
 def _save_item(session: Session, platform: str, sub_name: str, item: RawItem) -> bool:
-    """入库一条内容；已存在返回 False。"""
-    exists = session.exec(
-        select(Content.id).where(
+    """入库一条内容；已存在则刷新标题/正文等元数据并返回 False。"""
+    existing = session.exec(
+        select(Content).where(
             Content.platform == platform, Content.content_id == item.content_id
         )
     ).first()
-    if exists is not None:
+    if existing is not None:
+        touched = False
+        for field, value in (
+            ("title", item.title),
+            ("description", item.description[:2000]),
+            ("cover", item.cover),
+            ("url", item.url),
+            ("media_url", item.media_url),
+        ):
+            if value and getattr(existing, field) != value:
+                setattr(existing, field, value)
+                touched = True
+        if item.images:
+            payload = json.dumps(item.images, ensure_ascii=False)
+            if existing.images_json != payload:
+                existing.images_json = payload
+                touched = True
+        if item.emotes:
+            payload = json.dumps(item.emotes, ensure_ascii=False)
+            if existing.emotes_json != payload:
+                existing.emotes_json = payload
+                touched = True
+        if touched:
+            session.add(existing)
+            session.commit()
         return False
 
     session.add(Content(
@@ -94,9 +140,11 @@ def _save_item(session: Session, platform: str, sub_name: str, item: RawItem) ->
         media_type=item.media_type,
         url=item.url,
         cover=item.cover,
+        media_url=item.media_url,
         description=item.description[:2000],
         duration=item.duration,
         images_json=json.dumps(item.images, ensure_ascii=False) if item.images else "",
+        emotes_json=json.dumps(item.emotes, ensure_ascii=False) if item.emotes else "",
         published_at=item.published_at,
         like_count=item.like_count,
         comment_count=item.comment_count,
@@ -153,7 +201,12 @@ def collect_contents(
 
 # ---------------- 下载 ----------------
 
-def _pick_targets(session: Session, day: date, platform: str, limit: int, per_author: int):
+def _pick_targets(
+    session: Session,
+    day: date,
+    platform: str,
+    only_ids: set[str] | None = None,
+):
     since, until = day_range(day)
     contents = session.exec(
         select(Content)
@@ -162,32 +215,29 @@ def _pick_targets(session: Session, day: date, platform: str, limit: int, per_au
             Content.published_at >= since,
             Content.published_at < until,
         )
-        .order_by(Content.published_at.desc())
+        # 按发布顺序正序：老内容先下，最新发布的排在最后；同一秒的用 id 兜底保证顺序稳定
+        .order_by(Content.published_at.asc(), Content.id.asc())
     ).all()
     downloads = {
         (d.platform, d.content_id): d
         for d in session.exec(select(Download).where(Download.platform == platform)).all()
     }
     picked: list[tuple[Content, Download]] = []
-    per_author_count: dict[str, int] = {}
     for content in contents:
+        if only_ids and content.content_id not in only_ids:
+            continue
         dl = downloads.get((content.platform, content.content_id))
         if dl is None or dl.status not in ("pending", "failed"):
             continue
-        if per_author_count.get(content.author, 0) >= per_author:
-            continue
-        if len(picked) >= limit:
-            logger.info("达到单次下载上限 %d，剩余内容留到下次", limit)
-            break
-        per_author_count[content.author] = per_author_count.get(content.author, 0) + 1
         picked.append((content, dl))
     return picked
 
 
-def _media_dir(day: date, platform: str, author: str, extra: str = "") -> Path:
-    settings = get_settings()
-    base = settings.media_path / day.isoformat() / platform / safe_name(author, 40)
-    return base / safe_name(extra, 50) if extra else base
+def _stem(content: Content) -> str:
+    """平台-作者-标题-发布号（多 P 时由 yt-dlp 补 -[Pn]）。"""
+    return build_stem(
+        content.platform, content.author, content.title, content.content_id
+    )
 
 
 def _images_of(content: Content) -> list[str]:
@@ -200,8 +250,53 @@ def _images_of(content: Content) -> list[str]:
     return [u for u in urls if isinstance(u, str) and u]
 
 
-def download_contents(session: Session, day: date, platform: str, limit: int, per_author: int) -> dict:
-    """下载当日待下载内容，返回统计。"""
+def _emotes_of(content: Content) -> dict[str, str]:
+    """正文表情映射：[名称] -> 图标 URL。"""
+    if not content.emotes_json:
+        return {}
+    try:
+        data = json.loads(content.emotes_json)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if k and v}
+
+
+def _emote_uris(content: Content) -> dict[str, str]:
+    """把正文表情图标下载后转成 data URI，随 HTML 一起离线可用。"""
+    emotes = _emotes_of(content)
+    if not emotes:
+        return {}
+    with tempfile.TemporaryDirectory(prefix="myhub_emote_") as tmp:
+        saved, errors = download_images_by_url(list(emotes.values()), Path(tmp))
+        if errors:
+            logger.debug("%s 部分表情下载失败：%s", content.content_id, "; ".join(errors))
+        return {
+            name: image_data_uri(path)
+            for name, url in emotes.items()
+            if (path := saved.get(url)) is not None and path.stat().st_size > 0
+        }
+
+
+def _platform_cookiefile(platform: str) -> Path | None:
+    """各平台给 yt-dlp 用的 Cookie 文件；统一走 app.credentials，拿不到就匿名下载。"""
+    path = credentials.cookiefile(platform)
+    if path is None:
+        logger.info("%s 没有可用登录态，按匿名下载（画质可能受限）", platform)
+    return path
+
+
+def download_contents(
+    session: Session,
+    day: date,
+    platform: str,
+    only_ids: set[str] | None = None,
+) -> dict:
+    """下载当日待下载内容，返回统计。only_ids 可只处理指定内容（重下/修复用）。
+
+    不限条数、不限单作者条数：当天所有待下载内容都会处理。
+    """
     settings = get_settings()
     stats = {"downloaded": 0, "failed": 0, "skipped": 0}
 
@@ -213,14 +308,38 @@ def download_contents(session: Session, day: date, platform: str, limit: int, pe
         session.add(stale)
     session.commit()
 
-    cookiefile = None
-    if platform == "bilibili":
-        try:
-            cookiefile = bili_cookiefile()
-        except CookieError as e:
-            logger.warning("未取到 Cookie，将以匿名身份下载（画质受限）：%s", e)
+    if not ffmpeg_available(settings.ffmpeg_location):
+        logger.warning(
+            "未检测到 ffmpeg（PATH 与 FFMPEG_LOCATION 都没有），视频将退化为单文件流，画质可能只有 480p/720p"
+        )
 
-    targets = _pick_targets(session, day, platform, limit, per_author)
+    cookiefile = _platform_cookiefile(platform)
+    if platform == "youtube":
+        proxy = settings.youtube_proxy or settings.proxy
+    elif platform == "douyin":
+        proxy = settings.douyin_proxy or settings.proxy
+    else:
+        proxy = settings.proxy
+    # YouTube 的 nsig / n 挑战必须靠 Deno 解，否则只剩 storyboard 预览图
+    js_runtimes = None
+    if platform == "youtube":
+        if deno := find_deno():
+            js_runtimes = {"deno": {"path": deno}}
+        else:
+            logger.warning(
+                "没找到 Deno：YouTube 只能拿到预览图格式。"
+                "把 deno.exe 放到 data/tools/deno/ 或装进 PATH"
+            )
+
+    targets = _pick_targets(session, day, platform, only_ids)
+
+    # 旧数据可能缺正文（早期只读 desc），落盘前用详情接口补一次
+    detail_source = None
+    try:
+        detail_source = build_source(platform)
+    except SourceError as e:
+        logger.debug("详情补齐不可用：%s", e)
+
     for content, dl in targets:
         dl.started_at = datetime.now()
         dl.attempts += 1
@@ -228,23 +347,74 @@ def download_contents(session: Session, day: date, platform: str, limit: int, pe
         session.add(dl)
         session.commit()
 
+        if (
+            detail_source is not None
+            and content.media_type in ("text", "image")
+            and (not content.description or not content.emotes_json)
+        ):
+            detail = detail_source.fetch_detail(content.content_id)
+            if detail is not None:
+                touched = False
+                if detail.description and not content.description:
+                    content.description = detail.description[:2000]
+                    touched = True
+                if detail.title and not content.title:
+                    content.title = detail.title
+                    touched = True
+                if detail.images and not content.images_json:
+                    content.images_json = json.dumps(detail.images, ensure_ascii=False)
+                    touched = True
+                if detail.emotes:
+                    payload = json.dumps(detail.emotes, ensure_ascii=False)
+                    if content.emotes_json != payload:
+                        content.emotes_json = payload
+                        touched = True
+                if touched:
+                    session.add(content)
+                    session.commit()
+                    logger.info("补齐动态元数据：%s（正文 %d 字）", content.content_id, len(content.description))
+
         if content.media_type == "text":
-            dl.status, dl.error = "skipped", "纯文本动态，无需下载"
-            stats["skipped"] += 1
+            # 纯文本 / 专栏动态：不下载媒体，落一份本地 HTML 页面
+            settings.download_path.mkdir(parents=True, exist_ok=True)
+            out_path = settings.download_path / f"{_stem(content)}.html"
+            try:
+                write_dynamic_html(content, out_path, None, _emote_uris(content))
+                dl.status, dl.path = "done", str(out_path)
+                dl.size = _file_size(dl.path)
+                stats["downloaded"] += 1
+                _stamp(content, [out_path])
+            except OSError as e:
+                dl.status, dl.error = "failed", f"HTML 生成失败：{e}"[:300]
+                stats["failed"] += 1
         elif content.media_type == "image":
             if not settings.download_images:
                 dl.status, dl.error = "skipped", "已关闭图片下载"
                 stats["skipped"] += 1
             else:
-                out_dir = _media_dir(
-                    day, platform, content.author, f"{content.dynamic_id} {content.title}"
-                )
-                saved, errors = download_images(_images_of(content), out_dir)
-                if saved:
+                # 图文动态：单个自包含 HTML（图片转入临时目录后以 base64 内嵌）
+                settings.download_path.mkdir(parents=True, exist_ok=True)
+                page = settings.download_path / f"{_stem(content)}.html"
+                images = _images_of(content)
+                errors: list[str] = []
+                uris: list[str] = []
+                if images:
+                    with tempfile.TemporaryDirectory(prefix="myhub_img_") as tmp:
+                        saved, errors = download_images(images, Path(tmp))
+                        uris = [image_data_uri(p) for p in saved if p.stat().st_size > 0]
+                html_ok = False
+                try:
+                    write_dynamic_html(content, page, uris, _emote_uris(content))
+                    html_ok = True
+                except OSError as e:
+                    errors.append(f"HTML 生成失败：{e}")
+                # 纯文字动态被归到 image 时没有图片，只要有 HTML 就算成功
+                if html_ok and (uris or not images):
                     dl.status = "done"
-                    dl.path = str(out_dir)
-                    dl.size = sum(p.stat().st_size for p in saved)
+                    dl.path = str(page)
+                    dl.size = _file_size(str(page))
                     stats["downloaded"] += 1
+                    _stamp(content, [page])
                     if errors:
                         dl.error = ("部分图片失败：" + "; ".join(errors))[:300]
                 else:
@@ -252,17 +422,43 @@ def download_contents(session: Session, day: date, platform: str, limit: int, pe
                     dl.error = ("; ".join(errors) or "没有可下载的图片")[:300]
                     stats["failed"] += 1
         else:
-            out_dir = _media_dir(day, platform, content.author)
-            stem = f"{safe_name(content.title, 70)} [{content.content_id}]"
-            ok, path, err = download(
-                content.url, out_dir, stem,
-                quality=settings.quality, cookiefile=cookiefile, proxy=settings.proxy,
-            )
+            # 视频：平铺在下载根目录，多 P 由 yt-dlp 追加 -[Pn]
+            out_dir = settings.download_path
+            stem = _stem(content)
+            if platform == "douyin" and content.media_url:
+                # 抖音给的是现成 mp4 直链，直接拉更稳；失败再退回 yt-dlp
+                ok, path, err = download_direct(
+                    content.media_url, out_dir, stem,
+                    referer=content.url, proxy=proxy,
+                )
+                if not ok:
+                    logger.info("抖音直链下载失败，改用 yt-dlp：%s", err)
+                    ok, path, err = download(
+                        content.url, out_dir, stem,
+                        quality=settings.quality, platform=platform,
+                        cookiefile=cookiefile, proxy=proxy,
+                        ffmpeg_location=settings.ffmpeg_location,
+                        js_runtimes=js_runtimes,
+                    )
+                    if not ok:
+                        err = _douyin_hint(err)
+            else:
+                ok, path, err = download(
+                    content.url, out_dir, stem,
+                    quality=settings.quality, platform=platform,
+                    cookiefile=cookiefile, proxy=proxy,
+                    ffmpeg_location=settings.ffmpeg_location,
+                    js_runtimes=js_runtimes,
+                )
             if ok:
                 dl.status, dl.path = "done", path
-                dl.size = _file_size(path)
+                files = find_files(out_dir, stem)
+                dl.size = sum(f.stat().st_size for f in files) if files else _file_size(path)
                 stats["downloaded"] += 1
+                _stamp(content, files or [path])
             else:
+                if platform == "youtube":
+                    err = _youtube_hint(err)
                 dl.status, dl.error = "failed", err
                 stats["failed"] += 1
 
@@ -270,7 +466,35 @@ def download_contents(session: Session, day: date, platform: str, limit: int, pe
         session.add(dl)
         session.commit()
 
+    if detail_source is not None:
+        detail_source.close()
+
     return stats
+
+
+def _douyin_hint(err: str) -> str:
+    """抖音失败大多是登录态或直链过期，翻译成可执行的下一步。"""
+    if "Fresh cookies" in err or "Verify" in err or "登录" in err:
+        return f"{err.rstrip('。')}；先跑 python -m app login douyin 刷新登录态"[:300]
+    for code in ("403", "404", "410", "expired", "过期"):
+        if code in err:
+            return f"{err.rstrip('。')}；直链可能已过期，重跑 collect 会重新抓链接"[:300]
+    return err
+
+
+def _youtube_hint(err: str) -> str:
+    """把 YouTube 最常见的两种失败翻译成「该配什么」。"""
+    if "Sign in to confirm" in err:
+        return f"{err.rstrip('。')}；先跑 python -m app login youtube 刷新登录态"[:300]
+    if "Only images are available" in err or "Signature solving failed" in err:
+        return f"{err.rstrip('。')}；缺少 JS 运行时，把 deno.exe 放到 data/tools/deno/"[:300]
+    return err
+
+
+def _stamp(content: Content, paths) -> None:
+    """把下载产物的修改时间对齐到发布时间（FILE_MTIME_FROM_PUBLISH=false 可关）。"""
+    if get_settings().file_mtime_from_publish:
+        touch_published(paths, content.published_at)
 
 
 def _file_size(path: str) -> int:
@@ -285,10 +509,11 @@ def _file_size(path: str) -> int:
 def run_once(
     day: date | None = None,
     platform: str = "bilibili",
-    limit: int | None = None,
     do_download: bool = True,
     refresh_sources: bool = True,
     only_mid: str | None = None,
+    only_ids: set[str] | None = None,
+    do_collect: bool = True,
 ) -> dict:
     """完整跑一次：同步关注 → 抓取 → 下载 → 生成报告。"""
     settings = get_settings()
@@ -312,21 +537,22 @@ def run_once(
             ).all()
             result.authors = len(subs)
 
-            result.new_items = collect_contents(session, target_day, platform, only_mid)
+            result.new_items = (
+                collect_contents(session, target_day, platform, only_mid) if do_collect else 0
+            )
             logger.info("%s 新增内容 %d 条", target_day, result.new_items)
 
             if do_download:
                 stats = download_contents(
                     session, target_day, platform,
-                    limit=limit or settings.max_downloads_per_run,
-                    per_author=settings.max_downloads_per_author,
+                    only_ids=only_ids,
                 )
                 result.downloaded = stats["downloaded"]
                 result.failed = stats["failed"]
                 result.skipped = stats["skipped"]
 
-            if paths := write_reports(session, target_day):
-                result.report = str(paths[1])
+            if report := write_reports(session, target_day):
+                result.report = str(report)
         except CookieError as e:
             message = f"登录态问题：{e}"
             logger.error("登录态问题：%s", str(e).splitlines()[0])

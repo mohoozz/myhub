@@ -54,3 +54,36 @@ def download_images(
                 errors.append(f"{url} -> {e}")
 
     return saved, errors
+
+
+def download_images_by_url(
+    urls: list[str],
+    out_dir: Path,
+    referer: str = "https://www.bilibili.com/",
+) -> tuple[dict[str, Path], list[str]]:
+    """按 URL 下载一组小图（表情图标等），返回 ({url: 本地路径}, 错误列表)。"""
+    if not urls:
+        return {}, []
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved: dict[str, Path] = {}
+    errors: list[str] = []
+    with httpx.Client(
+        headers={"User-Agent": _UA, "Referer": referer},
+        timeout=30,
+        follow_redirects=True,
+        trust_env=False,
+    ) as client:
+        for index, url in enumerate(urls, start=1):
+            target = out_dir / f"{index:03d}{_ext_of(url)}"
+            if target.exists() and target.stat().st_size > 0:
+                saved[url] = target
+                continue
+            try:
+                resp = client.get(url)
+                resp.raise_for_status()
+                target.write_bytes(resp.content)
+                saved[url] = target
+            except Exception as e:  # noqa: BLE001
+                logger.warning("图片下载失败 %s: %s", url, e)
+                errors.append(f"{url} -> {e}")
+    return saved, errors

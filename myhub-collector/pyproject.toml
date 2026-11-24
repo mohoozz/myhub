@@ -8,6 +8,10 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "pydantic-settings>=2.5",
     "yt-dlp>=2026.8.19",
+    # YouTube 的 JS 挑战求解脚本（配合 Deno 运行时；缺了只能拿到预览图）
+    "yt-dlp-ejs>=0.8.0",
+    # 抖音：驱动已登录的浏览器抓关注列表与作品（签名由页面自己算）
+    "playwright>=1.45",
 ]
 
 [build-system]

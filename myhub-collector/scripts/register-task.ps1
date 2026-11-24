@@ -1,4 +1,4 @@
-# 注册 Windows 计划任务：每天 06:00 采集前一天的内容
+﻿# 注册 Windows 计划任务：每天 06:00 采集前一天的内容
 # 用法（管理员或普通用户均可）：
 #   powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1
 # 卸载：
