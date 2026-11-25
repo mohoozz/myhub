@@ -46,7 +46,15 @@ header.top{display:flex;align-items:flex-end;justify-content:space-between;
   gap:14px;margin-bottom:18px;flex-wrap:wrap}
 header.top h1{margin:0;font-size:21px}
 header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
-.top-actions{display:flex;gap:8px;flex-wrap:wrap}
+.top-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.day-status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;
+  padding:5px 12px;font-size:12px;font-weight:600;border:1px solid var(--line);
+  background:#0d1117;color:var(--muted);white-space:nowrap}
+.day-status i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.day-status.ok{color:#56d364;border-color:#2b5d33;background:#23863622}
+.day-status.bad{color:#ff8b84;border-color:#5b2b2b;background:#da363322}
+.day-status.run{color:#e3b341;border-color:#5c4403;background:#9e6a0322}
+.day-status.idle{color:#8b949e}
 .btn{border:1px solid var(--line);background:var(--panel2);border-radius:8px;
   padding:7px 13px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
   transition:.15s border-color,.15s background}
@@ -264,6 +272,7 @@ details.adv .form-grid{margin-top:10px}
     <header class="top">
       <div><h1 id="viewTitle">概览</h1><p id="viewSub">…</p></div>
       <div class="top-actions">
+        <span class="day-status" id="dayStatus" hidden></span>
         <button class="btn sm ghost" id="btnInit">环境自检</button>
         <button class="btn sm ghost" id="btnSync">同步订阅源</button>
         <button class="btn sm primary" id="btnCollectTop">立即采集</button>
@@ -436,7 +445,7 @@ function fmtSize(n){
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
   return n.toFixed(n >= 100 ? 0 : 1) + " " + u[i];
 }
-const S = { overview:null, days:null, day:null, env:null, view:"overview", linkResult:null };
+const S = { overview:null, days:null, day:null, env:null, view:"overview", linkResult:null, daySummary:null };
 let jobTimer = null, jobId = null, jobState = null, jobSeen = false;
 
 async function api(path, opt){
@@ -478,6 +487,7 @@ function switchView(view){
   if (view === "progress") loadProgress();
   if (view === "link") { linkCount(); if (S.linkResult) renderLinkResult(S.linkResult); }
   if (view === "config") loadConfig();
+  updateDayStatus();
 }
 $$("nav button").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
 
@@ -676,6 +686,7 @@ async function pollJob(){
   $("#jobBadge").innerHTML = (job.status === "running" ? '<i class="pulse"></i>' : "") +
     ({ running:"运行中", done:"已完成", failed:"失败", queued:"排队中" }[job.status] || job.status);
   renderJobProgress(job);
+  updateDayStatus(job);
   updateJobRow(job);
   const drawerOpen = $("#drawer").classList.contains("show");
   if (!drawerOpen && (job.status === "running" || job.status === "queued")) showFab(job);
@@ -747,6 +758,38 @@ $("#btnLink").addEventListener("click", async () => {
   finally { btn.disabled = false; }
 });
 /* ---------- 进度 ---------- */
+/* 右上角状态：任务在跑就直接报「进行中」，否则按当前这天的统计判定 */
+function updateDayStatus(job){
+  const el = $("#dayStatus");
+  if (S.view !== "progress" || !S.day) {
+    el.hidden = true;
+    el.dataset.text = "";
+    return;
+  }
+  const running = jobState === "running" || jobState === "queued";
+  const s = S.daySummary || { total: 0, failed: 0, pending: 0, running: 0 };
+  const left = (s.pending || 0) + (s.running || 0);
+  let cls, text;
+  if (running) {
+    const pr = (job && job.progress) || {};
+    cls = "run";
+    text = pr.size ? ("进行中 " + (Number(pr.percent) || 0).toFixed(0) + "%") : "进行中";
+  } else if (!s.total) {
+    cls = "idle"; text = "这一天没有内容";
+  } else if (s.failed) {
+    cls = "bad"; text = "部分失败 · " + s.failed + " 条";
+  } else if (left) {
+    cls = "idle"; text = "待下载 " + left + " 条";
+  } else {
+    cls = "ok"; text = "已完成";
+  }
+  el.hidden = false;
+  el.className = "day-status " + cls;
+  if (el.dataset.text === text) return;
+  el.dataset.text = text;
+  el.innerHTML = '<i' + (cls === "run" ? ' class="pulse"' : '') + '></i>' + esc(text);
+}
+
 function statusBadge(status){
   if (status === "done") return '<span class="badge ok">完成</span>';
   if (status === "failed") return '<span class="badge bad">失败</span>';
@@ -800,6 +843,7 @@ function renderRuns(runs){
 
 async function loadDay(day){
   S.day = day;
+  S.daySummary = null;
   let d;
   try { d = await api("/api/day/" + encodeURIComponent(day)); } catch (e) { return toast(e.message, "err"); }
   S.day = day;
@@ -868,6 +912,8 @@ async function loadDay(day){
         '<td class="mono">' + (it.size ? fmtSize(it.size) : "—") + '</td></tr>').join("") +
       '</tbody></table>' + (d.items.length > rows.length ? '<div class="empty">仅显示前 120 条</div>' : "")
     : '<div class="empty">这一天没有采集到内容</div>';
+  S.daySummary = s;
+  updateDayStatus();
 }
 
 /* ---------- 配置 ---------- */
