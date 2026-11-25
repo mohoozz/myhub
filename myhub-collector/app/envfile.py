@@ -6,7 +6,10 @@
 """
 from __future__ import annotations
 
+import os
 import shutil
+import string
+from pathlib import Path
 
 from app.config import BASE_DIR, Settings, get_settings
 
@@ -40,19 +43,19 @@ def _groups() -> list[dict]:
                 {
                     "key": "DATA_DIR",
                     "label": "数据目录",
-                    "type": "text",
+                    "type": "path",
                     "help": "数据库、登录态都放这里，默认 data",
                 },
                 {
                     "key": "DOWNLOAD_DIR",
                     "label": "下载目录",
-                    "type": "text",
+                    "type": "path",
                     "help": "成品文件平铺存放，留空 = <数据目录>/downloads",
                 },
                 {
                     "key": "REPORT_DIR",
                     "label": "报告目录",
-                    "type": "text",
+                    "type": "path",
                     "help": "每日 HTML 报告输出位置，留空 = <数据目录>/reports",
                 },
             ],
@@ -122,7 +125,7 @@ def _groups() -> list[dict]:
                 {
                     "key": "DOUYIN_USER_DATA_DIR",
                     "label": "复用本机浏览器目录",
-                    "type": "text",
+                    "type": "path",
                     "help": "填浏览器 User Data 目录可直接继承登录态；留空用独立 profile",
                     "advanced": True,
                 },
@@ -172,7 +175,7 @@ def _groups() -> list[dict]:
                 {
                     "key": "FFMPEG_LOCATION",
                     "label": "ffmpeg 目录",
-                    "type": "text",
+                    "type": "path",
                     "help": "未加入 PATH 时填这里，留空只从 PATH 找",
                 },
             ],
@@ -260,6 +263,17 @@ def _coerce(item: dict, raw: str) -> str:
     if kind == "select" and item.get("options"):
         if value not in item["options"]:
             raise ValueError(f"{label}：可选 {' / '.join(o or '（空）' for o in item['options'])}")
+        return value
+
+    if kind == "path":
+        # 允许从资源管理器复制带引号的路径；多余的尾部斜杠去掉，但盘符根保留
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1].strip()
+        if value:
+            value = os.path.expanduser(value)
+            trimmed = value.rstrip("\\/")
+            if trimmed and not trimmed.endswith(":"):
+                value = trimmed
         return value
 
     return value
@@ -350,6 +364,88 @@ def env_status() -> dict:
         "data_dir": str(get_settings().data_path),
         "download_dir": str(get_settings().download_path),
         "report_dir": str(get_settings().report_path),
+    }
+
+
+def _roots() -> list[dict[str, str]]:
+    """路径选择的快捷起点：盘符（或 /）+ 用户主目录。"""
+    out: list[dict[str, str]] = []
+    if os.name == "nt":
+        for letter in string.ascii_uppercase:
+            drive = Path(f"{letter}:\\")
+            try:
+                if drive.exists():
+                    out.append({"name": f"{letter}:", "path": str(drive)})
+            except OSError:
+                continue
+    else:
+        out.append({"name": "/", "path": "/"})
+    try:
+        out.append({"name": "用户主目录", "path": str(Path.home())})
+    except RuntimeError:
+        pass
+    return out
+
+
+def browse(path: str = "") -> dict:
+    """列出一个目录的子目录，供门户「选择目录」弹层使用。
+
+    只读目录名、不读文件内容；``path`` 为空时只返回快捷起点。
+    路径口径和 ``Settings._abs`` 一致：相对路径按项目根解析。
+    """
+    raw = (path or "").strip().strip('"')
+    if not raw:
+        return {
+            "path": "",
+            "parent": "",
+            "sep": os.sep,
+            "roots": _roots(),
+            "dirs": [],
+            "truncated": False,
+        }
+
+    target = Path(os.path.expanduser(raw))
+    if not target.is_absolute():
+        target = BASE_DIR / target
+    try:
+        target = target.resolve()
+    except OSError:
+        pass
+    if not target.exists():
+        raise ValueError(f"目录不存在：{target}")
+    if not target.is_dir():
+        raise ValueError(f"不是目录：{target}")
+
+    dirs: list[dict[str, str]] = []
+    truncated = False
+    try:
+        with os.scandir(target) as entries:
+            for entry in entries:
+                try:
+                    if not entry.is_dir():
+                        continue
+                except OSError:
+                    continue
+                name = entry.name
+                if os.name == "nt" and (
+                    name.startswith("$") or name == "System Volume Information"
+                ):
+                    continue
+                dirs.append({"name": name, "path": str(Path(entry.path))})
+                if len(dirs) >= 500:
+                    truncated = True
+                    break
+    except PermissionError as e:
+        raise ValueError(f"没有权限读取：{target}") from e
+    dirs.sort(key=lambda d: d["name"].lower())
+
+    return {
+        "path": str(target),
+        "parent": str(target.parent) if target.parent != target else "",
+        "sep": os.sep,
+        "roots": _roots(),
+        "dirs": dirs,
+        "truncated": truncated,
     }
 
 

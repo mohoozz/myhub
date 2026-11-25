@@ -20,7 +20,7 @@ import webbrowser
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from app import credentials, envfile, jobs, webui
 from app.config import get_settings
@@ -409,6 +409,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(api_day(unquote(path.rsplit("/", 1)[-1])))
             if path == "/api/env":
                 return self._json({"groups": envfile.schema(), "status": envfile.env_status()})
+            if path == "/api/browse":
+                query = parse_qs(urlsplit(self.path).query)
+                return self._json(envfile.browse((query.get("path") or [""])[0]))
             if path.startswith("/api/jobs/"):
                 job = jobs.JOBS.get(unquote(path.rsplit("/", 1)[-1]))
                 return self._json(job.snapshot(0) if job else {})

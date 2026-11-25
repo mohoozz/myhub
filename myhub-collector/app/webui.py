@@ -155,6 +155,28 @@ details.adv .form-grid{margin-top:10px}
 .drawer .log{flex:1;overflow:auto;padding:10px 14px;font-size:12px;line-height:1.6;
   color:#adbac7;font-family:ui-monospace,Consolas,monospace}
 .drawer .log div{white-space:pre-wrap;word-break:break-word}
+.path-ctl{display:flex;gap:8px;align-items:center}
+.path-ctl input{flex:1;min-width:0}
+.picker{position:fixed;inset:0;background:#0b0f14cc;backdrop-filter:blur(3px);
+  display:none;align-items:center;justify-content:center;padding:20px;z-index:90}
+.picker.show{display:flex}
+.picker-box{width:min(720px,96vw);max-height:82vh;background:var(--panel);
+  border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;
+  overflow:hidden;box-shadow:0 20px 60px #000a}
+.picker-box header{display:flex;align-items:center;gap:10px;padding:12px 14px;
+  border-bottom:1px solid var(--line)}
+.picker-box header .title{flex:1;min-width:0;font-size:13px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.picker-roots{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px 0}
+.picker-list{flex:1;overflow:auto;padding:10px 14px}
+.picker-dir{padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13px;
+  display:flex;gap:8px;align-items:flex-start;word-break:break-all}
+.picker-dir:hover{background:#1f6feb22}
+.picker-dir .i{color:var(--dim);font-size:11px;flex:none;margin-top:2px}
+.picker-box footer{display:flex;gap:8px;align-items:center;padding:10px 14px;
+  border-top:1px solid var(--line);background:#0d1117aa}
+.picker-box footer .msg{flex:1;min-width:0;color:var(--muted);font-size:11.5px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #toast{position:fixed;right:20px;top:18px;display:flex;flex-direction:column;gap:8px;z-index:80}
 .toast{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--blue);
   border-radius:9px;padding:10px 14px;min-width:220px;max-width:380px;font-size:12.5px;
@@ -276,6 +298,22 @@ details.adv .form-grid{margin-top:10px}
       <span class="num" id="jobPct"></span></div>
   </div>
   <div class="log" id="logBox"></div>
+</div>
+<div class="picker" id="picker">
+  <div class="picker-box">
+    <header>
+      <span class="title" id="pickerPath">选择目录</span>
+      <button class="btn sm ghost" id="pickerClose">关闭</button>
+    </header>
+    <div class="picker-roots" id="pickerRoots"></div>
+    <div class="picker-list" id="pickerList"></div>
+    <footer>
+      <span class="msg" id="pickerMsg"></span>
+      <button class="btn sm ghost" id="pickerBlank">留空用默认</button>
+      <button class="btn sm ghost" id="pickerUp">上一级</button>
+      <button class="btn sm primary" id="pickerPick">选择此目录</button>
+    </footer>
+  </div>
 </div>
 <div id="toast"></div>
 <script>
@@ -611,10 +649,15 @@ function control(item){
   if (item.type === "textarea") {
     return '<textarea data-key="' + k + '" placeholder="' + esc(item.default) + '">' + esc(v) + '</textarea>';
   }
+  if (item.type === "path") {
+    return '<div class="path-ctl"><input type="text" data-key="' + k + '" value="' + esc(v) +
+      '" placeholder="' + esc(item.default) + '"><button type="button" class="btn sm ghost" data-pick="' +
+      k + '">选择…</button></div>';
+  }
   return '<input type="text" data-key="' + k + '" value="' + esc(v) + '" placeholder="' + esc(item.default) + '">';
 }
 function fieldHtml(item){
-  const wide = item.type === "textarea" ? ' style="grid-column:1/-1"' : "";
+  const wide = (item.type === "textarea" || item.type === "path") ? ' style="grid-column:1/-1"' : "";
   return '<div class="field"' + wide + '><label>' + esc(item.label) +
     (item.restart ? '<span class="restart">重启后生效</span>' : "") + '</label>' +
     control(item) + (item.help ? '<span class="help">' + esc(item.help) + '</span>' : "") + '</div>';
@@ -655,6 +698,85 @@ async function saveConfig(){
   } catch (e) { toast(e.message, "err"); $("#saveMsg").textContent = e.message; }
   finally { btn.disabled = false; }
 }
+
+/* ---------- 目录选择 ---------- */
+const PICK = { key:"", path:"", parent:"" };
+function pickerClose(){ $("#picker").classList.remove("show"); }
+function pickerQuick(){
+  const st = (S.env && S.env.status) || {};
+  return [["数据目录", st.data_dir], ["下载目录", st.download_dir], ["报告目录", st.report_dir]]
+    .filter((x) => x[1])
+    .map((x) => '<button class="btn sm ghost" data-pick-dir="' + esc(x[1]) + '">' + esc(x[0]) + '</button>')
+    .join("");
+}
+function renderPicker(d){
+  PICK.path = d.path || "";
+  PICK.parent = d.parent || "";
+  $("#pickerPath").textContent = PICK.path || "选择起点";
+  $("#pickerUp").disabled = !PICK.parent;
+  $("#pickerPick").disabled = !PICK.path;
+  $("#pickerMsg").textContent = d.truncated ? "目录太多，只显示前 500 个" : "";
+  const roots = (d.roots || []).map((r) =>
+    '<button class="btn sm ghost" data-pick-dir="' + esc(r.path) + '">' + esc(r.name) + '</button>').join("");
+  $("#pickerRoots").innerHTML = roots + pickerQuick();
+  $("#pickerList").innerHTML = (d.dirs || []).length
+    ? d.dirs.map((x) => '<div class="picker-dir" data-pick-dir="' + esc(x.path) + '"><span class="i">▸</span>' +
+        esc(x.name) + '</div>').join("")
+    : '<div class="empty">' + (PICK.path ? "没有子目录" : "先选一个起点") + '</div>';
+}
+async function pickerLoad(path){
+  try { renderPicker(await api("/api/browse?path=" + encodeURIComponent(path))); }
+  catch (e) { toast(e.message, "err"); }
+}
+async function pickerOpen(key, current){
+  PICK.key = key;
+  PICK.path = "";
+  PICK.parent = "";
+  $("#picker").classList.add("show");
+  $("#pickerPath").textContent = "选择目录";
+  $("#pickerRoots").innerHTML = "";
+  $("#pickerMsg").textContent = "";
+  $("#pickerList").innerHTML = '<div class="empty">读取中…</div>';
+  $("#pickerUp").disabled = true;
+  $("#pickerPick").disabled = true;
+  const start = (current || "").trim();
+  if (!start) {
+    try { renderPicker(await api("/api/browse")); } catch (e) { toast(e.message, "err"); }
+    return;
+  }
+  try {
+    renderPicker(await api("/api/browse?path=" + encodeURIComponent(start)));
+  } catch (e) {
+    // 当前值是相对路径或目录已被删除：回到起点列表让用户重新选
+    toast(e.message, "err");
+    try { renderPicker(await api("/api/browse")); } catch (e2) { toast(e2.message, "err"); }
+  }
+}
+$("#picker").addEventListener("click", (e) => {
+  if (e.target === $("#picker")) { pickerClose(); return; }
+  const dir = e.target.closest("[data-pick-dir]");
+  if (dir) pickerLoad(dir.dataset.pickDir);
+});
+$("#pickerClose").addEventListener("click", pickerClose);
+$("#pickerUp").addEventListener("click", () => { if (PICK.parent) pickerLoad(PICK.parent); });
+$("#pickerPick").addEventListener("click", () => {
+  if (!PICK.path) return;
+  const input = $('#configForm [data-key="' + PICK.key + '"]');
+  if (input) input.value = PICK.path;
+  pickerClose();
+});
+$("#pickerBlank").addEventListener("click", () => {
+  const input = $('#configForm [data-key="' + PICK.key + '"]');
+  if (input) input.value = "";
+  pickerClose();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") pickerClose(); });
+$("#configForm").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-pick]");
+  if (!btn) return;
+  const input = $('#configForm [data-key="' + btn.dataset.pick + '"]');
+  pickerOpen(btn.dataset.pick, input ? input.value : "");
+});
 
 /* ---------- 动作 ---------- */
 async function collect(useForm){
