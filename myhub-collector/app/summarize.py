@@ -188,6 +188,13 @@ def write_reports(session: Session, day: date) -> Path | None:
     settings.report_path.mkdir(parents=True, exist_ok=True)
     html_path = settings.report_path / f"{day.isoformat()}.html"
     html_path.write_text(render_html(day, contents, downloads), encoding="utf-8")
+    # 报告的修改时间统一设成当天零点：文件管理器里按日期排序更整齐，
+    # 也方便按「报告属于哪一天」而不是「哪天生成」来归档。
+    ts = datetime.combine(day, time.min).timestamp()
+    try:
+        os.utime(html_path, (ts, ts))
+    except OSError as e:  # 文件被占用 / 权限不足：不影响报告生成
+        logger.debug("设置报告文件时间失败 %s：%s", html_path, e)
     logger.info("报告已生成：%s", html_path)
     return html_path
 
