@@ -294,9 +294,7 @@ struct ReadingHomeView: View {
         let entry = entry(for: record)
         let isSelected = isSelected(record)
         return VStack(spacing: 0) {
-            // 底部对齐：文本块高度恒等于封面（标题强制 1 行），副标题始终贴住封面底边，
-            // 行高稳定在 80pt，不随文件名长短/「文件名行数」设置变化
-            HStack(alignment: .bottom, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 ReadingCoverImage(
                     record: record, entry: entry,
                     connection: connections[record.connectionID],
@@ -306,33 +304,26 @@ struct ReadingHomeView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    // 固定单行：超长文件名先小幅缩放、再中段省略，避免撑高行影响封面对齐
                     Text(title(of: record))
                         .font(.body.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .truncationMode(.middle)
-                    // Spacer 把副标题压到文本块底部（= 封面底边）
-                    Spacer(minLength: 3)
+                        .lineLimit(browseDisplaySettings.fileNameLines)
                     Text(subtitle(for: record))
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
-                // 多选态仍保留进度环（勾选标记并排在其右侧）；行底部对齐时保持自身垂直居中
+                // 多选态仍保留进度环（勾选标记并排在其右侧）
                 if record.finished || record.percent > 0 {
                     progressRing(record)
-                        .frame(maxHeight: .infinity)
                 }
                 if isSelecting {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .foregroundStyle(isSelected ? AppColors.primary : AppColors.textSecondary)
-                        .frame(maxHeight: .infinity)
                 }
             }
             .padding(.horizontal, 12)
