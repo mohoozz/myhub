@@ -200,6 +200,7 @@ struct BrowseDirectoryView: View {
         case copy(Set<String>)
         case editText(FileEntry)
         case share(URL)
+        case info(FileEntry)
 
         var id: String {
             switch self {
@@ -207,6 +208,7 @@ struct BrowseDirectoryView: View {
             case .copy: return "copy"
             case .editText(let entry): return "edit-\(entry.path)"
             case .share(let url): return "share-\(url.absoluteString)"
+            case .info(let entry): return "info-\(entry.path)"
             }
         }
     }
@@ -328,6 +330,8 @@ struct BrowseDirectoryView: View {
             case .share(let url):
                 ActivityView(url: url)
                     .onDisappear { try? FileManager.default.removeItem(at: url) }
+            case .info(let entry):
+                FileInfoView(entry: entry, connection: connection, mediaType: mediaType(for: entry))
             }
         }
         .fullScreenCover(item: $fullScreen) { route in
@@ -930,8 +934,13 @@ struct BrowseDirectoryView: View {
 
  // MARK: - 操作菜单（长按 / 指针右键）
 
+    /// 菜单与属性面板共用的媒体类型判定（epub 漫画预判参与）
+    private func mediaType(for entry: FileEntry) -> MediaType {
+        viewModel.isComicEpub(entry) ? .comic : MediaType.detect(ext: entry.ext)
+    }
+
     private func contextMenuItems(for entry: FileEntry) -> [PopupMenuItem] {
-        let type = viewModel.isComicEpub(entry) ? .comic : MediaType.detect(ext: entry.ext)
+        let type = mediaType(for: entry)
         var items: [PopupMenuItem] = [
             // 多选：置顶显示。从长按进入时默认勾选按住的那一项
             PopupMenuItem(title: "多选", systemImage: "checkmark.circle") {
@@ -969,6 +978,10 @@ struct BrowseDirectoryView: View {
                 txtReader.open(connection: connection, entry: entry)
             })
         }
+        // 属性：展示文件信息（长按菜单 → 属性，与阅读界面一致）
+        items.append(PopupMenuItem(title: "属性", systemImage: "info.circle") {
+            sheet = .info(entry)
+        })
         items.append(PopupMenuItem(
             title: viewModel.favoritePaths.contains(entry.path) ? "取消收藏" : "收藏",
             systemImage: viewModel.favoritePaths.contains(entry.path) ? "star.fill" : "star"
