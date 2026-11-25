@@ -529,7 +529,8 @@ def download_contents(
                     content.media_url, out_dir, stem,
                     referer=content.url, proxy=proxy,
                 )
-                if not ok:
+                if not ok and not _network_failure(err):
+                    # 链接过期 / 403 这类还值得让 yt-dlp 重新解析一次
                     logger.info("抖音直链下载失败，改用 yt-dlp：%s", err)
                     ok, path, err = download(
                         content.url, out_dir, stem,
@@ -539,8 +540,10 @@ def download_contents(
                         js_runtimes=js_runtimes,
                         max_duration_sec=probe_limit,
                     )
-                    if not ok:
-                        err = _douyin_hint(err)
+                elif not ok:
+                    logger.warning("抖音直链网络不通，跳过 yt-dlp 兜底：%s", err)
+                if not ok:
+                    err = _douyin_hint(err)
             else:
                 ok, path, err = download(
                     content.url, out_dir, stem,
@@ -585,6 +588,19 @@ def download_contents(
         detail_source.close()
 
     return stats
+
+
+# 直链失败如果是网络层问题（连不上抖音 CDN），退 yt-dlp 只会用同一条网络再等一轮，
+# 不如立刻记失败，等下一次「重新下载」换到别的节点。
+_NETWORK_ERROR_HINTS = (
+    "Timeout", "Timed out", "ConnectError", "ConnectTimeout",
+    "ReadError", "ReadTimeout", "getaddrinfo", "SSL", "10060",
+)
+
+
+def _network_failure(err: str) -> bool:
+    text = err or ""
+    return any(hint in text for hint in _NETWORK_ERROR_HINTS)
 
 
 def _douyin_hint(err: str) -> str:

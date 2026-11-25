@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 
 import yt_dlp
@@ -93,6 +94,27 @@ class _ErrorCollector:
         return ""
 
 
+# 这些错误重试同一个 URL 没用（B 站分片锁死在一个连不通的 CDN 节点上），
+# 必须重新解析拿一份新的播放地址，才会换到能连的镜像。
+_TRANSIENT_HINTS = (
+    "10060",  # WinError 连接超时
+    "10054",  # WinError 连接被重置
+    "timed out",
+    "Timeout",
+    "TransportError",
+    "Connection reset",
+    "Remote end closed",
+    "EOF occurred",
+    "Unable to connect",
+    "Temporary failure",
+)
+
+
+def _transient(reason: str) -> bool:
+    text = reason or ""
+    return any(hint in text for hint in _TRANSIENT_HINTS)
+
+
 def _on_progress(d: dict) -> None:
     """yt-dlp 进度钩子 → 当前任务的结构化进度（没有任务在跑时自动忽略）。"""
     from app import jobs
@@ -166,9 +188,12 @@ def build_opts(
         "no_warnings": True,
         "quiet": True,
         "noprogress": True,
-        "retries": 10,
-        "fragment_retries": 10,
-        "socket_timeout": 30,
+        # 卡死防护：单个请求 15s 没动静就算失败，最多 4 次（15×4≈60s）。
+        # 之前是 30s×10 次，碰上抖音验证页 / 某个 CDN 节点不通会干等 5 分钟。
+        "retries": 4,
+        "fragment_retries": 4,
+        "socket_timeout": 15,
+        "extractor_retries": 1,
         "windowsfilenames": True,
         "continuedl": True,
         "overwrites": False,
@@ -290,25 +315,38 @@ def download(
     if (existing := find_files(out_dir, stem)) and not any("-[P" in p.name for p in existing):
         return True, str(existing[0]), "已存在"
 
-    collector = _ErrorCollector()
-    try:
-        opts = build_opts(
+    def _opts() -> dict:
+        return build_opts(
             out_dir, stem, quality, platform, cookiefile, proxy, ffmpeg_location,
             cookies_from_browser, js_runtimes,
         )
-        if max_duration_sec > 0:
-            total = _probe_total_duration(url, opts)
-            if total > max_duration_sec:
-                return False, "", duration_skip_error(total, max_duration_sec)
-        opts["logger"] = collector
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception as e:  # noqa: BLE001
-        logger.warning("yt-dlp 异常 %s: %s", url, e)
-        return False, "", str(e)[:300]
 
-    if (found := find_files(out_dir, stem)):
-        return True, str(found[0]), ""
-    reason = collector.last_error() or "下载结束但没有输出文件（详见 yt-dlp 日志）"
+    opts = _opts()
+    if max_duration_sec > 0:
+        total = _probe_total_duration(url, opts)
+        if total > max_duration_sec:
+            return False, "", duration_skip_error(total, max_duration_sec)
+
+    # 最多两轮：第二轮是「重新解析」再下一次。B 站每次播放地址会分配到不同
+    # 镜像节点，本轮连不上时，换一份地址往往就能下（等同于手动再点一次下载）。
+    reason = ""
+    for round_no in (1, 2):
+        collector = _ErrorCollector()
+        opts["logger"] = collector
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("yt-dlp 异常 %s: %s", url, e)
+            reason = str(e)[:300]
+        if (found := find_files(out_dir, stem)):
+            return True, str(found[0]), ""
+        reason = collector.last_error() or reason or "下载结束但没有输出文件（详见 yt-dlp 日志）"
+        if round_no == 2 or not _transient(reason):
+            break
+        logger.info("网络不通，重新解析后再试一次 %s：%s", url, reason[:100])
+        time.sleep(1.5)
+        opts = _opts()
+
     logger.warning("yt-dlp 未产出文件 %s：%s", url, reason)
     return False, "", reason[:300]

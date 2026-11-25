@@ -19,9 +19,12 @@ _UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 _CHUNK = 1 << 20
+# 建连失败要快：抖音 CDN 节点不通时，60s 的连接超时会连累 3 次重试白等 3 分钟。
+# 读超时留 20s，正常传输中不会触发（长视频是持续有数据的）。
+_TIMEOUT = httpx.Timeout(20.0, connect=6.0)
 
 
-def _client(proxy: str, timeout: float) -> httpx.Client:
+def _client(proxy: str, timeout: httpx.Timeout | float = _TIMEOUT) -> httpx.Client:
     opts: dict = {"timeout": timeout, "follow_redirects": True}
     if proxy in ("", "direct"):
         opts["trust_env"] = False
@@ -79,7 +82,7 @@ def download_direct(
 
     for attempt in range(1, max(retries, 1) + 1):
         try:
-            with _client(proxy, timeout=60) as client:
+            with _client(proxy) as client:
                 with client.stream("GET", url, headers=headers) as resp:
                     resp.raise_for_status()
                     total = int(resp.headers.get("content-length") or 0)
