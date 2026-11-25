@@ -590,7 +590,7 @@ async function loadDay(day){
         '<td><span class="t" title="' + esc(it.title) + '">' + esc(it.title) + '</span>' +
         '<span class="tag" style="margin-left:6px">' + esc(PLAT[it.platform] || it.platform) + '</span>' +
         '<span class="tag">' + esc(it.media_type || "-") + '</span></td>' +
-        '<td>' + statusBadge(it.status) + '</td>' +
+        '<td' + (it.error ? ' title="' + esc(it.error) + '"' : '') + '>' + statusBadge(it.status) + '</td>' +
         '<td class="mono">' + (it.size ? fmtSize(it.size) : "—") + '</td></tr>').join("") +
       '</tbody></table>' + (d.items.length > rows.length ? '<div class="empty">仅显示前 120 条</div>' : "")
     : '<div class="empty">这一天没有采集到内容</div>';

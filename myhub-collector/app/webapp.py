@@ -235,7 +235,8 @@ def _reset_duration_skips(day: str, platforms: list[str]) -> int:
     init_db()
     marks = ", ".join("?" for _ in platforms)
     sql = (
-        "UPDATE downloads SET status = 'pending', error = '', attempts = 0, finished_at = NULL "
+        "UPDATE downloads SET status = 'pending', error = '', attempts = 0, finished_at = NULL, "
+        "path = '', size = 0 "
         "WHERE status = 'skipped' AND error LIKE ? "
         f"AND platform IN ({marks}) "
         "AND EXISTS (SELECT 1 FROM contents c WHERE c.platform = downloads.platform "

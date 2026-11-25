@@ -30,6 +30,9 @@ YOUTUBE_QUALITY_FORMATS = {
 
 _SINGLE_STREAM = "best[acodec!=none][vcodec!=none]/best"
 _PART_SUFFIXES = (".part", ".ytdl", ".temp")
+# 超时长视频只落一张预览卡片（stem.html），它不是视频成品；调大时长上限后
+# 重新下载时不能被它挡住「已存在」的判断。
+_CARD_SUFFIXES = (".html", ".htm")
 
 
 def _ffmpeg_dir(location: str = "") -> str:
@@ -205,6 +208,8 @@ def find_files(out_dir: Path, stem: str) -> list[Path]:
     found: list[Path] = []
     for path in out_dir.iterdir():
         if not path.is_file() or path.name.endswith(_PART_SUFFIXES):
+            continue
+        if path.suffix.lower() in _CARD_SUFFIXES:
             continue
         if not path.name.startswith(stem):
             continue

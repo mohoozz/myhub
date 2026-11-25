@@ -149,7 +149,7 @@ downloads/           # 下载根目录 = DOWNLOAD_DIR，平铺、不建作者/�
 | `PROXY` | direct | `direct` 直连 / `system` 跟随系统代理 / 填代理地址 |
 | `QUALITY` | 1080 | `best` / `1080` / `720` / `audio` |
 | `DOWNLOAD_IMAGES` | true | 是否下载图文动态的图片 |
-| `MAX_DURATION_MINUTES` | 0 | 单条视频最长时长（分钟），0 = 不限制；B 站多分 P 按总时长算，超长的标「跳过」不下载 |
+| `MAX_DURATION_MINUTES` | 0 | 单条视频最长时长（分钟），0 = 不限制；B 站多分 P 按总时长算，超长的只存一张含标题和封面的 HTML 预览，不下载视频本体 |
 | `KEEP_DAYS` | 30 | 保留天数，`python -m app clean` 按下载记录的完成时间删文件 |
 | `FFMPEG_LOCATION` | 空 | ffmpeg 所在目录（如 `C:\Code\ffmpeg...\bin`），留空则只找 PATH；没有 ffmpeg 会退化成单文件流 |
 

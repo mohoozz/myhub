@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.cookies import CookieError
 from app.downloader import download, download_direct, download_images, download_images_by_url, find_files
 from app.downloader.ytdlp import ffmpeg_available, find_deno
-from app.dynamic_html import image_data_uri, write_dynamic_html
+from app.dynamic_html import image_data_uri, write_dynamic_html, write_video_card
 from app.filetime import touch_published
 from app.models import Content, Download, RunLog, Subscription
 from app.sources import SourceError, build_source
@@ -290,6 +290,44 @@ def _emote_uris(content: Content) -> dict[str, str]:
         }
 
 
+def _card_cover(content: Content) -> str:
+    """封面转 data URI；下载失败时回落远程 URL，保证卡片至少有图可看。"""
+    url = (content.cover or "").strip()
+    if not url:
+        return ""
+    if url.startswith("//"):
+        url = "https:" + url
+    referer = (
+        "https://www.bilibili.com/"
+        if content.platform == "bilibili"
+        else (content.url or "")
+    )
+    with tempfile.TemporaryDirectory(prefix="myhub_cover_") as tmp:
+        saved, errors = download_images([url], Path(tmp), referer=referer)
+        if errors:
+            logger.debug("%s 封面下载失败：%s", content.content_id, "; ".join(errors))
+        if saved and saved[0].stat().st_size > 0:
+            return image_data_uri(saved[0])
+    return url
+
+
+def _write_duration_card(content: Content, limit_seconds: int) -> str:
+    """超时长视频不下载本体，只落一张含标题和封面的 HTML 预览，返回路径。"""
+    settings = get_settings()
+    settings.download_path.mkdir(parents=True, exist_ok=True)
+    path = settings.download_path / f"{_stem(content)}.html"
+    return str(write_video_card(content, path, _card_cover(content), limit_seconds // 60))
+
+
+def _duration_from_error(err: str) -> str:
+    """从「超时长：23:38 超过上限 10 分钟」里取回真实时长文本（取不到返回空串）。"""
+    prefix = f"{DURATION_SKIP_PREFIX}："
+    if prefix not in err:
+        return ""
+    text, sep, _ = err.split(prefix, 1)[1].partition(" 超过上限")
+    return text.strip() if sep else ""
+
+
 def _platform_cookiefile(platform: str) -> Path | None:
     """各平台给 yt-dlp 用的 Cookie 文件；统一走 app.credentials，拿不到就匿名下载。"""
     path = credentials.cookiefile(platform)
@@ -375,15 +413,25 @@ def download_contents(
             and known_seconds
             and known_seconds > duration_limit
         ):
+            # 不下载视频本体，只落一张「标题 + 封面」的 HTML 预览
+            card_path = ""
+            try:
+                card_path = _write_duration_card(content, duration_limit)
+            except OSError as e:
+                logger.warning("超时长预览生成失败 %s：%s", content.content_id, e)
             dl.status = "skipped"
             dl.error = (
                 f"{DURATION_SKIP_PREFIX}：{fmt_duration(known_seconds)}"
                 f" 超过上限 {settings.max_duration_minutes} 分钟"
+                + ("，已生成 HTML 预览" if card_path else "")
             )
+            dl.path, dl.size = card_path, _file_size(card_path)
             dl.finished_at = datetime.now()
             stats["skipped"] += 1
             session.add(dl)
             session.commit()
+            if card_path:
+                _stamp(content, [Path(card_path)])
             logger.info(
                 "跳过超长视频：%s %s（%s）", content.platform, content.content_id, dl.error
             )
@@ -510,7 +558,18 @@ def download_contents(
                 _stamp(content, files or [path])
             elif err.startswith(DURATION_SKIP_PREFIX):
                 # 下载器解析出的真实总时长超限（B 站多 P / YouTube）
+                if not content.duration and (real := _duration_from_error(err)):
+                    # 回写探测到的时长，下次直接按已知时长跳过，不必再解析
+                    content.duration = real
+                    session.add(content)
+                card_path = ""
+                try:
+                    card_path = _write_duration_card(content, duration_limit)
+                    err = f"{err}，已生成 HTML 预览"
+                except OSError as e:
+                    logger.warning("超时长预览生成失败 %s：%s", content.content_id, e)
                 dl.status, dl.error = "skipped", err
+                dl.path, dl.size = card_path, _file_size(card_path)
                 stats["skipped"] += 1
             else:
                 if platform == "youtube":

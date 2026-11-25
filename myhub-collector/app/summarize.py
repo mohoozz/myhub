@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 
 from app.config import get_settings
 from app.models import Content, Download
-from app.utils import build_stem
+from app.utils import DURATION_SKIP_PREFIX, build_stem
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,8 @@ def _rows(
         name = _file_name(item, dl)
         status = dl.status if dl else ""
         cls = _STATUS_CLASS.get(status, "idle")
-        rel = _rel_link(dl.path, report_dir) if dl and status == "done" else ""
+        # 超时长视频没下载本体，但 path 指向 HTML 预览卡片，也该能点开
+        rel = _rel_link(dl.path, report_dir) if dl and dl.path and status in ("done", "skipped") else ""
         title = _esc(item.author) + " · " + _esc(_TYPE_LABEL.get(item.media_type, item.media_type))
         if rel:
             label = f'<a href="{_esc(rel)}"><code>{_esc(name)}</code></a>'
@@ -110,7 +111,9 @@ def _rows(
         else:
             label = f"<code>{_esc(name)}</code>"
         note = _STATUS_TEXT.get(status, "未下载")
-        if status == "failed" and dl and dl.error:
+        if status == "skipped" and dl and (dl.error or "").startswith(DURATION_SKIP_PREFIX):
+            note = "已跳过视频（有 HTML 预览）" if dl.path else "已跳过视频（超时长）"
+        elif status == "failed" and dl and dl.error:
             note = f"失败（{dl.error}）"
         out.append(
             f'<li class="{cls}">{label}'
