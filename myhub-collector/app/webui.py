@@ -41,7 +41,7 @@ nav button .dot{width:6px;height:6px;border-radius:50%;background:currentColor;o
 .aside-foot{margin-top:auto;padding:12px 10px 4px;border-top:1px solid var(--line);
   color:var(--dim);font-size:11.5px;word-break:break-all}
 .aside-foot b{color:var(--muted);display:block;margin-top:8px}
-main{padding:22px 26px 70px;max-width:1180px}
+main{padding:22px 26px 70px;min-width:0}
 header.top{display:flex;align-items:flex-end;justify-content:space-between;
   gap:14px;margin-bottom:18px;flex-wrap:wrap}
 header.top h1{margin:0;font-size:21px}
@@ -61,7 +61,7 @@ header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 .card h3{margin:0 0 4px;font-size:14.5px;display:flex;align-items:center;gap:8px}
 .card .hint{color:var(--muted);font-size:12.5px;margin:0 0 12px}
 .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.grid-2{display:grid;grid-template-columns:1fr 1.15fr;gap:14px}
+.grid-2{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);gap:14px}
 @media(max-width:1020px){.grid-3,.grid-2{grid-template-columns:1fr}}
 .icon{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;
   font-weight:800;font-size:16px;flex:none}
@@ -108,10 +108,41 @@ th{color:var(--dim);font-weight:500;text-align:left;padding:6px 8px;
 td{padding:7px 8px;border-bottom:1px solid #1b2027;vertical-align:top}
 tr:last-child td{border-bottom:0}
 td.mono{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
-td .t{display:block;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td .t{display:block;max-width:min(760px,46vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 明细表按固定列宽排：宽屏时标题吃掉剩余空间，不会把「状态 / 大小」挤出卡片 */
+#dayItems table{table-layout:fixed}
+#dayItems th:nth-child(1),#dayItems td:nth-child(1){width:64px}
+#dayItems th:nth-child(2),#dayItems td:nth-child(2){width:132px}
+#dayItems th:nth-child(4),#dayItems td:nth-child(4){width:68px}
+#dayItems th:nth-child(5),#dayItems td:nth-child(5){width:84px}
+#dayItems td .t{max-width:100%}
 .tag{font-size:11px;color:var(--muted);border:1px solid var(--line);
   border-radius:5px;padding:1px 6px;margin-right:5px;white-space:nowrap}
-.err{color:#ff8b84;font-size:12px;max-width:520px;word-break:break-word}
+.err{color:#ff8b84;font-size:12px;max-width:min(760px,46vw);word-break:break-word}
+/* 失败清单：一条一张小卡，长链接单独占行，条目之间靠边框分隔 */
+.fail-bar{display:flex;align-items:baseline;gap:8px;margin:0 0 8px}
+.fail-bar h3{font-size:13px;margin:0;color:#ff8b84}
+.fail-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.fail-item{background:#ff8b840d;border:1px solid #ff8b842e;border-left:3px solid #ff8b8499;
+  border-radius:8px;padding:8px 10px}
+.fail-item:hover{border-color:#ff8b8455}
+.fail-head{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+.fail-head .who{font-size:12px;color:var(--muted);font-weight:600}
+.fail-head .when{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.fail-title{font-size:12.5px;margin-bottom:4px;overflow-wrap:anywhere}
+.fail-title .lnk{color:#c9d1d9}
+.fail-title .lnk:hover{color:#58a6ff}
+.fail-head .code{margin-left:auto;font-size:11px;color:#ff8b84;background:#ff8b841a;
+  border:1px solid #ff8b8433;border-radius:5px;padding:1px 6px;white-space:nowrap}
+.fail-msg{color:#ffb3ae;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.fail-msg .lnk.block{display:block;margin:3px 0 3px -2px;padding-left:8px;
+  border-left:2px solid #ff8b8433;line-height:1.5}
+.fail-src{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:6px;padding-top:5px;
+  border-top:1px dashed #ffffff17;font-size:11.5px}
+.fail-src .srcline{display:inline-flex;align-items:baseline;gap:4px;min-width:0;max-width:100%}
+.lnk{color:#58a6ff;text-decoration:none;word-break:break-all}
+.lnk:hover{text-decoration:underline}
+.src{color:var(--dim);font-size:11px;margin-right:2px}
 .empty{color:var(--dim);text-align:center;padding:24px 10px;font-size:13px}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px}
 @media(max-width:900px){.form-grid{grid-template-columns:1fr}}
@@ -143,6 +174,18 @@ details.adv .form-grid{margin-top:10px}
   border-radius:14px 0 0 0;display:none;flex-direction:column;z-index:50;
   box-shadow:-8px -8px 30px #0008}
 .drawer.show{display:flex}
+/* 抽屉收起后的悬浮入口：任务还在跑也能随时展开日志 */
+.fab{position:fixed;right:18px;bottom:18px;z-index:60;display:none;align-items:center;gap:8px;
+  border:1px solid var(--line);background:#161b22f2;backdrop-filter:blur(8px);color:var(--text);
+  border-radius:999px;padding:9px 15px;font-size:12.5px;font-weight:600;
+  box-shadow:0 10px 30px #0009;transition:.15s border-color,.15s background}
+.fab.show{display:inline-flex}
+.fab:hover{border-color:#3d444d;background:#1c2128}
+.fab .dot{width:7px;height:7px;border-radius:50%;background:#e3b341;flex:none}
+.fab.run .dot{animation:pulse 1.1s infinite}
+.fab.ok .dot{background:var(--green)}
+.fab.bad .dot{background:var(--red)}
+.fab .pct{color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums}
 .drawer header{display:flex;align-items:center;gap:10px;padding:10px 14px;
   border-bottom:1px solid var(--line)}
 .drawer header .title{font-weight:600;font-size:13px;flex:1;overflow:hidden;
@@ -299,6 +342,9 @@ details.adv .form-grid{margin-top:10px}
   </div>
   <div class="log" id="logBox"></div>
 </div>
+<button class="fab" id="jobFab" title="展开任务日志">
+  <span class="dot"></span><span id="jobFabText">任务运行中</span>
+</button>
 <div class="picker" id="picker">
   <div class="picker-box">
     <header>
@@ -323,6 +369,39 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
   ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 const PLAT = { bilibili:"B站", youtube:"YouTube", douyin:"抖音" };
+/* 可点链接：错误信息里常混着原始 URL，方便直接点开看是链接失效还是下载失败 */
+const lnk = (url, text, cls) => '<a class="lnk' + (cls ? " " + cls : "") +
+  '" href="' + esc(url) + '" target="_blank" rel="noreferrer">' + esc(text == null ? url : text) + '</a>';
+/* 长 URL 单独占一行，避免和「→ Client error … for url」这类说明文字搅在一起；
+   截断只发生在说明文字上，不会把链接切成半截 */
+function linkify(text, max){
+  const full = String(text == null ? "" : text);
+  const lim = Math.max(80, max || 400);
+  const cut = full.length > lim;
+  const raw = cut ? full.slice(0, lim) : full;
+  const re = /(https?:\/\/[^\s"'<>）)]+)/g;
+  let out = "", last = 0, m, tail = "";
+  while ((m = re.exec(raw)) !== null) {
+    if (cut && m.index + m[1].length >= lim) { tail = esc(raw.slice(last, m.index)) + "…"; break; }
+    out += esc(raw.slice(last, m.index)) + lnk(m[1], null, m[1].length > 56 ? "block" : "");
+    last = m.index + m[1].length;
+  }
+  if (!tail) out += esc(raw.slice(last));
+  return out + tail;
+}
+/* 失败条目右上角的错误类型，扫一眼就知道是 404 还是网络问题 */
+function errKind(text){
+  const s = String(text || "");
+  let m = s.match(/Client error\s+'([^']+)'/i); if (m) return m[1];
+  m = s.match(/WinError\s+(\d+)/); if (m) return "WinError " + m[1];
+  m = s.match(/\bHTTP\s*(\d{3})\b/); if (m) return "HTTP " + m[1];
+  if (/not found/i.test(s)) return "404 Not Found";
+  if (/forbidden/i.test(s)) return "403 Forbidden";
+  if (/unauthori[sz]ed/i.test(s)) return "401 Unauthorized";
+  if (/timeout|timed out|超时/i.test(s)) return "超时";
+  if (/Connection|connect|拒绝|refused|reset/i.test(s)) return "连接失败";
+  return "";
+}
 function fmtSize(n){
   n = Number(n) || 0;
   if (n < 1024) return n + " B";
@@ -331,7 +410,7 @@ function fmtSize(n){
   return n.toFixed(n >= 100 ? 0 : 1) + " " + u[i];
 }
 const S = { overview:null, days:null, day:null, env:null, view:"overview" };
-let jobTimer = null, jobId = null;
+let jobTimer = null, jobId = null, jobState = null, jobSeen = false;
 
 async function api(path, opt){
   opt = opt || {};
@@ -411,6 +490,14 @@ async function loadOverview(){
     renderJobs(d.jobs);
     renderRuns(d.runs);
     if (!$("#collectDay").value) $("#collectDay").value = d.last_day;
+    // 刷新页面或换标签回来时，服务里还有在跑的任务就接管轮询并留出悬浮入口
+    const live = (d.jobs || []).find((j) => j.status === "running" || j.status === "queued");
+    if (live && !jobId) {
+      jobId = live.id; jobState = live.status;
+      showFab(live);
+      clearInterval(jobTimer);
+      jobTimer = setInterval(pollJob, 900);
+    }
   } catch (e) { toast(e.message, "err"); }
 }
 
@@ -420,6 +507,23 @@ function jobBadge(status){
   if (status === "done") return '<span class="badge ok">完成</span>';
   if (status === "failed") return '<span class="badge bad">失败</span>';
   return '<span class="badge">' + esc(status) + '</span>';
+}
+/* RunLog 落库写的是 success / failed，任务状态是 done / failed，两种都要认，
+   否则历史记录会全部落到「运行中」 */
+function runBadge(status){
+  const s = String(status || "").toLowerCase();
+  if (s === "success" || s === "ok" || s === "done") return jobBadge("done");
+  if (s === "failed" || s === "error") return jobBadge("failed");
+  if (s === "running") return jobBadge("running");
+  return '<span class="badge">' + esc(status || "-") + '</span>';
+}
+function fmtElapsed(sec){
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if (!sec) return "<1 秒";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return h + " 小时 " + m + " 分";
+  if (m) return m + " 分 " + String(s).padStart(2, "0") + " 秒";
+  return s + " 秒";
 }
 function fmtEta(sec){
   sec = Math.max(0, Math.round(Number(sec) || 0));
@@ -487,8 +591,26 @@ async function startLogin(platform){
 $("#btnLoginAll").addEventListener("click", () => startLogin("all"));
 
 /* ---------- 任务 ---------- */
+/* 右下角悬浮入口：抽屉收起后仍能回到任务日志 */
+function showFab(job){
+  const st = job ? job.status : jobState;
+  const fab = $("#jobFab");
+  fab.className = "fab show " + (st === "done" ? "ok" : st === "failed" ? "bad" : "run");
+  const pr = (job && job.progress) || {};
+  let text = { queued:"排队中", running:"任务运行中", done:"任务完成 · 查看日志", failed:"任务失败 · 查看日志" }[st] || "查看任务日志";
+  if (st === "running" && pr.size) text += ' <span class="pct">' + (Number(pr.percent) || 0).toFixed(0) + "%</span>";
+  $("#jobFabText").innerHTML = text;
+}
+function hideFab(){ $("#jobFab").classList.remove("show"); }
+$("#jobFab").addEventListener("click", () => {
+  if (!jobId) return;
+  jobSeen = true;                       // 从悬浮入口看过一次，结束态就不再提示
+  $("#drawer").classList.add("show");   // 直接展开，不清空已有日志
+  hideFab();
+});
 function openDrawer(title){
   $("#drawer").classList.add("show");
+  hideFab();
   $("#jobTitle").textContent = title;
   $("#logBox").innerHTML = "";
   $("#jobProg").hidden = true;
@@ -497,11 +619,17 @@ function openDrawer(title){
   $("#jobPct").textContent = "";
 }
 $("#btnCloseDrawer").addEventListener("click", () => {
-  // 只收起面板：轮询继续，概览表格里仍能看到进度，任务结束自动停
+  // 只收起面板：轮询继续，概览表格里仍能看到进度，任务结束自动停。
+  // 收起后右下角始终留一个入口：运行中显示实时进度，结束后显示结果，
+  // 从入口看过一次（jobSeen）再收起才算已阅、不再打扰。
   $("#drawer").classList.remove("show");
+  if (!jobId) return;
+  if (jobState === "running" || jobState === "queued" || !jobSeen) showFab(null);
 });
 function watchJob(id){
   jobId = id;
+  jobState = "queued";
+  jobSeen = false;
   openDrawer("任务运行中…");
   clearInterval(jobTimer);
   jobTimer = setInterval(pollJob, 900);
@@ -512,6 +640,7 @@ async function pollJob(){
   let job;
   try { job = await api("/api/jobs/" + encodeURIComponent(jobId)); } catch (e) { return; }
   if (!job || !job.id) return;
+  jobState = job.status;
   $("#jobTitle").textContent = job.title || "任务";
   const cls = job.status === "failed" ? "bad" : job.status === "done" ? "ok" : "run";
   $("#jobBadge").className = "badge " + cls;
@@ -519,6 +648,8 @@ async function pollJob(){
     ({ running:"运行中", done:"已完成", failed:"失败", queued:"排队中" }[job.status] || job.status);
   renderJobProgress(job);
   updateJobRow(job);
+  const drawerOpen = $("#drawer").classList.contains("show");
+  if (!drawerOpen && (job.status === "running" || job.status === "queued")) showFab(job);
   const box = $("#logBox");
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.innerHTML = (job.lines || []).map((l) =>
@@ -528,6 +659,8 @@ async function pollJob(){
   if (job.status === "done" || job.status === "failed") {
     clearInterval(jobTimer); jobTimer = null;
     $("#jobProg").hidden = true;
+    jobSeen = false;                       // 刚结束，再收起面板时给一次结果入口
+    if (!$("#drawer").classList.contains("show")) showFab(job);
     toast(job.status === "done" ? "任务完成" : ("任务失败：" + (job.error || "")), job.status === "done" ? "ok" : "err");
     loadOverview();
     if (S.view === "progress") loadProgress();
@@ -575,9 +708,11 @@ async function loadProgress(){
 function renderRuns(runs){
   const box = $("#runList");
   if (!runs || !runs.length) { box.innerHTML = '<div class="empty">还没有运行记录</div>'; return; }
-  box.innerHTML = '<table><thead><tr><th>日期</th><th>平台</th><th>状态</th><th>新增</th><th>下载</th><th>失败</th><th>备注</th></tr></thead><tbody>' +
-    runs.map((r) => '<tr><td class="mono">' + esc(r.day) + '</td><td>' + esc(PLAT[r.platform] || r.platform) + '</td>' +
-      '<td>' + jobBadge(r.status === "ok" ? "done" : r.status === "error" ? "failed" : "running") + '</td>' +
+  box.innerHTML = '<table><thead><tr><th>开始时间</th><th>平台</th><th>状态</th><th>耗时</th><th>新增</th><th>下载</th><th>失败</th><th>备注</th></tr></thead><tbody>' +
+    runs.map((r) => '<tr><td class="mono">' + esc(r.started_at || r.day) + '</td>' +
+      '<td>' + esc(PLAT[r.platform] || r.platform) + '</td>' +
+      '<td>' + runBadge(r.status) + '</td>' +
+      '<td class="mono">' + (r.elapsed == null ? "—" : fmtElapsed(r.elapsed)) + '</td>' +
       '<td class="mono">' + r.new_items + '</td><td class="mono">' + r.downloaded + '</td>' +
       '<td class="mono">' + r.failed + '</td><td style="color:var(--dim);max-width:300px">' +
       esc((r.message || "").slice(0, 120)) + '</td></tr>').join("") + '</tbody></table>';
@@ -612,12 +747,31 @@ async function loadDay(day){
     : "";
 
   $("#dayFailures").innerHTML = d.failures.length
-    ? '<h3 style="font-size:13px;margin:0 0 6px;color:#ff8b84">失败 ' + d.failures.length + '</h3>' +
-      d.failures.slice(0, 20).map((f) => '<div class="err" style="margin-bottom:4px">· ' +
-        esc(PLAT[f.platform] || f.platform) + ' · ' + esc(f.author) + '：' + esc((f.error || "未知错误").slice(0, 200)) + '</div>').join("")
+    ? '<div class="fail-bar"><h3>失败 ' + d.failures.length + '</h3>' +
+      (d.failures.length > 20 ? '<span class="hint">只列出前 20 条</span>' : "") + '</div>' +
+      '<div class="fail-list">' + d.failures.slice(0, 20).map((f) => {
+        const src = [];
+        if (f.url) src.push('<span class="srcline"><span class="src">页面</span>' + lnk(f.url) + '</span>');
+        if (f.media_url && f.media_url !== f.url) {
+          src.push('<span class="srcline"><span class="src">直链</span>' + lnk(f.media_url) + '</span>');
+        }
+        const kind = errKind(f.error);
+        return '<div class="fail-item">' +
+          '<div class="fail-head"><span class="tag">' + esc(PLAT[f.platform] || f.platform) + '</span>' +
+          '<span class="who">' + esc(f.author || "—") + '</span>' +
+          (f.published_at ? '<span class="when">' + esc(f.published_at) + '</span>' : "") +
+          (kind ? '<span class="code">' + esc(kind) + '</span>' : "") + '</div>' +
+          (f.title ? '<div class="fail-title">' +
+            (f.url ? lnk(f.url, f.title) : esc(f.title)) + '</div>' : "") +
+          '<div class="fail-msg">' + linkify(f.error || "未知错误", 400) + '</div>' +
+          (src.length ? '<div class="fail-src">' + src.join("") + '</div>' : "") +
+          '</div>';
+      }).join("") + '</div>'
     : "";
+  const todo = s.failed + s.pending;
   $("#dayActions").innerHTML =
     '<button class="btn sm ghost" data-recollect="' + esc(day) + '">重新采集这一天</button>' +
+    (todo ? ' <button class="btn sm" data-redownload="' + esc(day) + '">只重新下载 ' + todo + ' 条</button>' : "") +
     (d.skipped_duration ? ' <button class="btn sm ghost" data-retry-duration="' + esc(day) + '">重试超时长 ' + d.skipped_duration + ' 条</button>' : "") +
     (d.report ? ' <a class="btn sm primary" href="' + esc(d.report) + '" target="_blank">打开日报</a>' : "");
 
@@ -625,7 +779,9 @@ async function loadDay(day){
   $("#dayItems").innerHTML = rows.length
     ? '<table><thead><tr><th>时间</th><th>作者</th><th>标题</th><th>状态</th><th>大小</th></tr></thead><tbody>' +
       rows.map((it) => '<tr><td class="mono">' + esc(it.published_at) + '</td><td>' + esc(it.author) + '</td>' +
-        '<td><span class="t" title="' + esc(it.title) + '">' + esc(it.title) + '</span>' +
+        '<td>' + (it.url
+          ? '<a class="t lnk" href="' + esc(it.url) + '" target="_blank" rel="noreferrer" title="' + esc(it.url) + '">' + esc(it.title) + '</a>'
+          : '<span class="t" title="' + esc(it.title) + '">' + esc(it.title) + '</span>') +
         '<span class="tag" style="margin-left:6px">' + esc(PLAT[it.platform] || it.platform) + '</span>' +
         '<span class="tag">' + esc(it.media_type || "-") + '</span></td>' +
         '<td' + (it.error ? ' title="' + esc(it.error) + '"' : '') + '>' + statusBadge(it.status) + '</td>' +
@@ -807,6 +963,19 @@ document.addEventListener("click", (e) => {
     const day = redo.dataset.recollect;
     $("#collectDay").value = day;
     collect(true);
+    return;
+  }
+  const redl = e.target.closest("[data-redownload]");
+  if (redl) {
+    const day = redl.dataset.redownload;
+    // 只补下载：沿用库里已有的内容清单，不重新抓取、不重新同步关注
+    api("/api/collect", {
+      method: "POST",
+      body: { day, platform: "all", download: true, sync: false, download_only: true },
+    }).then((res) => {
+      watchJob(res.job_id);
+      toast("正在重新下载待下载 / 失败的内容");
+    }).catch((err) => toast(err.message, "err"));
     return;
   }
   const retry = e.target.closest("[data-retry-duration]");

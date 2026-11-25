@@ -17,11 +17,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Deno 官方只发 GitHub Release；这里留成列表便于以后加镜像
+# 官方只发 GitHub Release：国内直连常年 50 KB/s，40 MB 要十几分钟，所以先走 npmmirror 镜像
+# （实测 8 MB/s），镜像挑不到版本再回落到 GitHub。
+DENO_MIRROR_INDEX = "https://registry.npmmirror.com/-/binary/deno/"
 DENO_SOURCES = (
     "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip",
 )
 DENO_HOME = "https://deno.com/"
+_MIRROR_TRIES = 3          # 镜像目录里最新几个版本依次试
 _MIN_DENO_BYTES = 10 * 1024 * 1024
 
 
@@ -100,17 +103,57 @@ def _unzip(zip_path: Path, target: Path, exe: str) -> None:
         target.chmod(0o755)
 
 
+def deno_status() -> tuple[bool, str]:
+    """只做本地检查、不联网下载（启动脚本用，必须毫秒级返回）。"""
+    # 这里不调 find_deno()：那条路会连带 import yt_dlp，启动脚本里没必要背这个开销
+    if (target := deno_target()).exists():
+        return True, str(target)
+    if found := shutil.which("deno"):
+        return True, found
+    return False, "未安装（需要 YouTube 完整下载时执行：python -m app deps）"
+
+
+def _zip_name() -> str:
+    return "deno-x86_64-pc-windows-msvc.zip"
+
+
+def _mirror_sources(proxy: str) -> list[str]:
+    """从 npmmirror 目录列表里挑最新几个版本的 zip 地址；取不到就返回空列表。"""
+    import httpx
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    kwargs: dict = {
+        "follow_redirects": True,
+        "timeout": httpx.Timeout(10.0, connect=5.0),
+    }
+    kwargs.update(_proxy_kwargs(proxy))
+    try:
+        with httpx.Client(**kwargs) as client:
+            items = client.get(DENO_MIRROR_INDEX).raise_for_status().json()
+        versions: list[tuple[tuple[int, ...], str]] = []
+        for item in items:
+            name = str(item.get("name") or "").rstrip("/")
+            if not name.startswith("v"):
+                continue
+            nums = tuple(int(p) for p in name[1:].split(".") if p.isdigit())
+            if len(nums) == 3:
+                versions.append((nums, name))
+        versions.sort(reverse=True)
+        return [f"{DENO_MIRROR_INDEX}{name}/{_zip_name()}" for _, name in versions[:_MIRROR_TRIES]]
+    except Exception as exc:  # noqa: BLE001 镜像不可用就回落 GitHub
+        logger.debug("读取 Deno 镜像目录失败：%s", exc)
+        return []
+
+
 def ensure_deno(quiet: bool = False, force: bool = False) -> tuple[bool, str]:
     """确保 Deno 可用。返回 (是否可用, 路径或失败原因)。
 
     已经放在内置目录或 PATH 里就直接用；否则下载到内置目录（约 40 MB，仅首次）。
     """
-    # 这里不调 find_deno()：那条路会连带 import yt_dlp，启动脚本里没必要背这个开销
     if not force:
-        if (target := deno_target()).exists():
-            return True, str(target)
-        if found := shutil.which("deno"):
-            return True, found
+        ok, info = deno_status()
+        if ok:
+            return True, info
 
     if os.name != "nt":
         return False, f"自动安装只支持 Windows，其它系统请参考 {DENO_HOME}"
@@ -126,7 +169,7 @@ def ensure_deno(quiet: bool = False, force: bool = False) -> tuple[bool, str]:
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="myhub-deno-") as tmpdir:
         zip_path = Path(tmpdir) / "deno.zip"
-        for url in DENO_SOURCES:
+        for url in (*_mirror_sources(settings.proxy), *DENO_SOURCES):
             try:
                 if not quiet:
                     print(f"  来源：{url}", file=sys.stderr)

@@ -10,13 +10,13 @@ if exist ".venv\Scripts\python.exe" (
     set "PY=python"
 )
 
-rem 首次运行补齐 Deno（约 40 MB）；已存在时几乎不耗时
+rem 只做本地检查：联网下载 40 MB 会卡住启动，需要时手动补装 Deno
 echo 正在检查运行环境...
-"%PY%" -m app deps --quiet
+"%PY%" -m app deps --check --quiet
 if errorlevel 1 (
     echo.
-    echo [提示] Deno 未就绪，YouTube 下载会只剩预览图。
-    echo        网络不通时先在 .env 里设 PROXY，再执行：python -m app deps
+    echo [提示] 未检测到 Deno，YouTube 下载会只剩预览图。
+    echo        需要完整下载时执行一次：python -m app deps
     echo.
 )
 

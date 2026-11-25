@@ -362,14 +362,18 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_deps(args: argparse.Namespace) -> int:
     """检查并按需下载可选外部工具（Deno）。"""
-    from app.tools import ensure_deno
+    from app.tools import deno_status, ensure_deno
 
-    ok, message = ensure_deno(quiet=args.quiet)
+    if args.check:  # 只查本地，不联网：启动脚本用，40 MB 下载不能挡在启动路径上
+        ok, message = deno_status()
+    else:
+        ok, message = ensure_deno(quiet=args.quiet)
     if ok:
         if not args.quiet:
             print(f"Deno 就绪：{message}")
         return 0
-    print(f"Deno 不可用：{message}", file=sys.stderr)
+    if not args.quiet:
+        print(f"Deno 不可用：{message}", file=sys.stderr)
     return 1
 
 
@@ -449,6 +453,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("deps", help="检查并按需下载可选工具（Deno，YouTube 解 JS 挑战用）")
     p.add_argument("--quiet", action="store_true", help="成功时不输出，失败仍报错（启动脚本用）")
+    p.add_argument("--check", action="store_true",
+                   help="只检查本地是否有 Deno，不联网下载（启动脚本用，秒回）")
     p.set_defaults(func=cmd_deps)
 
     p = sub.add_parser("serve", help="启动本地门户：浏览器里登录 / 看下载进度 / 改配置")

@@ -85,6 +85,7 @@ ORDER BY day DESC
 
 _SQL_DAY_DETAIL = """
 SELECT c.platform, c.author, c.title, c.media_type, c.published_at, c.url,
+       COALESCE(c.media_url, '') AS media_url,
        COALESCE(dl.status, 'pending') AS status,
        COALESCE(dl.path, '') AS path,
        COALESCE(dl.size, 0) AS size,
@@ -147,8 +148,12 @@ def _recent_runs(limit: int) -> list[dict]:
                 "failed": r.failed,
                 "skipped": r.skipped,
                 "message": r.message,
-                "started_at": r.started_at.strftime("%Y-%m-%d %H:%M") if r.started_at else "",
+                "started_at": r.started_at.strftime("%Y-%m-%d %H:%M:%S") if r.started_at else "",
                 "finished_at": r.finished_at.strftime("%H:%M:%S") if r.finished_at else "",
+                "elapsed": (
+                    int((r.finished_at - r.started_at).total_seconds())
+                    if r.started_at and r.finished_at else None
+                ),
             }
             for r in runs
         ]
@@ -174,7 +179,7 @@ def api_day(day: str) -> dict:
     items: list[dict] = []
     failures: list[dict] = []
     skipped_duration = 0
-    for platform, author, title, media_type, published_at, url, status, path, size, error in rows:
+    for platform, author, title, media_type, published_at, url, media_url, status, path, size, error in rows:
         sub = node["platforms"].setdefault(platform, _blank_day(day))
         _add_count(node, status, 1, size or 0)
         _add_count(sub, status, 1, size or 0)
@@ -185,6 +190,7 @@ def api_day(day: str) -> dict:
             "media_type": media_type or "",
             "published_at": _hhmm(published_at),
             "url": url or "",
+            "media_url": media_url or "",
             "status": status,
             "size": size or 0,
             "error": error or "",
@@ -254,11 +260,13 @@ def _collect_job(
     download: bool,
     refresh: bool,
     retry_skipped: bool = False,
+    download_only: bool = False,
 ) -> str:
     from app.pipeline import run_once
 
-    if retry_skipped:
-        # 只补下载：不重新抓取、不重复同步关注
+    # 只补下载（重试失败 / 待下载 / 超时长）：不重新抓取、不重复同步关注
+    only_download = retry_skipped or download_only
+    if only_download:
         download, refresh = True, False
 
     def run(job: jobs.Job) -> dict:
@@ -266,6 +274,8 @@ def _collect_job(
         if retry_skipped:
             reset = _reset_duration_skips(day, platforms)
             job.log(f"已重置 {reset} 条「超时长跳过」记录，只补下载不重新抓取")
+        elif download_only:
+            job.log("只重新下载：沿用已入库的内容清单，不重新抓取")
         for platform in platforms:
             job.log(f"=== {platform} · {day} ===")
             out[platform] = run_once(
@@ -273,12 +283,14 @@ def _collect_job(
                 platform=platform,
                 do_download=download,
                 refresh_sources=refresh,
-                do_collect=not retry_skipped,
+                do_collect=not only_download,
             )
         return out
 
     if retry_skipped:
         title = f"重试超时长 {day}"
+    elif download_only:
+        title = f"重新下载 {day}（{'、'.join(platforms)}）"
     else:
         title = f"采集 {day}（{'、'.join(platforms)}）"
     return jobs.JOBS.submit("collect", title, run).id
@@ -442,6 +454,7 @@ class Handler(BaseHTTPRequestHandler):
                     bool(payload.get("download", True)),
                     bool(payload.get("sync", True)),
                     bool(payload.get("retry_skipped")),
+                    bool(payload.get("download_only")),
                 )
                 return self._json({"ok": True, "job_id": job_id}, 202)
             if path == "/api/sync":
