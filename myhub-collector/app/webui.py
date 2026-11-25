@@ -47,14 +47,6 @@ header.top{display:flex;align-items:flex-end;justify-content:space-between;
 header.top h1{margin:0;font-size:21px}
 header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 .top-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.day-status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;
-  padding:5px 12px;font-size:12px;font-weight:600;border:1px solid var(--line);
-  background:#0d1117;color:var(--muted);white-space:nowrap}
-.day-status i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
-.day-status.ok{color:#56d364;border-color:#2b5d33;background:#23863622}
-.day-status.bad{color:#ff8b84;border-color:#5b2b2b;background:#da363322}
-.day-status.run{color:#e3b341;border-color:#5c4403;background:#9e6a0322}
-.day-status.idle{color:#8b949e}
 .btn{border:1px solid var(--line);background:var(--panel2);border-radius:8px;
   padding:7px 13px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
   transition:.15s border-color,.15s background}
@@ -68,6 +60,13 @@ header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 .card+.card{margin-top:14px}
 .card h3{margin:0 0 4px;font-size:14.5px;display:flex;align-items:center;gap:8px}
 .card .hint{color:var(--muted);font-size:12.5px;margin:0 0 12px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  min-height:26px;margin-bottom:4px}
+.card-head h3{margin:0}
+.grid-2>.card+.card,.grid-3>.card+.card{margin-top:0}
+@media(min-width:1021px){
+  #view-progress .grid-2>.card>.hint{height:36px;margin-bottom:12px;overflow:hidden}
+}
 .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .grid-2{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);gap:14px}
 @media(max-width:1020px){.grid-3,.grid-2{grid-template-columns:1fr}}
@@ -102,8 +101,10 @@ header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 .day-item:hover{border-color:#3d444d}
 .day-item.active{border-color:var(--blue);background:#1f6feb22}
 .day-item .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.day-item .row2{display:flex;align-items:center;gap:8px}
+.day-item .row2 .bar{flex:1;min-width:0}
 .day-item .d{font-weight:600;font-variant-numeric:tabular-nums;font-size:13px}
-.day-item .s{font-size:11.5px;color:var(--dim)}
+.day-item .s{font-size:11.5px;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
 .stat-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
 .stat{flex:1;min-width:84px;background:var(--panel2);border:1px solid var(--line);
   border-radius:9px;padding:9px 12px}
@@ -272,7 +273,6 @@ details.adv .form-grid{margin-top:10px}
     <header class="top">
       <div><h1 id="viewTitle">概览</h1><p id="viewSub">…</p></div>
       <div class="top-actions">
-        <span class="day-status" id="dayStatus" hidden></span>
         <button class="btn sm ghost" id="btnInit">环境自检</button>
         <button class="btn sm ghost" id="btnSync">同步订阅源</button>
         <button class="btn sm primary" id="btnCollectTop">立即采集</button>
@@ -324,10 +324,12 @@ details.adv .form-grid{margin-top:10px}
     </section>
     <section id="view-progress" hidden>
       <div class="grid-2">
-        <div class="card"><h3>按天查看</h3>
+        <div class="card">
+          <div class="card-head"><h3>按天查看</h3></div>
           <p class="hint">以内容发布时间归档，展示每条内容的下载状态。</p>
           <div class="days" id="dayList"><div class="empty">还没有采集记录</div></div></div>
-        <div class="card"><h3 id="dayTitle">选择一天</h3>
+        <div class="card">
+          <div class="card-head"><h3 id="dayTitle">选择一天</h3></div>
           <p class="hint" id="daySub">点左边任意一天查看明细</p>
           <div class="stat-row" id="dayStats"></div>
           <div class="bar-wrap" style="margin-bottom:14px">
@@ -445,7 +447,7 @@ function fmtSize(n){
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
   return n.toFixed(n >= 100 ? 0 : 1) + " " + u[i];
 }
-const S = { overview:null, days:null, day:null, env:null, view:"overview", linkResult:null, daySummary:null };
+const S = { overview:null, days:null, day:null, env:null, view:"overview", linkResult:null };
 let jobTimer = null, jobId = null, jobState = null, jobSeen = false;
 
 async function api(path, opt){
@@ -487,7 +489,6 @@ function switchView(view){
   if (view === "progress") loadProgress();
   if (view === "link") { linkCount(); if (S.linkResult) renderLinkResult(S.linkResult); }
   if (view === "config") loadConfig();
-  updateDayStatus();
 }
 $$("nav button").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
 
@@ -686,7 +687,6 @@ async function pollJob(){
   $("#jobBadge").innerHTML = (job.status === "running" ? '<i class="pulse"></i>' : "") +
     ({ running:"运行中", done:"已完成", failed:"失败", queued:"排队中" }[job.status] || job.status);
   renderJobProgress(job);
-  updateDayStatus(job);
   updateJobRow(job);
   const drawerOpen = $("#drawer").classList.contains("show");
   if (!drawerOpen && (job.status === "running" || job.status === "queued")) showFab(job);
@@ -758,44 +758,22 @@ $("#btnLink").addEventListener("click", async () => {
   finally { btn.disabled = false; }
 });
 /* ---------- 进度 ---------- */
-/* 右上角状态：任务在跑就直接报「进行中」，否则按当前这天的统计判定 */
-function updateDayStatus(job){
-  const el = $("#dayStatus");
-  if (S.view !== "progress" || !S.day) {
-    el.hidden = true;
-    el.dataset.text = "";
-    return;
-  }
-  const running = jobState === "running" || jobState === "queued";
-  const s = S.daySummary || { total: 0, failed: 0, pending: 0, running: 0 };
-  const left = (s.pending || 0) + (s.running || 0);
-  let cls, text;
-  if (running) {
-    const pr = (job && job.progress) || {};
-    cls = "run";
-    text = pr.size ? ("进行中 " + (Number(pr.percent) || 0).toFixed(0) + "%") : "进行中";
-  } else if (!s.total) {
-    cls = "idle"; text = "这一天没有内容";
-  } else if (s.failed) {
-    cls = "bad"; text = "部分失败 · " + s.failed + " 条";
-  } else if (left) {
-    cls = "idle"; text = "待下载 " + left + " 条";
-  } else {
-    cls = "ok"; text = "已完成";
-  }
-  el.hidden = false;
-  el.className = "day-status " + cls;
-  if (el.dataset.text === text) return;
-  el.dataset.text = text;
-  el.innerHTML = '<i' + (cls === "run" ? ' class="pulse"' : '') + '></i>' + esc(text);
-}
-
 function statusBadge(status){
   if (status === "done") return '<span class="badge ok">完成</span>';
   if (status === "failed") return '<span class="badge bad">失败</span>';
   if (status === "running") return '<span class="badge run"><i class="pulse"></i>下载中</span>';
   if (status === "skipped") return '<span class="badge">已跳过</span>';
   return '<span class="badge">待下载</span>';
+}
+
+/* 每一天的角标：任务跑着且这天还有没下完的，优先报「进行中」 */
+function dayBadge(node){
+  const left = (node.pending || 0) + (node.running || 0);
+  const busy = jobState === "running" || jobState === "queued";
+  if (busy && left) return '<span class="badge run"><i class="pulse"></i>进行中</span>';
+  if (node.failed) return '<span class="badge bad">部分失败 · ' + node.failed + ' 条</span>';
+  if (left) return '<span class="badge">待下载 ' + left + ' 条</span>';
+  return '<span class="badge ok">已完成</span>';
 }
 
 function barOf(node){
@@ -818,9 +796,10 @@ async function loadProgress(){
   box.innerHTML = d.days.map((node) => {
     const done = node.done + node.skipped;
     return '<button class="day-item' + (S.day === node.day ? " active" : "") + '" data-day="' + esc(node.day) + '">' +
-      '<div class="row"><span class="d">' + esc(node.day) + '</span>' +
+      '<div class="row"><span class="d">' + esc(node.day) + '</span>' + dayBadge(node) + '</div>' +
+      '<div class="row2">' + barOf(node) +
       '<span class="s">' + done + '/' + node.total + ' · ' + fmtSize(node.size) + '</span></div>' +
-      barOf(node) + '</button>';
+      '</button>';
   }).join("");
   box.querySelectorAll("[data-day]").forEach((b) =>
     b.addEventListener("click", () => loadDay(b.dataset.day)));
@@ -843,7 +822,6 @@ function renderRuns(runs){
 
 async function loadDay(day){
   S.day = day;
-  S.daySummary = null;
   let d;
   try { d = await api("/api/day/" + encodeURIComponent(day)); } catch (e) { return toast(e.message, "err"); }
   S.day = day;
@@ -912,8 +890,6 @@ async function loadDay(day){
         '<td class="mono">' + (it.size ? fmtSize(it.size) : "—") + '</td></tr>').join("") +
       '</tbody></table>' + (d.items.length > rows.length ? '<div class="empty">仅显示前 120 条</div>' : "")
     : '<div class="empty">这一天没有采集到内容</div>';
-  S.daySummary = s;
-  updateDayStatus();
 }
 
 /* ---------- 配置 ---------- */
