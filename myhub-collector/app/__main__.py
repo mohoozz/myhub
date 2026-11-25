@@ -11,6 +11,7 @@
     python -m app login bilibili                       # 只登录某个平台
     python -m app status                               # 查看三个平台的登录态
     python -m app init                                 # 首次自检：Python/依赖/浏览器/目录
+    python -m app deps                                 # 检查并按需下载 Deno（YouTube 解 JS 挑战用）
     python -m app serve [--port 8765]                  # 本地门户：浏览器里登录、看进度、改配置
 """
 from __future__ import annotations
@@ -321,11 +322,17 @@ def cmd_init(args: argparse.Namespace) -> int:
         warnings.append("装 ffmpeg：winget install ffmpeg，或在 .env 设 FFMPEG_LOCATION")
 
     deno = find_deno()
+    if not deno:
+        from app.tools import ensure_deno
+
+        print("未找到 Deno，正在自动下载（约 40 MB，仅首次）……")
+        ok, info = ensure_deno(quiet=True)
+        deno = info if ok else ""
+        if not ok:
+            line(False, "Deno", "自动安装失败，YouTube 只能拿到预览图")
+            warnings.append(f"Deno 下载失败（{info}）；可设置 PROXY 后重试：python -m app deps")
     if deno:
         line(True, "Deno", deno)
-    else:
-        line(False, "Deno", "未找到，YouTube 只能拿到预览图")
-        warnings.append("把 deno.exe 放到 data/tools/deno/（YouTube 解 JS 挑战用）")
 
     print()
     pending = 0
@@ -351,6 +358,19 @@ def cmd_init(args: argparse.Namespace) -> int:
     print("  python -m app collect       # 采集前一天")
     return 1 if problems else 0
 
+
+
+def cmd_deps(args: argparse.Namespace) -> int:
+    """检查并按需下载可选外部工具（Deno）。"""
+    from app.tools import ensure_deno
+
+    ok, message = ensure_deno(quiet=args.quiet)
+    if ok:
+        if not args.quiet:
+            print(f"Deno 就绪：{message}")
+        return 0
+    print(f"Deno 不可用：{message}", file=sys.stderr)
+    return 1
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -426,6 +446,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="首次使用自检：Python / 依赖 / 浏览器 / 配置 / 登录态")
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("deps", help="检查并按需下载可选工具（Deno，YouTube 解 JS 挑战用）")
+    p.add_argument("--quiet", action="store_true", help="成功时不输出，失败仍报错（启动脚本用）")
+    p.set_defaults(func=cmd_deps)
 
     p = sub.add_parser("serve", help="启动本地门户：浏览器里登录 / 看下载进度 / 改配置")
     p.add_argument("--host", default="127.0.0.1", help="监听地址，默认只绑本机")

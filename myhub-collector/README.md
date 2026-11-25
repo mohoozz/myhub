@@ -42,7 +42,7 @@ python -m app collect                           # 抓取 + 下载 + 日报
 
 | 页面 | 能做什么 |
 | --- | --- |
-| 概览 | 三平台登录态、环境自检、同步订阅、选日期与平台直接采集；任务日志实时滚动，关掉页面也不影响后台 |
+| 概览 | 三平台登录态、环境自检、同步订阅、选日期与平台直接采集；任务运行时抽屉顶部有进度条，显示当前第几个、已下 / 总量、下载速度与剩余时间，日志实时滚动，关掉页面也不影响后台 |
 | 平台登录 | 点「登录」弹出浏览器窗口，完成后自动保存并关闭；支持一键依次登录三个平台，等待时长可选 |
 | 下载进度 | 按内容发布日归档：完成 / 失败 / 待下载 / 占用空间、进度条、失败原因、「重新采集这一天」、打开当天日报 |
 | 环境配置 | 表单化编辑 `.env`，保存前校验类型和枚举；自动备份 `.env.bak`；`DATA_DIR` 等改动会提示重启 |
@@ -59,7 +59,8 @@ python -m app collect                           # 抓取 + 下载 + 日报
 | `python -m app sync [--platform bilibili\|youtube\|douyin\|all]` | 仅同步订阅源（B 站关注列表 / YouTube 频道清单 / 抖音关注列表） |
 | `python -m app login all\|bilibili\|youtube\|douyin [--wait 秒] [--profile 目录]` | 弹窗手动登录（`all` 依次跑三个平台），Cookie 统一导出到 `data/credentials/<平台>.txt`；中途关窗口即取消 |
 | `python -m app status` | 查看三个平台登录态（是否有效、过期时间、来源） |
-| `python -m app init` | 首次自检：Python / 依赖 / 浏览器 / ffmpeg / Deno / 配置 / 登录态，不改数据 |
+| `python -m app init` | 首次自检：Python / 依赖 / 浏览器 / ffmpeg / Deno / 配置 / 登录态，不改数据（缺 Deno 会自动下载） |
+| `python -m app deps` | 检查并按需下载 Deno（YouTube 解 JS 挑战用；启动脚本会先跑一次） |
 | `python -m app list [--day YYYY-MM-DD]` | 查看某天已入库内容 |
 | `python -m app report [--day YYYY-MM-DD]` | 重新生成某天报告 |
 | `python -m app clean [--keep-days N] [--dry-run]` | 删除早于保留天数的下载文件，并清理对应下载记录（`--dry-run` 只统计） |
@@ -110,7 +111,7 @@ data/
   browser/                   # 登录/抓取用的独立浏览器 profile
     douyin/                  # 抖音必须靠它（接口要真实浏览器环境）
     bilibili/  youtube/      # 由 login 命令创建
-  tools/deno/deno.exe        # YouTube 解 JS 挑战用的 Deno（约 40MB）
+  tools/deno/deno.exe        # YouTube 解 JS 挑战用的 Deno（首次运行自动下载，40MB 包 / 90MB 文件）
   reports/2026-11-22.html
 downloads/           # 下载根目录 = DOWNLOAD_DIR，平铺、不建作者/日期子目录
   Bili-UP主-视频标题-BV1xx411c7mD.mp4                  # 单 P 视频
@@ -180,7 +181,7 @@ downloads/           # 下载根目录 = DOWNLOAD_DIR，平铺、不建作者/�
 - B 站 CDN 有多个镜像节点，个别节点不通会导致单条下载失败（会记为 failed，下次重试）。
 - 转发类动态（`DYNAMIC_TYPE_FORWARD`）一期跳过，避免与原作者的原创内容重复。
 - YouTube 下载需要 Cookie + Deno 两样都齐：只配 Cookie 会卡在 nsig 挑战（只剩预览图格式），只配 Deno 会卡在 bot 校验；两者都缺时抓取仍正常，只下载失败并在日报里写明原因。
-- Deno 放在 `data/tools/deno/` 下，`data/` 被 gitignore，换机器或清理 data 后需要重新下载：`https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip` 解压即可（单文件，无需安装）。已装 Node 也没用：yt-dlp 对 Node < 23.5 会加 `--experimental-permission` 但没给读权限，EJS 必然失败。
+- Deno 放在 `data/tools/deno/` 下，`data/` 被 gitignore，所以没有跟着仓库走。`start-web.bat` 和 `scripts\setup.ps1` 启动前会跑 `python -m app deps`，缺失就从 GitHub Release 自动下载解压（压缩包约 40MB，解压后约 90MB，单文件无需安装）；网络不通时先在 `.env` 设 `PROXY` 再重试。已装 Node 也没用：yt-dlp 对 Node < 23.5 会加 `--experimental-permission` 但没给读权限，EJS 必然失败。
 - YouTube 频道 RSS 只有最近 15 条，单个频道一天发超过 15 条会漏（正常频道不会发生）。
 
 ## 后续计划

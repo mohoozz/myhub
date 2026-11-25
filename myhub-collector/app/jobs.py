@@ -15,7 +15,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable
 
 MAX_LINES = 600
 
@@ -43,6 +43,12 @@ class Job:
     result: dict = field(default_factory=dict)
     error: str = ""
     dropped: int = 0               # 超出 MAX_LINES 被丢掉的早期日志行数
+    # 结构化进度：stage / current / total / percent / downloaded / size / speed / eta / title
+    progress: dict = field(default_factory=dict)
+
+    def update_progress(self, **fields: Any) -> None:
+        """合并进度字段；整体换新 dict，读方拿到的永远是稳定快照。"""
+        self.progress = {**self.progress, **fields}
 
     def log(self, text: str) -> None:
         line = (text or "").rstrip()
@@ -71,6 +77,7 @@ class Job:
             "cursor": self.dropped + len(self.lines),
             "result": self.result,
             "error": self.error,
+            "progress": dict(self.progress),
         }
 
     def brief(self) -> dict:
@@ -83,6 +90,7 @@ class Job:
             "finished_at": self.finished_at,
             "error": self.error,
             "summary": _summary_of(self),
+            "progress": dict(self.progress),
         }
 
 
@@ -102,6 +110,25 @@ def _summary_of(job: Job) -> str:
                 f" / 失败 {data.get('failed', 0)}"
             )
     return "；".join(parts)
+
+
+_local = threading.local()
+
+
+def current_job() -> Job | None:
+    """当前线程正在跑的任务；CLI 或网页线程里没有，返回 None。"""
+    return getattr(_local, "job", None)
+
+
+def report_progress(**fields: Any) -> None:
+    """把下载进度上报给当前任务，没有任务在跑时静默忽略。
+
+    pipeline / yt-dlp 进度钩子都不知道 Job 的存在，靠线程本地变量找到它，
+    这样命令行直接跑 collect 也不会被这套逻辑影响。
+    """
+    job = current_job()
+    if job is not None:
+        job.update_progress(**fields)
 
 
 class _ThreadFilter(logging.Filter):
@@ -202,6 +229,7 @@ class JobManager:
     def _run(self, job: Job, func: Callable[[Job], dict | None]) -> None:
         job.status = "running"
         job.started_at = _now()
+        _local.job = job
 
         handler = _JobHandler(job)
         handler.addFilter(_ThreadFilter(threading.get_ident()))
@@ -225,6 +253,7 @@ class JobManager:
             stream.flush()
             root.removeHandler(handler)
             root.setLevel(previous_level)
+            _local.job = None
             job.finished_at = _now()
             with self._lock:
                 if self._current == job.id:

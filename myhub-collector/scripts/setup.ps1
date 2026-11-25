@@ -97,7 +97,17 @@ if (-not $SkipBrowser) {
     }
 }
 
-# ---------- 5. 配置文件 ----------
+# ---------- 5. 可选工具 ----------
+Step "检查 Deno（YouTube 解 JS 挑战用，缺失自动下载约 40 MB）"
+& $venvPy -m app deps
+if ($LASTEXITCODE -ne 0) {
+    Warn "Deno 未就绪，YouTube 下载会只剩预览图。设好 PROXY 后可重试：`n  $venvPy -m app deps"
+}
+else {
+    Ok "Deno 就绪"
+}
+
+# ---------- 6. 配置文件 ----------
 Step "准备配置文件"
 $envFile = Join-Path $root ".env"
 $example = Join-Path $root ".env.example"
@@ -114,19 +124,19 @@ else {
     Ok ".env 已存在，未覆盖"
 }
 
-# ---------- 6. 自检 ----------
+# ---------- 7. 自检 ----------
 Step "初始化数据目录并自检"
 & $venvPy -m app init
 $initCode = $LASTEXITCODE
 
-# ---------- 7. 可选：直接登录 ----------
+# ---------- 8. 可选：直接登录 ----------
 foreach ($platform in $Login) {
     if (-not $platform) { continue }
     Step "弹窗登录：$platform（窗口里手动登录，成功后自动继续）"
     & $venvPy -m app login $platform
 }
 
-# ---------- 8. 收尾 ----------
+# ---------- 9. 收尾 ----------
 Write-Host "`n=====================================================" -ForegroundColor Cyan
 if ($initCode -eq 0) {
     Write-Host "初始化完成" -ForegroundColor Green

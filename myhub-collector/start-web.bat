@@ -10,6 +10,16 @@ if exist ".venv\Scripts\python.exe" (
     set "PY=python"
 )
 
+rem 首次运行补齐 Deno（约 40 MB）；已存在时几乎不耗时
+echo 正在检查运行环境...
+"%PY%" -m app deps --quiet
+if errorlevel 1 (
+    echo.
+    echo [提示] Deno 未就绪，YouTube 下载会只剩预览图。
+    echo        网络不通时先在 .env 里设 PROXY，再执行：python -m app deps
+    echo.
+)
+
 echo 正在启动 MyHub 采集器门户...
 "%PY%" -m app serve --port 8765
 

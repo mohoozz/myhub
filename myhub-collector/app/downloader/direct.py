@@ -32,6 +32,28 @@ def _client(proxy: str, timeout: float) -> httpx.Client:
     return httpx.Client(**opts)
 
 
+def _report(done: int, total: int, started: float, final: bool = False) -> None:
+    """直链没有 yt-dlp 的进度钩子，按累计耗时算平均速度报给门户。"""
+    from app import jobs
+
+    if final:
+        jobs.report_progress(
+            stage="下载", percent=100.0, downloaded=done, size=done or total,
+            speed=0.0, eta=0,
+        )
+        return
+    elapsed = max(time.monotonic() - started, 0.001)
+    speed = done / elapsed
+    jobs.report_progress(
+        stage="下载",
+        percent=round(done * 100 / total, 1) if total else 0.0,
+        downloaded=done,
+        size=total,
+        speed=speed,
+        eta=int((total - done) / speed) if total and done and done < total else 0,
+    )
+
+
 def download_direct(
     url: str,
     out_dir: Path,
@@ -60,12 +82,20 @@ def download_direct(
             with _client(proxy, timeout=60) as client:
                 with client.stream("GET", url, headers=headers) as resp:
                     resp.raise_for_status()
+                    total = int(resp.headers.get("content-length") or 0)
+                    done = 0
+                    started = time.monotonic()
                     with part.open("wb") as fh:
                         for chunk in resp.iter_bytes(_CHUNK):
-                            if chunk:
-                                fh.write(chunk)
-            if part.stat().st_size <= 0:
+                            if not chunk:
+                                continue
+                            fh.write(chunk)
+                            done += len(chunk)
+                            _report(done, total, started)
+            size = part.stat().st_size
+            if size <= 0:
                 raise OSError("下载到的文件为空")
+            _report(size, size, started, final=True)
             part.replace(target)
             return True, str(target), ""
         except Exception as e:  # noqa: BLE001 重试后仍失败才放弃

@@ -88,6 +88,49 @@ class _ErrorCollector:
         return ""
 
 
+def _on_progress(d: dict) -> None:
+    """yt-dlp 进度钩子 → 当前任务的结构化进度（没有任务在跑时自动忽略）。"""
+    from app import jobs
+
+    info = d.get("info_dict") or {}
+    status = str(d.get("status") or "")
+    title = str(info.get("title") or "").strip()
+    if not title:
+        name = str(d.get("filename") or "")
+        title = Path(name).name if name else ""
+    title = title[:60]
+
+    if status == "downloading":
+        total = int(d.get("total_bytes") or d.get("total_bytes_estimate") or 0)
+        done = int(d.get("downloaded_bytes") or 0)
+        jobs.report_progress(
+            stage="下载",
+            title=title,
+            percent=round(done * 100 / total, 1) if total else 0.0,
+            downloaded=done,
+            size=total,
+            speed=float(d.get("speed") or 0.0),
+            eta=int(d.get("eta") or 0),
+        )
+    elif status == "finished":
+        size = int(
+            d.get("total_bytes") or d.get("total_bytes_estimate")
+            or d.get("downloaded_bytes") or 0
+        )
+        jobs.report_progress(
+            stage="下载", title=title, percent=100.0,
+            downloaded=size, size=size, speed=0.0, eta=0,
+        )
+
+
+def _on_postprocess(d: dict) -> None:
+    """合并音视频 / 转码没有字节进度，只把当前阶段写清楚。"""
+    from app import jobs
+
+    if str(d.get("status") or "") in ("started", "processing"):
+        jobs.report_progress(stage="合并 / 转码", percent=100.0, speed=0.0, eta=0)
+
+
 def quality_format(quality: str, platform: str = "bilibili") -> str:
     table = YOUTUBE_QUALITY_FORMATS if platform == "youtube" else QUALITY_FORMATS
     return table.get(quality, table["1080"])
@@ -126,6 +169,9 @@ def build_opts(
         "overwrites": False,
         "format": fmt,
         "outtmpl": str(out_dir / f"{stem}%(playlist_index&-[P{{}}]|)s.%(ext)s"),
+        # 门户的实时进度：只写内存里的任务字段，命令行跑采集时是空操作
+        "progress_hooks": [_on_progress],
+        "postprocessor_hooks": [_on_postprocess],
     }
     if has_ffmpeg:
         # B 站无损音轨是 FLAC，固定 mp4 会导致合并失败，故允许 mp4/mkv

@@ -147,6 +147,11 @@ details.adv .form-grid{margin-top:10px}
   border-bottom:1px solid var(--line)}
 .drawer header .title{font-weight:600;font-size:13px;flex:1;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+.drawer .prog{display:flex;flex-direction:column;gap:6px;padding:9px 14px;
+  border-bottom:1px solid var(--line);background:#0d1117aa}
+.drawer .prog .bar{height:6px}
+.drawer .prog .row{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
+.drawer .prog .txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .drawer .log{flex:1;overflow:auto;padding:10px 14px;font-size:12px;line-height:1.6;
   color:#adbac7;font-family:ui-monospace,Consolas,monospace}
 .drawer .log div{white-space:pre-wrap;word-break:break-word}
@@ -265,6 +270,11 @@ details.adv .form-grid{margin-top:10px}
   <header><span class="badge run" id="jobBadge"><i class="pulse"></i>运行中</span>
     <span class="title" id="jobTitle">任务日志</span>
     <button class="btn sm ghost" id="btnCloseDrawer">收起</button></header>
+  <div class="prog" id="jobProg" hidden>
+    <div class="bar"><div class="done" id="jobBar" style="width:0"></div></div>
+    <div class="row"><span class="txt" id="jobProgText">准备中…</span>
+      <span class="num" id="jobPct"></span></div>
+  </div>
   <div class="log" id="logBox"></div>
 </div>
 <div id="toast"></div>
@@ -373,13 +383,57 @@ function jobBadge(status){
   if (status === "failed") return '<span class="badge bad">失败</span>';
   return '<span class="badge">' + esc(status) + '</span>';
 }
+function fmtEta(sec){
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if (!sec) return "";
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m ? (m + ":" + String(s).padStart(2, "0")) : (s + " 秒");
+}
+function progressBrief(pr){
+  pr = pr || {};
+  const bits = [];
+  if (pr.stage) bits.push(pr.stage);
+  if (pr.current && pr.total) bits.push(pr.current + "/" + pr.total);
+  if (pr.size) bits.push((Number(pr.percent) || 0).toFixed(0) + "%");
+  if (pr.speed) bits.push(fmtSize(pr.speed) + "/s");
+  return bits.join(" · ");
+}
+/* 抽屉里的实时进度：百分比条 + 已下/总量 + 速度 + 剩余 + 当前文件 */
+function renderJobProgress(job){
+  const box = $("#jobProg"), pr = job.progress || {};
+  const live = job.status === "running" || job.status === "queued";
+  const has = live && !!(pr.stage || pr.current || pr.title);
+  box.hidden = !has;
+  if (!has) return;
+  const pct = Math.max(0, Math.min(100, Number(pr.percent) || 0));
+  $("#jobBar").style.width = pct.toFixed(1) + "%";
+  const bits = [];
+  if (pr.stage) bits.push(pr.stage);
+  if (pr.current && pr.total) bits.push("第 " + pr.current + " / " + pr.total + " 个");
+  if (pr.size) bits.push(fmtSize(pr.downloaded || 0) + " / " + fmtSize(pr.size));
+  if (pr.speed) bits.push(fmtSize(pr.speed) + "/s");
+  if (pr.eta) bits.push("剩余 " + fmtEta(pr.eta));
+  if (pr.title) bits.push(pr.title);
+  $("#jobProgText").textContent = bits.join(" · ");
+  $("#jobPct").textContent = pr.size ? pct.toFixed(1) + "%" : "";
+}
+function updateJobRow(job){
+  const cell = document.querySelector('[data-jobrow="' + job.id + '"]');
+  if (!cell) return;
+  cell.textContent = job.status === "running"
+    ? (progressBrief(job.progress) || "运行中…")
+    : (job.summary || job.error || "—");
+}
 function renderJobs(list){
   const box = $("#jobList");
   if (!list || !list.length) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   box.innerHTML = '<table><thead><tr><th>任务</th><th>状态</th><th>时间</th><th>结果</th></tr></thead><tbody>' +
     list.map((j) => '<tr><td>' + esc(j.title) + '</td><td>' + jobBadge(j.status) + '</td>' +
       '<td class="mono">' + esc(j.started_at || "") + (j.finished_at ? " → " + esc(j.finished_at) : "") + '</td>' +
-      '<td style="color:var(--muted)">' + esc(j.summary || j.error || "—") + '</td></tr>').join("") +
+      '<td style="color:var(--muted)" data-jobrow="' + esc(j.id) + '">' +
+      esc(j.status === "running"
+        ? (progressBrief(j.progress) || "运行中…")
+        : (j.summary || j.error || "—")) + '</td></tr>').join("") +
     '</tbody></table>';
 }
 
@@ -399,10 +453,14 @@ function openDrawer(title){
   $("#drawer").classList.add("show");
   $("#jobTitle").textContent = title;
   $("#logBox").innerHTML = "";
+  $("#jobProg").hidden = true;
+  $("#jobBar").style.width = "0";
+  $("#jobProgText").textContent = "准备中…";
+  $("#jobPct").textContent = "";
 }
 $("#btnCloseDrawer").addEventListener("click", () => {
+  // 只收起面板：轮询继续，概览表格里仍能看到进度，任务结束自动停
   $("#drawer").classList.remove("show");
-  clearInterval(jobTimer); jobTimer = null; jobId = null;
 });
 function watchJob(id){
   jobId = id;
@@ -421,6 +479,8 @@ async function pollJob(){
   $("#jobBadge").className = "badge " + cls;
   $("#jobBadge").innerHTML = (job.status === "running" ? '<i class="pulse"></i>' : "") +
     ({ running:"运行中", done:"已完成", failed:"失败", queued:"排队中" }[job.status] || job.status);
+  renderJobProgress(job);
+  updateJobRow(job);
   const box = $("#logBox");
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.innerHTML = (job.lines || []).map((l) =>
@@ -429,6 +489,7 @@ async function pollJob(){
   if (atBottom) box.scrollTop = box.scrollHeight;
   if (job.status === "done" || job.status === "failed") {
     clearInterval(jobTimer); jobTimer = null;
+    $("#jobProg").hidden = true;
     toast(job.status === "done" ? "任务完成" : ("任务失败：" + (job.error || "")), job.status === "done" ? "ok" : "err");
     loadOverview();
     if (S.view === "progress") loadProgress();

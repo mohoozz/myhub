@@ -11,7 +11,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
-from app import credentials
+from app import credentials, jobs
 from app.config import get_settings
 from app.cookies import CookieError
 from app.downloader import download, download_direct, download_images, download_images_by_url, find_files
@@ -25,6 +25,17 @@ from app.summarize import day_range, write_reports
 from app.utils import build_stem
 
 logger = logging.getLogger(__name__)
+
+
+def _report_stage(name: str, percent: float = 0.0) -> None:
+    """把「同步 / 抓取 / 生成报告」这类没有字节进度的阶段告诉门户。
+
+    命令行直接跑采集时没有任务在跑，report_progress 会自动忽略。
+    """
+    jobs.report_progress(
+        stage=name, current=0, total=0, percent=percent,
+        downloaded=0, size=0, speed=0.0, eta=0, title="",
+    )
 
 
 @dataclass
@@ -328,7 +339,7 @@ def download_contents(
         else:
             logger.warning(
                 "没找到 Deno：YouTube 只能拿到预览图格式。"
-                "把 deno.exe 放到 data/tools/deno/ 或装进 PATH"
+                "执行 python -m app deps 可自动下载到 data/tools/deno/"
             )
 
     targets = _pick_targets(session, day, platform, only_ids)
@@ -340,7 +351,20 @@ def download_contents(
     except SourceError as e:
         logger.debug("详情补齐不可用：%s", e)
 
-    for content, dl in targets:
+    total = len(targets)
+    for index, (content, dl) in enumerate(targets, 1):
+        # 门户实时进度：先报「第几条 / 共几条」，字节级进度由下载器继续覆盖
+        jobs.report_progress(
+            stage="下载",
+            current=index,
+            total=total,
+            title=(content.title or content.content_id)[:60],
+            percent=0.0,
+            downloaded=0,
+            size=0,
+            speed=0.0,
+            eta=0,
+        )
         dl.started_at = datetime.now()
         dl.attempts += 1
         dl.status = "running"
@@ -487,7 +511,7 @@ def _youtube_hint(err: str) -> str:
     if "Sign in to confirm" in err:
         return f"{err.rstrip('。')}；先跑 python -m app login youtube 刷新登录态"[:300]
     if "Only images are available" in err or "Signature solving failed" in err:
-        return f"{err.rstrip('。')}；缺少 JS 运行时，把 deno.exe 放到 data/tools/deno/"[:300]
+        return f"{err.rstrip('。')}；缺少 JS 运行时，执行 python -m app deps 自动安装"[:300]
     return err
 
 
@@ -528,6 +552,7 @@ def run_once(
     with session_scope() as session:
         try:
             if refresh_sources:
+                _report_stage("同步订阅")
                 info = sync_subscriptions(session, platform)
                 logger.info("关注列表同步：%s", info)
             subs = session.exec(
@@ -537,6 +562,8 @@ def run_once(
             ).all()
             result.authors = len(subs)
 
+            if do_collect:
+                _report_stage("抓取当日内容")
             result.new_items = (
                 collect_contents(session, target_day, platform, only_mid) if do_collect else 0
             )
@@ -551,6 +578,7 @@ def run_once(
                 result.failed = stats["failed"]
                 result.skipped = stats["skipped"]
 
+            _report_stage("生成报告", percent=100.0)
             if report := write_reports(session, target_day):
                 result.report = str(report)
         except CookieError as e:
