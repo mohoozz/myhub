@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yt_dlp
 
+from app.utils import DURATION_SKIP_PREFIX, fmt_duration
+
 logger = logging.getLogger(__name__)
 
 QUALITY_FORMATS = {
@@ -218,6 +220,48 @@ def find_file(out_dir: Path, stem: str) -> Path | None:
     return files[0] if files else None
 
 
+def _total_duration(info: dict | None) -> int:
+    """单视频取 duration；playlist（B 站多 P / YouTube 播放列表）把各条累加。"""
+    if not isinstance(info, dict):
+        return 0
+    entries = info.get("entries")
+    if isinstance(entries, list) and entries:
+        return sum(
+            int((entry or {}).get("duration") or 0)
+            for entry in entries
+            if isinstance(entry, dict)
+        )
+    try:
+        return int(info.get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def duration_skip_error(total: int, limit_sec: int) -> str:
+    """超时长跳过的统一文案；pipeline 按 DURATION_SKIP_PREFIX 识别后记为 skipped。"""
+    return f"{DURATION_SKIP_PREFIX}：{fmt_duration(total)} 超过上限 {limit_sec // 60} 分钟"
+
+
+def _probe_total_duration(url: str, opts: dict) -> int:
+    """只解析不下载，尽量拿到真实总时长；失败返回 0（按不限制处理，绝不误杀）。
+
+    用一份去掉 format 的独立配置来探测：用户选的清晰度对某些视频并不存在，
+    带 format 会在拿到 duration 之前就报 "Requested format is not available"。
+    同时去掉 logger，避免探测的报错污染真正的下载错误信息。
+    """
+    probe_opts = dict(opts)
+    probe_opts.pop("format", None)
+    probe_opts.pop("logger", None)
+    probe_opts.update({"quiet": True, "no_warnings": True, "skip_download": True})
+    try:
+        with yt_dlp.YoutubeDL(probe_opts) as probe:
+            info = probe.extract_info(url, download=False)
+    except Exception as e:  # noqa: BLE001
+        logger.info("时长探测失败（按不限制处理）%s: %s", url, e)
+        return 0
+    return _total_duration(info)
+
+
 def download(
     url: str,
     out_dir: Path,
@@ -229,10 +273,13 @@ def download(
     ffmpeg_location: str = "",
     cookies_from_browser: tuple | None = None,
     js_runtimes: dict | None = None,
+    max_duration_sec: int = 0,
 ) -> tuple[bool, str, str]:
     """下载单个视频/音频，返回 (是否成功, 本地路径, 错误信息)。
 
     单 P 已存在则直接跳过；多 P 会交给 yt-dlp 逐个跳过已下好的分 P。
+    max_duration_sec > 0 时先只解析拿总时长（多 P 求和），超限直接返回不下载；
+    没超限再按用户原配置正常下载（多一次元数据解析，换取清晰度不被探测污染）。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     if (existing := find_files(out_dir, stem)) and not any("-[P" in p.name for p in existing):
@@ -244,6 +291,10 @@ def download(
             out_dir, stem, quality, platform, cookiefile, proxy, ffmpeg_location,
             cookies_from_browser, js_runtimes,
         )
+        if max_duration_sec > 0:
+            total = _probe_total_duration(url, opts)
+            if total > max_duration_sec:
+                return False, "", duration_skip_error(total, max_duration_sec)
         opts["logger"] = collector
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])

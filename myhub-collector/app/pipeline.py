@@ -22,7 +22,7 @@ from app.models import Content, Download, RunLog, Subscription
 from app.sources import SourceError, build_source
 from app.sources.base import RawItem
 from app.summarize import day_range, write_reports
-from app.utils import build_stem
+from app.utils import DURATION_SKIP_PREFIX, build_stem, fmt_duration, parse_duration
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +310,8 @@ def download_contents(
     """
     settings = get_settings()
     stats = {"downloaded": 0, "failed": 0, "skipped": 0}
+    # 0 = 不限制；时长未知的内容（YouTube RSS 没有时长）交给下载器解析后再判断
+    duration_limit = max(int(settings.max_duration_minutes or 0), 0) * 60
 
     # 上次异常退出留下的 running 任务重置为 pending
     for stale in session.exec(
@@ -365,6 +367,28 @@ def download_contents(
             speed=0.0,
             eta=0,
         )
+        # 已知时长的超长视频直接跳过：不占带宽，也不算「失败」
+        known_seconds = parse_duration(content.duration)
+        if (
+            duration_limit
+            and content.media_type == "video"
+            and known_seconds
+            and known_seconds > duration_limit
+        ):
+            dl.status = "skipped"
+            dl.error = (
+                f"{DURATION_SKIP_PREFIX}：{fmt_duration(known_seconds)}"
+                f" 超过上限 {settings.max_duration_minutes} 分钟"
+            )
+            dl.finished_at = datetime.now()
+            stats["skipped"] += 1
+            session.add(dl)
+            session.commit()
+            logger.info(
+                "跳过超长视频：%s %s（%s）", content.platform, content.content_id, dl.error
+            )
+            continue
+
         dl.started_at = datetime.now()
         dl.attempts += 1
         dl.status = "running"
@@ -449,6 +473,8 @@ def download_contents(
             # 视频：平铺在下载根目录，多 P 由 yt-dlp 追加 -[Pn]
             out_dir = settings.download_path
             stem = _stem(content)
+            # 时长已知且没超限就不必再探测；未知时（YouTube）交给下载器解析后判断
+            probe_limit = 0 if known_seconds else duration_limit
             if platform == "douyin" and content.media_url:
                 # 抖音给的是现成 mp4 直链，直接拉更稳；失败再退回 yt-dlp
                 ok, path, err = download_direct(
@@ -463,6 +489,7 @@ def download_contents(
                         cookiefile=cookiefile, proxy=proxy,
                         ffmpeg_location=settings.ffmpeg_location,
                         js_runtimes=js_runtimes,
+                        max_duration_sec=probe_limit,
                     )
                     if not ok:
                         err = _douyin_hint(err)
@@ -473,6 +500,7 @@ def download_contents(
                     cookiefile=cookiefile, proxy=proxy,
                     ffmpeg_location=settings.ffmpeg_location,
                     js_runtimes=js_runtimes,
+                    max_duration_sec=probe_limit,
                 )
             if ok:
                 dl.status, dl.path = "done", path
@@ -480,6 +508,10 @@ def download_contents(
                 dl.size = sum(f.stat().st_size for f in files) if files else _file_size(path)
                 stats["downloaded"] += 1
                 _stamp(content, files or [path])
+            elif err.startswith(DURATION_SKIP_PREFIX):
+                # 下载器解析出的真实总时长超限（B 站多 P / YouTube）
+                dl.status, dl.error = "skipped", err
+                stats["skipped"] += 1
             else:
                 if platform == "youtube":
                     err = _youtube_hint(err)

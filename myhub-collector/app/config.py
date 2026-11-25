@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     proxy: str = "direct"
     quality: str = "1080"           # best / 1080 / 720 / audio
     download_images: bool = True    # 是否下载图文动态的图片
+    # 单条视频最长时长（分钟），0 = 不限制。B 站多分 P 按所有 P 的总时长判断，
+    # 超长的只把下载记录标成 skipped，不占用带宽和磁盘。
+    max_duration_minutes: int = 0
     keep_days: int = 30             # 媒体保留天数（python -m app clean 使用）
     # 下载完成后把文件修改时间改成内容发布时间（资源管理器按「修改日期」即发布顺序）
     file_mtime_from_publish: bool = True

@@ -152,6 +152,12 @@ def _groups() -> list[dict]:
                 },
                 {"key": "DOWNLOAD_IMAGES", "label": "下载图文图片", "type": "bool"},
                 {
+                    "key": "MAX_DURATION_MINUTES",
+                    "label": "视频时长上限（分钟）",
+                    "type": "int",
+                    "help": "0 = 不限制；B 站多分 P 按总时长算，超长的只记「跳过」不下载",
+                },
+                {
                     "key": "KEEP_DAYS",
                     "label": "媒体保留天数",
                     "type": "int",

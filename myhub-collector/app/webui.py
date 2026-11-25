@@ -580,6 +580,7 @@ async function loadDay(day){
     : "";
   $("#dayActions").innerHTML =
     '<button class="btn sm ghost" data-recollect="' + esc(day) + '">重新采集这一天</button>' +
+    (d.skipped_duration ? ' <button class="btn sm ghost" data-retry-duration="' + esc(day) + '">重试超时长 ' + d.skipped_duration + ' 条</button>' : "") +
     (d.report ? ' <a class="btn sm primary" href="' + esc(d.report) + '" target="_blank">打开日报</a>' : "");
 
   const rows = d.items.slice(0, 120);
@@ -679,11 +680,23 @@ $("#btnSync").addEventListener("click", async () => {
   catch (e) { toast(e.message, "err"); }
 });
 document.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-recollect]");
-  if (!btn) return;
-  const day = btn.dataset.recollect;
-  $("#collectDay").value = day;
-  collect(true);
+  const redo = e.target.closest("[data-recollect]");
+  if (redo) {
+    const day = redo.dataset.recollect;
+    $("#collectDay").value = day;
+    collect(true);
+    return;
+  }
+  const retry = e.target.closest("[data-retry-duration]");
+  if (!retry) return;
+  const day = retry.dataset.retryDuration;
+  api("/api/collect", {
+    method: "POST",
+    body: { day, platform: "all", download: true, sync: false, retry_skipped: true },
+  }).then((res) => {
+    watchJob(res.job_id);
+    toast("正在重试超时长跳过的内容");
+  }).catch((err) => toast(err.message, "err"));
 });
 
 /* ---------- 启动 ---------- */

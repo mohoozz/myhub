@@ -25,6 +25,7 @@ from urllib.parse import unquote, urlsplit
 from app import credentials, envfile, jobs, webui
 from app.config import get_settings
 from app.database import get_engine, init_db
+from app.utils import DURATION_SKIP_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,7 @@ def api_day(day: str) -> dict:
     node = _blank_day(day)
     items: list[dict] = []
     failures: list[dict] = []
+    skipped_duration = 0
     for platform, author, title, media_type, published_at, url, status, path, size, error in rows:
         sub = node["platforms"].setdefault(platform, _blank_day(day))
         _add_count(node, status, 1, size or 0)
@@ -190,6 +192,8 @@ def api_day(day: str) -> dict:
         items.append(entry)
         if status == "failed":
             failures.append(entry)
+        if status == "skipped" and (error or "").startswith(DURATION_SKIP_PREFIX):
+            skipped_duration += 1
 
     report = get_settings().report_path / f"{day}.html"
     return {
@@ -197,6 +201,7 @@ def api_day(day: str) -> dict:
         "summary": node,
         "items": items,
         "failures": failures,
+        "skipped_duration": skipped_duration,
         "report": f"/report/{day}" if report.exists() else "",
     }
 
@@ -225,11 +230,41 @@ def _login_job(platform: str, wait: int) -> str:
     return jobs.JOBS.submit("login", title, run).id
 
 
-def _collect_job(day: str, platforms: list[str], download: bool, refresh: bool) -> str:
+def _reset_duration_skips(day: str, platforms: list[str]) -> int:
+    """把当天「超时长跳过」的记录改回待下载：调大上限后可一键补下。"""
+    init_db()
+    marks = ", ".join("?" for _ in platforms)
+    sql = (
+        "UPDATE downloads SET status = 'pending', error = '', attempts = 0, finished_at = NULL "
+        "WHERE status = 'skipped' AND error LIKE ? "
+        f"AND platform IN ({marks}) "
+        "AND EXISTS (SELECT 1 FROM contents c WHERE c.platform = downloads.platform "
+        "AND c.content_id = downloads.content_id AND substr(c.published_at, 1, 10) = ?)"
+    )
+    params: tuple = (f"{DURATION_SKIP_PREFIX}%", *platforms, day)
+    with get_engine().begin() as conn:
+        result = conn.exec_driver_sql(sql, params)
+    return int(result.rowcount or 0)
+
+
+def _collect_job(
+    day: str,
+    platforms: list[str],
+    download: bool,
+    refresh: bool,
+    retry_skipped: bool = False,
+) -> str:
     from app.pipeline import run_once
+
+    if retry_skipped:
+        # 只补下载：不重新抓取、不重复同步关注
+        download, refresh = True, False
 
     def run(job: jobs.Job) -> dict:
         out: dict = {}
+        if retry_skipped:
+            reset = _reset_duration_skips(day, platforms)
+            job.log(f"已重置 {reset} 条「超时长跳过」记录，只补下载不重新抓取")
         for platform in platforms:
             job.log(f"=== {platform} · {day} ===")
             out[platform] = run_once(
@@ -237,11 +272,15 @@ def _collect_job(day: str, platforms: list[str], download: bool, refresh: bool) 
                 platform=platform,
                 do_download=download,
                 refresh_sources=refresh,
+                do_collect=not retry_skipped,
             )
         return out
 
-    names = "、".join(platforms)
-    return jobs.JOBS.submit("collect", f"采集 {day}（{names}）", run).id
+    if retry_skipped:
+        title = f"重试超时长 {day}"
+    else:
+        title = f"采集 {day}（{'、'.join(platforms)}）"
+    return jobs.JOBS.submit("collect", title, run).id
 
 
 def _sync_job(platforms: list[str]) -> str:
@@ -398,6 +437,7 @@ class Handler(BaseHTTPRequestHandler):
                     day, targets,
                     bool(payload.get("download", True)),
                     bool(payload.get("sync", True)),
+                    bool(payload.get("retry_skipped")),
                 )
                 return self._json({"ok": True, "job_id": job_id}, 202)
             if path == "/api/sync":
