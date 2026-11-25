@@ -312,6 +312,16 @@ def _sync_job(platforms: list[str]) -> str:
     return jobs.JOBS.submit("sync", f"同步订阅源（{'、'.join(platforms)}）", run).id
 
 
+def _link_job(text: str) -> str:
+    from app import linkdl
+
+    def run(job: jobs.Job) -> dict:
+        return linkdl.run(job, text)
+
+    count = len(linkdl.extract_urls(text))
+    return jobs.JOBS.submit("link", f"链接下载（{count} 个链接）", run).id
+
+
 def _init_job() -> str:
     def run(job: jobs.Job) -> dict:
         from app.__main__ import cmd_init
@@ -457,6 +467,11 @@ class Handler(BaseHTTPRequestHandler):
                     bool(payload.get("download_only")),
                 )
                 return self._json({"ok": True, "job_id": job_id}, 202)
+            if path == "/api/link":
+                text = str(payload.get("text") or "").strip()
+                if not text:
+                    raise ValueError("请先粘贴至少一个链接")
+                return self._json({"ok": True, "job_id": _link_job(text)}, 202)
             if path == "/api/sync":
                 platform = str(payload.get("platform") or "all")
                 from app.sources import SUPPORTED

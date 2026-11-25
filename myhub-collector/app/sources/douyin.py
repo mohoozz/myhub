@@ -38,6 +38,7 @@ _VIDEO_URL = "https://www.douyin.com/video/{aid}"
 
 _FOLLOWING_API = "/following/list"
 _POST_API = "/aweme/v1/web/aweme/post/"
+_DETAIL_API = "/aweme/v1/web/aweme/detail/"
 _SEC_UID = re.compile(r"MS4wLjABAAAA[\w-]{5,}")
 # 只认真正的登录票据：passport_csrf_token 之类匿名访问也有，拿它判断会误判成已登录
 _LOGIN_COOKIES = ("sessionid", "sessionid_ss")
@@ -360,6 +361,41 @@ class DouyinSource(Source):
 
     def fetch_detail(self, content_id: str) -> RawItem | None:
         """列表接口已经给了正文/图片，下载阶段不需要再开浏览器补详情。"""
+        return None
+
+    def fetch_one(self, aweme_id: str) -> RawItem | None:
+        """按作品号打开视频页，截获详情接口返回单条 RawItem（链接下载用）。
+
+        抖音 web 接口要 a_bogus 签名，纯 HTTP 拿不到；这里让页面自己算，
+        我们只读它发出的响应，和抓作者作品是同一套思路。
+        """
+        page = self._page()
+        self._check_login(page)
+        hits: list = []
+        handler = lambda r: hits.append(r) if _DETAIL_API in (r.url or "") else None  # noqa: E731
+        page.on("response", handler)
+        try:
+            page.goto(_VIDEO_URL.format(aid=aweme_id), wait_until="domcontentloaded")
+            page.wait_for_timeout(3500)
+        finally:
+            try:
+                page.remove_listener("response", handler)
+            except Exception:  # noqa: BLE001
+                pass
+
+        for resp in hits:
+            try:
+                data = resp.json()
+            except Exception:  # noqa: BLE001 非 JSON 响应直接跳过
+                continue
+            aweme = data.get("aweme_detail")
+            if not isinstance(aweme, dict):
+                details = data.get("aweme_details") or []
+                aweme = details[0] if details and isinstance(details[0], dict) else None
+            if aweme:
+                item = parse_aweme(aweme)
+                if item is not None:
+                    return item
         return None
 
     # ---------------- 响应解析 ----------------

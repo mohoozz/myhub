@@ -140,6 +140,12 @@ td .t{display:block;max-width:min(760px,46vw);overflow:hidden;text-overflow:elli
 .fail-src{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:6px;padding-top:5px;
   border-top:1px dashed #ffffff17;font-size:11.5px}
 .fail-src .srcline{display:inline-flex;align-items:baseline;gap:4px;min-width:0;max-width:100%}
+.link-input{width:100%;min-height:140px;background:#0d1117;border:1px solid var(--line);
+  border-radius:8px;padding:10px 12px;color:var(--text);outline:none;resize:vertical;
+  font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.7}
+.link-input:focus{border-color:var(--blue)}
+.link-bar{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.link-tip-ok{color:var(--green)}
 .lnk{color:#58a6ff;text-decoration:none;word-break:break-all}
 .lnk:hover{text-decoration:underline}
 .src{color:var(--dim);font-size:11px;margin-right:2px}
@@ -245,6 +251,7 @@ details.adv .form-grid{margin-top:10px}
       <button data-view="overview" class="active"><i class="dot"></i>概览</button>
       <button data-view="platforms"><i class="dot"></i>平台登录</button>
       <button data-view="progress"><i class="dot"></i>下载进度</button>
+      <button data-view="link"><i class="dot"></i>链接下载</button>
       <button data-view="config"><i class="dot"></i>环境配置</button>
     </nav>
     <div class="aside-foot">
@@ -320,6 +327,26 @@ details.adv .form-grid{margin-top:10px}
           <div id="dayFailures"></div>
           <div style="margin-top:12px" id="dayActions"></div>
           <div style="margin-top:14px;max-height:460px;overflow:auto" id="dayItems"></div></div>
+      </div>
+    </section>
+    <section id="view-link" hidden>
+      <div class="card">
+        <h3>粘贴链接开始下载</h3>
+        <p class="hint">支持抖音单视频、B站单视频 / 稍后再看、YouTube 单视频 / 播放列表 / 稍后观看。
+          一行一个，直接粘贴分享文案也行；落盘命名和采集一致（平台-作者-标题-内容号），
+          下载进度页、日报、失败重试都能看到。</p>
+        <textarea id="linkText" class="link-input" rows="7"
+          placeholder="https://www.bilibili.com/video/BV1xx411c7mD&#10;https://www.bilibili.com/watchlater/&#10;https://youtu.be/xxxxxxxxxxx&#10;https://www.youtube.com/playlist?list=PLxxxxxxxx&#10;https://www.douyin.com/video/7300000000000000000"></textarea>
+        <div class="link-bar">
+          <button class="btn primary" id="btnLink">开始下载</button>
+          <button class="btn ghost sm" id="btnLinkClear">清空</button>
+          <span class="hint" id="linkTip" style="margin:0">还没有链接</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>本次结果</h3>
+        <p class="hint">最近一次链接下载的逐条状态。</p>
+        <div id="linkResult"><div class="empty">还没有链接下载记录</div></div>
       </div>
     </section>
     <section id="view-config" hidden>
@@ -409,7 +436,7 @@ function fmtSize(n){
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
   return n.toFixed(n >= 100 ? 0 : 1) + " " + u[i];
 }
-const S = { overview:null, days:null, day:null, env:null, view:"overview" };
+const S = { overview:null, days:null, day:null, env:null, view:"overview", linkResult:null };
 let jobTimer = null, jobId = null, jobState = null, jobSeen = false;
 
 async function api(path, opt){
@@ -436,18 +463,20 @@ const META = {
   overview: ["概览", "三个平台的登录态、昨天的下载情况和最近的运行记录"],
   platforms: ["平台登录", "登录一次长期有效，登录态存在 data/credentials/"],
   progress: ["下载进度", "按内容发布时间查看每天的采集与下载情况"],
+  link: ["链接下载", "粘贴 B站 / YouTube / 抖音 链接直接下载，命名和采集一致"],
   config: ["环境配置", "直接改 .env；保存后立即生效（目录类改动需重启服务）"],
 };
 function switchView(view){
   S.view = view;
   $$("nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-  ["overview","platforms","progress","config"].forEach((v) => {
+  ["overview","platforms","progress","link","config"].forEach((v) => {
     document.getElementById("view-" + v).hidden = v !== view;
   });
   $("#viewTitle").textContent = META[view][0];
   $("#viewSub").textContent = META[view][1];
   if (view === "overview" || view === "platforms") loadOverview();
   if (view === "progress") loadProgress();
+  if (view === "link") { linkCount(); if (S.linkResult) renderLinkResult(S.linkResult); }
   if (view === "config") loadConfig();
 }
 $$("nav button").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
@@ -664,8 +693,59 @@ async function pollJob(){
     toast(job.status === "done" ? "任务完成" : ("任务失败：" + (job.error || "")), job.status === "done" ? "ok" : "err");
     loadOverview();
     if (S.view === "progress") loadProgress();
+    if (job.kind === "link" && job.result) {
+      S.linkResult = job.result;
+      renderLinkResult(job.result);
+    }
   }
 }
+/* ---------- 链接下载 ---------- */
+const LINK_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/g;
+function linkCount(){
+  const raw = ($("#linkText").value || "").match(LINK_RE) || [];
+  const set = new Set(raw.map((u) => u.replace(/[，。、；：！？）】」》…,.;:!?)'"]+$/, "")));
+  const n = set.size;
+  const tip = $("#linkTip");
+  tip.textContent = n ? ("识别到 " + n + " 个链接") : "还没有链接";
+  tip.className = n ? "hint link-tip-ok" : "hint";
+  return n;
+}
+function renderLinkResult(res){
+  const items = (res && res.items) || [];
+  const errors = (res && res.errors) || [];
+  const box = $("#linkResult");
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">没有解析到内容' +
+      (errors.length ? '：' + esc(errors.join("；")) : "") + '</div>';
+    return;
+  }
+  box.innerHTML = '<table><thead><tr><th style="width:76px">平台</th><th>标题</th>' +
+    '<th style="width:150px">作者</th><th style="width:88px">状态</th><th style="width:76px">大小</th></tr></thead><tbody>' +
+    items.map((it) => '<tr><td>' + esc(it.name || it.platform) + '</td>' +
+      '<td><a class="lnk" href="' + esc(it.url) + '" target="_blank" rel="noreferrer">' +
+      esc((it.title || "").slice(0, 90)) + '</a>' +
+      (it.error ? '<div class="err" style="margin-top:3px">' + esc(String(it.error).slice(0, 200)) + '</div>' : "") +
+      '</td><td>' + esc(it.author || "—") + '</td>' +
+      '<td>' + statusBadge(it.status) + '</td>' +
+      '<td class="mono">' + (it.size ? fmtSize(it.size) : "—") + '</td></tr>').join("") +
+    '</tbody></table>' +
+    (errors.length ? '<div class="fail-list" style="margin-top:10px">' + errors.map((e) =>
+      '<div class="fail-item"><div class="fail-msg">' + esc(e) + '</div></div>').join("") + '</div>' : "");
+}
+$("#linkText").addEventListener("input", linkCount);
+$("#btnLinkClear").addEventListener("click", () => { $("#linkText").value = ""; linkCount(); });
+$("#btnLink").addEventListener("click", async () => {
+  const text = ($("#linkText").value || "").trim();
+  if (!linkCount()) return toast("先粘贴至少一个链接", "err");
+  const btn = $("#btnLink");
+  btn.disabled = true;
+  try {
+    const r = await api("/api/link", {method: "POST", body: {text}});
+    watchJob(r.job_id);
+    toast("已开始解析链接", "ok");
+  } catch (e) { toast(e.message, "err"); }
+  finally { btn.disabled = false; }
+});
 /* ---------- 进度 ---------- */
 function statusBadge(status){
   if (status === "done") return '<span class="badge ok">完成</span>';
