@@ -74,6 +74,13 @@ struct FileGridCell: View {
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .lineLimit(1)
+                if !modTimeText.isEmpty {
+                    Text(modTimeText)
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .center)
         }
@@ -141,6 +148,11 @@ struct FileGridCell: View {
         if let duration { parts.append(DisplayFormatters.duration(duration)) }
         parts.append(DisplayFormatters.size(entry.size))
         return parts.joined(separator: " · ")
+    }
+
+    /// 修改时间（mtime）；未知时间（distantPast）为空串，不占位
+    private var modTimeText: String {
+        DisplayFormatters.modTime(entry.modTime)
     }
 }
 
@@ -240,12 +252,14 @@ struct FileListRow: View {
     }
 
     private var caption: String {
-        if entry.isDir {
-            return "目录"
+        var parts = [entry.isDir ? "目录" : mediaType.label]
+        if !entry.isDir {
+            if let duration { parts.append(DisplayFormatters.duration(duration)) }
+            parts.append(DisplayFormatters.size(entry.size))
         }
-        var parts = [mediaType.label]
-        if let duration { parts.append(DisplayFormatters.duration(duration)) }
-        parts.append(DisplayFormatters.size(entry.size))
+        // 修改时间（mtime）；未知时间（distantPast）为空串，不占位
+        let time = DisplayFormatters.modTime(entry.modTime)
+        if !time.isEmpty { parts.append(time) }
         return parts.joined(separator: " · ")
     }
 }
