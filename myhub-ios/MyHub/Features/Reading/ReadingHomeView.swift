@@ -315,7 +315,8 @@ struct ReadingHomeView: View {
                         .truncationMode(.middle)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 8)
+                // 名称列已靠 maxWidth 撑满剩余宽度、把尾部元素顶到最右；
+                // 此处不再放 Spacer（它与无限弹性的文本列平分剩余宽度，白吃掉一半）
                 // 多选态仍保留进度环（勾选标记并排在其右侧）
                 if record.finished || record.percent > 0 {
                     progressRing(record)

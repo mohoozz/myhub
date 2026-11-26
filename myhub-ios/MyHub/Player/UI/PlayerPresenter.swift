@@ -46,10 +46,22 @@ final class PlayerPresenter: ObservableObject {
             level: .info, module: "player"
         )
         let mediaType = MediaType.detect(ext: entry.ext)
-        play(PlayableItem(
+        let item = PlayableItem(
             title: entry.name, path: entry.path,
             isAudioOnly: mediaType == .audio, connectionID: connection.id
-        ))
+        )
+        // 同一文件正在 mini 中：只展开回全屏复用已有会话。
+        // 必须在这里提前返回，否则下面会重新解析数据源并 PlayerCore.open，
+        // 把正在播放的会话重新打开（丢当前播放位置、重新起播）。
+        if current == item, isMini {
+            AppLogger.shared.log(
+                "点击 mini 中的同一文件：展开全屏复用会话 file=\(entry.name)",
+                level: .info, module: "player"
+            )
+            play(item)
+            return
+        }
+        play(item)
         Task {
             do {
                 let request = try await PlaybackSourceResolver.makeRequest(connection: connection, entry: entry)
