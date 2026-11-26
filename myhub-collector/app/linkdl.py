@@ -22,7 +22,7 @@ from app.config import get_settings
 from app.database import session_scope
 from app.models import Content, Download
 from app.sources.base import RawItem
-from app.utils import fmt_duration
+from app.utils import DURATION_SKIP_PREFIX, fmt_duration
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +320,14 @@ def _upsert(session, platform: str, item: RawItem) -> bool:
         dl = Download(platform=platform, content_id=item.content_id, status="pending")
         session.add(dl)
         session.commit()
+        return True
+    if dl.status == "skipped" and (dl.error or "").startswith(DURATION_SKIP_PREFIX):
+        # 之前被采集的时长上限跳过；链接下载不看上限，放回队列重新下
+        dl.status, dl.error, dl.attempts = "pending", "", 0
+        dl.path, dl.size, dl.finished_at = "", 0, None
+        session.add(dl)
+        session.commit()
+        return True
     return not (dl.status == "done" and dl.path and Path(dl.path).exists())
 
 
@@ -373,7 +381,11 @@ def run(job, text: str) -> dict:
     failed = 0
     with session_scope() as session:
         for (platform, day), ids in groups.items():
-            stats = download_contents(session, day, platform, only_ids=set(ids))
+            # 链接下载不看 MAX_DURATION_MINUTES：给了链接就下，超时长判定只服务于采集
+            stats = download_contents(
+                session, day, platform, only_ids=set(ids),
+                enforce_duration_limit=False,
+            )
             failed += int(stats.get("failed") or 0)
 
     result: dict = {"items": [], "errors": list(errors)}

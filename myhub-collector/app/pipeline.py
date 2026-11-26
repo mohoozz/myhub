@@ -380,15 +380,21 @@ def download_contents(
     day: date,
     platform: str,
     only_ids: set[str] | None = None,
+    enforce_duration_limit: bool = True,
 ) -> dict:
     """下载当日待下载内容，返回统计。only_ids 可只处理指定内容（重下/修复用）。
 
     不限条数、不限单作者条数：当天所有待下载内容都会处理。
+    enforce_duration_limit=False 时完全忽略 MAX_DURATION_MINUTES（链接下载用：
+    用户是拿着具体链接来的，要什么下什么，不做超时长拦截）。
     """
     settings = get_settings()
     stats = {"downloaded": 0, "failed": 0, "skipped": 0}
     # 0 = 不限制；时长未知的内容（YouTube RSS 没有时长）交给下载器解析后再判断
-    duration_limit = max(int(settings.max_duration_minutes or 0), 0) * 60
+    duration_limit = (
+        max(int(settings.max_duration_minutes or 0), 0) * 60
+        if enforce_duration_limit else 0
+    )
 
     # 上次异常退出留下的 running 任务重置为 pending
     for stale in session.exec(
