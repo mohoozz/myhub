@@ -7,12 +7,19 @@ struct FileStatusIndicator: View {
     /// 是否正在以（mini）播放器播放该文件
     let isPlaying: Bool
     var size: CGFloat = 16
+    /// 无状态时仍占固定宽高：列表行尾部用它稳住列宽，
+    /// 否则进度环异步出现/消失会把文件名挤得重新折行
+    var reservesSpace: Bool = false
 
     var body: some View {
         if isPlaying {
             PlayingBarsIndicator(size: size)
         } else if let progress {
             ReadingProgressRing(percent: progress, size: size)
+        } else if reservesSpace {
+            Color.clear
+                .frame(width: size, height: size)
+                .allowsHitTesting(false)
         }
     }
 }

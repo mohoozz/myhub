@@ -1,6 +1,5 @@
 import AVFoundation
 import AVKit
-import MobileVLCKit
 import SwiftUI
 import UIKit
 
@@ -161,7 +160,8 @@ extension PiPState: AVPictureInPictureControllerDelegate {
     }
 }
 
-/// 视频渲染桥：硬解 → AVPlayerLayer（videoGravity .resizeAspect，不同分辨率/竖屏正确适配，不拉伸不裁切）
+/// 视频渲染桥：画面本体由 `VideoSurface` 共享持有（硬解 AVPlayerLayer / 软解 VLC drawable），
+/// 本视图只提供一个全屏尺寸的宿主容器，进出 mini 时画面整体搬走而不重建输出。
 struct VideoRenderView: UIViewRepresentable {
     /// PlayerCore.videoOutput（AVPlayer / VLCMediaPlayer）
     let output: Any?
@@ -171,94 +171,51 @@ struct VideoRenderView: UIViewRepresentable {
         Coordinator(pip: pip)
     }
 
-    func makeUIView(context: Context) -> PlayerRenderUIView {
-        let view = PlayerRenderUIView()
+    func makeUIView(context: Context) -> SurfaceHostView {
+        let view = SurfaceHostView()
+        view.style = .fullscreen
         context.coordinator.attach(output: output, to: view)
         return view
     }
 
-    func updateUIView(_ uiView: PlayerRenderUIView, context: Context) {
+    func updateUIView(_ uiView: SurfaceHostView, context: Context) {
         context.coordinator.attach(output: output, to: uiView)
     }
 
-    static func dismantleUIView(_ uiView: PlayerRenderUIView, coordinator: Coordinator) {
-        coordinator.teardown()
+    static func dismantleUIView(_ uiView: SurfaceHostView, coordinator: Coordinator) {
+        coordinator.teardown(host: uiView)
     }
 
     @MainActor
     final class Coordinator {
         private let pip: PiPState
-        private weak var attachedOutput: AnyObject?
-        /// 自己挂载的宿主
-        private weak var hostView: PlayerRenderUIView?
-        private var playerLayer: AVPlayerLayer?
+        /// 已交给画中画的渲染层（只在渲染层真正换代时重新挂载，避免每次刷新都改动 PiPState）
+        private weak var pipLayer: AVPlayerLayer?
 
         init(pip: PiPState) {
             self.pip = pip
         }
 
-        func attach(output: Any?, to view: PlayerRenderUIView) {
-            let object = output as AnyObject?
-            if let object, object === attachedOutput { return }
-            detach()
+        func attach(output: Any?, to host: SurfaceHostView) {
+            // 先绑定输出（vout 创建时要能读到 drawable），再让宿主认领画面
+            VideoSurface.shared.bind(output)
+            VideoSurface.shared.claim(host)
 
-            if let player = object as? AVPlayer {
-                let layer = AVPlayerLayer(player: player)
-                layer.videoGravity = .resizeAspect
-                layer.backgroundColor = UIColor.black.cgColor
-                layer.frame = view.bounds
-                view.layer.addSublayer(layer)
-                playerLayer = layer
-                attachedOutput = player
+            let layer = VideoSurface.shared.playerLayer
+            guard layer !== pipLayer else { return }
+            pipLayer = layer
+            if let layer {
                 pip.attach(layer: layer)
-                // 渲染桥面包屑：确认熄屏回前台/引擎切换后画面输出层是否重新挂载
-                AppLogger.shared.log("渲染桥挂载 硬解 AVPlayerLayer", level: .debug, module: "player")
-            } else if let mediaPlayer = object as? VLCMediaPlayer {
-                mediaPlayer.drawable = view
-                attachedOutput = mediaPlayer
-                hostView = view
-                AppLogger.shared.log("渲染桥挂载 软解 VLC drawable", level: .debug, module: "player")
+            } else {
+                // 软解 / 纯音频：没有 AVPlayerLayer，画中画不可用
+                pip.detach()
             }
         }
 
-        func detach() {
-            cleanup()
-            pip.detach()
-        }
-
-        func teardown() {
-            cleanup()
+        func teardown(host: SurfaceHostView) {
+            // 只解绑画中画与本宿主占位，画面本体留给下一个宿主（mini）继续承载
+            VideoSurface.shared.release(host)
             pip.teardown()
         }
-
-        private func cleanup() {
-            if let mediaPlayer = attachedOutput as? VLCMediaPlayer,
-               let host = hostView,
-               mediaPlayer.drawable as? PlayerRenderUIView === host {
-                mediaPlayer.drawable = nil
-            }
-            playerLayer?.removeFromSuperlayer()
-            playerLayer = nil
-            attachedOutput = nil
-            hostView = nil
-        }
-    }
-}
-
-/// 宿主视图：随布局同步 AVPlayerLayer 尺寸
-final class PlayerRenderUIView: UIView {
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .black
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        backgroundColor = .black
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        layer.sublayers?.forEach { $0.frame = bounds }
     }
 }

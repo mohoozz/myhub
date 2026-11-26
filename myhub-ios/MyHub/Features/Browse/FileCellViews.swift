@@ -205,10 +205,11 @@ struct FileListRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
-                // 多选态仍保留进度环/播放动画（勾选标记并排在其右侧）
-                if isPlaying || progress != nil {
-                    FileStatusIndicator(progress: progress, isPlaying: isPlaying, size: 18)
-                }
+                // 多选态仍保留进度环/播放动画（勾选标记并排在其右侧）；
+                // 无状态时也占住 18pt，环出现/消失不再挤压文件名导致折行
+                FileStatusIndicator(
+                    progress: progress, isPlaying: isPlaying, size: 18, reservesSpace: true
+                )
                 if isSelecting {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)

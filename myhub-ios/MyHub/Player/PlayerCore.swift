@@ -594,6 +594,8 @@ final class PlayerCore: ObservableObject {
         }
         engine?.stop()
         engine = nil
+        // 画面输出随会话一起解绑：全屏 / mini 共用同一渲染视图，旧引擎的输出不得残留到新会话
+        VideoSurface.shared.unbind()
         seekTarget = nil
         audioTracks = []
         subtitleTracks = []
