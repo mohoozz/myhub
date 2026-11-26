@@ -34,6 +34,12 @@ _PART_SUFFIXES = (".part", ".ytdl", ".temp")
 # 超时长视频只落一张预览卡片（stem.html），它不是视频成品；调大时长上限后
 # 重新下载时不能被它挡住「已存在」的判断。
 _CARD_SUFFIXES = (".html", ".htm")
+# 纯音频容器：视频内容下只剩这些文件，说明音视频没合并成功或视频流没下完。
+# yt-dlp 开了 ignoreerrors，这种「半成品」不会抛异常，只能靠自己认出来。
+# 注意不要放 .webm：YouTube 的纯音频流也是 webm，放进去会把正常结果判成失败。
+_AUDIO_SUFFIXES = frozenset(
+    {".m4a", ".mp3", ".aac", ".flac", ".opus", ".ogg", ".oga", ".wav", ".wma"}
+)
 
 
 def _ffmpeg_dir(location: str = "") -> str:
@@ -227,6 +233,10 @@ def find_files(out_dir: Path, stem: str) -> list[Path]:
 
     注意：stem 里带 "[BV号]" 这样的方括号，glob 会把 [] 当成字符集，
     匹配不到真实文件，所以这里改用前缀遍历，不能用 out_dir.glob()。
+
+    stem 之后带两段扩展名的（stem.f137.mp4 / stem-[P1].f140.m4a）是 yt-dlp
+    合并音视频时用的中间文件：合并成功后会被删掉，留下的就是合并失败的残留，
+    不能算成品，否则「只有音频 / 只有视频」的半成品会被当成下载完成。
     """
     if not out_dir.exists():
         return []
@@ -239,8 +249,12 @@ def find_files(out_dir: Path, stem: str) -> list[Path]:
         if not path.name.startswith(stem):
             continue
         rest = path.name[len(stem):]
-        if rest.startswith(".") or rest.startswith("-[P"):
-            found.append(path)
+        if not (rest.startswith(".") or rest.startswith("-[P")):
+            continue
+        _, _, ext = rest.partition(".")
+        if "." in ext:
+            continue  # 带格式号的合并中间文件（stem.f137.mp4）
+        found.append(path)
     return sorted(found)
 
 
@@ -248,6 +262,37 @@ def find_file(out_dir: Path, stem: str) -> Path | None:
     """兼容旧用法：命中即返回第一个文件。"""
     files = find_files(out_dir, stem)
     return files[0] if files else None
+
+
+def _part_of(path: Path, stem: str) -> str:
+    """stem-[P2].mp4 → "-[P2]"；单 P 的 stem.mp4 → ""（用于按分 P 分组）。"""
+    rest = path.name[len(stem):]
+    part, _, _ = rest.partition(".")
+    return part if part.startswith("-[P") else ""
+
+
+def _audio_only_files(files: list[Path], stem: str) -> list[Path]:
+    """返回「整组只有音频」的那些分 P 的文件（单 P 就是 stem.m4a 这类）。"""
+    groups: dict[str, list[Path]] = {}
+    for path in files:
+        groups.setdefault(_part_of(path, stem), []).append(path)
+    return [
+        path
+        for group in groups.values()
+        if all(p.suffix.lower() in _AUDIO_SUFFIXES for p in group)
+        for path in group
+    ]
+
+
+def has_video(files: list[Path], stem: str) -> bool:
+    """每个分 P 都至少有一个视频容器文件才算下全了。
+
+    B 站音视频合并失败时会只留下 m4a，而 ignoreerrors 把错误吞掉，
+    以前这里只看「有没有文件」，于是把半成品当成功写进 downloads.status=done。
+    """
+    if not files:
+        return False
+    return not _audio_only_files(files, stem)
 
 
 def _total_duration(info: dict | None) -> int:
@@ -312,8 +357,12 @@ def download(
     没超限再按用户原配置正常下载（多一次元数据解析，换取清晰度不被探测污染）。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    # quality=audio 时音频就是成品；其余情况必须真有视频文件，只在旧版留下的
+    # 半成品（仅有 m4a）不算「已存在」，要重新下一次把视频补回来。
+    want_video = quality != "audio"
     if (existing := find_files(out_dir, stem)) and not any("-[P" in p.name for p in existing):
-        return True, str(existing[0]), "已存在"
+        if not want_video or has_video(existing, stem):
+            return True, str(existing[0]), "已存在"
 
     def _opts() -> dict:
         return build_opts(
@@ -339,14 +388,23 @@ def download(
         except Exception as e:  # noqa: BLE001
             logger.warning("yt-dlp 异常 %s: %s", url, e)
             reason = str(e)[:300]
-        if (found := find_files(out_dir, stem)):
+        found = find_files(out_dir, stem)
+        if found and (not want_video or has_video(found, stem)):
             return True, str(found[0]), ""
-        reason = collector.last_error() or reason or "下载结束但没有输出文件（详见 yt-dlp 日志）"
+        detail = collector.last_error() or reason
+        if found and want_video:
+            # 只剩音频：B 站音视频合并失败 / 视频流中断，半成品不能算成功
+            names = "、".join(p.name for p in _audio_only_files(found, stem))[:120]
+            reason = f"只下载到音频没有视频（{names}），多为音视频合并失败或视频流中断"
+            if detail:
+                reason = f"{reason}：{detail}"
+        else:
+            reason = detail or "下载结束但没有输出文件（详见 yt-dlp 日志）"
         if round_no == 2 or not _transient(reason):
             break
         logger.info("网络不通，重新解析后再试一次 %s：%s", url, reason[:100])
         time.sleep(1.5)
         opts = _opts()
 
-    logger.warning("yt-dlp 未产出文件 %s：%s", url, reason)
+    logger.warning("yt-dlp 未产出可用的成品文件 %s：%s", url, reason)
     return False, "", reason[:300]

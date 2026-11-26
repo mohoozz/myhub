@@ -14,7 +14,14 @@ from sqlmodel import Session, select
 from app import credentials, jobs
 from app.config import get_settings
 from app.cookies import CookieError
-from app.downloader import download, download_direct, download_images, download_images_by_url, find_files
+from app.downloader import (
+    download,
+    download_direct,
+    download_images,
+    download_images_by_url,
+    find_files,
+    has_video,
+)
 from app.downloader.ytdlp import ffmpeg_available, find_deno
 from app.dynamic_html import image_data_uri, write_dynamic_html, write_video_card
 from app.filetime import touch_published
@@ -233,15 +240,47 @@ def _pick_targets(
         (d.platform, d.content_id): d
         for d in session.exec(select(Download).where(Download.platform == platform)).all()
     }
+    # quality=audio 时音频本来就是成品，不能把 m4a 判成「缺视频」
+    want_video = get_settings().quality != "audio"
     picked: list[tuple[Content, Download]] = []
     for content in contents:
         if only_ids and content.content_id not in only_ids:
             continue
         dl = downloads.get((content.platform, content.content_id))
-        if dl is None or dl.status not in ("pending", "failed"):
+        if dl is None:
             continue
+        if dl.status not in ("pending", "failed"):
+            # 旧版本只要目录里有文件就记 done，B 站音视频合并失败只留下 m4a 时
+            # 也被当成成功。这里识别出这种半成品，改回 pending 重新补视频。
+            if (
+                want_video
+                and dl.status == "done"
+                and content.media_type == "video"
+                and _audio_only_result(content, dl)
+            ):
+                logger.warning(
+                    "修正历史记录（只有音频没有视频），重新下载：%s %s",
+                    content.platform, content.content_id,
+                )
+                dl.status, dl.error = "pending", ""
+                dl.attempts, dl.path, dl.size = 0, "", 0
+                dl.finished_at = None
+                session.add(dl)
+                session.commit()
+            else:
+                continue
         picked.append((content, dl))
     return picked
+
+
+def _audio_only_result(content: Content, dl: Download) -> bool:
+    """done 的记录实际只有音频文件（音视频没合并 / 视频流没下完）。"""
+    if not dl.path:
+        return False
+    path = Path(dl.path)
+    stem = _stem(content)
+    files = find_files(path.parent, stem)
+    return bool(files) and not has_video(files, stem)
 
 
 def _stem(content: Content) -> str:
