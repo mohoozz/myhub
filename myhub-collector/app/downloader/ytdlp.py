@@ -5,8 +5,10 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import yt_dlp
@@ -123,16 +125,24 @@ def _transient(reason: str) -> bool:
     return any(hint in text for hint in _TRANSIENT_HINTS)
 
 
-# ===== B 站 PCDN 兜底 =====
-# B 站部分视频（新投稿、冷门视频）的 DASH 播放地址只给 PCDN 边缘节点
-# （*.edge.mountaintoys.cn:4483），运营商封了 4483 这类非标端口时永远连不上。
-# 实测这些视频用 html5 接口拿到的还是常规 CDN（*.bilivideo.com:443），
-# 只是画质上限 720P。所以 DASH 走不通时降级成 html5 的 MP4 单文件。
+# ===== B 站 PCDN 换源兜底 =====
+# 部分视频的 DASH 播放地址只给 PCDN 边缘节点（*.edge.mountaintoys.cn:4483）。
+# 实测 B 站签名不绑定 host：把 host 换成常规 CDN（upos-*），path/query/签名
+# 保持不变仍然返回 206。因此保留 1080P DASH，只换一个可达 CDN。
+# 主机列表优先从 playurl 响应的 backupUrl 自动学习（见 _host_pool），
+# 下面的常量只是响应里全是 PCDN 时的兜底种子，不需要人工跟着 B 站改。
 _BV_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
 _BILI_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+_BILI_CDN_MIRRORS = (
+    "upos-sz-mirrorcos.bilivideo.com",
+    "upos-sz-mirrorali.bilivideo.com",
+    "upos-sz-mirrorhw.bilivideo.com",
+)
+_BILI_QN = {"best": 120, "1080": 80, "720": 64, "480": 32}
+_BILI_QN_LABEL = {120: "4K", 112: "1080P+", 80: "1080P", 74: "720P60", 64: "720P", 32: "480P", 16: "360P"}
 
 
 def _cookie_header(cookiefile: Path | None) -> str:
@@ -155,8 +165,11 @@ def _cookie_header(cookiefile: Path | None) -> str:
     return "; ".join(pairs)
 
 
-def _bili_client(proxy: str) -> httpx.Client:
-    kwargs: dict = {"timeout": httpx.Timeout(20.0, connect=8.0), "follow_redirects": True}
+def _bili_client(proxy: str, timeout: float = 20.0) -> httpx.Client:
+    kwargs: dict = {
+        "timeout": httpx.Timeout(timeout, connect=min(8.0, timeout)),
+        "follow_redirects": True,
+    }
     if proxy in ("", "direct"):
         kwargs["trust_env"] = False
     elif proxy != "system":
@@ -184,73 +197,214 @@ def _cleanup_intermediates(out_dir: Path, stem: str) -> None:
                 pass
 
 
-def _fetch_page_mp4(
-    client: httpx.Client, headers: dict, bvid: str, cid: int, target: Path
+def _is_pcdn(url: str) -> bool:
+    return "edge.mountaintoys.cn" in url or ":4483" in url
+
+
+def _replace_url_host(url: str, host: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme or "https", host, parts.path, parts.query, parts.fragment))
+
+
+def _fmt_urls(fmt: dict) -> list[str]:
+    urls = [fmt.get("baseUrl") or fmt.get("base_url")]
+    urls += list(fmt.get("backupUrl") or fmt.get("backup_url") or [])
+    return [u for u in urls if u]
+
+
+def _host_pool(dash: dict) -> list[str]:
+    """从 playurl 响应里学可达的常规 CDN 主机（backupUrl 常带），静态列表只兜底。
+
+    B 站的备用地址本身就指向常规 CDN，换成这些 host 等于用官方给的节点；
+    静态列表仅在响应全是 PCDN 主机时兜底，避免以后换域名就完全失效。
+    """
+    learned: list[str] = []
+    for key in ("video", "audio"):
+        for fmt in dash.get(key) or []:
+            for url in _fmt_urls(fmt):
+                if _is_pcdn(url):
+                    continue
+                host = urlsplit(url).netloc
+                if host:
+                    learned.append(host)
+    hosts: list[str] = []
+    for host in learned + list(_BILI_CDN_MIRRORS):
+        if host not in hosts:
+            hosts.append(host)
+    return hosts[:6]
+
+
+def _candidate_urls(fmt: dict, hosts: list[str] | None = None) -> list[str]:
+    """常规 CDN 地址优先，PCDN 地址放最后，只作为理论上的兜底。"""
+    urls = _fmt_urls(fmt)
+    if not urls:
+        return []
+    candidates: list[str] = [u for u in urls if not _is_pcdn(u)]
+    for host in (hosts if hosts is not None else _BILI_CDN_MIRRORS):
+        candidates.append(_replace_url_host(urls[0], host))
+    candidates.extend(urls)
+    seen: set[str] = set()
+    result: list[str] = []
+    for url in candidates:
+        if url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
+
+
+def _pick_video_format(dash: dict, target_qn: int) -> dict | None:
+    videos = [f for f in dash.get("video") or [] if f.get("baseUrl") and f.get("id")]
+    if not videos:
+        return None
+    eligible = [f for f in videos if int(f["id"]) <= target_qn] or videos
+    best_qn = max(int(f["id"]) for f in eligible)
+    same = [f for f in eligible if int(f["id"]) == best_qn]
+    # 优先 AVC（兼容性最好），其次 HEVC，最后 AV1
+    for prefix in ("avc1", "hvc1", "hev1", "av01"):
+        matched = [f for f in same if str(f.get("codecs") or "").startswith(prefix)]
+        if matched:
+            return max(matched, key=lambda f: int(f.get("bandwidth") or 0))
+    return max(same, key=lambda f: int(f.get("bandwidth") or 0))
+
+
+def _pick_audio_format(dash: dict) -> dict | None:
+    audios = [f for f in dash.get("audio") or [] if f.get("baseUrl")]
+    if not audios:
+        return None
+    aac = [f for f in audios if "mp4a" in str(f.get("codecs") or "")]
+    pool = aac or audios
+    return max(pool, key=lambda f: (int(f.get("id") or 0), int(f.get("bandwidth") or 0)))
+
+
+def _bili_selected_is_pcdn(
+    url: str, quality: str, cookiefile: Path | None, proxy: str
+) -> bool:
+    """开下前探测选中的 DASH 地址是否落在 PCDN；失败按“未知”处理，继续 yt-dlp。"""
+    match = _BV_RE.search(url or "")
+    if not match:
+        return False
+    bvid = match.group(1)
+    target_qn = _BILI_QN.get(quality, 80)
+    headers = {
+        "User-Agent": _BILI_UA,
+        "Referer": f"https://www.bilibili.com/video/{bvid}/",
+        "Origin": "https://www.bilibili.com",
+    }
+    if cookie := _cookie_header(cookiefile):
+        headers["Cookie"] = cookie
+    try:
+        with _bili_client(proxy, timeout=6.0) as client:
+            view = client.get(
+                "https://api.bilibili.com/x/web-interface/view",
+                params={"bvid": bvid}, headers=headers,
+            ).json()
+            data = view.get("data") or {}
+            pages = data.get("pages") or [{"cid": data.get("cid")}]
+            cid = pages[0].get("cid") if pages else None
+            if not cid:
+                return False
+            play_params = {
+                "bvid": bvid, "cid": cid, "qn": target_qn,
+                "fnval": 4048, "fnver": 0, "fourk": 1, "platform": "pc",
+            }
+            if "Cookie" not in headers:
+                # 未登录时 B 站默认只给 480P，带上 try_look 才会返回全清晰度
+                play_params["try_look"] = 1
+            play = client.get(
+                "https://api.bilibili.com/x/player/playurl",
+                params=play_params,
+                headers=headers,
+            ).json()
+            dash = (play.get("data") or {}).get("dash") or {}
+            video = _pick_video_format(dash, target_qn)
+            audio = _pick_audio_format(dash)
+            if not video or not audio:
+                return False
+            urls = _fmt_urls(video) + _fmt_urls(audio)
+            return any(_is_pcdn(u) for u in urls)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _download_stream(
+    client: httpx.Client, urls: list[str], dest: Path, headers: dict, stage: str
 ) -> tuple[bool, str]:
-    """用 html5 接口取一个分 P 的 MP4（常规 CDN），多段顺序拼接。"""
+    """依次尝试候选 URL，把响应流写入 dest；全部失败才返回错误。"""
     from app import jobs
 
+    last = ""
+    for url in urls:
+        tmp = dest.with_name(dest.name + ".part")
+        try:
+            with client.stream("GET", url, headers=headers) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length") or 0)
+                done = 0
+                with tmp.open("wb") as fh:
+                    for chunk in resp.iter_bytes(1 << 20):
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            jobs.report_progress(
+                                stage=stage,
+                                percent=round(done * 100 / total, 1),
+                                downloaded=done, size=total,
+                            )
+            if tmp.stat().st_size <= 0:
+                raise OSError("下载文件为空")
+            tmp.replace(dest)
+            return True, ""
+        except Exception as e:  # noqa: BLE001
+            tmp.unlink(missing_ok=True)
+            last = f"{type(e).__name__}: {e}"
+    return False, last[:200] or "没有可用的下载地址"
+
+
+def _ffmpeg_exe(location: str = "") -> str:
+    ffmpeg_dir = _ffmpeg_dir(location)
+    if ffmpeg_dir:
+        return str(Path(ffmpeg_dir) / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg"))
+    return shutil.which("ffmpeg") or ""
+
+
+def _merge_av(video: Path, audio: Path, final: Path, ffmpeg_location: str) -> tuple[bool, str]:
+    ffmpeg = _ffmpeg_exe(ffmpeg_location)
+    if not ffmpeg:
+        return False, "没有找到 ffmpeg，无法合并 1080P 音视频"
+    final.unlink(missing_ok=True)
+    cmd = [ffmpeg, "-y", "-loglevel", "error", "-i", str(video), "-i", str(audio), "-c", "copy"]
+    if final.suffix.lower() == ".mp4":
+        cmd += ["-movflags", "+faststart"]
+    cmd.append(str(final))
     try:
-        j = client.get(
-            "https://api.bilibili.com/x/player/playurl",
-            params={"bvid": bvid, "cid": cid, "qn": 80, "fnval": 1,
-                    "fnver": 0, "fourk": 0, "platform": "html5"},
-            headers=headers,
-        ).json()
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     except Exception as e:  # noqa: BLE001
-        return False, f"取 html5 播放地址异常：{type(e).__name__}: {e}"
-    if j.get("code") != 0:
-        return False, f"html5 播放地址失败：{j.get('message')}"
-    durl = (j.get("data") or {}).get("durl") or []
-    if not durl:
-        return False, "html5 播放地址为空（可能是付费/大会员视频）"
-
-    total = sum(int(seg.get("size") or 0) for seg in durl)
-    done = 0
-    tmp = target.with_name(target.name + ".part")
-    try:
-        with tmp.open("wb") as fh:
-            for seg in durl:
-                urls = [seg.get("url")] + list(seg.get("backup_url") or [])
-                err: Exception | None = None
-                for seg_url in [u for u in urls if u]:
-                    try:
-                        with client.stream("GET", seg_url, headers=headers) as r:
-                            r.raise_for_status()
-                            for chunk in r.iter_bytes(1 << 20):
-                                fh.write(chunk)
-                                done += len(chunk)
-                                if total:
-                                    jobs.report_progress(
-                                        stage="下载（720P 兜底）",
-                                        percent=round(done * 100 / total, 1),
-                                        downloaded=done, size=total,
-                                    )
-                        err = None
-                        break
-                    except Exception as e:  # noqa: BLE001
-                        err = e
-                if err is not None:
-                    raise err
-        tmp.replace(target)
-        return True, ""
-    except Exception as e:  # noqa: BLE001
-        tmp.unlink(missing_ok=True)
-        return False, f"html5 MP4 下载失败：{type(e).__name__}: {e}"[:200]
+        final.unlink(missing_ok=True)
+        return False, f"合并异常：{type(e).__name__}: {e}"
+    if r.returncode != 0:
+        final.unlink(missing_ok=True)
+        return False, f"合并失败：{(r.stderr or '')[-200:]}"
+    if not final.exists() or final.stat().st_size <= 0:
+        final.unlink(missing_ok=True)
+        return False, "合并后没有输出文件"
+    return True, ""
 
 
-def download_bilibili_mp4(
+def download_bilibili_dash(
     url: str,
     out_dir: Path,
     stem: str,
+    quality: str = "1080",
     cookiefile: Path | None = None,
     proxy: str = "direct",
+    ffmpeg_location: str = "",
 ) -> tuple[bool, str, str]:
-    """B 站 PCDN 兜底下载：html5 接口取 MP4（常规 CDN，画质上限 720P）。"""
+    """B 站 PCDN 兜底：保留 DASH 画质，把不可达的 host 换成常规 CDN 后合并。"""
     match = _BV_RE.search(url or "")
     if not match:
         return False, "", "无法从链接解析 BV 号"
     bvid = match.group(1)
+    target_qn = _BILI_QN.get(quality, 80)
     headers = {
         "User-Agent": _BILI_UA,
         "Referer": f"https://www.bilibili.com/video/{bvid}/",
@@ -275,21 +429,78 @@ def download_bilibili_mp4(
                 cid = page.get("cid")
                 if not cid:
                     continue
+                play_params = {
+                    "bvid": bvid, "cid": cid, "qn": target_qn,
+                    "fnval": 4048, "fnver": 0, "fourk": 1, "platform": "pc",
+                }
+                if "Cookie" not in headers:
+                    play_params["try_look"] = 1
+                play = client.get(
+                    "https://api.bilibili.com/x/player/playurl",
+                    params=play_params,
+                    headers=headers,
+                ).json()
+                if play.get("code") != 0:
+                    return False, "", f"取 DASH 地址失败：{play.get('message')}"
+                dash = (play.get("data") or {}).get("dash") or {}
+                video = _pick_video_format(dash, target_qn)
+                audio = _pick_audio_format(dash)
+                if not video or not audio:
+                    return False, "", "DASH 没有可用的视频/音频流"
+
+                qn = int(video.get("id") or target_qn)
+                label = _BILI_QN_LABEL.get(qn, f"{qn}")
+                if qn < target_qn:
+                    logger.info(
+                        "B 站只返回了 %s 流（目标 %s）%s",
+                        label, _BILI_QN_LABEL.get(target_qn, target_qn), bvid,
+                    )
+                ext = ".mkv" if "flac" in str(audio.get("codecs") or "").lower() else ".mp4"
                 index = page.get("page") or 1
-                name = f"{stem}-[P{index}].mp4" if multi else f"{stem}.mp4"
+                name = f"{stem}-[P{index}]{ext}" if multi else f"{stem}{ext}"
                 target = out_dir / name
                 if target.exists() and target.stat().st_size > 0:
                     continue
-                ok, err = _fetch_page_mp4(client, headers, bvid, cid, target)
+
+                video_path = out_dir / f"{target.stem}.video.mp4"
+                audio_path = out_dir / f"{target.stem}.audio.m4a"
+                hosts = _host_pool(dash)
+                ok, err = _download_stream(
+                    client, _candidate_urls(video, hosts), video_path,
+                    headers, f"下载视频（{label} 换源）",
+                )
+                if not ok:
+                    return False, "", f"视频流下载失败：{err}"
+                ok, err = _download_stream(
+                    client, _candidate_urls(audio, hosts), audio_path,
+                    headers, f"下载音频（{label} 换源）",
+                )
+                if not ok:
+                    video_path.unlink(missing_ok=True)
+                    return False, "", f"音频流下载失败：{err}"
+
+                from app import jobs
+
+                jobs.report_progress(stage=f"合并（{label} 换源）", percent=100.0)
+                ok, err = _merge_av(video_path, audio_path, target, ffmpeg_location)
+                video_path.unlink(missing_ok=True)
+                audio_path.unlink(missing_ok=True)
                 if not ok:
                     return False, "", err
     except Exception as e:  # noqa: BLE001
-        return False, "", f"html5 兜底异常：{type(e).__name__}: {e}"[:300]
+        return False, "", f"1080P 换源异常：{type(e).__name__}: {e}"[:300]
 
     if found := find_files(out_dir, stem):
-        _cleanup_intermediates(out_dir, stem)
-        return True, str(found[0]), ""
-    return False, "", "html5 兜底没有产出文件"
+        if has_video(found, stem):
+            videos = [p for p in found if p.suffix.lower() not in _AUDIO_SUFFIXES]
+            # 首轮 yt-dlp 失败可能留下 stem.m4a，别让它排在 stem.mp4 前面被当成成品
+            for path in found:
+                if path.suffix.lower() in _AUDIO_SUFFIXES:
+                    path.unlink(missing_ok=True)
+            _cleanup_intermediates(out_dir, stem)
+            if videos:
+                return True, str(videos[0]), ""
+    return False, "", "1080P 换源没有产出可用文件"
 
 
 def _on_progress(d: dict) -> None:
@@ -366,7 +577,7 @@ def build_opts(
         "quiet": True,
         "noprogress": True,
         # 卡死防护：单个请求 15s 没动静就算失败。B 站的 PCDN 节点（4483 端口）
-        # 根本连不上，重试只是白等，快速放弃交给 html5 兜底；其他平台留 4 次容错。
+        # 根本连不上，重试只是白等，快速放弃交给 CDN 换源兜底；其他平台留 4 次容错。
         "retries": 2 if platform == "bilibili" else 4,
         "fragment_retries": 2 if platform == "bilibili" else 4,
         "socket_timeout": 15,
@@ -547,12 +758,25 @@ def download(
         if total > max_duration_sec:
             return False, "", duration_skip_error(total, max_duration_sec)
 
+    # 开下前先探测：选中的地址全是 PCDN 时直接换源，避免先白等 yt-dlp 重试。
+    if platform == "bilibili" and want_video and ffmpeg_available(ffmpeg_location):
+        if _bili_selected_is_pcdn(url, quality, cookiefile, proxy):
+            logger.info("检测到 B 站 PCDN 地址，直接换源下载 %s", url)
+            ok_dash, path_dash, err_dash = download_bilibili_dash(
+                url, out_dir, stem, quality=quality, cookiefile=cookiefile,
+                proxy=proxy, ffmpeg_location=ffmpeg_location,
+            )
+            if ok_dash:
+                logger.info("常规 CDN 换源成功 %s", url)
+                return True, path_dash, ""
+            logger.warning("常规 CDN 换源失败，继续走 yt-dlp %s：%s", url, err_dash[:120])
+
     # 最多两轮：第二轮是「重新解析」再下一次。B 站每次播放地址会分配到不同
     # 镜像节点，本轮连不上时，换一份地址往往就能下（等同于手动再点一次下载）。
     # B 站另有 PCDN 特例：某些视频的 DASH 只给 *.edge.mountaintoys.cn:4483
-    # 这类被封禁的 PCDN 节点，重解析也换不掉，只能改走 html5 的常规 CDN。
+    # 这类被封禁的 PCDN 节点，重解析也换不掉，需要把 host 换成常规 CDN。
     reason = ""
-    tried_mp4 = False
+    tried_rewrite = False
     for round_no in (1, 2):
         collector = _ErrorCollector()
         opts["logger"] = collector
@@ -564,7 +788,11 @@ def download(
             reason = str(e)[:300]
         found = find_files(out_dir, stem)
         if found and (not want_video or has_video(found, stem)):
-            return True, str(found[0]), ""
+            first = next(
+                (p for p in found if p.suffix.lower() not in _AUDIO_SUFFIXES),
+                found[0],
+            )
+            return True, str(first), ""
         detail = collector.last_error() or reason
         if found and want_video:
             # 只剩音频：B 站音视频合并失败 / 视频流中断，半成品不能算成功
@@ -576,17 +804,18 @@ def download(
             reason = detail or "下载结束但没有输出文件（详见 yt-dlp 日志）"
         if round_no == 2 or not _transient(reason):
             break
-        if not tried_mp4 and platform == "bilibili" and want_video:
-            tried_mp4 = True
-            logger.info("DASH 不通（B 站 PCDN 节点不可达），改用 html5 MP4 兜底 %s", url)
-            ok_mp4, path_mp4, err_mp4 = download_bilibili_mp4(
-                url, out_dir, stem, cookiefile=cookiefile, proxy=proxy,
+        if not tried_rewrite and platform == "bilibili" and want_video:
+            tried_rewrite = True
+            logger.info("DASH 不通（B 站 PCDN 节点不可达），改用常规 CDN 换源 %s", url)
+            ok_dash, path_dash, err_dash = download_bilibili_dash(
+                url, out_dir, stem, quality=quality, cookiefile=cookiefile,
+                proxy=proxy, ffmpeg_location=ffmpeg_location,
             )
-            if ok_mp4:
-                logger.info("html5 MP4 兜底成功（720P）%s", url)
-                return True, path_mp4, ""
-            logger.warning("html5 MP4 兜底失败 %s：%s", url, err_mp4[:120])
-            reason = err_mp4 or reason
+            if ok_dash:
+                logger.info("常规 CDN 换源成功 %s", url)
+                return True, path_dash, ""
+            logger.warning("常规 CDN 换源失败 %s：%s", url, err_dash[:120])
+            reason = err_dash or reason
         logger.info("网络不通，重新解析后再试一次 %s：%s", url, reason[:100])
         time.sleep(1.5)
         opts = _opts()
