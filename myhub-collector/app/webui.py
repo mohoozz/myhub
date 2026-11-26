@@ -47,6 +47,7 @@ header.top{display:flex;align-items:flex-end;justify-content:space-between;
 header.top h1{margin:0;font-size:21px}
 header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 .top-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+[hidden]{display:none!important}
 .btn{border:1px solid var(--line);background:var(--panel2);border-radius:8px;
   padding:7px 13px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
   transition:.15s border-color,.15s background}
@@ -67,9 +68,14 @@ header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 @media(min-width:1021px){
   #view-progress .grid-2>.card>.hint{height:36px;margin-bottom:12px;overflow:hidden}
 }
-.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
 .grid-2{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);gap:14px}
 @media(max-width:1020px){.grid-3,.grid-2{grid-template-columns:1fr}}
+.plat-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;margin-bottom:10px}
+.plat-bar .hint{margin:0;color:var(--muted);font-size:12.5px}
+.plat-bar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wait-label{color:var(--muted);font-size:12.5px;display:flex;gap:6px;align-items:center}
 .icon{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;
   font-weight:800;font-size:16px;flex:none}
 .icon.bilibili{background:linear-gradient(135deg,#fb7299,#ff9eb5)}
@@ -95,6 +101,15 @@ header.top p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 .bar-wrap{display:flex;align-items:center;gap:10px}
 .bar-wrap .bar{flex:1}
 .num{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px;white-space:nowrap}
+.collect-box{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;padding:10px;
+  border:1px solid var(--line);border-radius:9px;background:var(--panel2)}
+.collect-box input[type=date],.collect-box select{width:100%;box-sizing:border-box;
+  background:#0d1117;border:1px solid var(--line);border-radius:7px;padding:6px 9px;
+  color:inherit;font:inherit;font-size:12.5px}
+.collect-box .chk-row{display:flex;gap:12px;flex-wrap:wrap}
+.collect-box .chk-line{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12.5px}
+.collect-box .btn{width:100%;justify-content:center}
+.collect-box .hint{color:var(--dim);font-size:11.5px;line-height:1.5}
 .days{display:flex;flex-direction:column;gap:6px;max-height:560px;overflow:auto;padding-right:4px}
 .day-item{border:1px solid var(--line);background:var(--panel2);border-radius:9px;
   padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:7px}
@@ -164,8 +179,15 @@ td .t{display:block;max-width:min(760px,46vw);overflow:hidden;text-overflow:elli
 .field{display:flex;flex-direction:column;gap:5px;min-width:0}
 .field label{font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .field .help{font-size:11.5px;color:var(--dim)}
-.field input[type=text],.field select,.field textarea{background:#0d1117;
+.field input[type=text],.field input[type=number],.field select,.field textarea{background:#0d1117;
   border:1px solid var(--line);border-radius:7px;padding:7px 10px;outline:none;width:100%}
+.chk-group{display:flex;gap:14px;flex-wrap:wrap;padding:2px 0}
+.field .chk{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text);cursor:pointer}
+.chk input{accent-color:#1f6feb;margin:0}
+.fold{grid-column:1/-1;border:1px solid var(--line);border-radius:8px;
+  padding:10px 12px;background:rgba(255,255,255,.015)}
+.fold>summary{cursor:pointer;color:var(--muted);font-size:12.5px;user-select:none}
+.fold[open]>summary{color:var(--text);margin-bottom:2px}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--blue)}
 .field textarea{resize:vertical;min-height:62px;
   font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
@@ -258,9 +280,9 @@ details.adv .form-grid{margin-top:10px}
       <div><b>MyHub 采集器</b><small>本地门户</small></div></div>
     <nav>
       <button data-view="overview" class="active"><i class="dot"></i>概览</button>
-      <button data-view="platforms"><i class="dot"></i>平台登录</button>
-      <button data-view="progress"><i class="dot"></i>下载进度</button>
+      <button data-view="progress"><i class="dot"></i>动态采集</button>
       <button data-view="link"><i class="dot"></i>链接下载</button>
+      <button data-view="plans"><i class="dot"></i>定时任务</button>
       <button data-view="config"><i class="dot"></i>环境配置</button>
     </nav>
     <div class="aside-foot">
@@ -274,59 +296,49 @@ details.adv .form-grid{margin-top:10px}
       <div><h1 id="viewTitle">概览</h1><p id="viewSub">…</p></div>
       <div class="top-actions">
         <button class="btn sm ghost" id="btnInit">环境自检</button>
-        <button class="btn sm ghost" id="btnSync">同步订阅源</button>
-        <button class="btn sm primary" id="btnCollectTop">立即采集</button>
       </div>
     </header>
     <section id="view-overview">
-      <div class="grid-3" id="platCards"></div>
-      <div class="card" style="margin-top:14px">
-        <h3>开始采集</h3>
-        <p class="hint">默认采集前一天：同步关注 → 抓取 → 下载 → 生成日报。后台运行，可随时关页面。</p>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-          <input type="date" id="collectDay" style="background:#0d1117;border:1px solid var(--line);border-radius:7px;padding:7px 10px">
-          <select id="collectPlatform" style="background:#0d1117;border:1px solid var(--line);border-radius:7px;padding:7px 10px">
-            <option value="all">全部平台</option>
-            <option value="bilibili">B站</option>
-            <option value="youtube">YouTube</option>
-            <option value="douyin">抖音</option>
-          </select>
-          <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12.5px">
-            <input type="checkbox" id="collectDownload" checked> 同时下载</label>
-          <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12.5px">
-            <input type="checkbox" id="collectSync" checked> 先同步关注</label>
-          <button class="btn primary" id="btnCollect">开始采集</button>
-        </div>
-      </div>
-      <div class="card"><h3>本次服务运行的任务</h3>
-        <p class="hint">进程内记录，重启服务后清空。</p>
-        <div id="jobList"><div class="empty">暂无任务</div></div></div>
-      <div class="card"><h3>历史运行日志</h3>
-        <div id="runList"><div class="empty">还没有运行记录</div></div></div>
-    </section>
-    <section id="view-platforms" hidden>
-      <div class="card">
-        <h3>登录态</h3>
-        <p class="hint">点「登录」会弹出浏览器窗口，正常登录即可；检测到登录态后自动保存并关闭。</p>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <button class="btn primary" id="btnLoginAll">一键登录全部平台</button>
-          <label style="color:var(--muted);font-size:12.5px;display:flex;gap:6px;align-items:center">
-            等待时长
+      <div class="plat-bar">
+        <p class="hint" style="margin:0">登录一次长期有效，登录态存在 data/credentials/；点「登录」会弹出浏览器窗口，检测到登录态后自动保存并关闭。</p>
+        <div class="plat-bar-actions">
+          <label class="wait-label">等待时长
             <select id="loginWait" style="background:#0d1117;border:1px solid var(--line);border-radius:7px;padding:5px 8px">
               <option value="120">2 分钟</option>
               <option value="300" selected>5 分钟</option>
               <option value="600">10 分钟</option>
             </select>
           </label>
+          <button class="btn primary sm" id="btnLoginAll">一键登录全部平台</button>
         </div>
       </div>
-      <div class="grid-3" id="platformFull" style="margin-top:14px"></div>
+      <div class="grid-3" id="platCards"></div>
+      <div class="card"><h3>本次服务运行的任务</h3>
+        <p class="hint">进程内记录，重启服务后清空。</p>
+        <div id="jobList"><div class="empty">暂无任务</div></div></div>
+      <div class="card"><h3>历史运行日志</h3>
+        <div id="runList"><div class="empty">还没有运行记录</div></div></div>
     </section>
     <section id="view-progress" hidden>
       <div class="grid-2">
         <div class="card">
           <div class="card-head"><h3>按天查看</h3></div>
           <p class="hint">以内容发布时间归档，展示每条内容的下载状态。</p>
+          <div class="collect-box">
+            <input type="date" id="collectDay" title="采集哪一天，默认昨天">
+            <select id="collectPlatform" title="采集哪些平台">
+              <option value="all">全部平台</option>
+              <option value="bilibili">B站</option>
+              <option value="youtube">YouTube</option>
+              <option value="douyin">抖音</option>
+            </select>
+            <div class="chk-row">
+              <label class="chk-line"><input type="checkbox" id="collectDownload" checked> 同时下载</label>
+              <label class="chk-line"><input type="checkbox" id="collectSync" checked> 先同步关注</label>
+            </div>
+            <button class="btn primary sm" id="btnCollect">开始采集</button>
+            <p class="hint" style="margin:0">同步关注 → 抓取 → 下载 → 生成日报，后台运行，可随时关页面。</p>
+          </div>
           <div class="days" id="dayList"><div class="empty">还没有采集记录</div></div></div>
         <div class="card">
           <div class="card-head"><h3 id="dayTitle">选择一天</h3></div>
@@ -345,7 +357,7 @@ details.adv .form-grid{margin-top:10px}
         <h3>粘贴链接开始下载</h3>
         <p class="hint">支持抖音单视频、B站单视频 / 稍后再看、YouTube 单视频 / 播放列表 / 稍后观看。
           一行一个，直接粘贴分享文案也行；落盘命名和采集一致（平台-作者-标题-内容号），
-          下载进度页、日报、失败重试都能看到。</p>
+          动态采集页、日报、失败重试都能看到。</p>
         <textarea id="linkText" class="link-input" rows="7"
           placeholder="https://www.bilibili.com/video/BV1xx411c7mD&#10;https://www.bilibili.com/watchlater/&#10;https://youtu.be/xxxxxxxxxxx&#10;https://www.youtube.com/playlist?list=PLxxxxxxxx&#10;https://www.douyin.com/video/7300000000000000000"></textarea>
         <div class="link-bar">
@@ -358,6 +370,28 @@ details.adv .form-grid{margin-top:10px}
         <h3>本次结果</h3>
         <p class="hint">最近一次链接下载的逐条状态。</p>
         <div id="linkResult"><div class="empty">还没有链接下载记录</div></div>
+      </div>
+    </section>
+    <section id="view-plans" hidden>
+      <div class="card">
+        <div class="card-head"><h3>定时计划</h3>
+          <div style="display:flex;gap:8px">
+            <button class="btn sm ghost" id="btnPlanReload">刷新</button>
+            <button class="btn sm primary" id="btnPlanNew">新建计划</button>
+          </div>
+        </div>
+        <p class="hint">到点由门户服务在后台执行，改完立即生效、不用重启。
+          同一类型可以建多条，比如「每天 3 点全平台采集」和「每小时只抓抖音」。</p>
+        <div id="planList"><div class="empty">读取中…</div></div>
+      </div>
+      <div class="card" id="planEditor" hidden style="margin-top:14px">
+        <div class="card-head"><h3 id="planEditorTitle">新建计划</h3><span class="badge" id="planEditorTag">…</span></div>
+        <div class="form-grid" id="planForm"></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
+          <button class="btn primary" id="btnPlanSave">保存计划</button>
+          <button class="btn ghost" id="btnPlanCancel">取消</button>
+          <span class="msg" id="planMsg" style="color:var(--muted);font-size:12.5px"></span>
+        </div>
       </div>
     </section>
     <section id="view-config" hidden>
@@ -447,7 +481,7 @@ function fmtSize(n){
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
   return n.toFixed(n >= 100 ? 0 : 1) + " " + u[i];
 }
-const S = { overview:null, days:null, day:null, env:null, view:"overview", linkResult:null };
+const S = { overview:null, days:null, day:null, env:null, view:"overview", linkResult:null, plans:null };
 let jobTimer = null, jobId = null, jobState = null, jobSeen = false;
 
 async function api(path, opt){
@@ -471,29 +505,31 @@ function toast(text, kind){
 }
 
 const META = {
-  overview: ["概览", "三个平台的登录态、昨天的下载情况和最近的运行记录"],
-  platforms: ["平台登录", "登录一次长期有效，登录态存在 data/credentials/"],
-  progress: ["下载进度", "按内容发布时间查看每天的采集与下载情况"],
+  overview: ["概览", "三个平台的登录态、本次服务运行的任务与最近的运行记录"],
+  progress: ["动态采集", "选好日期和平台开始采集，并按内容发布时间查看每天的下载情况"],
   link: ["链接下载", "粘贴 B站 / YouTube / 抖音 链接直接下载，命名和采集一致"],
+  plans: ["定时任务", "按 cron 自动执行；可以建多条计划，同一类型也能有不同时间 / 平台"],
   config: ["环境配置", "直接改 .env；保存后立即生效（目录类改动需重启服务）"],
 };
 function switchView(view){
   S.view = view;
   $$("nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-  ["overview","platforms","progress","link","config"].forEach((v) => {
+  ["overview","progress","link","plans","config"].forEach((v) => {
     document.getElementById("view-" + v).hidden = v !== view;
   });
   $("#viewTitle").textContent = META[view][0];
   $("#viewSub").textContent = META[view][1];
-  if (view === "overview" || view === "platforms") loadOverview();
+  $("#btnInit").hidden = view !== "overview";
+  if (view === "overview") loadOverview();
   if (view === "progress") loadProgress();
   if (view === "link") { linkCount(); if (S.linkResult) renderLinkResult(S.linkResult); }
+  if (view === "plans") loadPlans();
   if (view === "config") loadConfig();
 }
 $$("nav button").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
 
 /* ---------- 平台卡 ---------- */
-function platCard(p, compact){
+function platCard(p){
   const badge = p.ok ? '<span class="badge ok">已登录</span>' : '<span class="badge bad">未登录</span>';
   return '<div class="card plat">' +
     '<div class="head"><div class="icon ' + esc(p.platform) + '">' + esc(p.brand) + '</div>' +
@@ -503,17 +539,11 @@ function platCard(p, compact){
     '<span>来源</span><span>' + esc(p.source) + '</span></div>' +
     '<div style="display:flex;gap:8px">' +
     '<button class="btn primary sm" data-login="' + esc(p.platform) + '">' + (p.ok ? "重新登录" : "登录") + '</button>' +
-    (compact ? "" : '<button class="btn sm ghost" data-sync="' + esc(p.platform) + '">同步订阅</button>') +
     '</div></div>';
 }
 function bindCards(root){
   root.querySelectorAll("[data-login]").forEach((b) =>
     b.addEventListener("click", () => startLogin(b.dataset.login)));
-  root.querySelectorAll("[data-sync]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      try { watchJob((await api("/api/sync", { method:"POST", body:{ platform:b.dataset.sync } })).job_id); }
-      catch (e) { toast(e.message, "err"); }
-    }));
 }
 
 async function loadOverview(){
@@ -523,10 +553,8 @@ async function loadOverview(){
     $("#footData").textContent = d.env.data_dir;
     $("#footDown").textContent = d.env.download_dir;
     $("#footReport").textContent = d.env.report_dir;
-    $("#platCards").innerHTML = d.platforms.map((p) => platCard(p, true)).join("");
+    $("#platCards").innerHTML = d.platforms.map((p) => platCard(p)).join("");
     bindCards($("#platCards"));
-    $("#platformFull").innerHTML = d.platforms.map((p) => platCard(p, false)).join("");
-    bindCards($("#platformFull"));
     renderJobs(d.jobs);
     renderRuns(d.runs);
     if (!$("#collectDay").value) $("#collectDay").value = d.last_day;
@@ -606,6 +634,312 @@ function updateJobRow(job){
     ? (progressBrief(job.progress) || "运行中…")
     : (job.summary || job.error || "—");
 }
+/* ---------- 定时计划 ---------- */
+const PLAN = { id:0 };
+const PLAT_LABEL = Object.assign({ all:"全部平台" }, PLAT);
+
+function kindsList(){ return (S.plans && S.plans.kinds) || []; }
+function kindMeta(key){ return kindsList().find((k) => k.key === key) || null; }
+
+function planParamsText(p, kind){
+  const bits = [];
+  let overrides = 0;
+  (kind ? kind.fields : []).forEach((f) => {
+    const v = (p.params || {})[f.key];
+    if (f.override) {
+      if (v != null && v !== "") overrides += 1;
+      return;
+    }
+    if (f.type === "bool") { if (v) bits.push(f.label); return; }
+    if (f.type === "platforms") {
+      const names = String(v || "all").split(",").filter(Boolean).map((x) => PLAT_LABEL[x] || x);
+      bits.push(names.join("+") || "全部平台");
+      return;
+    }
+    if (f.type === "int") { if (Number(v)) bits.push(f.label + " " + v); return; }
+    if (v != null && v !== "") bits.push(String(v));
+  });
+  if (overrides) bits.push("覆盖 " + overrides + " 项配置");
+  return bits.join(" · ") || "—";
+}
+function planBadge(p){
+  if (!p.enabled) return '<span class="badge">已停用</span>';
+  if (p.valid === false) return '<span class="badge bad">cron 有误</span>';
+  if (p.last_status === "failed") return '<span class="badge bad">上次失败</span>';
+  if (p.last_status === "busy") return '<span class="badge run">等待空闲</span>';
+  if (p.last_status === "queued") return '<span class="badge run">执行中</span>';
+  return '<span class="badge ok">已启用</span>';
+}
+function planLastText(p){
+  if (!p.last_run_at) return "—";
+  const st = { queued:"执行中", submitted:"已提交", done:"完成", failed:"失败", busy:"等待空闲" }[p.last_status] || p.last_status || "";
+  return esc(p.last_run_at) + (st ? " · " + st : "");
+}
+function renderPlans(d){
+  S.plans = d;
+  const box = $("#planList");
+  const list = d.plans || [];
+  if (!list.length) {
+    box.innerHTML = '<div class="empty">还没有计划，点右上角「新建计划」添加' +
+      (d.running ? "" : "（调度器未运行，启动门户后才会自动执行）") + '</div>';
+    return;
+  }
+  box.innerHTML = '<table><thead><tr><th>计划</th><th>cron</th><th>状态</th>' +
+    '<th>下次执行</th><th>上次</th><th style="width:240px">操作</th></tr></thead><tbody>' +
+    list.map((p) => {
+      const kind = kindMeta(p.kind);
+      return '<tr><td><b>' + esc(p.name) + '</b>' +
+        '<div class="hint" style="margin:2px 0 0">' + esc(p.kind_title) + ' · ' + esc(planParamsText(p, kind)) + '</div>' +
+        (p.last_error ? '<div class="err" style="margin-top:3px">' + esc(String(p.last_error).slice(0, 160)) + '</div>' : "") +
+        '</td>' +
+        '<td class="mono">' + esc(p.cron) + '</td>' +
+        '<td>' + planBadge(p) + '</td>' +
+        '<td class="mono">' + esc(p.enabled ? (p.next_run_at || "—") : "—") + '</td>' +
+        '<td class="mono">' + planLastText(p) + (p.runs ? ' <span class="tag">共 ' + p.runs + ' 次</span>' : "") + '</td>' +
+        '<td><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<button class="btn sm" data-plan-run="' + p.id + '">立即执行</button>' +
+          '<button class="btn sm ghost" data-plan-edit="' + p.id + '">编辑</button>' +
+          '<label class="switch" title="启用 / 停用"><input type="checkbox" data-plan-toggle="' + p.id + '"' +
+            (p.enabled ? " checked" : "") + '><span class="track"></span></label>' +
+          '<button class="btn sm ghost" data-plan-del="' + p.id + '">删除</button>' +
+        '</div></td></tr>';
+    }).join("") + '</tbody></table>' +
+    (d.running ? "" : '<div class="hint" style="margin:10px 0 0">调度器未运行：用 <code>python -m app serve</code> 启动门户后才会自动触发。</div>');
+}
+async function loadPlans(){
+  try { renderPlans(await api("/api/plans")); }
+  catch (e) { $("#planList").innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; }
+}
+
+function planEnvHint(f){
+  const value = f.env_value === "" || f.env_value == null ? "默认" : f.env_value;
+  return "用环境配置：" + value;
+}
+function planOption(value, label, current){
+  return '<option value="' + esc(value) + '"' +
+    (String(current) === String(value) ? " selected" : "") + '>' + esc(label) + '</option>';
+}
+
+function planFieldHtml(f, value){
+  const v = value === undefined || value === null ? f.default : value;
+  const key = esc(f.key);
+  const help = f.help ? '<span class="help">' + esc(f.help) + '</span>' : "";
+  if (f.type === "bool") {
+    return '<div class="field"><label>' + esc(f.label) + '</label>' +
+      '<label class="switch"><input type="checkbox" data-pf="' + key + '" data-ptype="bool"' +
+      (v ? " checked" : "") + '><span class="track"></span></label>' + help + '</div>';
+  }
+  if (f.type === "platforms") {
+    const sel = String(v || "all").split(",").filter(Boolean);
+    const all = !sel.length || sel.indexOf("all") >= 0;
+    const boxes = ["all","bilibili","youtube","douyin"].map((p) =>
+      '<label class="chk"><input type="checkbox" data-pf="' + key + '" data-ptype="platforms" value="' + p + '"' +
+      ((all ? p === "all" : sel.indexOf(p) >= 0) ? " checked" : "") + '>' + esc(PLAT_LABEL[p]) + '</label>').join("");
+    return '<div class="field" style="grid-column:1/-1"><label>' + esc(f.label) + '</label>' +
+      '<div class="chk-group">' + boxes + '</div>' + help + '</div>';
+  }
+  if (f.type === "int") {
+    return '<div class="field"><label>' + esc(f.label) + '</label>' +
+      '<input type="number" min="0" data-pf="' + key + '" data-ptype="int" value="' + esc(v) + '">' + help + '</div>';
+  }
+  if (f.type === "select") {
+    return '<div class="field"><label>' + esc(f.label) + '</label>' +
+      '<select data-pf="' + key + '" data-ptype="select">' + f.options.map((o) =>
+        '<option value="' + esc(o) + '"' + (o === v ? " selected" : "") + '>' + esc(o) + '</option>').join("") +
+      '</select>' + help + '</div>';
+  }
+  if (f.type === "inherit_text" || f.type === "inherit_int") {
+    const current = v === null || v === undefined ? "" : String(v);
+    const isInt = f.type === "inherit_int";
+    return '<div class="field"><label>' + esc(f.label) + '</label>' +
+      '<input type="' + (isInt ? "number" : "text") + '"' + (isInt ? ' min="0"' : "") +
+      ' data-pf="' + key + '" data-ptype="' + esc(f.type) + '" value="' + esc(current) + '"' +
+      ' placeholder="' + esc(planEnvHint(f)) + '">' + help + '</div>';
+  }
+  if (f.type === "inherit_bool") {
+    const cur = v === null || v === undefined || v === "" ? "" : (v ? "1" : "0");
+    return '<div class="field"><label>' + esc(f.label) + '</label>' +
+      '<select data-pf="' + key + '" data-ptype="inherit_bool">' +
+        planOption("", planEnvHint(f), cur) + planOption("1", "是", cur) + planOption("0", "否", cur) +
+      '</select>' + help + '</div>';
+  }
+  if (f.type === "inherit_select") {
+    const cur = v === null || v === undefined ? "" : String(v);
+    return '<div class="field"><label>' + esc(f.label) + '</label>' +
+      '<select data-pf="' + key + '" data-ptype="inherit_select">' +
+        planOption("", planEnvHint(f), cur) +
+        (f.options || []).map((o) => planOption(o, o, cur)).join("") +
+      '</select>' + help + '</div>';
+  }
+  return '<div class="field"><label>' + esc(f.label) + '</label>' +
+    '<input type="text" data-pf="' + key + '" data-ptype="text" value="' + esc(v == null ? "" : v) + '">' + help + '</div>';
+}
+
+function planFormHtml(kindKey, plan, keep){
+  const kinds = kindsList();
+  const kind = kindMeta(kindKey) || kinds[0];
+  if (!kind) return '<div class="empty">没有可用的任务类型</div>';
+  const params = (plan && plan.params) || {};
+  const cron = keep && keep.cron ? keep.cron : (plan ? plan.cron : kind.default_cron);
+  const name = keep ? keep.name : (plan ? plan.name : "");
+  const enabled = keep ? keep.enabled : (plan ? plan.enabled : true);
+  const normal = kind.fields.filter((f) => !f.override);
+  const conf = kind.fields.filter((f) => f.override);
+  const touched = conf.some((f) => {
+    const v = params[f.key];
+    return v !== null && v !== undefined && v !== "";
+  });
+  return '<div class="field"><label>计划名称</label>' +
+      '<input type="text" data-plan-name maxlength="64" placeholder="如：每天 3 点全平台" value="' + esc(name) + '"></div>' +
+    '<div class="field"><label>任务类型</label>' +
+      '<select id="planKind">' + kinds.map((k) =>
+        '<option value="' + esc(k.key) + '"' + (k.key === kind.key ? " selected" : "") + '>' +
+        esc(k.title) + '</option>').join("") + '</select>' +
+      '<span class="help">' + esc(kind.desc) + '</span></div>' +
+    '<div class="field"><label>cron 表达式</label>' +
+      '<input type="text" id="planCron" value="' + esc(cron) + '">' +
+      '<span class="help">5 段：分 时 日 月 周。例：0 3 * * * = 每天 03:00；*/30 * * * * = 每 30 分钟；0 4 * * 1-5 = 工作日 04:00</span></div>' +
+    '<div class="field"><label>启用</label>' +
+      '<label class="switch"><input type="checkbox" id="planEnabled"' + (enabled ? " checked" : "") +
+      '><span class="track"></span></label>' +
+      '<span class="help">停用后不再自动执行，仍可手动「立即执行」</span></div>' +
+    '<div class="form-grid" id="planParams" data-kind="' + esc(kind.key) + '" style="grid-column:1/-1">' +
+      normal.map((f) => planFieldHtml(f, params[f.key])).join("") +
+      (conf.length ?
+        '<details class="fold"' + (touched ? " open" : "") + '>' +
+          '<summary>配置覆盖（不填就用环境配置，只影响本计划）</summary>' +
+          '<div class="form-grid" style="margin-top:10px">' +
+            conf.map((f) => planFieldHtml(f, params[f.key])).join("") +
+          '</div></details>' : "") +
+    '</div>';
+}
+
+function bindPlanPicker(group){
+  group.addEventListener("change", (e) => {
+    const box = e.target;
+    if (!box.matches('input[data-ptype="platforms"]')) return;
+    const all = group.querySelector('input[value="all"]');
+    const others = Array.from(group.querySelectorAll('input[value]:not([value="all"])'));
+    if (box === all) {
+      if (all.checked) others.forEach((x) => { x.checked = false; });
+    } else if (box.checked) {
+      all.checked = false;
+    }
+    if (!all.checked && !others.some((x) => x.checked)) all.checked = true;
+  });
+}
+function bindPlanForm(){
+  const sel = $("#planKind");
+  if (sel) sel.addEventListener("change", () => {
+    const cur = readPlanForm();
+    // 换类型时保留已填的「配置覆盖」项（下载目录之类跟任务类型无关）
+    const box = $("#planParams");
+    const prev = kindMeta(box ? box.dataset.kind : "");
+    const kept = {};
+    (prev ? prev.fields : []).forEach((f) => {
+      if (f.override) kept[f.key] = cur.params[f.key];
+    });
+    $("#planForm").innerHTML = planFormHtml(sel.value,
+      { id: PLAN.id, params: kept },
+      { name: cur.name, cron: cur.cron, enabled: cur.enabled });
+    bindPlanForm();
+  });
+  $$("#planParams .chk-group").forEach(bindPlanPicker);
+}
+function readPlanForm(){
+  const kind = $("#planKind") ? $("#planKind").value : "";
+  const params = {};
+  $$("#planParams [data-pf]").forEach((el) => {
+    const key = el.dataset.pf;
+    if (el.dataset.ptype === "bool") { params[key] = el.checked; return; }
+    if (el.dataset.ptype === "int") { params[key] = el.value === "" ? "" : Number(el.value || 0); return; }
+    if (el.dataset.ptype === "inherit_int") {
+      params[key] = el.value.trim() === "" ? "" : Number(el.value);
+      return;
+    }
+    if (el.dataset.ptype === "platforms") {
+      const picked = $$('#planParams input[data-ptype="platforms"]:checked').map((x) => x.value);
+      params[key] = (!picked.length || picked.indexOf("all") >= 0) ? "all" : picked.join(",");
+      return;
+    }
+    params[key] = el.value;
+  });
+  return {
+    kind,
+    name: ($("[data-plan-name]") || {}).value || "",
+    cron: ($("#planCron") || {}).value || "",
+    enabled: $("#planEnabled") ? $("#planEnabled").checked : true,
+    params,
+  };
+}
+async function openPlanEditor(plan){
+  if (!S.plans) await loadPlans();   // 页面刚打开就点「新建」时，先拿到任务类型清单
+  PLAN.id = plan ? plan.id : 0;
+  $("#planForm").innerHTML = planFormHtml(plan ? plan.kind : "", plan || null);
+  $("#planEditorTitle").textContent = plan ? "编辑计划" : "新建计划";
+  $("#planEditorTag").className = "badge" + (plan ? "" : " ok");
+  $("#planEditorTag").textContent = plan ? ("#" + plan.id) : "新建";
+  $("#planMsg").textContent = "";
+  $("#planEditor").hidden = false;
+  bindPlanForm();
+  $("#planEditor").scrollIntoView({ block:"nearest", behavior:"smooth" });
+}
+async function savePlan(){
+  const data = readPlanForm();
+  if (!data.kind) return toast("请选择任务类型", "err");
+  const btn = $("#btnPlanSave");
+  btn.disabled = true;
+  try {
+    await api("/api/plans/save", { method:"POST", body:{
+      id: PLAN.id || 0, kind: data.kind, name: data.name,
+      cron: data.cron, enabled: data.enabled, params: data.params,
+    }});
+    toast(PLAN.id ? "计划已更新" : "计划已创建", "ok");
+    $("#planEditor").hidden = true;
+    PLAN.id = 0;
+    await loadPlans();
+  } catch (e) {
+    toast(e.message, "err");
+    $("#planMsg").textContent = e.message;
+  } finally { btn.disabled = false; }
+}
+$("#btnPlanNew").addEventListener("click", () => openPlanEditor(null));
+$("#btnPlanReload").addEventListener("click", loadPlans);
+$("#btnPlanSave").addEventListener("click", savePlan);
+$("#btnPlanCancel").addEventListener("click", () => {
+  $("#planEditor").hidden = true;
+  PLAN.id = 0;
+});
+document.addEventListener("click", (e) => {
+  const run = e.target.closest("[data-plan-run]");
+  if (run) {
+    api("/api/plans/run", { method:"POST", body:{ id: Number(run.dataset.planRun) } })
+      .then((res) => { watchJob(res.job_id); toast("计划已开始执行", "ok"); })
+      .catch((err) => toast(err.message, "err"));
+    return;
+  }
+  const edit = e.target.closest("[data-plan-edit]");
+  if (edit) {
+    const p = ((S.plans || {}).plans || []).find((x) => x.id === Number(edit.dataset.planEdit));
+    if (p) openPlanEditor(p);
+    return;
+  }
+  const del = e.target.closest("[data-plan-del]");
+  if (!del) return;
+  const p = ((S.plans || {}).plans || []).find((x) => x.id === Number(del.dataset.planDel));
+  if (!p || !confirm("删除计划「" + p.name + "」？删除后不再自动执行，历史运行日志不受影响。")) return;
+  api("/api/plans/delete", { method:"POST", body:{ id: p.id } })
+    .then(() => { toast("已删除", "ok"); if (PLAN.id === p.id) { $("#planEditor").hidden = true; PLAN.id = 0; } loadPlans(); })
+    .catch((err) => toast(err.message, "err"));
+});
+document.addEventListener("change", (e) => {
+  const box = e.target.closest("[data-plan-toggle]");
+  if (!box) return;
+  api("/api/plans/toggle", { method:"POST", body:{ id: Number(box.dataset.planToggle), enabled: box.checked } })
+    .then(() => { toast(box.checked ? "已启用" : "已停用", "ok"); loadPlans(); })
+    .catch((err) => { toast(err.message, "err"); box.checked = !box.checked; });
+});
+
 function renderJobs(list){
   const box = $("#jobList");
   if (!list || !list.length) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
@@ -704,6 +1038,7 @@ async function pollJob(){
     toast(job.status === "done" ? "任务完成" : ("任务失败：" + (job.error || "")), job.status === "done" ? "ok" : "err");
     loadOverview();
     if (S.view === "progress") loadProgress();
+    if (S.view === "plans") loadPlans();
     if (job.kind === "link" && job.result) {
       S.linkResult = job.result;
       renderLinkResult(job.result);
@@ -790,7 +1125,7 @@ async function loadProgress(){
   renderRuns(d.runs);
   const box = $("#dayList");
   if (!d.days.length) {
-    box.innerHTML = '<div class="empty">还没有采集记录，先去「概览」跑一次采集</div>';
+    box.innerHTML = '<div class="empty">还没有采集记录，选中日期后点上面的「开始采集」</div>';
     return;
   }
   box.innerHTML = d.days.map((node) => {
@@ -1037,34 +1372,30 @@ $("#configForm").addEventListener("click", (e) => {
 });
 
 /* ---------- 动作 ---------- */
-async function collect(useForm){
-  const day = useForm ? ($("#collectDay").value || "") : "";
-  const platform = useForm ? $("#collectPlatform").value : "all";
-  const download = useForm ? $("#collectDownload").checked : true;
-  const sync = useForm ? $("#collectSync").checked : true;
+async function collect(){
+  const day = $("#collectDay").value || "";
+  const platform = $("#collectPlatform").value;
+  const download = $("#collectDownload").checked;
+  const sync = $("#collectSync").checked;
   try {
     const res = await api("/api/collect", { method:"POST", body:{ day, platform, download, sync } });
     watchJob(res.job_id);
     toast("采集已开始，进度见右下角日志");
   } catch (e) { toast(e.message, "err"); }
 }
-$("#btnCollect").addEventListener("click", () => collect(true));
-$("#btnCollectTop").addEventListener("click", () => collect(false));
+$("#btnCollect").addEventListener("click", () => collect());
 $("#btnSaveEnv").addEventListener("click", saveConfig);
 $("#btnReloadEnv").addEventListener("click", loadConfig);
 $("#btnInit").addEventListener("click", async () => {
   try { watchJob((await api("/api/init", { method:"POST" })).job_id); } catch (e) { toast(e.message, "err"); }
 });
-$("#btnSync").addEventListener("click", async () => {
-  try { watchJob((await api("/api/sync", { method:"POST", body:{ platform:"all" } })).job_id); }
-  catch (e) { toast(e.message, "err"); }
-});
+
 document.addEventListener("click", (e) => {
   const redo = e.target.closest("[data-recollect]");
   if (redo) {
     const day = redo.dataset.recollect;
     $("#collectDay").value = day;
-    collect(true);
+    collect();
     return;
   }
   const redl = e.target.closest("[data-redownload]");
@@ -1100,6 +1431,7 @@ loadOverview().then(() => {
 setInterval(() => {
   if (document.hidden) return;
   if (S.view === "progress") loadProgress();
+  else if (S.view === "plans") loadPlans();
   else if (S.view === "overview") loadOverview();
 }, 8000);
 </script>

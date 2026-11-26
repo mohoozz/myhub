@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Iterator
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -67,6 +70,10 @@ class Settings(BaseSettings):
     file_mtime_from_publish: bool = True
     # ffmpeg / ffprobe 所在目录；留空表示只从 PATH 找。没有 ffmpeg 就无法合并音视频
     ffmpeg_location: str = ""
+    # 单条内容下载失败后，本次运行内再重试几次（0 = 不重试，等下次采集再来）
+    download_retries: int = 2
+    # 相邻两次重试的等待秒数（第 n 次等待 = 该值 × n，最长 60 秒）
+    download_retry_delay: float = 5.0
 
     # ---------- 路径属性 ----------
     def _abs(self, value: str) -> Path:
@@ -159,5 +166,38 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings() -> Settings:
+def _base_settings() -> Settings:
     return Settings()
+
+
+def reset_settings() -> None:
+    """改完 .env 后清缓存，下一个 get_settings() 重新读文件。"""
+    _base_settings.cache_clear()
+
+
+# 定时计划等场景可以只覆盖个别项（下载目录 / 画质…），其余仍用环境配置。
+# 用 ContextVar 而不是改全局单例：多线程跑任务时互不影响。
+_OVERRIDES: ContextVar[dict[str, Any] | None] = ContextVar("settings_overrides", default=None)
+
+
+def get_settings() -> Settings:
+    overrides = _OVERRIDES.get()
+    base = _base_settings()
+    if not overrides:
+        return base
+    return base.model_copy(update=overrides)
+
+
+@contextmanager
+def settings_overrides(**values: Any) -> Iterator[Settings]:
+    """在 with 块内让 get_settings() 返回覆盖后的配置；空值表示沿用环境配置。"""
+    clean = {k: v for k, v in values.items() if v is not None and v != ""}
+    if not clean:
+        yield get_settings()
+        return
+    merged = {**(_OVERRIDES.get() or {}), **clean}
+    token = _OVERRIDES.set(merged)
+    try:
+        yield get_settings()
+    finally:
+        _OVERRIDES.reset(token)

@@ -11,7 +11,7 @@ import shutil
 import string
 from pathlib import Path
 
-from app.config import BASE_DIR, Settings, get_settings
+from app.config import BASE_DIR, Settings, get_settings, reset_settings
 
 ENV_PATH = BASE_DIR / ".env"
 BACKUP_PATH = BASE_DIR / ".env.bak"
@@ -177,6 +177,18 @@ def _groups() -> list[dict]:
                     "label": "ffmpeg 目录",
                     "type": "path",
                     "help": "未加入 PATH 时填这里，留空只从 PATH 找",
+                },
+                {
+                    "key": "DOWNLOAD_RETRIES",
+                    "label": "失败重试次数",
+                    "type": "int",
+                    "help": "采集后下载失败的条目，本次运行内再重试几次（0 = 不重试，等下次采集）",
+                },
+                {
+                    "key": "DOWNLOAD_RETRY_DELAY",
+                    "label": "重试间隔（秒）",
+                    "type": "float",
+                    "help": "第 n 次重试前等待 间隔×n 秒，最长 60 秒",
                 },
             ],
         },
@@ -347,7 +359,7 @@ def save(payload: dict[str, str]) -> dict:
         shutil.copyfile(ENV_PATH, BACKUP_PATH)
 
     ENV_PATH.write_text(_render(groups, merged), encoding="utf-8")
-    get_settings.cache_clear()
+    reset_settings()
     return {
         "changed": changed,
         "restart_required": [k for k in changed if k in RESTART_KEYS],

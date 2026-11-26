@@ -2,7 +2,7 @@
 
 和「采集」的区别是不依赖关注列表和日期，给什么链接下什么；入库、命名、下载器
 全部复用采集那套（contents / downloads + 「平台-作者-标题-内容号」），
-所以下载进度页、日报、失败重试看到的都是同一批文件。
+所以动态采集页、日报、失败重试看到的都是同一批文件。
 """
 from __future__ import annotations
 
@@ -367,7 +367,7 @@ def run(job, text: str) -> dict:
     if not items:
         raise ValueError("；".join(errors) or "所有链接都没解析出内容")
 
-    from app.pipeline import download_contents
+    from app.pipeline import download_with_retry
 
     groups: dict[tuple[str, date], set[str]] = defaultdict(set)
     need = 0
@@ -382,7 +382,7 @@ def run(job, text: str) -> dict:
     with session_scope() as session:
         for (platform, day), ids in groups.items():
             # 链接下载不看 MAX_DURATION_MINUTES：给了链接就下，超时长判定只服务于采集
-            stats = download_contents(
+            stats = download_with_retry(
                 session, day, platform, only_ids=set(ids),
                 enforce_duration_limit=False,
             )

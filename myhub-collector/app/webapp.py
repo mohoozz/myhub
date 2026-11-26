@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from app import credentials, envfile, jobs, webui
+from app import credentials, envfile, jobs, plans, scheduler, webui
 from app.config import get_settings
 from app.database import get_engine, init_db
 from app.utils import DURATION_SKIP_PREFIX
@@ -431,6 +431,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(api_day(unquote(path.rsplit("/", 1)[-1])))
             if path == "/api/env":
                 return self._json({"groups": envfile.schema(), "status": envfile.env_status()})
+            if path == "/api/plans":
+                return self._json(scheduler.status())
             if path == "/api/browse":
                 query = parse_qs(urlsplit(self.path).query)
                 return self._json(envfile.browse((query.get("path") or [""])[0]))
@@ -482,6 +484,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "job_id": _sync_job(targets)}, 202)
             if path == "/api/init":
                 return self._json({"ok": True, "job_id": _init_job()}, 202)
+            if path == "/api/plans/save":
+                plan_id = plans.save_plan(payload)
+                return self._json({"ok": True, "id": plan_id})
+            if path == "/api/plans/delete":
+                plan_id = int(payload.get("id") or 0)
+                if not plans.delete_plan(plan_id):
+                    raise ValueError(f"计划不存在：{plan_id}")
+                return self._json({"ok": True})
+            if path == "/api/plans/toggle":
+                plan_id = int(payload.get("id") or 0)
+                plans.set_enabled(plan_id, bool(payload.get("enabled")))
+                return self._json({"ok": True})
+            if path == "/api/plans/run":
+                plan_id = int(payload.get("id") or 0)
+                job = scheduler.SCHEDULER.run_now(plan_id)
+                return self._json({"ok": True, "job_id": job.id}, 202)
             if path == "/api/env":
                 values = payload.get("values") or {}
                 if not isinstance(values, dict):
@@ -514,6 +532,15 @@ def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) 
     url = f"http://{host}:{real_port}/"
     print(f"myhub-collector 门户已启动：{url}")
     print("按 Ctrl+C 停止；登录会弹出浏览器窗口，完成后回到页面看状态。")
+    try:
+        enabled = plans.load_plans(enabled_only=True)
+    except Exception:  # noqa: BLE001 表还没建好时不影响门户启动
+        enabled = []
+    if enabled:
+        print(f"定时计划已启用 {len(enabled)} 条：{'、'.join(plans.plan_name(p) for p in enabled)}")
+    else:
+        print("还没有启用中的定时计划，可在门户「定时任务」里添加。")
+    scheduler.start()
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
@@ -521,4 +548,5 @@ def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) 
     except KeyboardInterrupt:
         print("\n已停止")
     finally:
+        scheduler.SCHEDULER.stop()
         httpd.server_close()

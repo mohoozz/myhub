@@ -12,6 +12,7 @@
     python -m app status                               # 查看三个平台的登录态
     python -m app init                                 # 首次自检：Python/依赖/浏览器/目录
     python -m app deps                                 # 检查并按需下载 Deno（YouTube 解 JS 挑战用）
+    python -m app schedule [--status|--once|--run ID]  # 定时计划：看状态 / 立即执行 / 前台常驻
     python -m app serve [--port 8765]                  # 本地门户：浏览器里登录、看进度、改配置
 """
 from __future__ import annotations
@@ -377,6 +378,76 @@ def cmd_deps(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_schedule(args: argparse.Namespace) -> int:
+    """定时计划：查看状态 / 立即执行某条计划 / 前台常驻（不用开门户也能定时）。"""
+    import time
+
+    from app import jobs, plans, scheduler
+
+    if args.status:
+        st = scheduler.status()
+        print(f"调度器：{'运行中' if st['running'] else '未启动（python -m app serve 会自动启动）'}")
+        if st.get("error"):
+            print(f"读取计划失败：{st['error']}")
+        if not st["plans"]:
+            print("还没有定时计划：在门户「定时任务」页添加。")
+        for plan in st["plans"]:
+            mark = "启用" if plan["enabled"] else "停用"
+            print(
+                f"  [{plan['id']:>3}] {plan['name']}（{plan['kind_title']}）{mark} "
+                f"{plan['cron']}  下次 {plan['next_run_at'] or '—'}  "
+                f"上次 {plan['last_run_at'] or '—'}  状态 {plan['last_status']}"
+            )
+            if plan.get("last_error"):
+                print(f"        → {plan['last_error']}")
+        return 0
+
+    if args.run or args.once:
+        st = scheduler.status()
+        if args.run:
+            target = next((p for p in st["plans"] if p["id"] == args.run), None)
+            if target is None:
+                print(f"没有 id={args.run} 的计划", file=sys.stderr)
+                return 1
+        else:
+            target = next((p for p in st["plans"] if p["enabled"]), None)
+            if target is None:
+                print("没有启用中的计划，先加一条：门户「定时任务」页", file=sys.stderr)
+                return 1
+        row = plans.get_plan(target["id"])
+        spec = plans.build_spec(row) if row else None
+        if spec is None:
+            print("这个计划的类型未注册或计划已被删除", file=sys.stderr)
+            return 1
+        job = jobs.Job(id="cli", kind="schedule", title=spec.title)
+        try:
+            spec.runner(job)
+        except Exception as e:  # noqa: BLE001
+            print(f"计划执行失败：{type(e).__name__}: {e}", file=sys.stderr)
+            return 1
+        finally:
+            for line in job.lines:
+                print(line)
+        return 0
+
+    scheduler.start()
+    st = scheduler.status()
+    if not st["plans"]:
+        print("还没有定时计划：在门户「定时任务」页添加后，这里会显示下次执行时间")
+    for plan in st["plans"]:
+        if plan["enabled"]:
+            print(f"[{plan['id']}] {plan['name']}：{plan['cron']}  下次 {plan['next_run_at'] or '—'}")
+    print("调度器前台运行中，按 Ctrl+C 退出（想常驻用 python -m app serve）")
+    try:
+        while True:
+            time.sleep(5)
+    except KeyboardInterrupt:
+        print("\n已停止")
+    finally:
+        scheduler.SCHEDULER.stop()
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """启动本地门户（阻塞，Ctrl+C 退出）。"""
     from app.webapp import serve
@@ -456,6 +527,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check", action="store_true",
                    help="只检查本地是否有 Deno，不联网下载（启动脚本用，秒回）")
     p.set_defaults(func=cmd_deps)
+
+    p = sub.add_parser("schedule", help="定时计划：查看状态 / 立即执行 / 前台常驻")
+    p.add_argument("--status", action="store_true", help="列出所有计划、下次执行时间与上次结果")
+    p.add_argument("--run", type=int, default=0, metavar="ID",
+                   help="立即执行指定 id 的计划（不等 cron）")
+    p.add_argument("--once", action="store_true", help="立即执行第一条启用中的计划")
+    p.set_defaults(func=cmd_schedule)
 
     p = sub.add_parser("serve", help="启动本地门户：浏览器里登录 / 看下载进度 / 改配置")
     p.add_argument("--host", default="127.0.0.1", help="监听地址，默认只绑本机")

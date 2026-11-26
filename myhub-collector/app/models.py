@@ -73,6 +73,27 @@ class Download(SQLModel, table=True):
     finished_at: NaiveDatetime | None = None
 
 
+class Plan(SQLModel, table=True):
+    """定时计划：一个类型（kind）可以有多条计划，各自 cron / 平台 / 参数不同。"""
+
+    __tablename__ = "plans"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(default="", max_length=128)       # 留空则用类型名
+    kind: str = Field(default="collect", index=True, max_length=32)  # 任务类型，见 app/plans.py
+    cron: str = Field(default="0 3 * * *", max_length=64)
+    enabled: bool = Field(default=True)
+    params_json: str = Field(default="{}")               # 类型自定义参数（平台 / 日期偏移…）
+    # 运行状态落库：重启服务后仍能看到「上次跑得怎么样」
+    last_run_at: NaiveDatetime | None = None
+    last_status: str = Field(default="idle", max_length=16)   # idle/submitted/done/failed/busy
+    last_job_id: str = Field(default="", max_length=64)
+    last_error: str = Field(default="")
+    runs: int = Field(default=0)
+    created_at: NaiveDatetime = Field(default_factory=datetime.now)
+    updated_at: NaiveDatetime = Field(default_factory=datetime.now)
+
+
 class RunLog(SQLModel, table=True):
     """一次采集运行的汇总日志。"""
 

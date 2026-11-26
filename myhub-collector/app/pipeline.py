@@ -224,6 +224,8 @@ def _pick_targets(
     day: date,
     platform: str,
     only_ids: set[str] | None = None,
+    only_failed: bool = False,
+    skip_permanent: bool = True,
 ):
     since, until = day_range(day)
     contents = session.exec(
@@ -249,7 +251,13 @@ def _pick_targets(
         dl = downloads.get((content.platform, content.content_id))
         if dl is None:
             continue
-        if dl.status not in ("pending", "failed"):
+        if only_failed:
+            # 本次运行内的重试轮：只捞上一轮失败的，且跳过重试也没用的错误
+            if dl.status != "failed":
+                continue
+            if skip_permanent and _permanent_failure(dl.error):
+                continue
+        elif dl.status not in ("pending", "failed"):
             # 旧版本只要目录里有文件就记 done，B 站音视频合并失败只留下 m4a 时
             # 也被当成成功。这里识别出这种半成品，改回 pending 重新补视频。
             if (
@@ -381,12 +389,15 @@ def download_contents(
     platform: str,
     only_ids: set[str] | None = None,
     enforce_duration_limit: bool = True,
+    only_failed: bool = False,
 ) -> dict:
     """下载当日待下载内容，返回统计。only_ids 可只处理指定内容（重下/修复用）。
 
     不限条数、不限单作者条数：当天所有待下载内容都会处理。
     enforce_duration_limit=False 时完全忽略 MAX_DURATION_MINUTES（链接下载用：
     用户是拿着具体链接来的，要什么下什么，不做超时长拦截）。
+    only_failed=True 表示「重试轮」：只处理上一轮失败的条目，且跳过不可恢复的错误
+    （登录态、会员限制、404 之类），避免白等。
     """
     settings = get_settings()
     stats = {"downloaded": 0, "failed": 0, "skipped": 0}
@@ -427,7 +438,7 @@ def download_contents(
                 "执行 python -m app deps 可自动下载到 data/tools/deno/"
             )
 
-    targets = _pick_targets(session, day, platform, only_ids)
+    targets = _pick_targets(session, day, platform, only_ids, only_failed=only_failed)
 
     # 旧数据可能缺正文（早期只读 desc），落盘前用详情接口补一次
     detail_source = None
@@ -485,6 +496,7 @@ def download_contents(
         dl.started_at = datetime.now()
         dl.attempts += 1
         dl.status = "running"
+        dl.error = ""   # 重试成功时不要残留上一轮的报错
         session.add(dl)
         session.commit()
 
@@ -635,6 +647,90 @@ def download_contents(
     return stats
 
 
+def _retry_failed(
+    session: Session,
+    day: date,
+    platform: str,
+    stats: dict,
+    only_ids: set[str] | None = None,
+    retries: int = 0,
+    delay: float = 0.0,
+) -> dict:
+    """本次运行内按 DOWNLOAD_RETRIES 再试失败条目。
+
+    每轮只捞上一轮 status=failed 的（跳过登录态 / 会员 / 404 这类重试也没用的），
+    每轮之间等一会儿，给网络或直链一点恢复时间。返回累计后的统计。
+    """
+    if retries <= 0 or not stats.get("failed"):
+        return stats
+    for attempt in range(1, retries + 1):
+        if not stats.get("failed"):
+            break
+        wait = min(delay * attempt, 60.0) if delay else 0.0
+        jobs.report_progress(
+            stage=f"重试失败项 {attempt}/{retries}", current=0, total=0,
+            percent=0.0, downloaded=0, size=0, speed=0.0, eta=0, title="",
+        )
+        logger.warning(
+            "%s 有 %d 条下载失败，%.0f 秒后第 %d/%d 次重试",
+            platform, stats["failed"], wait, attempt, retries,
+        )
+        if wait:
+            time.sleep(wait)
+        more = download_contents(
+            session, day, platform, only_ids=only_ids, only_failed=True
+        )
+        stats["downloaded"] += more["downloaded"]
+        stats["skipped"] += more["skipped"]
+        # 重试轮会跳过不可恢复的错误，所以用「实际仍失败」的数量，而不是本轮处理的条数
+        stats["failed"] = _failed_count(session, day, platform, only_ids)
+        logger.info(
+            "%s 重试 %d/%d：补下 %d 条，仍失败 %d 条",
+            platform, attempt, retries, more["downloaded"], stats["failed"],
+        )
+        if not more["downloaded"]:
+            # 这一轮一条都没救回来，继续等大概率也是白等
+            break
+    return stats
+
+
+def _failed_count(
+    session: Session,
+    day: date,
+    platform: str,
+    only_ids: set[str] | None = None,
+) -> int:
+    """当天该平台仍处于 failed 的条数（含不可恢复错误，用于报表口径）。"""
+    return len(_pick_targets(
+        session, day, platform, only_ids, only_failed=True, skip_permanent=False
+    ))
+
+
+def download_with_retry(
+    session: Session,
+    day: date,
+    platform: str,
+    only_ids: set[str] | None = None,
+    enforce_duration_limit: bool = True,
+) -> dict:
+    """下载 + 按 DOWNLOAD_RETRIES 在本次运行内重试失败条目（采集和链接下载共用）。
+
+    返回最终统计：downloaded 是累计成功数，failed 是最终仍失败的条数。
+    """
+    settings = get_settings()
+    stats = download_contents(
+        session, day, platform,
+        only_ids=only_ids,
+        enforce_duration_limit=enforce_duration_limit,
+    )
+    return _retry_failed(
+        session, day, platform, stats,
+        only_ids=only_ids,
+        retries=max(int(settings.download_retries or 0), 0),
+        delay=max(float(settings.download_retry_delay or 0), 0.0),
+    )
+
+
 # 直链失败如果是网络层问题（连不上抖音 CDN），退 yt-dlp 只会用同一条网络再等一轮，
 # 不如立刻记失败，等下一次「重新下载」换到别的节点。
 _NETWORK_ERROR_HINTS = (
@@ -646,6 +742,24 @@ _NETWORK_ERROR_HINTS = (
 def _network_failure(err: str) -> bool:
     text = err or ""
     return any(hint in text for hint in _NETWORK_ERROR_HINTS)
+
+
+# 这些错误重试也没用：登录态没刷新、会员内容、链接已被删除、渲染失败等，
+# 本次运行内的重试轮直接跳过，把时间留给真正可能恢复的失败。
+_PERMANENT_ERROR_HINTS = (
+    "先跑 python -m app login", "登录态", "Sign in", "cookies",
+    "大会员", "会员", "充电专属", "付费",
+    "Unsupported URL", "Private", "private", "404", "410",
+    "Not available", "not available", "已删除", "不存在",
+    "HTML 生成失败", "已关闭图片下载", "没有可下载的图片",
+    "缺少 JS 运行时", "Only images are available", "Signature solving failed",
+)
+
+
+def _permanent_failure(err: str) -> bool:
+    """判断失败是否「不值得在本次运行内重试」。"""
+    text = err or ""
+    return any(hint in text for hint in _PERMANENT_ERROR_HINTS)
 
 
 def _douyin_hint(err: str) -> str:
@@ -722,7 +836,8 @@ def run_once(
             logger.info("%s 新增内容 %d 条", target_day, result.new_items)
 
             if do_download:
-                stats = download_contents(
+                # 采集后仍失败的，按 DOWNLOAD_RETRIES 在本次运行内再试几次
+                stats = download_with_retry(
                     session, target_day, platform,
                     only_ids=only_ids,
                 )
