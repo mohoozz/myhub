@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 /// HTML 网页预览（浏览界面直接弹出的全屏预览框，不占用内置浏览器页签）。
@@ -24,6 +25,8 @@ struct HTMLPreviewView: View {
     @State private var reloadToken = 0
     /// 侧滑退出的横向位移
     @State private var edgeDragOffset: CGFloat = 0
+    /// 顶栏显隐：点击网页切换（对齐漫画阅读器控制层）
+    @State private var chromeVisible = true
 
     var body: some View {
         // 用 GeometryReader 拿真实安全区：整屏铺满（不留白边），顶栏按 inset 自己让位
@@ -37,6 +40,9 @@ struct HTMLPreviewView: View {
             .ignoresSafeArea()
         }
         .background(edgeSwipeBack)
+        // 顶栏隐藏时一并隐藏状态栏，网页真正全屏（与漫画阅读器一致）
+        .statusBarHidden(!chromeVisible)
+        .animation(.appQuick, value: chromeVisible)
         .task { startIfNeeded() }
         .onDisappear { HTMLPreviewServer.shared.unregister() }
     }
@@ -60,7 +66,7 @@ struct HTMLPreviewView: View {
                     .background(AppColors.pageBackground)
             }
 
-            // 顶栏浮在网页上（透明毛玻璃），不占内容高度
+            // 顶栏浮在网页上（完全透明、点击网页切换显隐），不占内容高度
             header(insets: insets)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -75,7 +81,8 @@ struct HTMLPreviewView: View {
                 url: url,
                 reloadToken: reloadToken,
                 isLoading: $isLoading,
-                loadError: $loadError
+                loadError: $loadError,
+                onToggleChrome: toggleChrome
             )
         } else if let startError {
             errorView(startError)
@@ -110,7 +117,7 @@ struct HTMLPreviewView: View {
         )
     }
 
-// MARK: - 悬浮顶栏（透明毛玻璃，对齐漫画阅读器的控制层）
+// MARK: - 悬浮顶栏（完全透明：无底色/无毛玻璃，不遮挡网页）
 
     private func header(insets: EdgeInsets) -> some View {
         HStack(spacing: 2) {
@@ -128,6 +135,8 @@ struct HTMLPreviewView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
+                // 标题不拦截点击：点在标题上也等同于点网页（切换顶栏）
+                .allowsHitTesting(false)
 
             Spacer(minLength: 6)
 
@@ -142,11 +151,17 @@ struct HTMLPreviewView: View {
             .opacity(url == nil ? 0.35 : 1)
         }
         .foregroundStyle(AppColors.textPrimary)
-        // 顶栏内容避开状态栏 / 横屏刘海，毛玻璃底仍从屏幕最顶端铺下来
+        // 顶栏内容避开状态栏 / 横屏刘海；不加任何背景，网页内容从下面透出
         .padding(.horizontal, max(10, insets.leading))
         .padding(.top, insets.top + 2)
         .padding(.bottom, 6)
-        .background(.ultraThinMaterial)
+        .opacity(chromeVisible ? 1 : 0)
+        .allowsHitTesting(chromeVisible)
+    }
+
+    /// 点击网页：隐藏 / 显示顶栏（与漫画阅读器一致）
+    private func toggleChrome() {
+        withAnimation(.appQuick) { chromeVisible.toggle() }
     }
 
     private func errorView(_ message: String) -> some View {
@@ -201,6 +216,8 @@ private struct HTMLWebView: UIViewRepresentable {
     let reloadToken: Int
     @Binding var isLoading: Bool
     @Binding var loadError: String?
+    /// 单击网页（非交互元素）时回调：切换顶栏显隐
+    let onToggleChrome: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -221,6 +238,17 @@ private struct HTMLWebView: UIViewRepresentable {
         webView.scrollView.backgroundColor = .clear
         // 铺满整屏（含安全区）时不要再被自动内缩，否则底部/顶部会露出底色白边
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+
+        // 单击网页切换顶栏：不取消网页自身触摸（链接/按钮照常响应），与网页手势并存
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.handleTap(_:))
+        )
+        tap.numberOfTapsRequired = 1
+        tap.cancelsTouchesInView = false
+        tap.delaysTouchesEnded = false
+        tap.delegate = context.coordinator
+        webView.addGestureRecognizer(tap)
+
         context.coordinator.load(url, in: webView, token: reloadToken)
         return webView
     }
@@ -230,13 +258,50 @@ private struct HTMLWebView: UIViewRepresentable {
         context.coordinator.load(url, in: webView, token: reloadToken)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, UIGestureRecognizerDelegate {
         var parent: HTMLWebView
         private var loadedToken: Int?
         private var loadedURL: URL?
 
         init(_ parent: HTMLWebView) {
             self.parent = parent
+        }
+
+        // MARK: 单击切换顶栏
+
+        /// 单击网页：命中链接/表单等交互元素时不切换（避免点链接顺手把顶栏收起来）
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended, let webView = gesture.view as? WKWebView else { return }
+            let point = gesture.location(in: webView)
+            // elementFromPoint 用 CSS 像素，需乘页面缩放
+            let zoom = webView.pageZoom
+            let script = """
+            (function() {
+              var tags = ['a', 'button', 'input', 'textarea', 'select', 'label', 'summary',
+                          'video', 'audio', 'iframe'];
+              var el = document.elementFromPoint(\(point.x * zoom), \(point.y * zoom));
+              while (el && el !== document.body && el !== document.documentElement) {
+                if (tags.indexOf((el.tagName || '').toLowerCase()) >= 0) { return true; }
+                if (el.isContentEditable) { return true; }
+                el = el.parentElement;
+              }
+              return false;
+            })()
+            """
+            webView.evaluateJavaScript(script) { [weak self] result, error in
+                guard let self else { return }
+                // 查询失败按普通空白处理
+                if error == nil, (result as? Bool) == true { return }
+                DispatchQueue.main.async { self.parent.onToggleChrome() }
+            }
+        }
+
+        // 与网页自身手势（点击链接、滚动等）并存，互不阻塞
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
 
         func load(_ url: URL, in webView: WKWebView, token: Int) {
