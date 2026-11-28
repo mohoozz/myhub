@@ -2,7 +2,7 @@
 
 每天定时拉取关注列表，把**前一天**发布的内容（视频 / 图文 / 文字动态）下载到本地，并生成一份 Markdown + HTML 总结。
 
-当前进度：**B 站 + YouTube + 抖音 三平台闭环**（订阅 → 当天内容 → 按发布顺序下载 → 日报）。B 站走关注列表动态流，YouTube 走频道 RSS（免登录），抖音用 Playwright 复用已登录的浏览器抓关注列表和作品。
+当前进度：**B 站 + YouTube + 抖音 三平台闭环**，另加 B 站两个「列表型」采集平台（稍后观看 `bili_watchlater`、默认收藏夹 `bili_favorite`）。（订阅 → 当天内容 → 按发布顺序下载 → 日报）。B 站走关注列表动态流，YouTube 走频道 RSS（免登录），抖音用 Playwright 复用已登录的浏览器抓关注列表和作品。列表型平台不看日期，列表里有什么就抓什么，下载成功后自动从稍后观看 / 收藏夹里取消。
 
 ## 快速开始
 
@@ -34,6 +34,18 @@ python -m app collect                           # 抓取 + 下载 + 日报
 已有环境（依赖装好了）可以跳过安装，只做自检：`scripts\setup.ps1 -NoVenv -SkipDeps -SkipBrowser`；
 平时只查状态用 `python -m app init`。
 
+想打成**解压即用的绿色包**（自带 Python 运行时和依赖，目标机不用装任何东西）：
+双击 `deploy\collector\build.cmd`，或 `powershell -ExecutionPolicy Bypass -File ..\deploy\collector\build.ps1`，
+产物在 `deploy\dist\`，详见该脚本头部说明。
+
+## 日志
+
+所有输出统一写进 `data/logs/myhub-collector.log`（`DATA_DIR` 改了日志跟着走）：
+
+- 命令行 / 门户里 `print` 的内容、程序里的 `logging` 记录、门户后台任务线程的输出，全部落在这一份；
+- 单文件超过 10 MB 时在下次启动轮转，保留 `.log.1` ~ `.log.3`；
+- 排查「采集失败」「下载报错」「登录态过期」先看这里，比控制台窗口可靠（关掉窗口日志也在）。
+
 报告默认输出 `data/reports/YYYY-MM-DD.html`（可用 `REPORT_DIR` 改到别的盘），内容即文字总结：先「总览」（各平台 UP 主数 / 内容数 / 类型构成），再「详细」清单——失败的全部排在前面并带失败原因，其后是成功与其他状态。
 
 ## 本地门户
@@ -42,7 +54,7 @@ python -m app collect                           # 抓取 + 下载 + 日报
 
 | 页面 | 能做什么 |
 | --- | --- |
-| 概览 | 三平台登录态与登录入口（点「登录」弹出浏览器窗口，完成后自动保存并关闭；支持一键依次登录三个平台，等待时长可选）、环境自检（右上角，只在本页出现）；任务运行时抽屉顶部有进度条，显示当前第几个、已下 / 总量、下载速度与剩余时间，日志实时滚动，关掉页面也不影响后台 |
+| 概览 | 三平台登录态与登录入口（点「登录」弹出浏览器窗口，完成后自动保存并关闭；支持一键依次登录三个平台，等待时长可选）、**开机自动启动开关**（打开即写当前用户启动项，之后每次开机无窗口在后台拉起门户，客户不用再运行任何脚本；关掉即删除启动项）、环境自检（右上角，只在本页出现）；任务运行时抽屉顶部有进度条，显示当前第几个、已下 / 总量、下载速度与剩余时间，日志实时滚动，关掉页面也不影响后台 |
 | 动态采集 | 「按天查看」框里就是采集入口：选日期和平台、是否同时下载 / 先同步关注，点「开始采集」；下方按内容发布日归档，展示完成 / 失败 / 待下载 / 占用空间、进度条、失败原因、「重新采集这一天」（重抓再下）、「只重新下载 N 条」（沿用已入库清单，只补失败 / 待下载，不重抓）、打开当天日报 |
 | 链接下载 | 直接粘贴链接下载，不用等采集：抖音单视频、B 站单视频（`?p=N` 只下该 P）/ 稍后再看、YouTube 单视频 / 播放列表 / 稍后观看；一次多条，分享文案里夹着链接也能识别；解析结果逐条列出状态、大小与失败原因，落盘命名和采集完全一致 |
 | 环境配置 | 表单化编辑 `.env`，保存前校验类型和枚举；自动备份 `.env.bak`；`DATA_DIR` 等改动会提示重启；目录项点「选择…」可浏览本机目录后回填（`DATA_DIR` / `DOWNLOAD_DIR` / `REPORT_DIR` / ffmpeg 目录 / 抖音浏览器目录） |
@@ -94,7 +106,8 @@ cron 支持 `*`、`*/n`、`a-b`、`a-b/n`、`1,5,9`，周日写 `0` 或 `7`。
 powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1
 ```
 
-注册 Windows 计划任务「MyHubCollector」，每天 06:00 跑一次，日志在 `data/logs/collect.log`。
+注册 Windows 计划任务「MyHubCollector」，每天 06:00 跑一次，控制台输出重定向到 `data/logs/collect.log`
+（程序内部统一日志仍是 `data/logs/myhub-collector.log`）。
 媒体清理需要另外执行一次 `python -m app clean`（可再加一条月度计划任务，或用 `--keep-days` 临时指定）。
 
 ## 目录结构
@@ -116,6 +129,7 @@ app/
   plans.py           # 定时计划：任务类型注册表（register_kind）+ 计划的增删改查
   scheduler.py       # 定时调度：cron 解析 + 每轮读库按计划触发
   jobs.py            # 门户后台任务：线程、日志/stdout 捕获、任务互斥
+  logging_setup.py   # 统一日志：logging + print 全部写进 data/logs/myhub-collector.log
   envfile.py         # .env 的表单结构、校验与写回（带 .env.bak 备份）
   webapp.py          # 本地 HTTP 服务 + JSON API（只用标准库）
   webui.py           # 门户单页 HTML（内嵌 CSS/JS，无前端构建）
@@ -136,6 +150,9 @@ data/
     bilibili/  youtube/      # 由 login 命令创建
   tools/deno/deno.exe        # YouTube 解 JS 挑战用的 Deno（首次运行自动下载，40MB 包 / 90MB 文件）
   reports/2026-11-22.html
+  logs/myhub-collector.log   # 统一日志（print + logging 全收，超 10MB 轮转）
+  serve.port                 # 门户实际监听端口（端口被占用会顺延，start/stop 脚本据此找服务）
+  autostart.pyw              # 开机自启引导脚本（门户开关生成；开机时负责切目录、补 sys.path）
 downloads/           # 下载根目录 = DOWNLOAD_DIR，平铺、不建作者/日期子目录
   Bili-UP主-视频标题-BV1xx411c7mD.mp4                  # 单 P 视频
   Bili-UP主-合集标题-BV1xx411c7mD-[P3].mp4             # 多 P 视频，分 P 号放最后
@@ -146,7 +163,7 @@ downloads/           # 下载根目录 = DOWNLOAD_DIR，平铺、不建作者/�
 ```
 
 命名规则：`平台-作者-文件名称-发布号-[Pn]`
-平台前缀 `Bili` / `DouYin` / `Youtube`；发布号是 bvid 或动态 id；`[Pn]` 只在多 P 视频里出现，且固定放在最后。
+平台前缀 `Bili` / `BiliWL`（稍后观看）/ `BiliFav`（收藏夹）/ `DouYin` / `Youtube`；发布号是 bvid 或动态 id；`[Pn]` 只在多 P 视频里出现，且固定放在最后。
 
 ## 配置项（.env）
 

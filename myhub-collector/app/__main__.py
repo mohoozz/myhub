@@ -34,11 +34,10 @@ def _setup_logging() -> None:
                 stream.reconfigure(encoding="utf-8", errors="replace")
             except Exception:  # noqa: BLE001
                 pass
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    # 控制台 + data/logs/myhub-collector.log：print 和 logging 的所有输出都留档
+    from app.logging_setup import setup_logging
+
+    setup_logging(level=logging.INFO)
 
 
 def _parse_day(value: str | None) -> date:
@@ -504,7 +503,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_fixtime)
 
     p = sub.add_parser("login", help="弹窗手动登录，Cookie 统一导出到 data/credentials/")
-    p.add_argument("platform", choices=(*platforms, "all"),
+    # 登录只有三个真实平台；稍后观看 / 收藏夹用的是 B 站同一个登录态
+    from app.credentials import SITES
+
+    p.add_argument("platform", choices=(*SITES, "all"),
                    help="要登录的平台；all = 依次弹窗登录三个平台")
     p.add_argument(
         "--wait",

@@ -13,7 +13,13 @@ from app.models import Content
 from app.utils import human_count
 
 _TYPE_LABEL = {"video": "视频", "image": "图文动态", "text": "动态"}
-_PLATFORM_LABEL = {"bilibili": "B站", "youtube": "YouTube", "douyin": "抖音"}
+_PLATFORM_LABEL = {
+    "bilibili": "B站",
+    "bili_watchlater": "B站稍后观看",
+    "bili_favorite": "B站收藏夹",
+    "youtube": "YouTube",
+    "douyin": "抖音",
+}
 
 
 def _esc(text: object) -> str:

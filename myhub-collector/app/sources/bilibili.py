@@ -39,6 +39,7 @@ class BilibiliSource(Source):
             raise SourceError("缺少 B 站 Cookie")
         self._interval = max(interval, 0.5)
         self._max_pages = max(max_pages, 1)
+        self._cookie = cookie
         self._client = httpx.Client(
             headers={
                 "User-Agent": _UA,
@@ -168,6 +169,32 @@ class BilibiliSource(Source):
                 logger.debug("请求失败（第 %d 次）%s: %s", attempt + 1, url, e)
                 time.sleep(1.5 * (attempt + 1))
         raise SourceError(f"请求 {url} 失败：{last_error}")
+
+    def _post(self, url: str, data: dict, referer: str | None = None) -> dict:
+        """表单 POST（写操作：取消收藏 / 移出稍后观看），需要 csrf 参数。"""
+        last_error: Exception | None = None
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": referer or "https://www.bilibili.com/",
+        }
+        for attempt in range(3):
+            try:
+                resp = self._client.post(url, data=data, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                logger.debug("请求失败（第 %d 次）%s: %s", attempt + 1, url, e)
+                time.sleep(1.5 * (attempt + 1))
+        raise SourceError(f"请求 {url} 失败：{last_error}")
+
+    def cookie_value(self, name: str) -> str:
+        """从登录 Cookie 里取单个键（写操作要 bili_jct 当 csrf）。"""
+        for part in (self._cookie or "").split(";"):
+            key, _, value = part.strip().partition("=")
+            if key == name:
+                return value.strip()
+        return ""
 
     def close(self) -> None:
         self._client.close()

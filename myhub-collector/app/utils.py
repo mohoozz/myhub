@@ -12,6 +12,8 @@ DURATION_SKIP_PREFIX = "超时长"
 # 平台标识 → 文件名里的平台前缀
 PLATFORM_LABELS = {
     "bilibili": "Bili",
+    "bili_watchlater": "BiliWL",
+    "bili_favorite": "BiliFav",
     "douyin": "DouYin",
     "youtube": "Youtube",
 }

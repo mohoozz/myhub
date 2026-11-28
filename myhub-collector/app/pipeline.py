@@ -26,7 +26,7 @@ from app.downloader.ytdlp import ffmpeg_available, find_deno
 from app.dynamic_html import image_data_uri, write_dynamic_html, write_video_card
 from app.filetime import touch_published
 from app.models import Content, Download, RunLog, Subscription
-from app.sources import SourceError, build_source
+from app.sources import SourceError, build_source, download_platform, is_list_platform
 from app.sources.base import RawItem
 from app.summarize import day_range, write_reports
 from app.utils import DURATION_SKIP_PREFIX, build_stem, fmt_duration, parse_duration
@@ -228,15 +228,17 @@ def _pick_targets(
     skip_permanent: bool = True,
 ):
     since, until = day_range(day)
-    contents = session.exec(
-        select(Content)
-        .where(
-            Content.platform == platform,
+    query = select(Content).where(Content.platform == platform)
+    if not is_list_platform(platform):
+        # 列表型平台（稍后观看 / 收藏夹）是待清空的队列：库里所有待下载的都要处理，
+        # 不能按发布日期过滤，否则早期加进列表的内容永远不会下载。
+        query = query.where(
             Content.published_at >= since,
             Content.published_at < until,
         )
+    contents = session.exec(
         # 按发布顺序正序：老内容先下，最新发布的排在最后；同一秒的用 id 兜底保证顺序稳定
-        .order_by(Content.published_at.asc(), Content.id.asc())
+        query.order_by(Content.published_at.asc(), Content.id.asc())
     ).all()
     downloads = {
         (d.platform, d.content_id): d
@@ -346,7 +348,7 @@ def _card_cover(content: Content) -> str:
         url = "https:" + url
     referer = (
         "https://www.bilibili.com/"
-        if content.platform == "bilibili"
+        if content.platform.startswith("bili")
         else (content.url or "")
     )
     with tempfile.TemporaryDirectory(prefix="myhub_cover_") as tmp:
@@ -376,8 +378,11 @@ def _duration_from_error(err: str) -> str:
 
 
 def _platform_cookiefile(platform: str) -> Path | None:
-    """各平台给 yt-dlp 用的 Cookie 文件；统一走 app.credentials，拿不到就匿名下载。"""
-    path = credentials.cookiefile(platform)
+    """各平台给 yt-dlp 用的 Cookie 文件；统一走 app.credentials，拿不到就匿名下载。
+
+    列表型平台（B 站稍后观看 / 收藏夹）沿用 B 站登录态。
+    """
+    path = credentials.cookiefile(download_platform(platform))
     if path is None:
         logger.info("%s 没有可用登录态，按匿名下载（画质可能受限）", platform)
     return path
@@ -446,6 +451,8 @@ def download_contents(
         detail_source = build_source(platform)
     except SourceError as e:
         logger.debug("详情补齐不可用：%s", e)
+
+    done_ids: list[str] = []
 
     total = len(targets)
     for index, (content, dl) in enumerate(targets, 1):
@@ -536,6 +543,7 @@ def download_contents(
                 dl.status, dl.path = "done", str(out_path)
                 dl.size = _file_size(dl.path)
                 stats["downloaded"] += 1
+                done_ids.append(content.content_id)
                 _stamp(content, [out_path])
             except OSError as e:
                 dl.status, dl.error = "failed", f"HTML 生成失败：{e}"[:300]
@@ -567,6 +575,7 @@ def download_contents(
                     dl.path = str(page)
                     dl.size = _file_size(str(page))
                     stats["downloaded"] += 1
+                    done_ids.append(content.content_id)
                     _stamp(content, [page])
                     if errors:
                         dl.error = ("部分图片失败：" + "; ".join(errors))[:300]
@@ -591,7 +600,7 @@ def download_contents(
                     logger.info("抖音直链下载失败，改用 yt-dlp：%s", err)
                     ok, path, err = download(
                         content.url, out_dir, stem,
-                        quality=settings.quality, platform=platform,
+                        quality=settings.quality, platform=download_platform(platform),
                         cookiefile=cookiefile, proxy=proxy,
                         ffmpeg_location=settings.ffmpeg_location,
                         js_runtimes=js_runtimes,
@@ -604,7 +613,7 @@ def download_contents(
             else:
                 ok, path, err = download(
                     content.url, out_dir, stem,
-                    quality=settings.quality, platform=platform,
+                    quality=settings.quality, platform=download_platform(platform),
                     cookiefile=cookiefile, proxy=proxy,
                     ffmpeg_location=settings.ffmpeg_location,
                     js_runtimes=js_runtimes,
@@ -615,6 +624,7 @@ def download_contents(
                 files = find_files(out_dir, stem)
                 dl.size = sum(f.stat().st_size for f in files) if files else _file_size(path)
                 stats["downloaded"] += 1
+                done_ids.append(content.content_id)
                 _stamp(content, files or [path])
             elif err.startswith(DURATION_SKIP_PREFIX):
                 # 下载器解析出的真实总时长超限（B 站多 P / YouTube）
@@ -641,10 +651,33 @@ def download_contents(
         session.add(dl)
         session.commit()
 
+    # 列表型平台（稍后观看 / 收藏夹）：下好的从列表里取消掉，下次不再重复下载
+    if done_ids and is_list_platform(platform):
+        _prune_list(detail_source, platform, done_ids)
+
     if detail_source is not None:
         detail_source.close()
 
     return stats
+
+
+def _prune_list(source, platform: str, content_ids: list[str]) -> None:
+    """把本次真正下载成功的条目从 B 站列表里移除；失败只记日志，不影响下载结果。"""
+    prune = getattr(source, "prune", None)
+    if prune is None:  # 没有可用抓取源（例如登录态恰好在下载期间失效）
+        logger.warning(
+            "%s 没有可用的抓取源，%d 条已下载记录未从列表移除", platform, len(content_ids)
+        )
+        return
+    try:
+        removed = prune(content_ids)
+    except Exception as e:  # noqa: BLE001 清理失败不能把下载结果判成失败
+        logger.warning(
+            "%s 已下载 %d 条，但取消列表项失败（下次会重复下载）：%s",
+            platform, len(content_ids), e,
+        )
+        return
+    logger.info("%s 已从列表移除 %d / %d 条", platform, removed, len(content_ids))
 
 
 def _retry_failed(

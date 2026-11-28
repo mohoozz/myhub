@@ -313,6 +313,15 @@ details.adv .form-grid{margin-top:10px}
         </div>
       </div>
       <div class="grid-3" id="platCards"></div>
+      <div class="card">
+        <div class="card-head">
+          <h3>开机自动启动</h3>
+          <label class="switch" title="开启后每次开机在后台拉起门户">
+            <input type="checkbox" id="autostartSwitch"><span class="track"></span>
+          </label>
+        </div>
+        <p class="hint" id="autostartHint" style="margin:0">正在读取…</p>
+      </div>
       <div class="card"><h3>本次服务运行的任务</h3>
         <p class="hint">进程内记录，重启服务后清空。</p>
         <div id="jobList"><div class="empty">暂无任务</div></div></div>
@@ -329,6 +338,8 @@ details.adv .form-grid{margin-top:10px}
             <select id="collectPlatform" title="采集哪些平台">
               <option value="all">全部平台</option>
               <option value="bilibili">B站</option>
+              <option value="bili_watchlater">B站稍后观看</option>
+              <option value="bili_favorite">B站收藏夹</option>
               <option value="youtube">YouTube</option>
               <option value="douyin">抖音</option>
             </select>
@@ -337,7 +348,8 @@ details.adv .form-grid{margin-top:10px}
               <label class="chk-line"><input type="checkbox" id="collectSync" checked> 先同步关注</label>
             </div>
             <button class="btn primary sm" id="btnCollect">开始采集</button>
-            <p class="hint" style="margin:0">同步关注 → 抓取 → 下载 → 生成日报，后台运行，可随时关页面。</p>
+            <p class="hint" style="margin:0">同步关注 → 抓取 → 下载 → 生成日报，后台运行，可随时关页面。
+              稍后观看 / 收藏夹不看日期，下载成功后自动从列表里取消。</p>
           </div>
           <div class="days" id="dayList"><div class="empty">还没有采集记录</div></div></div>
         <div class="card">
@@ -440,7 +452,7 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
   ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
-const PLAT = { bilibili:"B站", youtube:"YouTube", douyin:"抖音" };
+const PLAT = { bilibili:"B站", bili_watchlater:"B站稍后观看", bili_favorite:"B站收藏夹", youtube:"YouTube", douyin:"抖音" };
 /* 可点链接：错误信息里常混着原始 URL，方便直接点开看是链接失效还是下载失败 */
 const lnk = (url, text, cls) => '<a class="lnk' + (cls ? " " + cls : "") +
   '" href="' + esc(url) + '" target="_blank" rel="noreferrer">' + esc(text == null ? url : text) + '</a>';
@@ -546,6 +558,41 @@ function bindCards(root){
     b.addEventListener("click", () => startLogin(b.dataset.login)));
 }
 
+/* ---------- 开机自动启动 ---------- */
+function autostartText(a){
+  if (!a) return "";
+  if (!a.supported) return a.hint || "当前环境不支持开机自启";
+  if (a.enabled) {
+    return "已开启：每次开机自动在后台启动门户，不弹窗口、不弹浏览器。" +
+      "浏览器访问 http://127.0.0.1:8765/ 即可（端口被占用会自动顺延，实际地址看日志 " +
+      (a.log || "data/logs") + "）。";
+  }
+  return "已关闭：只有手动双击 start.bat 时才会启动。打开这个开关就不用再运行任何脚本。";
+}
+function renderAutostart(a){
+  const sw = $("#autostartSwitch");
+  if (!sw) return;
+  a = a || {};
+  sw.checked = !!a.enabled;
+  sw.disabled = !a.supported;
+  const hint = $("#autostartHint");
+  hint.textContent = autostartText(a);
+  hint.title = a.command || "";   /* 鼠标悬停能看到注册表里实际写的是什么 */
+}
+$("#autostartSwitch").addEventListener("change", async (e) => {
+  const want = e.target.checked;
+  e.target.disabled = true;
+  try {
+    renderAutostart(await api("/api/autostart", { method:"POST", body:{ enabled: want } }));
+    toast(want ? "已开启开机自动启动" : "已关闭开机自动启动", "ok");
+  } catch (err) {
+    e.target.checked = !want;
+    toast(err.message, "err");
+  } finally {
+    e.target.disabled = false;
+  }
+});
+
 async function loadOverview(){
   try {
     const d = await api("/api/overview");
@@ -557,6 +604,7 @@ async function loadOverview(){
     bindCards($("#platCards"));
     renderJobs(d.jobs);
     renderRuns(d.runs);
+    renderAutostart(d.autostart);
     if (!$("#collectDay").value) $("#collectDay").value = d.last_day;
     // 刷新页面或换标签回来时，服务里还有在跑的任务就接管轮询并留出悬浮入口
     const live = (d.jobs || []).find((j) => j.status === "running" || j.status === "queued");
@@ -732,7 +780,7 @@ function planFieldHtml(f, value){
   if (f.type === "platforms") {
     const sel = String(v || "all").split(",").filter(Boolean);
     const all = !sel.length || sel.indexOf("all") >= 0;
-    const boxes = ["all","bilibili","youtube","douyin"].map((p) =>
+    const boxes = ["all"].concat(Object.keys(PLAT)).map((p) =>
       '<label class="chk"><input type="checkbox" data-pf="' + key + '" data-ptype="platforms" value="' + p + '"' +
       ((all ? p === "all" : sel.indexOf(p) >= 0) ? " checked" : "") + '>' + esc(PLAT_LABEL[p]) + '</label>').join("");
     return '<div class="field" style="grid-column:1/-1"><label>' + esc(f.label) + '</label>' +

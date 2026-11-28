@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from app import credentials, envfile, jobs, plans, scheduler, webui
+from app import autostart, credentials, envfile, jobs, plans, scheduler, webui
 from app.config import get_settings
 from app.database import get_engine, init_db
 from app.utils import DURATION_SKIP_PREFIX
@@ -64,6 +64,7 @@ def api_overview() -> dict:
         "jobs": [job.brief() for job in jobs.JOBS.recent(8)],
         "runs": _recent_runs(8),
         "env": envfile.env_status(),
+        "autostart": autostart.status(),
         "last_day": (date.today() - timedelta(days=1)).isoformat(),
         "today": date.today().isoformat(),
         "report_dir": str(settings.report_path),
@@ -505,6 +506,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(values, dict):
                     raise ValueError("values 必须是对象")
                 return self._json({"ok": True, **envfile.save(values)})
+            if path == "/api/autostart":
+                enabled = bool(payload.get("enabled"))
+                result = autostart.set_enabled(enabled)
+                logger.info("开机自启已%s", "开启" if enabled else "关闭")
+                return self._json({"ok": True, **result})
             return self._error(404, "没有这个接口")
 
         return self._error(405, "方法不支持")
@@ -530,6 +536,13 @@ def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) 
     httpd, real_port = _bind(ThreadingHTTPServer, host, port)
     httpd.daemon_threads = True
     url = f"http://{host}:{real_port}/"
+    # 端口可能被占用（Windows 还可能有系统保留区间）而顺延，把真实端口写到文件里，
+    # 绿色包的 start.bat / stop.bat 靠它找服务，不会守着一个写死的 8765。
+    port_file = settings.data_path / "serve.port"
+    try:
+        port_file.write_text(str(real_port), encoding="utf-8")
+    except OSError:
+        pass  # 只影响启动脚本，不挡服务
     print(f"myhub-collector 门户已启动：{url}")
     print("按 Ctrl+C 停止；登录会弹出浏览器窗口，完成后回到页面看状态。")
     try:
@@ -550,3 +563,9 @@ def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) 
     finally:
         scheduler.SCHEDULER.stop()
         httpd.server_close()
+        try:
+            # 只删自己写的那份：另一个实例可能已经接管了这个文件
+            if port_file.read_text(encoding="utf-8").strip() == str(real_port):
+                port_file.unlink()
+        except OSError:
+            pass

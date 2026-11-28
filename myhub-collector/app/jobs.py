@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
+from app.logging_setup import write_line
+
 MAX_LINES = 600
 
 
@@ -156,7 +158,7 @@ class _JobHandler(logging.Handler):
 
 
 class _JobStream(io.TextIOBase):
-    """把 ``print()`` 的输出按行塞进任务日志。"""
+    """把 ``print()`` 的输出按行塞进任务日志（同时回填全局日志文件）。"""
 
     def __init__(self, job: Job) -> None:
         self._job = job
@@ -167,6 +169,9 @@ class _JobStream(io.TextIOBase):
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
             self._job.log(line)
+            # redirect_stdout 把 sys.stdout 换成了这里，全局日志的 print 镜像收不到，
+            # 手动补一次，保证任务输出也进 data/logs/myhub-collector.log
+            write_line(line)
         return len(text)
 
     def flush(self) -> None:

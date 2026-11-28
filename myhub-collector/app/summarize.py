@@ -17,9 +17,21 @@ from app.utils import DURATION_SKIP_PREFIX, build_stem
 logger = logging.getLogger(__name__)
 
 # 总览里固定列出的平台（没有数据也显示 0）
-_PLATFORMS = ("bilibili", "douyin", "youtube")
-_PLATFORM_LABEL = {"bilibili": "B站", "youtube": "YouTube", "douyin": "抖音"}
-_PLATFORM_COLOR = {"bilibili": "#00a1d6", "youtube": "#ff0033", "douyin": "#fe2c55"}
+_PLATFORMS = ("bilibili", "bili_watchlater", "bili_favorite", "douyin", "youtube")
+_PLATFORM_LABEL = {
+    "bilibili": "B站",
+    "bili_watchlater": "B站稍后观看",
+    "bili_favorite": "B站收藏夹",
+    "youtube": "YouTube",
+    "douyin": "抖音",
+}
+_PLATFORM_COLOR = {
+    "bilibili": "#00a1d6",
+    "bili_watchlater": "#fb7299",
+    "bili_favorite": "#f472b6",
+    "youtube": "#ff0033",
+    "douyin": "#fe2c55",
+}
 _TYPE_LABEL = {"video": "视频", "image": "图文", "text": "动态"}
 _STATUS_TEXT = {
     "done": "成功",
