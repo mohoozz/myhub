@@ -13,7 +13,7 @@
     python -m app init                                 # 首次自检：Python/依赖/浏览器/目录
     python -m app deps                                 # 检查并按需下载 Deno（YouTube 解 JS 挑战用）
     python -m app schedule [--status|--once|--run ID]  # 定时计划：看状态 / 立即执行 / 前台常驻
-    python -m app serve [--port 8765]                  # 本地门户：浏览器里登录、看进度、改配置
+    python -m app serve [--port 17865]                 # 本地门户：浏览器里登录、看进度、改配置
 """
 from __future__ import annotations
 
@@ -537,9 +537,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--once", action="store_true", help="立即执行第一条启用中的计划")
     p.set_defaults(func=cmd_schedule)
 
+    from app import webapp
     p = sub.add_parser("serve", help="启动本地门户：浏览器里登录 / 看下载进度 / 改配置")
-    p.add_argument("--host", default="127.0.0.1", help="监听地址，默认只绑本机")
-    p.add_argument("--port", type=int, default=8765, help="端口，默认 8765（占用时自动往后找）")
+    p.add_argument("--host", default=webapp.DEFAULT_PORT_HOST, help="监听地址，默认只绑本机")
+    p.add_argument(
+        "--port", type=int, default=webapp.DEFAULT_PORT,
+        help=f"端口，默认 {webapp.DEFAULT_PORT}（固定；被占用会直接报错退出，可换一个）",
+    )
     p.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     p.set_defaults(func=cmd_serve)
 

@@ -165,8 +165,19 @@ def _login_keys_in(rows: list[list[str]], site: Site) -> tuple[str, ...]:
     return found
 
 
-def _logindata_expiry(rows: list[list[str]]) -> str:
-    stamps = [int(row[4]) for row in rows if row[4].isdigit() and int(row[4]) > 0]
+def _logindata_expiry(rows: list[list[str]], site: Site | None = None) -> str:
+    """登录态的过期时间，只看登录票据本身。
+
+    B站 / 抖音除了 SESSDATA、sessionid，还会下发 bili_ticket、bdtg_rcpt 这类
+    一两小时就失效的辅助 cookie，按「全部 cookie 取最早」会把还有大半年有效期
+    的登录态误标成已过期，所以优先只统计 login_keys，一个都没有时再退回全部。
+    """
+    picked = rows
+    if site:
+        login_rows = [row for row in rows if len(row) > 5 and row[5] in site.login_keys]
+        if login_rows:
+            picked = login_rows
+    stamps = [int(row[4]) for row in picked if row[4].isdigit() and int(row[4]) > 0]
     if not stamps:
         return "会话级"
     ts = min(stamps)
@@ -255,7 +266,7 @@ def status(platform: str) -> "CredentialStatus":
         ok=bool(found),
         keys=found,
         missing=tuple(k for k in site.login_keys if k not in found),
-        expires=_logindata_expiry(rows) if rows else "-",
+        expires=_logindata_expiry(rows, site) if rows else "-",
         source=source or "（无）",
         hint="" if found else f"python -m app login {platform}",
     )

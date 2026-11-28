@@ -21,7 +21,7 @@ if errorlevel 1 (
 )
 
 echo 正在启动 MyHub 采集器门户...
-"%PY%" -m app serve --port 8765
+"%PY%" -m app serve --port 17865
 
 echo.
 echo 服务已退出。按任意键关闭窗口。

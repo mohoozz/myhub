@@ -6,7 +6,7 @@
 
 ## 快速开始
 
-装好依赖后，**不想碰命令行就双击 `start-web.bat`**：浏览器会打开本地门户（`http://127.0.0.1:8765`），登录、采集、看下载进度、改配置都在页面上点，不用记任何命令。见下方「[本地门户](#本地门户)」。
+装好依赖后，**不想碰命令行就双击 `start-web.bat`**：浏览器会打开本地门户（`http://127.0.0.1:17865`），登录、采集、看下载进度、改配置都在页面上点，不用记任何命令。见下方「[本地门户](#本地门户)」。
 
 想用命令行，第一次走初始化脚本（建虚拟环境、装依赖和浏览器、生成 `.env`、自检）：
 
@@ -50,7 +50,7 @@ python -m app collect                           # 抓取 + 下载 + 日报
 
 ## 本地门户
 
-双击 `start-web.bat`（等价于 `python -m app serve`），浏览器自动打开 `http://127.0.0.1:8765`：
+双击 `start-web.bat`（等价于 `python -m app serve`），浏览器自动打开 `http://127.0.0.1:17865`：
 
 | 页面 | 能做什么 |
 | --- | --- |
@@ -65,7 +65,7 @@ python -m app collect                           # 抓取 + 下载 + 日报
 
 | 命令 | 说明 |
 | --- | --- |
-| `python -m app serve [--port 8765] [--no-browser]` | 启动本地门户（只监听本机，端口占用自动顺延） |
+| `python -m app serve [--port 17865] [--no-browser]` | 启动本地门户（只监听本机；端口固定，被占用会报错并写日志） |
 | --- | --- |
 | `python -m app collect [--day YYYY-MM-DD] [--platform bilibili\|youtube\|douyin\|all] [--no-download] [--no-sync] [--no-collect] [--mid MID] [--id 内容号 ...]` | 采集指定日期（默认昨天）并下载、生成总结 |
 | `python -m app sync [--platform bilibili\|youtube\|douyin\|all]` | 仅同步订阅源（B 站关注列表 / YouTube 频道清单 / 抖音关注列表） |

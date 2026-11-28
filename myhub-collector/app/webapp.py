@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -32,6 +33,11 @@ logger = logging.getLogger(__name__)
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TOKEN = secrets.token_urlsafe(18)
 MAX_BODY = 1 << 20  # 1 MB，配置表单够用了
+
+# 门户固定端口：避开 8000/8080/8888/8765 这类常见端口，
+# 也不在 Windows 默认动态端口段（49152+）里，书签和开机自启可以写死。
+DEFAULT_PORT = 17865
+DEFAULT_PORT_HOST = "127.0.0.1"
 
 BRAND = {"bilibili": "B", "youtube": "Y", "douyin": "D"}
 
@@ -518,26 +524,55 @@ class Handler(BaseHTTPRequestHandler):
 
 # ---------------- 启动 ----------------
 
-def _bind(server_cls, host: str, port: int, attempts: int = 10):
-    last: OSError | None = None
-    for offset in range(attempts):
-        try:
-            return server_cls((host, port + offset), Handler), port + offset
-        except OSError as e:
-            last = e
-    raise SystemExit(f"端口 {port}-{port + attempts - 1} 都被占用：{last}")
+class _PortalServer(ThreadingHTTPServer):
+    """门户 HTTP 服务。
+
+    Windows 的 SO_REUSEADDR 语义和 POSIX 不同：它允许多个进程绑同一个端口，
+    第二个实例不会报 10048，结果是两个服务抢同一个地址、行为时好时坏。
+    因此 Windows 上关掉它（改用独占绑定），端口被占用才能老实报错。
+    """
+
+    daemon_threads = True
+    allow_reuse_address = os.name != "nt"
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
+def _bind(server_cls, host: str, port: int):
+    """严格绑定指定端口：失败就带着原因退出，不再悄悄顺延到下一个端口。
+
+    端口写死是为了让书签、快捷方式、开机自启永远指向同一个地址；
+    真被占用时报错比「服务起来了但地址变了」好排查。
+    """
+    try:
+        return server_cls((host, port), Handler), port
+    except OSError as e:
+        code = getattr(e, "winerror", None) or e.errno
+        if code == 10013:
+            why = "被 Windows 的保留端口区间占用（Hyper-V / WSL / 系统更新会临时保留一批端口）"
+        elif code in (10048, 98):
+            why = "已被其它程序占用"
+        else:
+            why = f"{e.strerror or e}"
+        raise SystemExit(
+            f"端口 {port} 不可用：{why}。"
+            f"换一个端口重试：python -m app serve --port {port + 1}；"
+            f"查占用：netstat -ano | findstr :{port}"
+        ) from e
+
+
+def serve(host: str = DEFAULT_PORT_HOST, port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
     settings = get_settings()
     settings.ensure_dirs()
     init_db()
 
-    httpd, real_port = _bind(ThreadingHTTPServer, host, port)
+    try:
+        httpd, real_port = _bind(_PortalServer, host, port)
+    except SystemExit as exc:
+        # 开机自启走 pythonw，看不到任何窗口，失败原因必须落进日志（logger 同时也打控制台）
+        logger.error("门户启动失败：%s", exc)
+        raise SystemExit(1) from None
     httpd.daemon_threads = True
     url = f"http://{host}:{real_port}/"
-    # 端口可能被占用（Windows 还可能有系统保留区间）而顺延，把真实端口写到文件里，
-    # 绿色包的 start.bat / stop.bat 靠它找服务，不会守着一个写死的 8765。
+    # 端口写死不变，这里仍写一份 data\serve.port：start.bat / stop.bat 靠它确认服务在跑
     port_file = settings.data_path / "serve.port"
     try:
         port_file.write_text(str(real_port), encoding="utf-8")

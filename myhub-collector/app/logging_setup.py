@@ -181,6 +181,10 @@ def setup_logging(level: int = logging.INFO, console: bool = True) -> Path:
 
     if stdout is not None:
         sys.stdout = _Tee(stdout)
+    else:
+        # pythonw（开机自启）没有控制台，sys.stdout 是 None，print() 会被直接丢弃。
+        # 挂一个只写文件的 _Tee，保证「门户已启动：http://...:端口/」这类提示照样进日志。
+        sys.stdout = _Tee(None)
     if stderr is not None:
         sys.stderr = _Tee(stderr)
 
