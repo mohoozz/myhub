@@ -54,6 +54,10 @@ struct RangeZipReader {
         }
         guard entryCount > 0, cdSize > 0 else { return [] }
 
+        // 中央目录区间必须落在文件内，否则请求越界（服务器返回空/短包）
+        guard cdOffset >= 0, cdOffset <= totalSize, cdSize <= totalSize - cdOffset else {
+            throw ZipError.malformed
+        }
         let cdRange = cdOffset..<(cdOffset + cdSize)
         let cd = try await read(cdRange)
 
@@ -106,13 +110,20 @@ struct RangeZipReader {
 
     /// 读取并解压条目数据
     func extract(_ entry: Entry) async throws -> Data {
+        // 偏移/长度来自中央目录，可能被写坏或与真实文件不一致：越界一律按 malformed 处理，
+        // 绝不把越界区间交给 read（网络源会返回空/短包，随后的下标访问会直接 trap）
+        guard entry.localHeaderOffset >= 0, entry.localHeaderOffset <= totalSize,
+              totalSize - entry.localHeaderOffset >= 30,
+              entry.compressedSize >= 0 else { throw ZipError.malformed }
         // 本地头：签名 4 + 版本 2 + 标志 2 + 方法 2 + 时间 4 + CRC 4 + 压缩 4 + 原始 4 + 名长 2 + 扩展长 2
-        let header = try await read(entry.localHeaderOffset..<(entry.localHeaderOffset + 30))
+        let header = try await readExact(entry.localHeaderOffset..<(entry.localHeaderOffset + 30))
         guard Self.uint32(header, at: 0) == 0x04034B50 else { throw ZipError.malformed }
         let nameLength = Int64(Self.uint16(header, at: 26))
         let extraLength = Int64(Self.uint16(header, at: 28))
         let dataStart = entry.localHeaderOffset + 30 + nameLength + extraLength
-        let compressed = try await read(dataStart..<(dataStart + entry.compressedSize))
+        guard dataStart >= 0, dataStart <= totalSize,
+              entry.compressedSize <= totalSize - dataStart else { throw ZipError.malformed }
+        let compressed = try await readExact(dataStart..<(dataStart + entry.compressedSize))
 
         switch entry.compressionMethod {
         case 0:   // stored
@@ -136,9 +147,23 @@ struct RangeZipReader {
 
  // MARK: - 内部
 
+    /// 严格区间读取：实收字节数与请求区间不一致即抛错。
+    /// 网络源（WebDAV Range）可能少给字节（服务器提前收尾 / 区间越界），这类短包若被当作
+    /// 完整的头或页数据按下标解析，会触发 Data 越界陷阱（SIGTRAP，catch 不到），必须在此拦下。
+    private func readExact(_ range: Range<Int64>) async throws -> Data {
+        let expected = range.upperBound - range.lowerBound
+        guard expected > 0 else { return Data() }
+        let data = try await read(range)
+        guard Int64(data.count) == expected else {
+            throw ZipError.shortRead(expected: expected, actual: data.count)
+        }
+        return data
+    }
+
     enum ZipError: Error {
         case malformed
         case decompressFailed
+        case shortRead(expected: Int64, actual: Int)
         case unsupportedMethod(UInt16)
     }
 
@@ -218,17 +243,22 @@ struct RangeZipReader {
         return nil
     }
 
+    // 越界读取一律返回 0（而不是让 Data 下标 trap）：调用点依赖签名匹配做合法性判断，
+    // 0 必然匹配失败 → 上层按 malformed / break 处理
     private static func uint16(_ data: Data, at offset: Int) -> UInt16 {
-        UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+        guard offset >= 0, data.count - offset >= 2 else { return 0 }
+        return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
     }
 
     private static func uint32(_ data: Data, at offset: Int) -> UInt32 {
-        UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8)
+        guard offset >= 0, data.count - offset >= 4 else { return 0 }
+        return UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8)
             | (UInt32(data[offset + 2]) << 16) | (UInt32(data[offset + 3]) << 24)
     }
 
     private static func uint64(_ data: Data, at offset: Int) -> UInt64 {
-        (UInt64(uint32(data, at: offset + 4)) << 32) | UInt64(uint32(data, at: offset))
+        guard offset >= 0, data.count - offset >= 8 else { return 0 }
+        return (UInt64(uint32(data, at: offset + 4)) << 32) | UInt64(uint32(data, at: offset))
     }
 
     private static func decodeName(_ data: Data, utf8Flag: Bool) -> String {

@@ -855,20 +855,33 @@ private final class PressBridgeView: UIView, UIGestureRecognizerDelegate, PressB
 
  // MARK: - 侧滑返回识别器
 
+    /// 已记录过「缺失侧滑返回」日志的导航栈：滚动复用会让 `didMoveToWindow` 每帧重入，
+    /// 该条件与具体行无关，按栈去重后只留一条面包屑
+    private static var warnedMissingPopScopes = Set<ObjectIdentifier>()
+    /// 已记录过「已接管侧滑返回」诊断日志的导航栈（同上，避免 debug 日志刷屏）
+    private static var loggedAttachedPopScopes = Set<ObjectIdentifier>()
+    /// 没有导航栈时的固定去重键（此时所有行共享同一结论）
+    private static let fallbackPopScope = NSObject()
+
     /// 注册所在导航栈的「侧滑返回」识别器，交给 `SwipeRowCoordinator` 按行的展开态开关。
     private func registerEnclosingPopGesture() {
         guard onSwipe != nil else { return }
+        let scope = enclosingNavigationControllers().first.map(ObjectIdentifier.init)
+            ?? ObjectIdentifier(Self.fallbackPopScope)
         let gestures = enclosingPopGestures()
         guard !gestures.isEmpty else {
+            guard Self.warnedMissingPopScopes.insert(scope).inserted else { return }
             AppLogger.shared.log("左滑行未找到侧滑返回识别器：右滑收起只能靠行内 pan 与系统抢手势", level: .warn, module: "swipe")
             return
         }
         // 诊断：打印实际接管到的识别器，用于确认「右滑仍返回上一级」时禁用是否真的落到了
-        AppLogger.shared.log(
-            "左滑行接管侧滑返回 \(gestures.count) 个：" + gestures.map { "\(type(of: $0))#enabled=\($0.isEnabled)" }.joined(separator: ", "),
-            level: .debug,
-            module: "swipe"
-        )
+        if Self.loggedAttachedPopScopes.insert(scope).inserted {
+            AppLogger.shared.log(
+                "左滑行接管侧滑返回 \(gestures.count) 个：" + gestures.map { "\(type(of: $0))#enabled=\($0.isEnabled)" }.joined(separator: ", "),
+                level: .debug,
+                module: "swipe"
+            )
+        }
         SwipeRowCoordinator.shared.attachPopGestures(gestures)
     }
 
